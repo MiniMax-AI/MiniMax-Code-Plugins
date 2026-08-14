@@ -29,10 +29,13 @@ nearby patterns, and affected references.
 - Prefer exact evidence over assumptions.
 - Prefer existing project patterns over inventing new ones.
 - Prefer narrow, targeted changes after understanding the local context.
-- When external APIs or SDKs are involved, prefer versioned documentation already present in
-  the repository or local environment. If it is unavailable and host policy permits network
-  access, consult the dependency vendor's official documentation using only the minimum necessary
-  product, API, and version details; never send source code, credentials, or personal data.
+- For a task that proposes changing how code uses an external API or SDK, prefer versioned
+  documentation already present in the repository or local environment. If it is unavailable and
+  host policy permits network access, consult the dependency vendor's official documentation using
+  only the minimum necessary public product, API, and version details. Never send source code,
+  credentials, personal data, private endpoints, internal hostnames, or private package names.
+- For read-only tracing, explanation, or investigation tasks, do not initiate an online
+  documentation lookup; report any version-sensitive uncertainty instead.
 - If official documentation cannot be accessed, report that limitation and treat version-sensitive
   behavior as unverified. Avoid guessing; ask the user for documentation or approval of the
   explicitly stated risk before making that part of the change.
