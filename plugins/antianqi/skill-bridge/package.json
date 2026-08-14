@@ -1,0 +1,42 @@
+{
+  "name": "skill-bridge",
+  "version": "0.1.0",
+  "description": "Convert openclaw (and similar) skills into mavis/mcode-compatible skills or plugins.",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "mcode-skill-bridge": "index.js"
+  },
+  "author": "antianqi",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "demo:task-tracker": "node index.js convert examples/input/task-tracker --out examples/output/task-tracker",
+    "demo:investor-brand-kit": "node index.js convert examples/input/investor-brand-kit --out examples/output/investor-brand-kit",
+    "demo:self-improving-agent": "node index.js convert examples/input/self-improving-agent --out examples/output/self-improving-agent",
+    "demo:all": "npm run demo:task-tracker && npm run demo:investor-brand-kit && npm run demo:self-improving-agent"
+  },
+  "engines": {
+    "node": ">=22.19 <23 || >=24 <27"
+  },
+  "dependencies": {
+    "iconv-lite": "^0.6.3",
+    "js-yaml": "^4.1.0"
+  },
+  "files": [
+    "index.js",
+    "lib/",
+    "skills/",
+    "references/",
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "keywords": [
+    "mcode",
+    "mavis",
+    "skill",
+    "openclaw",
+    "migration",
+    "converter"
+  ]
+}
