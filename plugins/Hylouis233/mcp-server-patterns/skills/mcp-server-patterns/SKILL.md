@@ -9,8 +9,10 @@ Use this skill when evaluating, designing, or integrating MCP servers.
 
 ## Scope
 
-This skill is for guidance and design review. It does not automatically change MCP settings,
-install servers, or rewrite existing configuration.
+This skill is for guidance and design review only. Do not change MCP settings, install or invoke
+servers, rewrite configuration, authenticate to services, or send test requests. If the user asks
+for implementation, provide a proposed plan or copyable steps and ask them to perform or authorize
+the execution outside this Skill.
 
 ## Evaluate an MCP server with these questions
 
@@ -44,10 +46,12 @@ install servers, or rewrite existing configuration.
 
 ## Debugging checklist
 
-- Confirm the server is actually enabled.
-- Confirm credentials or environment variables are present.
-- Reproduce with the smallest possible call.
-- Distinguish transport failures from application failures.
+- Ask the user to confirm whether the server is enabled; do not inspect or modify live settings.
+- Ask the user to confirm whether required credential variables are set; never request or expose
+  their values.
+- Design the smallest possible reproduction request, including what data it would send, but do not
+  execute it. Ask the user to run it and share a redacted result.
+- Use the redacted result to distinguish transport failures from application failures.
 - Check whether a native tool already solves the same problem better.
 - Confirm whether the failure is server-side, auth-related, or client-routing related.
 
@@ -61,4 +65,5 @@ install servers, or rewrite existing configuration.
 ## Notes
 
 - This is a knowledge skill only.
-- It must not change hooks, settings, plugin state, or MCP configuration files automatically.
+- It must not change hooks, settings, plugin state, or MCP configuration files.
+- It must not invoke MCP servers, make network requests, authenticate, or handle credential values.

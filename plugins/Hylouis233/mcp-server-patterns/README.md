@@ -30,19 +30,23 @@ recommendation, and names the failure modes to expect.
   latency, explicit read-vs-write behavior, safe defaults, side-effect ownership.
 - Integration checklist: avoid duplicate coverage, lightest tool wins, document auth and
   environment, global vs project-local placement, default vs specialist workflow fit.
-- Debugging checklist: confirm enabled, confirm credentials, minimal reproduction call,
+- Debugging checklist: ask the user to confirm enablement and credential-variable presence,
+  design (but never execute) a minimal reproduction request, use a user-provided redacted result to
   distinguish transport from application failure, check native-tool alternatives, and classify
   server-side vs auth vs client-routing failures.
 
 ## Requirements
 
-- None. This is a knowledge Skill with no scripts and no MCP server of its own.
+- No additional executables, accounts, or paid services. This is a knowledge Skill with no scripts
+  and no MCP server of its own.
+- Platform-independent; supported wherever MiniMax Code Agent Plugins 1.0 Skills are available.
 
 ## Data and network
 
-- No network access.
-- No credentials required.
-- Guidance only; it does not modify MCP configuration files.
+- No network access. The Skill designs requests but never invokes an MCP server or sends them.
+- No credentials required or handled. It may ask whether a credential variable is present, but it
+  never requests, reads, or exposes the value.
+- Guidance only; it does not install servers, authenticate, or modify MCP configuration files.
 
 ## License
 
