@@ -44,12 +44,16 @@ narrow change grounded in the existing project pattern.
 ## Data and network
 
 - Repository investigation is local and requires no network access.
-- Conditional network access: when a task changes an external API or SDK and its versioned
-  documentation is unavailable locally, the Skill may ask the host's documentation or web tool to
-  retrieve the dependency vendor's official documentation. There is no fixed destination; it is
-  the official documentation domain for the dependency named in the user's task.
-- Only minimal product, API, and version identifiers may be used for that lookup. Source code,
-  credentials, personal data, and private endpoints must not be sent.
+- Conditional network access: when a task proposes changing how code uses an external API or SDK
+  and versioned documentation is unavailable locally, the Skill may ask the host's documentation
+  or web tool to retrieve the vendor's official documentation. There is no fixed destination: the
+  public dependency may be named by the user or identified from repository imports/manifests, and
+  its official documentation domain becomes the destination.
+- Only public product, API, and version identifiers may be used for that lookup. Source code,
+  credentials, personal data, private endpoints, internal hostnames, and private package names must
+  not be sent. A repository-discovered private dependency must never trigger an online lookup.
+- Read-only tracing, explanation, and investigation tasks never initiate online documentation
+  lookups; they report version-sensitive uncertainty instead.
 - If host policy or connectivity blocks the lookup, the Skill reports the documentation gap,
   treats version-sensitive behavior as unverified, and asks the user for documentation or explicit
   acceptance of the stated risk instead of guessing.
