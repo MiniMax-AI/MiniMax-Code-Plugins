@@ -19,15 +19,23 @@ nearby patterns, and affected references.
 2. Read the most relevant definitions and references.
 3. Identify adjacent code paths that could be affected.
 4. Identify tests, docs, configs, or UI flows coupled to the target.
-5. Only then propose or implement changes.
+5. Before proposing or editing, report a concise investigation summary: the primary
+   implementation, important callers, coupled artifacts, the project pattern to follow, and the
+   smallest safe change.
+6. Only then propose or implement changes.
 
 ## Priorities
 
 - Prefer exact evidence over assumptions.
 - Prefer existing project patterns over inventing new ones.
 - Prefer narrow, targeted changes after understanding the local context.
-- When external APIs or SDKs are involved, verify with official documentation before changing
-  code.
+- When external APIs or SDKs are involved, prefer versioned documentation already present in
+  the repository or local environment. If it is unavailable and host policy permits network
+  access, consult the dependency vendor's official documentation using only the minimum necessary
+  product, API, and version details; never send source code, credentials, or personal data.
+- If official documentation cannot be accessed, report that limitation and treat version-sensitive
+  behavior as unverified. Avoid guessing; ask the user for documentation or approval of the
+  explicitly stated risk before making that part of the change.
 - When the task spans multiple files or uncertainty remains high, narrow the scope or split the
   work instead of guessing.
 
