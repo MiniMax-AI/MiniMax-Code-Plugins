@@ -1,0 +1,18 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "search-first",
+  "version": "0.1.0",
+  "description": "Enforce a search-before-edit workflow: locate relevant files, symbols, call sites, and surrounding context before proposing or making code changes.",
+  "author": {
+    "name": "Hylouis233",
+    "url": "https://github.com/Hylouis233"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "minimax-code",
+    "plugin",
+    "workflow",
+    "code-quality",
+    "search"
+  ]
+}
