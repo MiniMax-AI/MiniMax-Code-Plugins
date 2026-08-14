@@ -24,13 +24,15 @@ output, and labels anything it could not check as not verified.
 
 - Core rule: a change is not done until the relevant claim has been verified with the smallest
   meaningful evidence.
-- Six-step loop: state claim, decide evidence, run verification, read the actual result,
-  iterate on failure, and state exactly what remains unverified when proof is impossible.
+- Six-step loop: state claim, decide evidence, run verification, record the command or action and
+  concise observed result, iterate on failure, and state exactly what remains unverified when proof
+  is impossible.
 - Verification categories: behavior (run the flow or minimal repro), tests (targeted first,
   then broader), types/build/lint when relevant, review claims tied to concrete output, and
   separating product failures from environment limits.
-- Completion vocabulary: "Verified: ...", "Not verified: ...", "Could not verify: ...",
-  "Next proof step: ...".
+- Completion format: every "Verified" claim includes an "Evidence" line with the command or
+  user-facing action, exit status, and concise non-sensitive observed result; unverified work uses
+  "Not verified", "Could not verify", and "Next proof step" explicitly.
 
 ## Requirements
 
