@@ -30,19 +30,27 @@ output, and labels anything it could not check as not verified.
 - Verification categories: behavior (run the flow or minimal repro), tests (targeted first,
   then broader), types/build/lint when relevant, review claims tied to concrete output, and
   separating product failures from environment limits.
-- Completion format: every "Verified" claim includes an "Evidence" line with the command or
-  user-facing action, exit status, and concise non-sensitive observed result; unverified work uses
-  "Not verified", "Could not verify", and "Next proof step" explicitly.
+- Completion format: every "Verified" claim includes an "Evidence" line with either a command,
+  exit status, and concise observed result, or a manual user-facing action and its observed outcome;
+  unverified work uses "Not verified", "Could not verify", and "Next proof step" explicitly.
 
 ## Requirements
 
-- None. The Skill directs how the agent uses its existing run/test tools.
+- No additional executables, accounts, or paid services. The Skill directs how the agent uses the
+  host's existing run/test tools.
+- Platform-independent; supported wherever MiniMax Code Agent Plugins 1.0 Skills are available.
 
 ## Data and network
 
-- No network access required.
-- No credentials required.
-- No data leaves the machine beyond what the host agent already does.
+- Local tests and checks require no network access.
+- Conditional network access: a user-requested remote endpoint or end-to-end flow may require a
+  request to the exact destination named by that task. Before acting, the Skill requires the agent
+  to disclose the destination, the minimal data sent, and whether remote state may change.
+- Credentials, personal data, private endpoints, and unrelated repository content must not be sent
+  or included in completion evidence.
+- If host policy, connectivity, or data-safety constraints block the request, the Skill records the
+  remote behavior as not verified and gives the next safe proof step.
+- This Plugin requires no credentials of its own.
 
 ## License
 

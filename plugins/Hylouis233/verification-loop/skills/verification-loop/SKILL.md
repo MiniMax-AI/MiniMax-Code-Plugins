@@ -18,8 +18,9 @@ meaningful evidence.
 1. State what claim needs to be true.
 2. Decide what evidence would prove or disprove that claim.
 3. Run the smallest meaningful verification.
-4. Read and record the actual result, not the expected result. Preserve the command or user-facing
-   action, its status, and the concise non-sensitive observation that proves or disproves the claim.
+4. Read and record the actual result, not the expected result. For a command, preserve the
+   command, exit status, and concise non-sensitive observation. For a manual user-facing action,
+   preserve the action and its observed outcome; do not invent a process exit status.
 5. If verification fails, continue iterating instead of declaring success.
 6. If verification is impossible, say exactly what remains unverified.
 
@@ -38,6 +39,12 @@ meaningful evidence.
 - Distinguish verified, unverified, and unverifiable outcomes explicitly.
 - Do not rely on "it should work" when a check can be run.
 - When an end-to-end flow matters, test the golden path before reporting completion.
+- Before any verification that would contact a remote endpoint, state the exact destination, the
+  minimal data to be sent, and whether the action may mutate remote state. Proceed only when the
+  destination follows from the user's task and host policy permits it. Never send credentials,
+  personal data, private endpoints, or unrelated repository content.
+- If network access is unavailable or unsafe, do not substitute confidence for proof; report the
+  remote behavior as not verified and give the next safe proof step.
 
 ## Completion evidence format
 
@@ -45,7 +52,8 @@ Every successful verification entry must include both the claim and the evidence
 observed. Do not write a bare statement such as `Verified: targeted tests`.
 
 - Verified: <the claim that was proved>
-  - Evidence: <command or user-facing action> — <exit status and concise observed result>
+  - Evidence (command): <command> — <exit status and concise observed result>
+  - Evidence (manual): <user-facing action> — <observed outcome>
 - Not verified: <what was not checked>
 - Could not verify: <why verification was blocked>
 - Next proof step: <the most useful remaining check>
