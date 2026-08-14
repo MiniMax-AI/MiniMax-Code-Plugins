@@ -1,0 +1,12 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "searxng-search",
+  "version": "1.0.0",
+  "description": "Search the web through your own self-hosted SearXNG instance: categories, engines, time range, language and safe-search filters via a zero-dependency Python script, with bearer/basic auth and TOML or JSON config.",
+  "author": {
+    "name": "Fectivnfy112357",
+    "url": "https://github.com/Fectivnfy112357"
+  },
+  "license": "MIT",
+  "keywords": ["searxng", "search", "self-hosted", "privacy", "metasearch"]
+}
