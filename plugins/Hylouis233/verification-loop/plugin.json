@@ -1,0 +1,18 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "verification-loop",
+  "version": "0.1.0",
+  "description": "Enforce a claim-to-proof workflow: define the evidence, run the right verification, and distinguish verified results from assumptions before declaring work complete.",
+  "author": {
+    "name": "Hylouis233",
+    "url": "https://github.com/Hylouis233"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "minimax-code",
+    "plugin",
+    "workflow",
+    "verification",
+    "code-quality"
+  ]
+}
