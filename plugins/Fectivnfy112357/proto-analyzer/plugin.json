@@ -1,0 +1,12 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "proto-analyzer",
+  "version": "1.0.0",
+  "description": "Turn a prototype page URL (Figma, Axure, deployed HTML, etc.) into backend development documentation: PRD (business requirements), System Design (architecture) and API Specification (integration contracts) — with field extraction rules, multi-agent document generation and a verification pass.",
+  "author": {
+    "name": "Fectivnfy112357",
+    "url": "https://github.com/Fectivnfy112357"
+  },
+  "license": "MIT",
+  "keywords": ["prototype", "prd", "api-spec", "system-design", "requirements", "figma", "axure"]
+}
