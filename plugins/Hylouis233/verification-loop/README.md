@@ -30,9 +30,9 @@ output, and labels anything it could not check as not verified.
 - Verification categories: behavior (run the flow or minimal repro), tests (targeted first,
   then broader), types/build/lint when relevant, review claims tied to concrete output, and
   separating product failures from environment limits.
-- Completion format: every "Verified" claim includes an "Evidence" line with either a command,
-  exit status, and concise observed result, or a manual user-facing action and its observed outcome;
-  unverified work uses "Not verified", "Could not verify", and "Next proof step" explicitly.
+- Completion format: every "Verified" or "Failed" claim includes concrete evidence (command +
+  exit status + observed result, or manual action + outcome). Untested or blocked work uses "Not
+  verified", "Could not verify", and "Next proof step" explicitly.
 
 ## Requirements
 
@@ -44,7 +44,9 @@ output, and labels anything it could not check as not verified.
 
 - This Plugin has no fixed network dependency or destination. Each host-project command or
   user-facing flow selected for verification retains its own network behavior; even a command run
-  locally may contact registries, test services, or remote endpoints.
+  locally may contact registries, test services, or remote endpoints. The Skill requires inspecting
+  that behavior first; unknown behavior is treated as remote and skipped until the destination and
+  data flow are explicitly confirmed.
 - Before any remote action, the Skill requires disclosure of the exact destination, minimal data
   sent, and whether remote state may change. The destination must be user-supplied or explicitly
   confirmed by the user. Any potentially mutating remote check requires explicit confirmation even

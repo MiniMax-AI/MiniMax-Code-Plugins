@@ -22,8 +22,10 @@ meaningful evidence.
 4. Read and record the actual result, not the expected result. For a command, preserve the
    command, exit status, and concise non-sensitive observation. For a manual user-facing action,
    preserve the action and its observed outcome; do not invent a process exit status.
-5. If any verification fails, continue iterating instead of declaring success.
-6. Before completion, account for every claim as Verified, Not verified, or Could not verify.
+5. If a claim is disproven and the task calls for a fix, iterate when a safe, relevant change
+   remains. Otherwise, stop and hand off the negative result honestly; never declare success.
+6. Before completion or handoff, account for every claim as Verified, Failed, Not verified, or
+   Could not verify.
 
 ## Verification categories
 
@@ -41,8 +43,9 @@ meaningful evidence.
 - Do not rely on "it should work" when a check can be run.
 - When an end-to-end flow matters, test the golden path before reporting completion.
 - Any selected host command may retain its own network behavior, even when described as a local
-  test or check. Inspect and disclose that behavior when it is known; do not assume local commands
-  are offline.
+  test or check. Inspect its script, configuration, and documentation before running it. If its
+  network behavior cannot be determined, treat it as a remote action and do not run it until the
+  destination and data flow are explicitly confirmed under the rules below.
 - Before any verification that would contact a remote endpoint, state the exact destination, the
   minimal data to be sent, and whether the action may mutate remote state. The destination must be
   supplied by the user or explicitly confirmed by the user before proceeding. Any potentially
@@ -61,6 +64,8 @@ bare statement such as `Verified: targeted tests`, and do not omit an untested r
 - Verified: <the claim that was proved>
   - Evidence (command): <command> — <exit status and concise observed result>
   - Evidence (manual): <user-facing action> — <observed outcome>
+- Failed: <the claim that was disproven>
+  - Evidence: <command/action> — <status or outcome and concise observed result>
 - Not verified: <what was not checked>
 - Could not verify: <why verification was blocked>
 - Next proof step: <the most useful remaining check>
