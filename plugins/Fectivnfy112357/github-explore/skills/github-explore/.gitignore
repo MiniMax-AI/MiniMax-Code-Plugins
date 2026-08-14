@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# ad-hoc diagnostic logs (stderr captures from debugging)
+*.err*.txt
+*_err*.txt
+find_err*.txt
+disc_err.txt
+explore_err.txt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo

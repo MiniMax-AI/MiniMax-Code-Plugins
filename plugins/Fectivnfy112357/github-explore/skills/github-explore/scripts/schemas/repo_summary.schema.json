@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "repo_summary.schema.json",
+  "title": "repo_summary.py --format json 输出结构",
+  "description": "单仓富信息。注意：数据嵌在顶层 repo 键下（d['repo']['stargazerCount'] 单数），不在顶层直接取字段！这是与 find_repos/explore 最大的结构差异。",
+  "type": "object",
+  "required": ["repo"],
+  "properties": {
+    "repo": {
+      "type": "object",
+      "description": "主 repo 数据（gh repo view 字段，SINGULAR stargazerCount/forkCount）。",
+      "required": ["nameWithOwner", "description", "stargazerCount"],
+      "properties": {
+        "nameWithOwner": {"type": "string", "description": "owner/repo"},
+        "name": {"type": "string"},
+        "description": {"type": "string"},
+        "stargazerCount": {"type": "number", "description": "星数（单数！不是 stargazersCount）"},
+        "forkCount": {"type": "number", "description": "fork 数（单数）"},
+        "watchers": {"type": "number"},
+        "createdAt": {"type": "string", "description": "ISO 时间"},
+        "pushedAt": {"type": "string", "description": "ISO 时间"},
+        "primaryLanguage": {"type": ["object", "null"], "description": "{name,...} 或 null"},
+        "licenseInfo": {"type": ["object", "null"], "description": "{key,name,...} 或 null"},
+        "repositoryTopics": {"type": "object", "description": "嵌套 {nodes:[{topic:{name}}]}，一次性表达式易失败，取不到就放弃"}
+      }
+    },
+    "open_issues_count": {"type": "number", "description": "open issues 数。"},
+    "languages": {"type": "object", "description": "{lang: bytes} 映射。"},
+    "recent_issues": {"type": "array", "description": "近期 issues 列表。"},
+    "recent_prs": {"type": "array", "description": "近期 PRs 列表。"}
+  }
+}

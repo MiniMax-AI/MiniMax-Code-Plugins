@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "explore.schema.json",
+  "title": "explore.py --format json 输出结构",
+  "description": "多轴语义探索的完整输出。顶层是 {topic, awesome_list, awesome_repo_count, canonical_anchors, axes:[...]}。注意：repo 数据在 axes[i].repos[j]，不在顶层！信号字段（_is_canonical 等）由 annotate 阶段注入每个 repo。",
+  "type": "object",
+  "required": ["topic", "axes"],
+  "properties": {
+    "topic": {
+      "type": "string",
+      "description": "主题名（标签，不参与搜索）。"
+    },
+    "awesome_list": {
+      "type": ["string", "null"],
+      "description": "命中的 awesome-<topic> 列表 fullName，或 null。"
+    },
+    "awesome_repo_count": {
+      "type": "number",
+      "description": "awesome list 中引用的 repo 数（--awesome 开启时才有意义）。"
+    },
+    "canonical_anchors": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "该主题的 canonical 锚点集（代码内建，仅覆盖热门主题）。"
+    },
+    "axes": {
+      "type": "array",
+      "description": "每个轴的搜索结果。repo 就在这下面！",
+      "items": {
+        "type": "object",
+        "required": ["name", "repos"],
+        "properties": {
+          "name": {"type": "string", "description": "轴名（agent 定义）。"},
+          "queries": {"type": "array", "items": {"type": "string"}, "description": "原始查询角度。"},
+          "effective_queries": {"type": "array", "items": {"type": "string"}, "description": "加入 topic/stars/fork 过滤后的实际查询。"},
+          "duration_ms": {"type": "number"},
+          "error": {"type": ["string", "null"], "description": "该轴查询错误（如限流）。"},
+          "repos": {
+            "type": "array",
+            "description": "该轴的 repo 列表。每个 repo 是通用字段 + 信号字段。",
+            "items": {
+              "type": "object",
+              "allOf": [{"$ref": "repo.schema.json"}],
+              "properties": {
+                "_is_canonical": {"type": "boolean", "description": "canonical 锚点（★）。"},
+                "_backfilled": {"type": "boolean", "description": "锚点缺失时 core API 补拉（⚑）。"},
+                "_in_awesome": {"type": "boolean", "description": "被主题 awesome list 提及（✓）。"},
+                "_is_list": {"type": "boolean", "description": "是 awesome 目录不是项目（☰），已降权。"},
+                "_cross_axis_count": {"type": "number", "description": "在几个轴出现（↻Naxes）。"}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

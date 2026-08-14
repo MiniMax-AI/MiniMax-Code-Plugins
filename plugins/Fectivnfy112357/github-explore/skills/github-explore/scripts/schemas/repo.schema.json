@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "repo.schema.json",
+  "title": "通用仓库字段（所有发现类脚本共用）",
+  "description": "find_repos / search_issues / discover / trending / find_similar 等脚本 --format json 输出的每个 repo 对象字段。注意：字段是 GitHub API 原生 camelCase（fullName 不是 full_name），license 是嵌套对象，pushedAt 是 ISO 字符串。",
+  "type": "object",
+  "required": ["fullName", "stargazersCount", "description"],
+  "properties": {
+    "fullName": {
+      "type": "string",
+      "description": "owner/repo。不是 full_name！最常见踩坑点。"
+    },
+    "stargazersCount": {
+      "type": "number",
+      "description": "星数（复数形式）。注意 gh repo view 是单数 stargazerCount，别混。"
+    },
+    "forksCount": {
+      "type": "number",
+      "description": "fork 数（复数）。"
+    },
+    "description": {
+      "type": "string",
+      "description": "仓库简介。可能为空串。"
+    },
+    "language": {
+      "type": "string",
+      "description": "主语言；空串 = 未标注。"
+    },
+    "isArchived": {
+      "type": "boolean",
+      "description": "是否归档。脚本默认过滤，此字段为标记。"
+    },
+    "isFork": {
+      "type": "boolean",
+      "description": "是否 fork。脚本默认过滤，此字段为标记。"
+    },
+    "license": {
+      "type": "object",
+      "description": "嵌套对象 {key,name,url}；空对象 = 无许可（key 为空串）。",
+      "properties": {
+        "key": {"type": "string"},
+        "name": {"type": "string"},
+        "url": {"type": "string"}
+      }
+    },
+    "pushedAt": {
+      "type": "string",
+      "description": "最近推送 ISO 时间（如 2026-08-10T12:00:00Z），活跃度判断用。"
+    },
+    "url": {
+      "type": "string",
+      "description": "仓库页面 URL。"
+    },
+    "_rel": {
+      "type": "number",
+      "description": "仅 find_repos 有：0-3 的软相关度分（语义命中 + 双 scope 加成）。"
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "github-explore",
+  "version": "2.0.0",
+  "description": "Search, discover, summarize and audit GitHub through the gh CLI: find repos about a topic, map a field landscape, trending, repo overviews, similar projects, code search, issue/PR search and org audits — backed by 10 zero-config Python scripts with relevance ranking and quota-aware searching.",
+  "author": {
+    "name": "Fectivnfy112357",
+    "url": "https://github.com/Fectivnfy112357"
+  },
+  "license": "MIT",
+  "keywords": ["github", "gh", "search", "discovery", "audit", "cli"]
+}
