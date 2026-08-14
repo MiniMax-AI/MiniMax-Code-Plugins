@@ -31,8 +31,8 @@ output, and labels anything it could not check as not verified.
   then broader), types/build/lint when relevant, review claims tied to concrete output, and
   separating product failures from environment limits.
 - Completion format: every "Verified" or "Failed" claim includes concrete evidence (command +
-  exit status + observed result, or manual action + outcome). Untested or blocked work uses "Not
-  verified", "Could not verify", and "Next proof step" explicitly.
+  exit status + observed result, or manual action + outcome). Untested work uses "Not verified";
+  blocked work uses "Could not verify" with the reason and "Next proof step" explicitly.
 
 ## Requirements
 
@@ -54,7 +54,8 @@ output, and labels anything it could not check as not verified.
 - Credentials, personal data, private endpoints, and unrelated repository content must not be sent
   or included in completion evidence.
 - If host policy, connectivity, or data-safety constraints block the request, the Skill records the
-  remote behavior as not verified and gives the next safe proof step.
+  remote behavior as "Could not verify", states why it was blocked, and gives the next safe proof
+  step.
 - This Plugin requires no credentials of its own.
 
 ## License

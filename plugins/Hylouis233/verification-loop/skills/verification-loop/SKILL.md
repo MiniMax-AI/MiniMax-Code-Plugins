@@ -53,7 +53,7 @@ meaningful evidence.
   already supplied. Host policy must permit the action. Never send credentials, personal data,
   private endpoints, or unrelated repository content.
 - If network access is unavailable or unsafe, do not substitute confidence for proof; report the
-  remote behavior as not verified and give the next safe proof step.
+  remote behavior as Could not verify, state why it was blocked, and give the next safe proof step.
 
 ## Completion evidence format
 
