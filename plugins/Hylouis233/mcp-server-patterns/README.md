@@ -24,13 +24,15 @@ recommendation, and names the failure modes to expect.
 
 ## What the Skill does
 
-- Evaluation: eight questions covering problem fit, read/write boundary, publisher/operator
-  provenance, package or endpoint authenticity, version integrity, authentication, least-privilege
-  authorization scopes, data egress, failure modes, discoverability, and tool overlap.
-- Design checklist: tool boundaries, stable schemas, good errors, minimal secrets and scopes,
-  predictable latency, explicit read-vs-write behavior, safe defaults, side-effect ownership.
-- Integration checklist: verify provenance and integrity, avoid duplicate coverage, prefer the
-  lightest tool, document auth/scopes/environment, and choose global vs project-local placement.
+- Evaluation: eight questions covering problem fit, read/write boundary, provenance/integrity,
+  authentication and least-privilege scopes, full egress destination/retention/sharing/training
+  behavior, retry safety, confirmation for high-impact writes, discoverability, and tool overlap.
+- Design checklist: tool boundaries, stable schemas, good errors, minimal secrets/scopes,
+  read-vs-write-aware retry semantics, idempotency or deduplication, disabled retries for unsafe
+  writes, previews/confirmation for consequential production actions, and side-effect ownership.
+- Integration checklist: verify provenance/integrity, document auth/scopes/environment and full
+  downstream data handling, confirm safe write/retry semantics, avoid duplicate coverage, and
+  choose global vs project-local placement.
 - Debugging checklist: confirm the credential variable name reaches the actual server process,
   design (but never execute) a preferably read-only sandbox reproduction, warn and get explicit
   confirmation for unavoidable mutation, and classify transport (startup/DNS/TLS/connection/

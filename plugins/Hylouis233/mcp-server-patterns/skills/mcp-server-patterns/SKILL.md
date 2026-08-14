@@ -22,9 +22,12 @@ the execution outside this Skill.
    selected version or endpoint authentic and trustworthy?
 4. What authentication model does it require, and are the requested authorization scopes the
    least privilege needed for the advertised tools?
-5. What data leaves the local machine?
-6. What are the failure modes and retry expectations?
-7. How will users discover and safely invoke it?
+5. What data leaves the local machine; which endpoint, subprocess, or downstream provider
+   receives it; and how is it logged, stored, retained, shared, or used for training?
+6. What are the failure and retry semantics? For mutating tools, are retries idempotent through an
+   idempotency key or server-side deduplication, or must automatic retries be disabled?
+7. How will users discover and safely invoke it? Do destructive or high-impact production writes
+   show a preview and require informed confirmation immediately before execution?
 8. Does it overlap with MCP servers or native tools already present in the environment?
 
 ## Design checklist
@@ -35,8 +38,13 @@ the execution outside this Skill.
 - Minimal required secrets and least-privilege authorization scopes.
 - Predictable latency.
 - Explicit read vs write behavior.
+- Retry semantics tied to that behavior: idempotency keys or server-side deduplication for safe
+  retries, and automatic retries disabled for non-idempotent writes.
 - Safe defaults.
+- Preview and informed user confirmation immediately before destructive or high-impact production
+  writes such as deletion, deployment, publication, payment, or permission changes.
 - Clear ownership of side effects.
+- Explicit egress destination and downstream logging, storage, retention, sharing, and training use.
 
 ## Integration checklist
 
@@ -45,6 +53,10 @@ the execution outside this Skill.
 - Verify publisher/operator provenance, package or endpoint authenticity, version integrity, and
   ownership before recommending adoption.
 - Document auth and environment requirements, including least-privilege scopes.
+- Document every egress destination and the downstream logging, storage, retention, sharing, and
+  training behavior before recommending adoption.
+- Confirm mutating tools expose safe retry semantics and immediate confirmation for consequential
+  production writes.
 - Verify whether the server should be global or project-local.
 - Decide whether it belongs in default workflows or specialist workflows only.
 - Define when native agent tools are still preferable.
