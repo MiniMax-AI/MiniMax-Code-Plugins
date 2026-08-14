@@ -15,14 +15,15 @@ meaningful evidence.
 
 ## Workflow
 
-1. State what claim needs to be true.
-2. Decide what evidence would prove or disprove that claim.
-3. Run the smallest meaningful verification.
+1. Enumerate every independent claim that must be true for the task to be complete, including each
+   user requirement and acceptance criterion.
+2. For each claim, decide what evidence would prove or disprove it.
+3. Run the smallest meaningful verification for each claim.
 4. Read and record the actual result, not the expected result. For a command, preserve the
    command, exit status, and concise non-sensitive observation. For a manual user-facing action,
    preserve the action and its observed outcome; do not invent a process exit status.
-5. If verification fails, continue iterating instead of declaring success.
-6. If verification is impossible, say exactly what remains unverified.
+5. If any verification fails, continue iterating instead of declaring success.
+6. Before completion, account for every claim as Verified, Not verified, or Could not verify.
 
 ## Verification categories
 
@@ -39,17 +40,23 @@ meaningful evidence.
 - Distinguish verified, unverified, and unverifiable outcomes explicitly.
 - Do not rely on "it should work" when a check can be run.
 - When an end-to-end flow matters, test the golden path before reporting completion.
+- Any selected host command may retain its own network behavior, even when described as a local
+  test or check. Inspect and disclose that behavior when it is known; do not assume local commands
+  are offline.
 - Before any verification that would contact a remote endpoint, state the exact destination, the
-  minimal data to be sent, and whether the action may mutate remote state. Proceed only when the
-  destination follows from the user's task and host policy permits it. Never send credentials,
-  personal data, private endpoints, or unrelated repository content.
+  minimal data to be sent, and whether the action may mutate remote state. The destination must be
+  supplied by the user or explicitly confirmed by the user before proceeding. Any potentially
+  mutating remote check also requires explicit user confirmation, even when its destination was
+  already supplied. Host policy must permit the action. Never send credentials, personal data,
+  private endpoints, or unrelated repository content.
 - If network access is unavailable or unsafe, do not substitute confidence for proof; report the
   remote behavior as not verified and give the next safe proof step.
 
 ## Completion evidence format
 
-Every successful verification entry must include both the claim and the evidence actually
-observed. Do not write a bare statement such as `Verified: targeted tests`.
+The final report must include every completion claim enumerated in step 1. Every successful
+verification entry must include both the claim and the evidence actually observed. Do not write a
+bare statement such as `Verified: targeted tests`, and do not omit an untested requirement.
 
 - Verified: <the claim that was proved>
   - Evidence (command): <command> — <exit status and concise observed result>

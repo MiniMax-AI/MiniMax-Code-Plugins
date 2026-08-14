@@ -24,9 +24,9 @@ output, and labels anything it could not check as not verified.
 
 - Core rule: a change is not done until the relevant claim has been verified with the smallest
   meaningful evidence.
-- Six-step loop: state claim, decide evidence, run verification, record the command or action and
-  concise observed result, iterate on failure, and state exactly what remains unverified when proof
-  is impossible.
+- Six-step loop: enumerate every completion claim, decide evidence for each, run the smallest
+  verification for each, record the command/action and concise observed result, iterate on any
+  failure, and account for every claim before completion.
 - Verification categories: behavior (run the flow or minimal repro), tests (targeted first,
   then broader), types/build/lint when relevant, review claims tied to concrete output, and
   separating product failures from environment limits.
@@ -42,10 +42,13 @@ output, and labels anything it could not check as not verified.
 
 ## Data and network
 
-- Local tests and checks require no network access.
-- Conditional network access: a user-requested remote endpoint or end-to-end flow may require a
-  request to the exact destination named by that task. Before acting, the Skill requires the agent
-  to disclose the destination, the minimal data sent, and whether remote state may change.
+- This Plugin has no fixed network dependency or destination. Each host-project command or
+  user-facing flow selected for verification retains its own network behavior; even a command run
+  locally may contact registries, test services, or remote endpoints.
+- Before any remote action, the Skill requires disclosure of the exact destination, minimal data
+  sent, and whether remote state may change. The destination must be user-supplied or explicitly
+  confirmed by the user. Any potentially mutating remote check requires explicit confirmation even
+  when the destination was already supplied.
 - Credentials, personal data, private endpoints, and unrelated repository content must not be sent
   or included in completion evidence.
 - If host policy, connectivity, or data-safety constraints block the request, the Skill records the
