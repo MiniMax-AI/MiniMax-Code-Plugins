@@ -18,18 +18,21 @@ the execution outside this Skill.
 
 1. What problem does it solve better than direct tools or local agents?
 2. Is it read-only, mutating, or both?
-3. What authentication model does it require?
-4. What data leaves the local machine?
-5. What are the failure modes and retry expectations?
-6. How will users discover and safely invoke it?
-7. Does it overlap with MCP servers or native tools already present in the environment?
+3. Who publishes the package or operates the endpoint, how is its identity verified, and is the
+   selected version or endpoint authentic and trustworthy?
+4. What authentication model does it require, and are the requested authorization scopes the
+   least privilege needed for the advertised tools?
+5. What data leaves the local machine?
+6. What are the failure modes and retry expectations?
+7. How will users discover and safely invoke it?
+8. Does it overlap with MCP servers or native tools already present in the environment?
 
 ## Design checklist
 
 - Clear tool boundaries.
 - Stable input/output schemas.
 - Good error messages.
-- Minimal required secrets.
+- Minimal required secrets and least-privilege authorization scopes.
 - Predictable latency.
 - Explicit read vs write behavior.
 - Safe defaults.
@@ -39,7 +42,9 @@ the execution outside this Skill.
 
 - Avoid duplicating existing MCP coverage.
 - Prefer the lightest tool that solves the task.
-- Document auth and environment requirements.
+- Verify publisher/operator provenance, package or endpoint authenticity, version integrity, and
+  ownership before recommending adoption.
+- Document auth and environment requirements, including least-privilege scopes.
 - Verify whether the server should be global or project-local.
 - Decide whether it belongs in default workflows or specialist workflows only.
 - Define when native agent tools are still preferable.
@@ -47,13 +52,17 @@ the execution outside this Skill.
 ## Debugging checklist
 
 - Ask the user to confirm whether the server is enabled; do not inspect or modify live settings.
-- Ask the user to confirm whether required credential variables are set; never request or expose
-  their values.
-- Design the smallest possible reproduction request, including what data it would send, but do not
-  execute it. Ask the user to run it and share a redacted result.
-- Use the redacted result to distinguish transport failures from application failures.
+- Ask the user to confirm that each required credential variable name is available to the actual
+  server process environment (not merely the interactive shell); never request or expose values.
+- Design the smallest possible reproduction request and identify its data and side effects, but do
+  not execute it. Prefer a read-only operation against a sandbox or disposable test resource. If
+  mutation is unavoidable, clearly warn about the exact side effect and require explicit user
+  confirmation before asking them to run it and share a redacted result.
+- Use the redacted result to distinguish application failures from transport failures such as
+  process startup, DNS/TLS, connection, or protocol negotiation.
 - Check whether a native tool already solves the same problem better.
-- Confirm whether the failure is server-side, auth-related, or client-routing related.
+- Classify the failure as transport, server/application, authentication/authorization, or client
+  routing; retain the relevant transport subcategory when applicable.
 
 ## Good usage pattern
 
