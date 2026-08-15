@@ -68,6 +68,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 from _lib import (
+    Column,
     detect_format,
     die,
     ensure_auth,
@@ -897,13 +898,13 @@ def render_table(results: List[AxisResult]) -> str:
     return format_table(
         rows,
         [
-            ("axis", "Axis", 22),
-            ("name", "Repository", 36),
-            ("stars", "⭐", 7),
-            ("lang", "Lang", 10),
-            ("pushed", "Pushed", 10),
-            ("sig", "Signals", 22),
-            ("desc", "Description", 60),
+            Column("axis", "Axis", 22),
+            Column("name", "Repository", 36),
+            Column("stars", "⭐", 7),
+            Column("lang", "Lang", 10),
+            Column("pushed", "Pushed", 10),
+            Column("sig", "Signals", 22),
+            Column("desc", "Description", 60),
         ],
     )
 

@@ -30,6 +30,7 @@ import sys
 from typing import Any, Dict, List
 
 from _lib import (
+    Column,
     detect_format,
     die,
     ensure_auth,
@@ -147,12 +148,12 @@ def render_table(results: list) -> str:
     return format_table(
         rows,
         [
-            ("name", "Repository", 42),
-            ("stars", "Stars", 7),
-            ("forks", "Forks", 6),
-            ("lang", "Language", 12),
-            ("pushed", "Pushed", 10),
-            ("desc", "Description", 80),
+            Column("name", "Repository", 42),
+            Column("stars", "Stars", 7),
+            Column("forks", "Forks", 6),
+            Column("lang", "Language", 12),
+            Column("pushed", "Pushed", 10),
+            Column("desc", "Description", 80),
         ],
     )
 

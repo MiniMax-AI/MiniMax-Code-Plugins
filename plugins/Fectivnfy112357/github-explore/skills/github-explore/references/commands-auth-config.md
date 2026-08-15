@@ -2,6 +2,8 @@
 
 > 按需查阅。版本基准：gh 2.85.0。详细 flag 用 `gh <cmd> --help`。
 
+> ⚠️ **认证诊断只允许 `gh auth status`（不回显 token）。** 禁止 `gh auth token`、`gh auth status --show-token`、`gh auth login --with-token` 等回显/打印 token 的命令；`GH_TOKEN` 仅用于自动化（CI），不得打印到 transcript。
+
 ## 安装
 
 ```bash
@@ -16,13 +18,10 @@ gh --version               # 验证
 ```bash
 gh auth login                       # 交互登录
 gh auth login --web                 # 浏览器授权
-gh auth login --with-token < token.txt   # token 注入
-gh auth status                      # 检查（脚本 ensure_auth 用这个）
-gh auth status --show-token         # 显示 token（小心）
+gh auth status                      # 检查（脚本 ensure_auth 用这个；唯一允许的认证诊断，不回显 token）
 gh auth switch --hostname github.com --user <name>   # 切换账号
 gh auth logout
 gh auth setup-git                   # gh 作为 git credential helper
-gh auth token                       # 打印 token
 gh auth refresh --scopes write:org,read:public_key   # 加 scope
 ```
 
@@ -74,7 +73,7 @@ gh config clear-cache
 
 | 变量 | 作用 |
 |---|---|
-| `GH_TOKEN` | token（自动化用） |
+| `GH_TOKEN` | token（仅自动化/CI；禁止回显/打印） |
 | `GH_HOST` | 默认 host（github.com） |
 | `GH_PROMPT_DISABLED` | 禁用交互提示 |
 | `GH_EDITOR` / `GH_PAGER` | 编辑器/分页器 |

@@ -13,7 +13,7 @@ import json
 import sys
 from typing import List
 
-from _lib import detect_format, ensure_auth, format_table, gh_json, humanize_date
+from _lib import Column, detect_format, ensure_auth, format_table, gh_json, humanize_date
 
 
 # `gh search code` available JSON fields (no `size`, no `language`).
@@ -116,9 +116,9 @@ def main() -> int:
         print(format_table(
             rows,
             [
-                ("repo", "Repo", 32),
-                ("path", "Path", 38),
-                ("snippet", "Snippet", 70),
+                Column("repo", "Repo", 32),
+                Column("path", "Path", 38),
+                Column("snippet", "Snippet", 70),
             ],
         ))
     print(f"\n{len(results)} result(s)", file=sys.stderr)

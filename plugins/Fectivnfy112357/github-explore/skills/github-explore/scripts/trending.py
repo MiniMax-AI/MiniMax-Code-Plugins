@@ -14,6 +14,7 @@ import sys
 from typing import List
 
 from _lib import (
+    Column,
     detect_format,
     die,
     ensure_auth,
@@ -121,11 +122,11 @@ def main() -> int:
         print(format_table(
             rows,
             [
-                ("name", "Repository", 42),
-                ("stars", "Stars", 7),
-                ("lang", "Lang", 12),
-                ("date", args.by.capitalize(), 10),
-                ("desc", "Description", 80),
+                Column("name", "Repository", 42),
+                Column("stars", "Stars", 7),
+                Column("lang", "Lang", 12),
+                Column("date", args.by.capitalize(), 10),
+                Column("desc", "Description", 80),
             ],
         ))
     print(f"\n{len(results)} result(s)", file=sys.stderr)

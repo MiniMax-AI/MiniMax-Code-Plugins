@@ -21,6 +21,7 @@ from collections import Counter
 from typing import List, Set
 
 from _lib import (
+    Column,
     detect_format,
     die,
     ensure_auth,
@@ -214,11 +215,11 @@ def main() -> int:
     print(format_table(
         rows,
         [
-            ("name", "Repository", 38),
-            ("stars", "Stars", 7),
-            ("lang", "Lang", 10),
-            ("matched", "Matched topics", 28),
-            ("desc", "Description", 60),
+            Column("name", "Repository", 38),
+            Column("stars", "Stars", 7),
+            Column("lang", "Lang", 10),
+            Column("matched", "Matched topics", 28),
+            Column("desc", "Description", 60),
         ],
     ))
     return 0

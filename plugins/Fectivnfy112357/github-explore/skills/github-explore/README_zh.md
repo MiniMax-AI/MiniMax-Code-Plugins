@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)](https://www.python.org/)
 [![脚本数: 11](https://img.shields.io/badge/脚本-11-brightgreen.svg)](#脚本列表)
-[![Schema: 3/11](https://img.shields.io/badge/schema-3%2F11-yellow.svg)](scripts/schemas)
+[![Schema: 3/9](https://img.shields.io/badge/schema-3%2F9-yellow.svg)](scripts/schemas)
 [![依赖 gh CLI](https://img.shields.io/badge/依赖-gh%20CLI-181717.svg?logo=github)](https://cli.github.com/)
 
 [English version](README.md) · 简体中文
@@ -37,7 +37,7 @@
 - **多维度语义探索** — `explore.py` 让 agent 为每个主题定义 2-4 个语义轴，并行跑、合并去重，相关性得分综合了"跨轴命中数"、"经典锚点召回率"、"在 awesome list 里的信号"。
 - **智能默认值** — 每个发现脚本默认过滤 fork 和 archived repo、设最低 star 门槛、按 `fullName` 去重、输出分层 markdown 摘要（约 3KB stdout）。
 - **分层输出** — 完整报告自动写到 `%TEMP%/gh-explore-{topic}-{ts}.md`；agent 读摘要就行，要细节再拉文件。一次探索把 context 从 ~18KB 压到 ~2KB。
-- **字段级契约** — `python scripts/<script>.py --schema` 打印 4 个支持脚本的输出 JSON 结构；剩下 6 个从 `scripts/schemas/*.schema.json` 读契约。
+- **字段级契约** — `python scripts/<script>.py --schema` 打印 3 个支持脚本的输出 JSON 结构（`find_repos` / `explore` / `repo_summary`）；剩下 6 个 entry-point 脚本暂未暴露 `--schema`，其契约随代码维护。
 - **不引入新 CLI 表面** — 每个脚本就是 `gh search` 或 `gh repo view` 的封装。去掉 skill 你照样能手动跑同样的 `gh` 命令；价值在过滤、去重、打分这套。
 
 ---
@@ -82,7 +82,7 @@ python scripts/explore.py "多 agent 协作" \
 | `_lib.py` | 共享 helper | 不适用 | `ensure_auth`、`gh_json`、`parse_since`、`print_schema`。不直接调。 |
 | `__init__.py` | 模块 docstring | 不适用 | 描述 scripts 包的约定。 |
 
-**`--schema` 缺口**：11 个脚本里 6 个还没暴露 `--schema` CLI 参数。这 6 个的 schema 文件在 `scripts/schemas/` 里也暂缺。已支持的 4 个脚本 + 现有的 `repo.schema.json` / `explore.schema.json` / `repo_summary.schema.json` 覆盖了最高频路径。
+**`--schema` 缺口**：9 个 entry-point 脚本里 6 个还没暴露 `--schema` CLI 参数。这 6 个的 schema 文件在 `scripts/schemas/` 里也暂缺。已支持的 3 个脚本（`find_repos` / `explore` / `repo_summary`）+ 现有的 `repo.schema.json` / `explore.schema.json` / `repo_summary.schema.json` 覆盖了最高频路径。
 
 ---
 
@@ -97,7 +97,7 @@ python scripts/explore.py "多 agent 协作" \
                                      │ python scripts/<name>.py [args]
                                      ▼
             ┌────────────────────────────────────────────────────┐
-            │  scripts/  （10 个入口 + _lib + __init__）         │
+            │  scripts/  （9 个入口 + _lib + __init__）          │
             │  ─────────────────────────────────────────────────│
             │  find_repos   explore   discover   trending       │
             │  repo_summary find_similar code_search            │

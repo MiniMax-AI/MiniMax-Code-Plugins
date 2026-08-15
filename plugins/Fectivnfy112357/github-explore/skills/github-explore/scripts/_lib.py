@@ -6,10 +6,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 # ---------- stdout encoding ----------
 # On Windows, PowerShell defaults to the OEM/ANSI code page (e.g. CP936/GBK),
@@ -75,6 +77,34 @@ def ensure_auth() -> None:
         )
 
 
+# ---------- secret redaction ----------
+
+# Credential shapes that must never reach the transcript. Applied to every
+# stderr message emitted on error (see warn/die), so a token that leaks into
+# gh output is masked instead of being echoed back to the agent or user.
+# Each entry is (compiled_pattern, replacement). Order matters: more specific
+# shapes (fine-grained PAT) come before generic ones (bearer / key=...).
+_SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"github_pat_[A-Za-z0-9_]+"), "github_pat_***"),        # fine-grained PAT
+    (re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"), "ghx_***"),             # classic PAT
+    (re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._\-]{20,}"), r"\1***"),
+    (re.compile(r"(?i)\b(token|password|passwd|secret|api[_-]?key)\b(\s*[:=]\s*)\S+"), r"\1\2***"),
+    (re.compile(r"(?i)\b(GH_TOKEN|GITHUB_TOKEN)\s*=\s*\S+"), r"\1=***"),
+]
+
+def redact_secrets(text: str) -> str:
+    """Mask credential-shaped substrings in `text`.
+
+    Best-effort: only obvious credential shapes are redacted, so ordinary
+    error text (repo names, URLs, rate-limit messages) passes through intact.
+    """
+    if not text:
+        return text
+    out = text
+    for pat, repl in _SECRET_PATTERNS:
+        out = pat.sub(repl, out)
+    return out
+
 # ---------- output ----------
 
 def info(msg: str) -> None:
@@ -83,11 +113,11 @@ def info(msg: str) -> None:
 
 
 def warn(msg: str) -> None:
-    print(f"⚠  {msg}", file=sys.stderr)
+    print(f"⚠  {redact_secrets(msg)}", file=sys.stderr)
 
 
 def die(msg: str, code: int = 1) -> None:
-    print(f"✗ {msg}", file=sys.stderr)
+    print(f"✗ {redact_secrets(msg)}", file=sys.stderr)
     sys.exit(code)
 
 
@@ -127,32 +157,45 @@ def detect_format(args_format: Optional[str]) -> str:
     return "markdown"
 
 
-def format_table(rows: List[Dict[str, Any]], columns: List[Tuple[str, str, int]]) -> str:
-    """Render a fixed-width table.
+@dataclass(frozen=True)
+class Column:
+    """One column in a `format_table` render.
 
-    columns: list of (key, header, max_width). max_width=0 means no truncation.
+    `key` is the dict key looked up on each row; `header` is the printed
+    column title; `max_width=0` means no truncation.
     """
+
+    key: str
+    header: str
+    max_width: int = 0
+
+    def truncate(self, text: str) -> str:
+        """Truncate `text` to `max_width`, appending '…' if shortened."""
+        if self.max_width and len(text) > self.max_width:
+            return text[: max(0, self.max_width - 1)] + "…"
+        return text
+
+
+def format_table(rows: List[Dict[str, Any]], columns: Sequence[Column]) -> str:
+    """Render a fixed-width table from `rows` using the given `columns`."""
     if not rows:
         return "(no results)"
 
     widths: Dict[str, int] = {}
-    for key, header, max_w in columns:
+    for col in columns:
         cell_width = max(
-            len(header),
-            *(len(_cell(row.get(key))) for row in rows),
+            len(col.header),
+            *(len(_cell(row.get(col.key))) for row in rows),
         )
-        widths[key] = min(cell_width, max_w) if max_w else cell_width
+        widths[col.key] = min(cell_width, col.max_width) if col.max_width else cell_width
 
-    def _render_cell(row: Dict[str, Any], key: str, w: int) -> str:
-        text = _cell(row.get(key))
-        if w and len(text) > w:
-            text = text[: max(0, w - 1)] + "…"
-        return text.ljust(w)
+    def _render_cell(row: Dict[str, Any], col: Column) -> str:
+        return col.truncate(_cell(row.get(col.key))).ljust(widths[col.key])
 
-    header_line = "  ".join(header.ljust(widths[key]) for key, header, _ in columns)
-    separator = "  ".join("-" * widths[key] for key, _, _ in columns)
+    header_line = "  ".join(col.header.ljust(widths[col.key]) for col in columns)
+    separator = "  ".join("-" * widths[col.key] for col in columns)
     body = "\n".join(
-        "  ".join(_render_cell(row, key, widths[key]) for key, _, _ in columns)
+        "  ".join(_render_cell(row, col) for col in columns)
         for row in rows
     )
     return f"{header_line}\n{separator}\n{body}"
@@ -207,11 +250,13 @@ def humanize_date(iso: Optional[str]) -> str:
 
 # ---------- repo filtering helpers ----------
 
-def is_low_quality(repo: Dict[str, Any], min_stars: int = 5) -> bool:
-    """Heuristic to drop demo/empty/archived repos from discovery output.
+def is_excluded(repo: Dict[str, Any], min_stars: int = 5) -> bool:
+    """Return True if `repo` should be dropped from discovery output.
 
-    Accepts BOTH `stargazerCount` (gh repo view, singular) and
-    `stargazersCount` (gh search repos, plural) for compatibility.
+    Filters archived repos, low-star forks, repos below the star floor, and
+    description-less low-star repos. Accepts BOTH `stargazerCount` (gh repo
+    view, singular) and `stargazersCount` (gh search repos, plural) for
+    compatibility.
     """
     stars = repo.get("stargazersCount") or repo.get("stargazerCount") or 0
     if repo.get("isArchived"):

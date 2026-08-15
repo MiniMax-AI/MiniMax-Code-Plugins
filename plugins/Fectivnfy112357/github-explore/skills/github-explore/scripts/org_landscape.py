@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List
 
 from _lib import (
+    Column,
     detect_format,
     die,
     ensure_auth,
@@ -240,10 +241,10 @@ def main() -> int:
         print(format_table(
             rows,
             [
-                ("name", "Repo", 40),
-                ("stars", "⭐", 7),
-                ("pushed", "Pushed", 10),
-                ("desc", "Description", 80),
+                Column("name", "Repo", 40),
+                Column("stars", "⭐", 7),
+                Column("pushed", "Pushed", 10),
+                Column("desc", "Description", 80),
             ],
         ))
     return 0

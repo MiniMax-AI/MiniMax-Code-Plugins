@@ -14,7 +14,7 @@ import json
 import sys
 from typing import List
 
-from _lib import detect_format, ensure_auth, format_table, gh_json, humanize_date, parse_since
+from _lib import Column, detect_format, ensure_auth, format_table, gh_json, humanize_date, parse_since
 
 
 # `gh search issues` JSON fields (note: commentsCount, not comments).
@@ -130,13 +130,13 @@ def main() -> int:
     print(format_table(
         rows,
         [
-            ("kind", "K", 3),
-            ("repo", "Repo", 28),
-            ("num", "#", 6),
-            ("state", "State", 8),
-            ("title", "Title", 50),
-            ("labels", "Labels", 24),
-            ("updated", "Updated", 10),
+            Column("kind", "K", 3),
+            Column("repo", "Repo", 28),
+            Column("num", "#", 6),
+            Column("state", "State", 8),
+            Column("title", "Title", 50),
+            Column("labels", "Labels", 24),
+            Column("updated", "Updated", 10),
         ],
     ))
     print(f"\n{len(results)} result(s)", file=sys.stderr)

@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)](https://www.python.org/)
 [![Scripts: 11](https://img.shields.io/badge/scripts-11-brightgreen.svg)](#the-scripts)
-[![Schemas: 3/11](https://img.shields.io/badge/schemas-3%2F11-yellow.svg)](scripts/schemas)
+[![Schemas: 3/9](https://img.shields.io/badge/schemas-3%2F9-yellow.svg)](scripts/schemas)
 [![gh CLI required](https://img.shields.io/badge/gh-CLI-181717.svg?logo=github)](https://cli.github.com/)
 
 [English](README.md) · [简体中文](README_zh.md)
@@ -37,7 +37,7 @@ Plain `gh search` has three structural problems for agent-driven research:
 - **Multi-axis exploration** — `explore.py` lets the agent define 2-4 semantic axes per topic, runs them in parallel, and unions results with a relevance score that combines cross-axis hits, canonical anchor recall, and awesome-list signals.
 - **Smart defaults** — every discovery script filters forks and archived repos by default, enforces a minimum star floor, dedupes by `fullName`, and renders in a layered markdown summary (~3KB stdout).
 - **Layered output** — full reports go to `%TEMP%/gh-explore-{topic}-{ts}.md` automatically; the agent reads the summary, and pulls the file only when it needs more detail. Default exploration drops your context from ~18KB to ~2KB.
-- **Field-level contract** — `python scripts/<script>.py --schema` prints the output JSON structure for the four scripts that support it; the other six read their contract from `scripts/schemas/*.schema.json`.
+- **Field-level contract** — `python scripts/<script>.py --schema` prints the output JSON structure for the three scripts that support it (`find_repos`, `explore`, `repo_summary`). The other six entry-point scripts don't yet expose `--schema`; their contracts live alongside the code.
 - **No new CLI surface** — every script is a wrapper over `gh search` or `gh repo view`. You can drop the skill and run the same `gh` commands by hand; the value is in the filter, dedup, and relevance scoring.
 
 ---
@@ -82,7 +82,7 @@ Each command writes a layered markdown summary to stdout (~3KB) and a full repor
 | `_lib.py` | Shared helpers | n/a | `ensure_auth`, `gh_json`, `parse_since`, `print_schema`. Not for direct use. |
 | `__init__.py` | Module docstring | n/a | Documents the scripts package. |
 
-**`--schema` gap:** 6 of 11 scripts don't yet expose `--schema` as a CLI flag. The schema files for those 6 are still pending in `scripts/schemas/`. Until they're added, the four scripts with `--schema` and the existing `repo.schema.json` / `explore.schema.json` / `repo_summary.schema.json` files cover the most-used paths.
+**`--schema` gap:** 6 of 9 entry-point scripts don't yet expose `--schema` as a CLI flag. The three scripts that do (`find_repos`, `explore`, `repo_summary`) cover the most-used paths; the remaining six are pending a schema flag addition.
 
 ---
 
@@ -97,7 +97,7 @@ Each command writes a layered markdown summary to stdout (~3KB) and a full repor
                                      │ python scripts/<name>.py [args]
                                      ▼
             ┌────────────────────────────────────────────────────┐
-            │  scripts/  (10 entry points + _lib + __init__)    │
+            │  scripts/  (9 entry points + _lib + __init__)     │
             │  ─────────────────────────────────────────────────│
             │  find_repos   explore   discover   trending       │
             │  repo_summary find_similar code_search            │

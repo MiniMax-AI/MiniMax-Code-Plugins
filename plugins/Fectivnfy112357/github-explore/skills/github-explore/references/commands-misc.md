@@ -2,6 +2,8 @@
 
 > 按需查阅。零散管理操作集合。
 
+> ⚠️ **写操作需确认**：本文件含 `label create/edit/delete`、`ssh-key/gpg-key add/delete`、`gist create/edit/delete`、`codespace create/delete`、`alias set/delete`、`extension install/remove` 等写命令。4 条纪律（目标 / 影响 / 最小数据 / 确认）见 [SECURITY-NOTES.md](SECURITY-NOTES.md)。
+
 ## 组织 (gh org)
 
 ```bash

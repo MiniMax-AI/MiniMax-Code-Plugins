@@ -22,6 +22,7 @@ from datetime import datetime
 from typing import Dict, List
 
 from _lib import (
+    Column,
     detect_format,
     die,
     ensure_auth,
@@ -29,7 +30,7 @@ from _lib import (
     gh_json,
     humanize_date,
     info,
-    is_low_quality,
+    is_excluded,
     parse_since,
 )
 
@@ -158,7 +159,7 @@ def main() -> int:
             q += f" pushed:>{parse_since(args.pushed_since)}"
         results = search_repos(q, args.per_topic * 3)
         # Quality filter
-        results = [r for r in results if not is_low_quality(r, min_stars=args.min_stars)]
+        results = [r for r in results if not is_excluded(r, min_stars=args.min_stars)]
         # NOTE: we don't filter self-echo (repo whose topic == seed keyword).
         # gh search repos doesn't return topics; doing the check would need
         # N+1 gh repo view calls per topic and slow discovery ~10x. The
@@ -207,12 +208,12 @@ def main() -> int:
     print(format_table(
         rows,
         [
-            ("topic", "Topic", 22),
-            ("name", "Repository", 38),
-            ("stars", "Stars", 6),
-            ("lang", "Lang", 10),
-            ("pushed", "Pushed", 10),
-            ("desc", "Description", 60),
+            Column("topic", "Topic", 22),
+            Column("name", "Repository", 38),
+            Column("stars", "Stars", 6),
+            Column("lang", "Lang", 10),
+            Column("pushed", "Pushed", 10),
+            Column("desc", "Description", 60),
         ],
     ))
     return 0

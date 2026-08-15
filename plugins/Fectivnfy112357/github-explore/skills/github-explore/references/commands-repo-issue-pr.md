@@ -2,6 +2,8 @@
 
 > 按需查阅。开发核心流：repo 管理、issue 追踪、PR 生命周期。
 
+> ⚠️ **写操作需确认**：本文件含 `create/update/delete/close/merge/dispatch` 等会改变远端状态的命令。4 条纪律（目标 / 影响 / 最小数据 / 确认）见 [SECURITY-NOTES.md](SECURITY-NOTES.md)；默认保持只读。
+
 ## 仓库 (gh repo)
 
 ```bash

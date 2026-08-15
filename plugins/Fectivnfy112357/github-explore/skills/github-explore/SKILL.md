@@ -10,9 +10,16 @@ license: MIT
 
 ## Overview
 
-两个层：`scripts/` 里 10 个 Python 脚本负责**搜索/发现/审计**（统一过滤 fork/archived、默认 star 下限、智能去重、relevance 排序、分层摘要+落盘），直接调用 `gh` 负责**管理操作**（建 repo、提 PR、改 label、跑 workflow 等）。脚本已做搜索 gotchas 处理，发现类请求优先用脚本。
+两个层：`scripts/` 里 9 个 Python 脚本负责**搜索/发现/审计**（统一过滤 fork/archived、默认 star 下限、智能去重、relevance 排序、分层摘要+落盘），直接调用 `gh` 负责**管理操作**（建 repo、提 PR、改 label、跑 workflow 等）。脚本已做搜索 gotchas 处理，发现类请求优先用脚本。
 
 所有脚本输出格式 `--format {table,json,markdown}`，**默认 markdown**（分层摘要 + 落盘），`json` 供管道处理，`table` 窄终端 ASCII 视图。注意：**不会**因为 stdout 被管道就自动切 JSON——要 JSON 必须显式 `--format json`（见 Common Pitfalls #1）。
+
+## 安全边界（Security boundaries）
+
+- **默认只读**：9 个发现类脚本（find_repos / discover / explore / trending / repo_summary / find_similar / code_search / search_issues / org_landscape）只读，不改远端状态。
+- **写操作需确认**：管理类 `gh` 写命令（create / update / delete / close / merge / dispatch / set 等，见 references/ 下 commands-* 系列）会改变远端状态。执行前必须向用户明确：**目标**（哪个 repo / org / 资源）、**影响范围**（改什么、是否可逆）、**最小改动数据**，并得到**明确确认**后再执行。未经确认绝不执行写操作。
+- **禁止回显 token**：认证诊断只用 `gh auth status`（不回显 token）。禁用 `gh auth token`、`gh auth status --show-token`、`--with-token` 注入；`GH_TOKEN` 仅用于自动化（CI），不得打印到 transcript。
+- **错误脱敏**：脚本在把 `gh` 的 stderr/stdout 回显进错误信息前，会脱敏凭据形态（`ghp_*` / `github_pat_*` / `Bearer *` / `token=*` 等）。
 
 ## When to Use
 
@@ -24,7 +31,7 @@ license: MIT
 - 「找代码片段 / where is pattern used」→ `code_search.py`
 - 「找 issue/PR」→ `search_issues.py`
 - 「审计整个 org / 按语言/活跃度/主题分组」→ `org_landscape.py`
-- 「建 repo / 提 PR / 改 label / 跑 workflow」→ 直接 `gh`（命令索引见 references/ 下的 commands-* 系列，按类型查）
+- 「建 repo / 提 PR / 改 label / 跑 workflow」→ 直接 `gh`（命令索引见 references/ 下的 commands-* 系列，按类型查）；**写操作执行前必须明确目标/影响/最小数据并得到用户确认（见「安全边界」）**
 - 不要用脚本做：管理类写操作（创建/修改/删除）。
 
 ## When to use which script — the deeper logic
@@ -113,7 +120,7 @@ python scripts/org_landscape.py langchain-ai --group-by activity
 
 所有发现类脚本 `--format json` 返回**相同字段命名**（GitHub API 原生 camelCase，**不是** snake_case）。**不要猜字段——读契约的两种方式**：
 
-1. `python scripts/<script>.py --schema`（仅 4 个脚本支持：`find_repos` / `explore` / `repo_summary`，以及通过 `_lib.print_schema` 间接调）
+1. `python scripts/<script>.py --schema`（仅 3 个脚本支持：`find_repos` / `explore` / `repo_summary`，以及通过 `_lib.print_schema` 间接调）
 2. 直接看 `explore.schema.json` / `repo.schema.json` / `repo_summary.schema.json` 三个契约文件（位于脚本目录下的 schemas 子目录；其他 6 个脚本的输出结构以 `gh search` 原生 JSON 字段为准，参考 `references/commands-search-format.md`）
 
 三个契约文件的**关键差异**（猜错必踩的坑）：
@@ -176,3 +183,6 @@ python scripts/trending.py --window 30d --format json \
 - [ ] 配额敏感时 `--max-workers 2`、`--awesome` 只跑一次
 - [ ] org/repo 审计确认了过滤条件（fork/archived/stars）符合预期
 - [ ] 管理操作按类型查 references/ 下的 commands-* 系列（不内联复制，不误用脚本）
+- [ ] 发现类任务只用只读脚本，未触发任何远端写
+- [ ] 写操作前已向用户明确目标/影响/最小数据并获得确认
+- [ ] 认证诊断只用了 `gh auth status`，未回显任何 token

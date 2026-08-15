@@ -2,7 +2,7 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "github-explore",
   "version": "2.0.0",
-  "description": "Search, discover, summarize and audit GitHub through the gh CLI: find repos about a topic, map a field landscape, trending, repo overviews, similar projects, code search, issue/PR search and org audits — backed by 10 zero-config Python scripts with relevance ranking and quota-aware searching.",
+  "description": "Search, discover, summarize and audit GitHub through the gh CLI: find repos about a topic, map a field landscape, trending, repo overviews, similar projects, code search, issue/PR search and org audits — backed by 9 zero-config Python scripts with relevance ranking and quota-aware searching. Read-only by default; opt-in write management (repos/issues/PRs/workflows/secrets/releases) requires target, impact and minimal-data disclosure plus explicit user confirmation before execution.",
   "author": {
     "name": "Fectivnfy112357",
     "url": "https://github.com/Fectivnfy112357"

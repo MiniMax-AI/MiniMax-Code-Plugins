@@ -2,6 +2,8 @@
 
 > 按需查阅。workflow 运行、缓存、密钥、变量、发布管理。
 
+> ⚠️ **写操作需确认**：本文件含 `workflow run/enable/disable`、`secret set/delete`、`variable set`、`cache delete`、`release create/delete`、`run rerun/cancel` 等会改变远端状态或密钥的命令。4 条纪律（目标 / 影响 / 最小数据 / 确认）见 [SECURITY-NOTES.md](SECURITY-NOTES.md)。
+
 ## Runs / Workflows
 
 ```bash
