@@ -1,0 +1,21 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "minimax-code-trajectory",
+  "version": "0.1.0",
+  "description": "Inspect local MiniMax Code session ledgers as privacy-aware, read-only trajectories through a dependency-free MCP server.",
+  "author": {
+    "name": "hetaoBackend",
+    "url": "https://github.com/hetaoBackend"
+  },
+  "homepage": "https://github.com/hetaoBackend/MiniMax-Code-Plugins/tree/main/plugins/hetaoBackend/minimax-code-trajectory",
+  "repository": "https://github.com/hetaoBackend/MiniMax-Code-Plugins.git",
+  "license": "Apache-2.0",
+  "keywords": [
+    "minimax-code",
+    "trajectory",
+    "session",
+    "debugging",
+    "mcp",
+    "privacy"
+  ]
+}
