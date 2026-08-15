@@ -1,0 +1,20 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "ticktick",
+  "version": "0.1.0",
+  "description": "Manage TickTick (international) tasks, lists, habits, focus records and countdowns through the official TickTick MCP server.",
+  "author": {
+    "name": "HopeYin",
+    "url": "https://github.com/HopeYin"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://help.ticktick.com/articles/7438129581631995904",
+  "keywords": [
+    "minimax-code",
+    "plugin",
+    "mcp",
+    "ticktick",
+    "task-management",
+    "habit-tracker"
+  ]
+}
