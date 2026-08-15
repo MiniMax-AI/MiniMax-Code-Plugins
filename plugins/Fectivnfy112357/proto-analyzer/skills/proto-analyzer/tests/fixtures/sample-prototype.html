@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>课程管理 — 课程创建</title>
+  <style>
+    body { font-family: sans-serif; max-width: 800px; margin: 2rem auto; }
+    label { display: block; margin-top: 1rem; font-weight: 600; }
+    input, textarea, select { display: block; width: 100%; padding: 0.4rem; }
+    .row { display: flex; gap: 1rem; }
+    .row > * { flex: 1; }
+    .mock-card { background: #f7f7f7; padding: 1rem; margin: 1rem 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>课程管理后台</h1>
+    <nav>
+      <a href="#dashboard">仪表盘</a> ·
+      <a href="#list">课程列表</a> ·
+      <a href="#create">创建课程</a>
+    </nav>
+  </header>
+
+  <!-- Page 1: Form page (course creation) -->
+  <main id="create" data-page-type="form">
+    <h2>创建课程</h2>
+
+    <form>
+      <label for="course_name">课程名称<span class="required">*</span></label>
+      <input id="course_name" name="course_name" type="text" maxlength="50" required
+             placeholder="请输入课程名称">
+
+      <label for="course_category">课程分类<span class="required">*</span></label>
+      <select id="course_category" name="course_category" required>
+        <option value="">请选择</option>
+        <option value="language">语言</option>
+        <option value="exam">考试</option>
+        <option value="it">IT</option>
+        <option value="art">艺术</option>
+      </select>
+
+      <label for="course_price">课程价格(元)<span class="required">*</span></label>
+      <input id="course_price" name="course_price" type="number" min="0" step="0.01" required>
+
+      <label for="course_intro">课程简介</label>
+      <textarea id="course_intro" name="course_intro" maxlength="500" rows="4"
+                placeholder="简要描述课程内容"></textarea>
+
+      <label for="course_cover">课程封面</label>
+      <input id="course_cover" name="course_cover" type="file" accept="image/*">
+
+      <div class="actions">
+        <button type="submit">提交</button>
+        <button type="reset">重置</button>
+        <a href="#list">取消</a>
+      </div>
+    </form>
+
+    <!-- Mock data section — should be EXCLUDED by Rule 3 (Context-Based Mock Data) -->
+    <aside class="mock-card" data-mock="true">
+      <h3>示例课程（仅展示，不计入字段）</h3>
+      <p>这是一段完整的中文示例文本，描述一个虚构的"2026年中级经济法VIP高效通关班"课程的详细情况，包括课程亮点、目标学员、师资介绍、课时安排、教学大纲、配套资料等等。这段内容明显长于普通表单输入，且明确标注为"示例"，因此根据 Rule 3 应作为 mock data 被排除。</p>
+      <p>另一段示例：学员手机号 182********83；课程评分 4.8；累计学员 12345；完课率 92%。这些数据实例不是字段定义。</p>
+    </aside>
+  </main>
+
+  <!-- Page 2: List page (course list) -->
+  <section id="list" data-page-type="list">
+    <h2>课程列表</h2>
+    <div class="filter-bar">
+      <label for="filter_category">分类</label>
+      <select id="filter_category" name="filter_category">
+        <option value="">全部</option>
+        <option value="language">语言</option>
+        <option value="exam">考试</option>
+        <option value="it">IT</option>
+        <option value="art">艺术</option>
+      </select>
+      <label for="filter_price_min">最低价</label>
+      <input id="filter_price_min" name="filter_price_min" type="number" min="0">
+      <label for="filter_price_max">最高价</label>
+      <input id="filter_price_max" name="filter_price_max" type="number" min="0">
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>课程名</th>
+          <th>分类</th>
+          <th>价格</th>
+          <th>创建时间</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>2026年中级经济法VIP高效通关班</td><td>exam</td><td>1980</td><td>2026-07-15</td></tr>
+        <tr><td>雅思7分突破训练营</td><td>language</td><td>3580</td><td>2026-06-20</td></tr>
+        <tr><td>Python 数据分析实战</td><td>it</td><td>1280</td><td>2026-08-01</td></tr>
+      </tbody>
+    </table>
+    <p class="pagination">共 3 条记录 · 第 1/1 页</p>
+  </section>
+
+  <!-- Page 3: Detail page (course detail) -->
+  <article id="detail" data-page-type="detail">
+    <h2>课程详情</h2>
+    <dl>
+      <dt>课程名称</dt>
+      <dd>2026年中级经济法VIP高效通关班</dd>
+      <dt>课程分类</dt>
+      <dd>考试</dd>
+      <dt>价格</dt>
+      <dd>1980 元</dd>
+      <dt>创建时间</dt>
+      <dd>2026-07-15</dd>
+      <dt>学员数</dt>
+      <dd>12345</dd>
+      <dt>评分</dt>
+      <dd>4.8</dd>
+    </dl>
+  </article>
+</body>
+</html>

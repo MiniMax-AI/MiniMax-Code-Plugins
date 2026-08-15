@@ -33,19 +33,72 @@ review.
 
 ## Requirements
 
-- A **browser automation tool** in the host agent (e.g. Playwright MCP or
-  Puppeteer MCP) to inspect the prototype page; the skill adapts to whatever
-  is available.
-- Access to the prototype URL (credentials, if any, are supplied by the user
-  when prompted).
+- Python 3.10+ (for the regression test suite that validates the SKILL's
+  output contract against a static prototype fixture).
+- Optional: a **browser automation tool** in the host agent (Playwright MCP,
+  Puppeteer MCP, etc.) to inspect the prototype page in a real browser.
+  If unavailable, paste the rendered HTML source instead — the Skill's
+  extraction rules still apply.
+- Optional: a **sub-agent dispatch** capability in the host agent to run
+  the three document generators concurrently. If unavailable, the host
+  agent generates them in order (PRD → System-Design → API-Spec); this is
+  the default.
+- Access to the prototype URL the user wants analyzed. See the
+  "Authentication" note below.
 
 ## Data and network
 
-- The skill only navigates the prototype URL the user provides; nothing is
-  sent anywhere else.
-- Credentials for password-protected prototypes are entered by the user at
-  prompt time and are not stored.
-- No telemetry, no third-party services.
+This Skill runs entirely in the host agent. The data flow depends on
+whether the host uses a browser tool or works from pasted HTML.
+
+**Direct (this Skill)**: no network calls of its own. Reads
+`page-analysis.json` (intermediate) and writes the four output documents
+to `docs/` in the project.
+
+**Direct (when the host uses a browser tool)**: the host's browser
+issues a single GET on the URL the user provides. That is the only
+explicit request made for this Skill.
+
+**Downstream (the prototype page itself, NOT this Skill)**: a real
+browser page is not just the URL you paste — visiting it causes the
+host's browser to load additional resources the page controls,
+including but not limited to:
+
+- CDN assets (scripts, images, CSS)
+- Web fonts
+- Analytics / telemetry beacons
+- SSO / OAuth redirect endpoints
+- Third-party iframes
+- API sub-resources called by the page's own JavaScript
+
+Those requests are part of normal browser behavior, not part of this
+Skill, but they DO leave the host's browser and reach the services
+listed above. For a private / internal prototype, the user must
+confirm that the prototype itself and the downstream services it
+loads are within scope before the host visits the URL. The host agent
+should surface this to the user (sample wording in `SKILL.md` "Data
+boundary" section).
+
+**Authentication**: if the prototype requires login, the user logs in
+via the host's already-authenticated browser session, or logs in
+themselves; this Skill then reads the resulting authenticated state.
+**This Skill never requests, reads, records, or echoes credential
+values in the conversation, in the generated documents, or in the
+`page-analysis.json` output.** This applies to bearer tokens, basic
+auth usernames/passwords, API keys, session cookies, OTP codes, and
+any other secret material.
+
+**No telemetry, no third-party services run by this Skill.** The
+Skill is a guidance document; the only file output is the four docs
+under `docs/`.
+
+## Security model
+
+- No credentials handled or echoed at any point.
+- No private endpoints or hidden telemetry in this Skill.
+- The host's browser may reach downstream services listed above when
+  loading the prototype; the user is responsible for confirming that
+  scope before processing private prototypes.
 
 ## License
 

@@ -16,6 +16,43 @@ Transform a prototype URL into three backend development documents:
 2. **SYSTEM-DESIGN.md** — Architecture, schema, module boundaries
 3. **API-SPEC.md** — RESTful endpoints, request/response contracts
 
+## Host capabilities (none are required)
+
+This Skill assumes only that the host agent can read its `SKILL.md` and
+follow instructions. The following host capabilities are **optional** —
+if present they are used; if absent, fallbacks in this Skill apply.
+
+| Capability | Used in | Fallback when absent |
+|---|---|---|
+| Browser automation MCP (Playwright, Puppeteer, etc.) | Step 1 — page DOM inspection, screenshots | User pastes the rendered HTML source (e.g. browser "Save as…" then `cat page.html`); the Skill parses the static HTML for field extraction |
+| Sub-agent dispatch (Task tool) | Steps 5/6 — PRD / System-Design / API-Spec / Verifier | The host agent does the work itself, sequentially, in the order PRD → System-Design → API-Spec → Verification. This is the default; sub-agents are only a performance optimization |
+| Authenticated browser session (cookies, SSO state) | Step 1.2 — accessing a login-protected prototype | The user logs in themselves in the host's browser; this Skill never reads, requests, records, or echoes credential values |
+
+Do not assume any of these are present. The Skill's contract is the four
+output documents; the orchestration is a host-side choice.
+
+## Data boundary (confirm before processing private prototypes)
+
+A real browser page is not just the URL the user pastes. Visiting it
+causes the host's browser to load additional resources the page
+controls, including but not limited to: CDN assets, web fonts, analytics
+beacons, SSO / OAuth redirect endpoints, third-party iframes, and API
+sub-resources called by the page's own JavaScript.
+
+**Before Step 1 begins**, the host agent must surface this to the user
+when the prototype is private, internal, or contains business-sensitive
+content. Recommended wording:
+
+> The prototype URL may cause your browser to load downstream resources
+> (CDN, fonts, analytics, SSO, iframes, API sub-resources). For a
+> private / internal prototype, please confirm the prototype itself
+> and the downstream services it pulls from are within scope before
+> proceeding. If you would rather not visit a private URL, paste the
+> rendered HTML source instead (see "Host capabilities" above).
+
+For a public, non-sensitive prototype, the host agent can proceed
+without a separate confirmation, but the disclosure still stands.
+
 ## Workflow
 
 ### Step 1: Prototype Exploration (Blocking)
@@ -24,22 +61,32 @@ Explore the prototype to understand its content.
 
 #### 1.1 Browser Tool Selection
 
-Use whatever browser automation tool is available:
-- **Playwright MCP** (`browser_navigate`, `browser_snapshot`, `browser_take_screenshot`, `browser_click`, `browser_type`)
-- **Chrome Puppeteer MCP** (`puppeteer_navigate`, `puppeteer_screenshot`, `puppeteer_evaluate`, `puppeteer_click`, `puppeteer_fill`)
-- **Other browser MCP tools** — adapt accordingly
+If the host has a browser automation MCP, use it. The Skill is tool-agnostic;
+any of the following work:
 
-**Strategy**: Start with the most capable tool. If one fails (e.g., page doesn't render, auth blocked), try another or ask the user for access.
+- **Playwright MCP** — `browser_navigate`, `browser_snapshot`, `browser_take_screenshot`, `browser_click`, `browser_type`
+- **Chrome Puppeteer MCP** — `puppeteer_navigate`, `puppeteer_screenshot`, `puppeteer_evaluate`, `puppeteer_click`, `puppeteer_fill`
+- **Other browser MCP tools** — adapt the same operations to whatever the host exposes
+
+**Strategy**: start with the most capable tool. If one fails (page doesn't
+render, auth blocked, headless issue), try another, or fall back to the
+user pasting rendered HTML source.
 
 #### 1.2 Navigation & Authentication
 
-- Navigate to the provided URL
-- If a password/verification/login page appears, **ask the user** for credentials
-- Take a screenshot for visual reference
-- Identify the prototype platform type:
+- Navigate to the provided URL using the selected browser tool
+- If a password / verification / login page appears:
+  - **Do not request credentials from the user in chat.** The user logs in
+    in the host's already-authenticated browser session, or logs in
+    themselves; this Skill then reads the resulting authenticated state.
+  - This Skill does not request, read, record, or echo credential values
+    anywhere in the conversation, in the generated documents, or in the
+    `page-analysis.json` output.
+- Take a screenshot for visual reference (if the browser tool supports it)
+- Identify the prototype platform type from the rendered DOM:
   - **Figma** — typically renders as a canvas with static layers
   - **Axure** — may have simulated interactions, notes panels, dynamic content
-  - **CoDesign/蓝湖/墨刀** — Chinese prototyping platforms with their own viewers
+  - **CoDesign / 蓝湖 / 墨刀** — Chinese prototyping platforms with their own viewers
   - **Deployed HTML** — real HTML/CSS/JS, may have real form elements
   - **Other** — describe what you see
 
@@ -256,13 +303,20 @@ Once tech stack is confirmed:
 3. **If no matching skill:** rely on the model's internal knowledge of the framework's industry-standard conventions.
 4. **If user chose framework-agnostic:** skip this step; generate generic descriptions in SYSTEM-DESIGN.md.
 
-### Step 5: Parallel Document Generation
+### Step 5: Document Generation
 
 **Only proceed after Step 1 is complete (`page-analysis.json` available) AND Steps 2-3 confirmed by user.**
 
-Spawn three sub-agents in parallel. Each receives:
-- `page-analysis.json` (complete field/interaction data)
-- User-confirmed context (business background, roles, goal)
+The host agent generates three documents, in the order
+**PRD.md → SYSTEM-DESIGN.md → API-SPEC.md**. If the host has a sub-agent
+capability (Task / spawn), the three generations can be dispatched in
+parallel as a performance optimization; this Skill does not require it.
+The Skill's contract is the three documents on disk, not the
+orchestration mechanism.
+
+For each document, the host agent has:
+- `page-analysis.json` (complete field / interaction data from Step 1)
+- User-confirmed context (business background, roles, goal — from Step 2)
 - Tech stack conventions (from Step 4)
 
 #### Document Boundary Rules (STRICT)
@@ -291,7 +345,7 @@ PRD field "姓名: 必填, 文本, 最多50字符"
     → API-SPEC generates: name: string (required, maxLength: 50)
 ```
 
-#### Agent A: PRD Writer
+#### 5.1 PRD.md
 
 Generate `PRD.md` using the template at `templates/prd-template.md`. Must include:
 
@@ -307,7 +361,7 @@ Generate `PRD.md` using the template at `templates/prd-template.md`. Must includ
 
 **CRITICAL:** Only include fields from `page-analysis.json` that are in the `fields` arrays. Cross-check `excluded_items` to ensure excluded content was not inadvertently included.
 
-#### Agent B: System Design Writer
+#### 5.2 SYSTEM-DESIGN.md
 
 Generate `SYSTEM-DESIGN.md` using the template at `templates/system-design-template.md`. Must include:
 
@@ -318,7 +372,7 @@ Generate `SYSTEM-DESIGN.md` using the template at `templates/system-design-templ
 
 **REMINDER:** No API endpoint definitions, no request/response JSON examples. Reference PRD for business rules.
 
-#### Agent C: API Spec Writer
+#### 5.3 API-SPEC.md
 
 Generate `API-SPEC.md` applying the tech stack conventions from Step 4. Must include:
 
@@ -332,18 +386,21 @@ Generate `API-SPEC.md` applying the tech stack conventions from Step 4. Must inc
 
 **REMINDER:** No database table definitions, no business background. Reference SYSTEM-DESIGN for entity types, PRD for validation rules.
 
-### Step 6: Verification (Verifier Agent)
+### Step 6: Verification
 
-Spawn a verification sub-agent that:
+The host agent runs the verification checklist itself (or, if a
+sub-agent capability is available, may dispatch the checklist to one
+as a performance optimization — this is not required).
 
-1. Reads all three generated documents
-2. Cross-references every field mentioned in PRD/API-SPEC against the original `page-analysis.json`
-3. Checks that no field from the prototype is missing in the API contract
-4. Validates that API endpoints cover all interactions identified in the navigation graph
-5. Ensures SYSTEM-DESIGN entities map to the fields identified on the prototype
-6. **Checks for excluded-item leakage** — verifies nothing from `excluded_items` arrays appears as a field in any document
-7. Checks document boundary compliance (no overlap between the three documents)
-8. Produces `VERIFICATION.md` with:
+The verifier reads all three generated documents and:
+
+1. Cross-references every field mentioned in PRD/API-SPEC against the original `page-analysis.json`
+2. Checks that no field from the prototype is missing in the API contract
+3. Validates that API endpoints cover all interactions identified in the navigation graph
+4. Ensures SYSTEM-DESIGN entities map to the fields identified on the prototype
+5. **Checks for excluded-item leakage** — verifies nothing from `excluded_items` arrays appears as a field in any document
+6. Checks document boundary compliance (no overlap between the three documents)
+7. Produces `VERIFICATION.md` with:
    - Coverage matrix: prototype fields vs document mentions (covered / missing)
    - Gap list: any field, interaction, or page zone that was not captured
    - **Exclusion integrity check**: confirms no excluded content leaked into documents
