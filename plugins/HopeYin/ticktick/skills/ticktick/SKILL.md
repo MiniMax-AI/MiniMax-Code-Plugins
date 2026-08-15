@@ -15,7 +15,7 @@ Manage the user's tasks, lists, habits, focus records and countdowns through the
 ## Operating rules
 
 1. **Look before you change.** Before updating, completing, moving or deleting a task, locate it with `search_task` or `filter_tasks`, show the user exactly what you are about to do, then act.
-2. **Deletion is irreversible.** `delete_task` moves a task to the trash and `delete_project_group` dissolves every list inside the folder — always get explicit user confirmation first.
+2. **Deletion is irreversible.** `delete_task` moves a task to the trash, `delete_project_group` dissolves every list inside the folder, `delete_comment` removes a comment permanently, and `delete_focus` removes a focus record permanently — always get explicit user confirmation before any of them.
 3. **Be specific.** When a request is ambiguous (no list name, date or priority), ask before creating or modifying anything. Do not guess.
 4. **Split complex requests.** "Review last week and reschedule this week" should run as: query → summarize to the user → confirm → batch operation.
 
