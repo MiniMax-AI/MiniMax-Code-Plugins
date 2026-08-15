@@ -86,9 +86,14 @@ def info(msg: str) -> None:
 def check_file_permissions(path: str) -> None:
     """Warn if `path` is readable beyond the owner (POSIX only).
 
-    On platforms that don't expose POSIX mode bits (Windows), no warning
-    is emitted — the platform's ACLs are out of scope for this check.
+    On platforms that don't expose POSIX mode bits (Windows, where
+    `os.stat().st_mode` is a synthetic mode not derived from real ACLs),
+    the check is skipped — restricting the file must be done via
+    Properties → Security. The docstring was previously aspirational;
+    the implementation now matches.
     """
+    if os.name != "posix":
+        return
     try:
         mode = os.stat(path).st_mode
     except OSError:

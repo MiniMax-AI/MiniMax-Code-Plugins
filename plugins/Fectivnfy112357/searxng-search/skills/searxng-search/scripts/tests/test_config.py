@@ -101,6 +101,8 @@ class TestResolveEnv(unittest.TestCase):
 
 class TestFilePermissions(unittest.TestCase):
     def test_world_readable_warns(self):
+        if os.name != "posix":
+            self.skipTest("POSIX-mode-bits check is skipped on non-POSIX platforms")
         # Drive the check by patching os.stat so the assertion is portable
         # across platforms (Windows doesn't preserve 0o600 reliably).
         fake_stat = type("S", (), {"st_mode": 0o644})()
@@ -111,6 +113,8 @@ class TestFilePermissions(unittest.TestCase):
         self.assertIn("readable beyond the owner", str(w.call_args))
 
     def test_owner_only_does_not_warn(self):
+        if os.name != "posix":
+            self.skipTest("POSIX-mode-bits check is skipped on non-POSIX platforms")
         fake_stat = type("S", (), {"st_mode": 0o600})()
         with mock.patch.object(search.os, "stat", return_value=fake_stat), \
              mock.patch.object(search, "warn", wraps=search.warn) as w:
@@ -121,6 +125,18 @@ class TestFilePermissions(unittest.TestCase):
         with mock.patch.object(search.os, "stat", side_effect=OSError("missing")), \
              mock.patch.object(search, "warn", wraps=search.warn) as w:
             search.check_file_permissions("/does/not/exist")
+        self.assertFalse(w.called)
+
+    def test_skipped_on_non_posix(self):
+        # Even with a "world-readable" stat, the check is a no-op on
+        # non-POSIX because `st_mode` is a synthetic value on Windows
+        # and not derived from the file's real ACL.
+        if os.name == "posix":
+            self.skipTest("POSIX-only assertion")
+        fake_stat = type("S", (), {"st_mode": 0o644})()
+        with mock.patch.object(search.os, "stat", return_value=fake_stat), \
+             mock.patch.object(search, "warn", wraps=search.warn) as w:
+            search.check_file_permissions("/dummy/path")
         self.assertFalse(w.called)
 
 
