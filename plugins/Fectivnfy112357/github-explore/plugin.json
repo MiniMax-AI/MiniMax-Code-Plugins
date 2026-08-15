@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "github-explore",
-  "version": "2.0.0",
-  "description": "Search, discover, summarize and audit GitHub through the gh CLI: find repos about a topic, map a field landscape, trending, repo overviews, similar projects, code search, issue/PR search and org audits — backed by 9 zero-config Python scripts with relevance ranking and quota-aware searching. Read-only by default; opt-in write management (repos/issues/PRs/workflows/secrets/releases) requires target, impact and minimal-data disclosure plus explicit user confirmation before execution.",
+  "version": "2.1.0",
+  "description": "Search, discover, summarize and audit GitHub through the gh CLI: find repos about a topic, map a field landscape, trending, repo overviews, similar projects, code search, issue/PR search and org audits — backed by 9 zero-config Python scripts with relevance ranking and quota-aware searching. Read-only by default; opt-in write management (repos/issues/PRs/workflows/secrets/releases plus auth/config and gh api mutations) requires target, impact and minimal-data disclosure plus explicit user confirmation before execution. Honours GH_HOST (defaults to github.com; routes all API traffic to e.g. *.ghe.com GitHub Enterprise Cloud or github.acme.com GitHub Enterprise Server — credentials do not cross hosts, GH_TOKEN/GITHUB_TOKEN applies to github.com+*.ghe.com only, GHES on-prem requires GH_ENTERPRISE_TOKEN, and the skill does not validate the target).",
   "author": {
     "name": "Fectivnfy112357",
     "url": "https://github.com/Fectivnfy112357"

@@ -1,7 +1,7 @@
 ---
 name: github-explore
 description: "Use when the user wants to search/discover/summarize/audit GitHub (find repos about X, explore a topic's landscape, what's trending, repo overview, similar projects, code search, issue/PR search, org audit) or run gh CLI operations. Prefer scripts/ for discovery; raw gh commands for management ops."
-version: 2.0.0
+version: 2.1.0
 author: Fectivnfy112357
 license: MIT
 ---
@@ -17,9 +17,14 @@ license: MIT
 ## 安全边界（Security boundaries）
 
 - **默认只读**：9 个发现类脚本（find_repos / discover / explore / trending / repo_summary / find_similar / code_search / search_issues / org_landscape）只读，不改远端状态。
-- **写操作需确认**：管理类 `gh` 写命令（create / update / delete / close / merge / dispatch / set 等，见 references/ 下 commands-* 系列）会改变远端状态。执行前必须向用户明确：**目标**（哪个 repo / org / 资源）、**影响范围**（改什么、是否可逆）、**最小改动数据**，并得到**明确确认**后再执行。未经确认绝不执行写操作。
+- **写操作需确认**（**全 `commands-*.md` 适用**，含 `commands-auth-config.md` 与 `commands-search-format.md`）：管理类 `gh` 写命令会改变**远端状态、本机凭据或配置**。执行前必须向用户明确：**目标**（哪个 repo / org / 资源 / host）、**影响范围**（改什么、是否可逆、是否触发下游）、**最小改动数据**，并得到**明确确认**后再执行。未经确认绝不执行写操作。具体适用范围与例外见 [references/SECURITY-NOTES.md](references/SECURITY-NOTES.md)。
+  - 远端写：create / update / delete / close / merge / dispatch / rerun / cancel / set-default / fork / deploy-key …
+  - 凭据写（`commands-auth-config.md`）：`gh auth login/logout/switch/setup-git/refresh --scopes …`——影响本机 git credential helper 与 token scopes，`refresh --scopes` 是**权限提升**。
+  - 配置写（`commands-auth-config.md`）：`gh config set …` / `gh config clear-cache`——改 `~/.config/gh/`。
+  - API mutation（`commands-search-format.md`）：`gh api --method POST|PUT|DELETE|PATCH …`；`gh api graphql` 中含 `mutation` 的 query——可触达任意 GitHub 资源（含 admin endpoint），影响面比 `gh issue` / `gh pr` 子命令更广。
 - **禁止回显 token**：认证诊断只用 `gh auth status`（不回显 token）。禁用 `gh auth token`、`gh auth status --show-token`、`--with-token` 注入；`GH_TOKEN` 仅用于自动化（CI），不得打印到 transcript。
-- **错误脱敏**：脚本在把 `gh` 的 stderr/stdout 回显进错误信息前，会脱敏凭据形态（`ghp_*` / `github_pat_*` / `Bearer *` / `token=*` 等）。
+- **错误脱敏（honest scope）**：9 个发现脚本内部走 `_lib.warn/die()` 的 `redact_secrets()` 路径，自动遮 `ghp_*` / `github_pat_*` / `Bearer *` / `token=*` / `GH_TOKEN=*` / `GITHUB_TOKEN=*` 形态。**但 agent 在 Bash 工具里直接跑 `gh …` 时，stderr 不经过 Python wrapper，原样进 transcript**——分享前手动管道 `gh <cmd> 2>&1 | python scripts/redact_stderr.py`。脱敏是 best-effort，非常规 token 形态仍可能漏出。
+- **`GH_HOST` / GitHub Enterprise 风险**：`GH_HOST` 会切换所有 `gh` 子命令的 API 流量目的地（纯 git 操作如 `git push` 不受 `GH_HOST` 影响，跟 `git remote` 走）；默认 `github.com`。切到 GHES on-prem（`github.acme.com`）必须用 `GH_ENTERPRISE_TOKEN` 而非 `GH_TOKEN`；切到 GHEC 租户（`*.ghe.com`）用 `GH_TOKEN`。`--hostname` 不是全局 flag，只在 `auth` / `api` / `attestation` 等约 11 个子命令上存在；通用切换姿势是 `GH_HOST=... gh <cmd>` 或 `gh auth switch --hostname X`。`gh auth status` 默认枚举所有已认证 host，不是只校验当前。skill 不限制、不校验、不警告 host 值——用户负责确保目的地正确；跨 host 误调用 = 跨凭据泄漏（写错组织的 issue / 错仓库开 PR / 错 token 触发 GHES workflow）。
 
 ## When to Use
 

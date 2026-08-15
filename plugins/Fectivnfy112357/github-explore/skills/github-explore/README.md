@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)](https://www.python.org/)
-[![Scripts: 11](https://img.shields.io/badge/scripts-11-brightgreen.svg)](#the-scripts)
+[![Scripts: 13](https://img.shields.io/badge/scripts-13-brightgreen.svg)](#the-scripts)
 [![Schemas: 3/9](https://img.shields.io/badge/schemas-3%2F9-yellow.svg)](scripts/schemas)
 [![gh CLI required](https://img.shields.io/badge/gh-CLI-181717.svg?logo=github)](https://cli.github.com/)
 
@@ -81,6 +81,8 @@ Each command writes a layered markdown summary to stdout (~3KB) and a full repor
 | `org_landscape.py` | Audit an entire org | ❌ | `--group-by {language,topic,activity,stars}`. |
 | `_lib.py` | Shared helpers | n/a | `ensure_auth`, `gh_json`, `parse_since`, `print_schema`. Not for direct use. |
 | `__init__.py` | Module docstring | n/a | Documents the scripts package. |
+| `run_tests.py` | Regression test runner (stdlib unittest; no network, no `gh`) | n/a | Run from `scripts/`: `python run_tests.py`. |
+| `redact_stderr.py` | Opt-in redactor for raw `gh` output (pipe: `gh <cmd> 2>&1 \| python scripts/redact_stderr.py`) | n/a | Reuses `_lib.redact_secrets()`; best-effort. |
 
 **`--schema` gap:** 6 of 9 entry-point scripts don't yet expose `--schema` as a CLI flag. The three scripts that do (`find_repos`, `explore`, `repo_summary`) cover the most-used paths; the remaining six are pending a schema flag addition.
 
@@ -97,7 +99,7 @@ Each command writes a layered markdown summary to stdout (~3KB) and a full repor
                                      │ python scripts/<name>.py [args]
                                      ▼
             ┌────────────────────────────────────────────────────┐
-            │  scripts/  (9 entry points + _lib + __init__)     │
+            │  scripts/  (9 entry points + helpers)             │
             │  ─────────────────────────────────────────────────│
             │  find_repos   explore   discover   trending       │
             │  repo_summary find_similar code_search            │
@@ -146,6 +148,28 @@ Each command writes a layered markdown summary to stdout (~3KB) and a full repor
 
 ---
 
+## Network destination & credentials (security boundary — see SECURITY-NOTES.md)
+
+- **`GH_HOST` changes API traffic destination.** Default is `github.com`; `GH_HOST=github.acme.com` (GHES on-prem) or `GH_HOST=acme.ghe.com` (GHEC tenancy) reroutes REST / search / GraphQL traffic. **Pure git operations (`git push` etc.) are NOT affected by `GH_HOST`** — they follow `git remote`. `--hostname` is **not a global flag**; it exists only on ~11 subcommands (`auth` / `api` / `attestation`); the universal switch is `GH_HOST=... gh <cmd>`.
+- **Credentials are per-host.** gh stores tokens in `hosts.yml` and keyring under a `gh:<host>:<user>` namespace — a PAT issued for one host does not authenticate to another.
+- **Env var overrides follow a strict scope:** `GH_TOKEN` / `GITHUB_TOKEN` are read only for `github.com` + `*.ghe.com` tenancy subdomains + `github.localhost`. **GHES on-prem instances (e.g. `github.acme.com`) require `GH_ENTERPRISE_TOKEN` / `GITHUB_ENTERPRISE_TOKEN`** — set `GH_TOKEN` on a GHES host and `gh` silently falls back to `hosts.yml` instead of using your env var. GHEC (`*.ghe.com` data-residency tenants) and GHES (on-prem) are different deployments with different env var names.
+- **`gh auth status` enumerates all authenticated hosts by default**, not just the current one; scope to one host with `--hostname X`.
+- **The skill does not validate, restrict or warn about `GH_HOST`** — a cross-host mistake is equivalent to a cross-credential leak (issue on the wrong org, PR on the wrong repo, workflow triggered with the wrong token).
+
+---
+
+## Error redaction (honest scope, synced with the zh version)
+
+The 9 discovery scripts internally pass through `_lib.warn/die()`'s `redact_secrets()`, masking `ghp_*` / `github_pat_*` / `Bearer *` / `token=*` / `GH_TOKEN=*` / `GITHUB_TOKEN=*` shapes. But when the agent runs `gh …` directly in the Bash tool, stderr does **not** go through the Python wrapper and lands in the transcript as-is — pipe it manually before sharing:
+
+```bash
+gh <cmd> 2>&1 | python scripts/redact_stderr.py
+```
+
+Redaction is best-effort; non-standard secret shapes can still slip through.
+
+---
+
 ## Design decisions worth knowing
 
 These are the non-obvious calls the skill makes, surfaced so you don't have to reverse-engineer them:
@@ -160,13 +184,14 @@ These are the non-obvious calls the skill makes, surfaced so you don't have to r
 
 ## Contributing
 
-Issues and pull requests are welcome. This is a personal skill that's been refactored over multiple real uses; the test surface is the scripts themselves, not a unit-test suite.
+Issues and pull requests are welcome. This is a personal skill that's been refactored over multiple real uses; the regression suite lives in `scripts/tests/` and runs with `python scripts/run_tests.py` (stdlib unittest, no network, no `gh` binary required). The repo-level `node --test` bridge (`test/github-explore.test.mjs`) runs it in CI.
 
 Before opening a PR:
 
 1. Make sure the affected scripts still pass `python scripts/<name>.py --help` and (where supported) `--schema`.
-2. If you add a new script, add a row to the [scripts table](#the-scripts) and consider whether it needs a schema file under `scripts/schemas/`.
-3. Keep the layered-output convention: stdout summary + temp-file full report, no exceptions.
+2. Run the regression suite (`python scripts/run_tests.py`) and add a test under `scripts/tests/` for any new behaviour.
+3. If you add a new script, add a row to the [scripts table](#the-scripts) and consider whether it needs a schema file under `scripts/schemas/`.
+4. Keep the layered-output convention: stdout summary + temp-file full report, no exceptions.
 
 ---
 

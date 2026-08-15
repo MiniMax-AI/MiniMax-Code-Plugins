@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)](https://www.python.org/)
-[![脚本数: 11](https://img.shields.io/badge/脚本-11-brightgreen.svg)](#脚本列表)
+[![脚本数: 13](https://img.shields.io/badge/脚本-13-brightgreen.svg)](#脚本列表)
 [![Schema: 3/9](https://img.shields.io/badge/schema-3%2F9-yellow.svg)](scripts/schemas)
 [![依赖 gh CLI](https://img.shields.io/badge/依赖-gh%20CLI-181717.svg?logo=github)](https://cli.github.com/)
 
@@ -81,6 +81,8 @@ python scripts/explore.py "多 agent 协作" \
 | `org_landscape.py` | 审计整个 org | ❌ | `--group-by {language,topic,activity,stars}`。 |
 | `_lib.py` | 共享 helper | 不适用 | `ensure_auth`、`gh_json`、`parse_since`、`print_schema`。不直接调。 |
 | `__init__.py` | 模块 docstring | 不适用 | 描述 scripts 包的约定。 |
+| `run_tests.py` | 回归测试入口（stdlib unittest；无网络、无需 `gh`） | 不适用 | 在 `scripts/` 下执行 `python run_tests.py`。 |
+| `redact_stderr.py` | raw `gh` 输出的可选脱敏器（管道：`gh <cmd> 2>&1 \| python scripts/redact_stderr.py`） | 不适用 | 复用 `_lib.redact_secrets()`；best-effort。 |
 
 **`--schema` 缺口**：9 个 entry-point 脚本里 6 个还没暴露 `--schema` CLI 参数。这 6 个的 schema 文件在 `scripts/schemas/` 里也暂缺。已支持的 3 个脚本（`find_repos` / `explore` / `repo_summary`）+ 现有的 `repo.schema.json` / `explore.schema.json` / `repo_summary.schema.json` 覆盖了最高频路径。
 
@@ -97,7 +99,7 @@ python scripts/explore.py "多 agent 协作" \
                                      │ python scripts/<name>.py [args]
                                      ▼
             ┌────────────────────────────────────────────────────┐
-            │  scripts/  （9 个入口 + _lib + __init__）          │
+            │  scripts/  （9 个入口 + helpers）                  │
             │  ─────────────────────────────────────────────────│
             │  find_repos   explore   discover   trending       │
             │  repo_summary find_similar code_search            │
@@ -146,6 +148,28 @@ python scripts/explore.py "多 agent 协作" \
 
 ---
 
+## 网络目的地与凭据（安全边界，详见 SECURITY-NOTES.md）
+
+- **`GH_HOST` 改 API 流量目的地**。默认 `github.com`；`GH_HOST=github.acme.com`（GHES on-prem）或 `GH_HOST=acme.ghe.com`（GHEC 租户）会把 REST / search / GraphQL 流量改走该 host。**纯 git 操作（`git push` 等）不受 `GH_HOST` 影响，跟 `git remote` 走**。`--hostname` 不是全局 flag，只在 `auth` / `api` / `attestation` 等约 11 个子命令上存在；通用切换姿势是 `GH_HOST=... gh <cmd>`。
+- **凭据按 host 隔离**。gh 把 token 存在 `hosts.yml`、keyring 用 `gh:<host>:<user>` 命名空间——一个 host 的 PAT 不会落到另一 host 的调用上。
+- **env var 优先于 hosts.yml，但作用域严格**：**`GH_TOKEN` / `GITHUB_TOKEN` 只对 `github.com` + `*.ghe.com` 租户子域 + `github.localhost` 生效**。**GHES on-prem 实例（如 `github.acme.com`）必须用 `GH_ENTERPRISE_TOKEN` / `GITHUB_ENTERPRISE_TOKEN`**——把 `GH_TOKEN` 设到 GHES 上，`gh` 会**默默**回落到 `hosts.yml`，**不会**用你设的 env var。GHEC（`*.ghe.com` 数据驻留租户）和 GHES（on-prem）是两套部署，env var 名**不同**。
+- **`gh auth status` 默认枚举所有已认证 host**，不是只校验当前 host；限定单 host 用 `--hostname X`。
+- **skill 不限制、不校验、不警告 `GH_HOST` 的值**——跨 host 误调用 = 跨凭据泄漏（写错组织的 issue / 错仓库开 PR / 错 token 触发 GHES workflow）。
+
+---
+
+## 错误脱敏（honest scope，英文版同步）
+
+9 个 discovery 脚本内部走 `_lib.warn/die()` 的 `redact_secrets()`，自动遮 `ghp_*` / `github_pat_*` / `Bearer *` / `token=*` / `GH_TOKEN=*` / `GITHUB_TOKEN=*` 等凭据形态。但 agent 在 Bash 工具里直接跑 `gh …` 时，stderr **不**经过 Python wrapper、原样进 transcript——分享前手动管道：
+
+```bash
+gh <cmd> 2>&1 | python scripts/redact_stderr.py
+```
+
+脱敏是 best-effort，非常规 token 形态仍可能漏出。
+
+---
+
 ## 值得知道的设计取舍
 
 这些是脚本里隐含的非显然决定，列出来免得你反推：
@@ -160,13 +184,14 @@ python scripts/explore.py "多 agent 协作" \
 
 ## 贡献
 
-欢迎 issue 和 PR。这是经过多次实际使用迭代出来的个人 skill；测试面是脚本本身，不是一套单元测试。
+欢迎 issue 和 PR。这是经过多次实际使用迭代出来的个人 skill；回归测试在 `scripts/tests/` 下，用 `python scripts/run_tests.py` 跑（stdlib unittest，无网络、无需 `gh` 二进制）。仓库级 `node --test` 桥接（`test/github-explore.test.mjs`）会在 CI 里跑它。
 
 提 PR 之前：
 
 1. 确认改动的脚本 `python scripts/<name>.py --help` 和（如果支持）`--schema` 还能跑通。
-2. 新增脚本的话，往[脚本列表](#脚本列表)加一行，考虑是否要在 `scripts/schemas/` 加 schema 文件。
-3. 保持分层输出约定：stdout 摘要 + temp 文件全量报告，没有例外。
+2. 跑回归测试 `python scripts/run_tests.py`；新行为在 `scripts/tests/` 下补测试。
+3. 新增脚本的话，往[脚本列表](#脚本列表)加一行，考虑是否要在 `scripts/schemas/` 加 schema 文件。
+4. 保持分层输出约定：stdout 摘要 + temp 文件全量报告，没有例外。
 
 ---
 

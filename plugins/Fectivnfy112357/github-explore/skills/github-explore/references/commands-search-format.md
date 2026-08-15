@@ -2,6 +2,8 @@
 
 > 按需查阅。脚本已封装 repo/issue 搜索；裸 `gh search` 用于脚本覆盖不到的查询或快速查看。JSON 字段命名注意：`gh search repos` 用复数（`stargazersCount`），`gh repo view` 用单数（`stargazerCount`）。
 
+> ⚠️ **写操作需确认**（新版纳入统一门禁）：本文件的 `gh api` 部分含 mutation 写命令——`gh api --method POST|PUT|DELETE|PATCH …` 任意调用（典型为 `POST /repos/o/r/issues` 创建 issue、`PATCH /gists/...` 编辑 gist 等），以及 `gh api graphql` 含 `mutation` 关键字的 query。4 条纪律（目标 / 影响 / 最小数据 / 确认）见 [SECURITY-NOTES.md](SECURITY-NOTES.md)。特别注意：`gh api` 可触达任意 GitHub 资源（含 admin endpoint），影响面比 `gh issue` / `gh pr` 子命令更广。
+
 ## 搜索 (gh search)
 
 ```bash
