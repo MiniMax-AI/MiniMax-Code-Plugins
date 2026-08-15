@@ -25,8 +25,14 @@ Same as `acp-collab`. The SDK lives at `D:/openclaw-acp/openclaw-skill/acp_tools
 ## Dispatch a task
 
 ```python
-import sys
-sys.path.insert(0, r'D:/openclaw-acp/openclaw-skill')
+import os, sys
+_acr_root = os.environ.get('ACP_HOME')
+if not _acr_root:
+    raise RuntimeError(
+        'ACP_HOME env var is not set. Install OpenClaw-mcode-ACP and set '
+        'ACP_HOME to its install path (PowerShell: $env:ACP_HOME = "<path>").'
+    )
+sys.path.insert(0, os.path.join(_acr_root, 'openclaw-skill'))
 from acp_tools import create_task, get_task, list_history
 
 task = create_task(
@@ -69,4 +75,4 @@ for t in recent["tasks"]:
 
 ## Failure handling
 
-If `create_task` returns a non-2xx response, the server is likely down or the auth token is invalid. Stop and surface the error to the user; do not retry in a tight loop.
+If `create_task` returns a non-2xx response, the server is likely down or rejected the request. Verify the server is reachable and that your environment is configured correctly (the server requires `$ACP_TOKEN` to match; this Plugin does not embed or manage credentials). Stop and surface the error to the user; do not retry in a tight loop.

@@ -30,8 +30,15 @@ The ACP server is at `http://localhost:9999`. Your `session_id` is given in the 
 To use the SDK from a shell:
 
 ```python
-import sys
-sys.path.insert(0, r'D:/openclaw-acp/openclaw-skill')
+import os, sys
+_acr_root = os.environ.get('ACP_HOME')
+if not _acr_root:
+    raise RuntimeError(
+        'ACP_HOME env var is not set. Install OpenClaw-mcode-ACP and set '
+        'ACP_HOME to its install path (PowerShell: $env:ACP_HOME = "<path>"). '
+        'See https://github.com/antianqi/openclaw-mcode-acp for setup.'
+    )
+sys.path.insert(0, os.path.join(_acr_root, 'openclaw-skill'))
 from acp_tools import (
     inbox_read, inbox_write, inbox_ask, inbox_answer,
     inbox_sessions, peer_session_id, peer_greet,

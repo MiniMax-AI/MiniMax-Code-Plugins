@@ -40,11 +40,25 @@ Expected behavior:
 ## Requirements
 
 - MiniMax Code desktop app with Agent Plugins 1.0 support
-- A running OpenClaw-mcode-ACP server (default: `http://localhost:9999`)
+- A running OpenClaw-mcode-ACP server **v7-bidir or later** (default: `http://localhost:9999`)
 - Python 3.10+ on `PATH`
-- The OpenClaw-mcode-ACP source checkout at `D:/openclaw-acp/` (or set `ACP_HOME` to your path)
+- **OpenClaw-mcode-ACP source checkout location** — must be exposed via the `ACP_HOME` environment variable. The Plugin never hardcodes a path. Example:
+  - PowerShell: `$env:ACP_HOME = 'D:\path\to\openclaw-mcode-acp'`
+  - bash / zsh: `export ACP_HOME=/path/to/openclaw-mcode-acp`
 
 Install the server side from https://github.com/antianqi/openclaw-mcode-acp (see its `README.md` for `pip install -r requirements.txt` and `.\scripts\start_server.bat`).
+
+## Verify the Plugin works (smoke test)
+
+Before installing into MiniMax Code, run the bundled smoke test to confirm the Plugin can talk to your server:
+
+```bash
+export ACP_HOME=/path/to/openclaw-mcode-acp
+export ACP_TOKEN=<the token your server was started with>
+python scripts/smoke.py
+```
+
+The smoke test (no MiniMax Code required) validates: `$ACP_HOME` resolves, the SDK imports, the server's `/acp/health` is reachable, and an inbox write/read roundtrip works end-to-end. Exits 0 on full pass, 1 on any failure. CI-friendly.
 
 ## Data and network
 
