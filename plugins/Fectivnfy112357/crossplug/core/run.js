@@ -5,9 +5,11 @@
 //   node core/run.js dsh2mcode <src> [--out <dir>] [--json]
 //   node core/run.js mcode2dsh <src> [--out <dir>] [--json]
 //   node core/run.js list --side <dsh|mcode> [--json]
-//   node core/run.js install --side <dsh|mcode|dsh-host> [--force] [--preset-id <id>] [--ext-dir <dir>] [--profile <web|cc-tui|headless>] [--json]
 //
 // 输出：人类可读文本或 --json 的 JSON 对象（供适配器解析）。
+//
+// 本托管插件不含安装器（CONTRIBUTING 禁止 installers）：转换只写入 --out 目录，
+// list 只读扫描用户插件目录；安装由用户手工完成（复制到目标目录 + /plugins 刷新）。
 
 'use strict';
 
@@ -16,7 +18,16 @@ const os = require('node:os');
 const path = require('node:path');
 const dsh2mcode = require('./dsh2mcode.js');
 const mcode2dsh = require('./mcode2dsh.js');
-const { installDsh, installDshHost, installDshHostPlugin, installMcode, registerPluginSkills, dshHome, minimaxHome, piHome } = require('./install.js');
+
+function dshHome() {
+  return process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
+}
+function minimaxHome() {
+  return path.join(os.homedir(), '.minimax');
+}
+function piHome() {
+  return path.join(os.homedir(), '.pi');
+}
 
 function fail(message) {
   process.stderr.write('错误: ' + message + '\n');
@@ -77,24 +88,15 @@ function listDsh() {
   return result;
 }
 
+// 纯路径推导（不执行任何子进程）：从 node 可执行文件位置与常见布局推断 npm 全局根
 function globalNpmRoots() {
   const roots = [];
-  try {
-    const { spawnSync } = require('node:child_process');
-    // Windows 下 npm.cmd 需要 shell；先用 cmd /c 试，失败静默
-    const cmd = process.platform === 'win32'
-      ? spawnSync('cmd', ['/c', 'npm root -g'], { encoding: 'utf8', windowsHide: true })
-      : spawnSync('npm', ['root', '-g'], { encoding: 'utf8', windowsHide: true });
-    if (cmd.status === 0 && cmd.stdout && cmd.stdout.trim()) roots.push(cmd.stdout.trim());
-  } catch { /* 忽略 */ }
-  // 从 node 可执行文件位置推导：<node根>/node_global/node_modules（Windows npm 常见布局）
   try {
     const exeDir = path.dirname(process.execPath);
     roots.push(path.join(exeDir, 'node_global', 'node_modules'));
     roots.push(path.join(path.dirname(exeDir), 'lib', 'node_modules'));
     roots.push(path.join(path.dirname(exeDir), 'lib'));
   } catch { /* 忽略 */ }
-  // 兜底常见位置
   if (process.env.APPDATA) roots.push(path.join(process.env.APPDATA, 'npm', 'node_modules'));
   const home = os.homedir();
   roots.push(path.join(home, '.local', 'lib', 'node_modules'));
@@ -144,12 +146,6 @@ function main() {
       const out = a.flags.out || defaultOutDir(src, 'mcode');
       result = dsh2mcode.convert(path.resolve(src), path.resolve(out));
       result.ok = true;
-      // 输出落在 ~/.minimax/plugins/ 下时：把包内技能自动注册为用户技能（斜杠命令可用）
-      const outAbs = path.resolve(out);
-      const mmPlugins = path.join(minimaxHome(), 'plugins');
-      if (outAbs === mmPlugins || outAbs.startsWith(mmPlugins + path.sep)) {
-        result.skillCommands = registerPluginSkills(outAbs);
-      }
     } else if (cmd === 'mcode2dsh') {
       const src = a.positional[0];
       if (!src) fail('mcode2dsh 需要输入路径（extension 文件或插件包目录）');
@@ -161,20 +157,6 @@ function main() {
       if (side === 'dsh') result = { ok: true, side, plugins: listDsh() };
       else if (side === 'mcode') result = { ok: true, side, plugins: listMcode() };
       else fail('list 需要 --side dsh|mcode');
-    } else if (cmd === 'install') {
-      const side = a.flags.side;
-      if (side === 'dsh') result = installDsh({ presetId: a.flags['preset-id'] || 'crossplug', force: !!a.flags.force });
-      else if (side === 'mcode') result = installMcode({
-        extDir: a.flags['ext-dir'] ? path.resolve(a.flags['ext-dir']) : undefined,
-        srcDir: a.flags.src ? path.resolve(a.flags.src) : undefined,
-        force: !!a.flags.force,
-        piSettings: !!a.flags['pi-settings'],
-      });
-      else if (side === 'dsh-host') {
-        if (a.flags.src) result = installDshHostPlugin(path.resolve(a.flags.src), { profile: a.flags.profile, force: !!a.flags.force });
-        else result = installDshHost({ profile: a.flags.profile, force: !!a.flags.force });
-      }
-      else fail('install 需要 --side dsh|mcode|dsh-host');
     } else {
       fail('未知命令: ' + cmd + '\n\n' + usage());
     }
@@ -232,7 +214,6 @@ function usage() {
   node core/run.js dsh2mcode <preset目录|插件源码文件> [--out <dir>]
   node core/run.js mcode2dsh <extension文件|插件包目录> [--out <dir>] [--host]
   node core/run.js list --side dsh|mcode
-  node core/run.js install --side dsh|mcode|dsh-host [--force] [--preset-id <id>] [--ext-dir <dir>] [--profile <web|cc-tui|headless>] [--src <host转换产物目录>]
   node core/run.js version
 
 所有命令支持 --json 输出（供插件/脚本调用）。

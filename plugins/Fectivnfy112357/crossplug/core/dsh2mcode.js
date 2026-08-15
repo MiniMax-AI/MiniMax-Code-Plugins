@@ -357,6 +357,10 @@ function renderReport(preset, srcDir, report, personaText, stubs, notes) {
 function convertPluginSource(srcFile, outDir, opts = {}) {
   const source = fs.readFileSync(srcFile, 'utf8');
   const base = path.basename(srcFile, path.extname(srcFile));
+  // 源模块类型：ESM（export/import）→ .js；CommonJS（module.exports/require）→ .cjs。
+  // 生成的 package.json 是 type:module，.cjs 扩展名强制 CommonJS 解析，避免把 CJS 源误当 ESM。
+  const sourceIsEsm = /^\s*(import\s|export\s)/m.test(source);
+  const vendorFile = sourceIsEsm ? 'dsh-plugin.js' : 'dsh-plugin.cjs';
   const tools = [];
   const events = [];
   const lostCapabilities = [];
@@ -449,8 +453,8 @@ function convertPluginSource(srcFile, outDir, opts = {}) {
         [serverName]: { type: 'stdio', command: 'node', args: ['./mcp-server.js'] },
       },
     }, null, 2) + '\n');
-    // vendor/dsh-plugin.js 已经在下面 copyFileSync 写过了；mcp-server.js 用 import + 模拟 ctx 加载它
-    writeFileSafe(path.join(outDir, 'mcp-server.js'), renderToolsMcpServer(tools, serverName, sourcePluginName || base));
+    // vendor/${vendorFile} 已经在下面 copyFileSync 写过了；mcp-server.js 用 import + 模拟 ctx 加载它
+    writeFileSafe(path.join(outDir, 'mcp-server.js'), renderToolsMcpServer(tools, serverName, sourcePluginName || base, vendorFile));
     mcpToolCount = tools.length;
   }
 
@@ -462,10 +466,10 @@ function convertPluginSource(srcFile, outDir, opts = {}) {
   lines.push('// 生成时间: ' + new Date().toISOString());
   lines.push('// 转换器: crossplug (core/dsh2mcode.js, plugin-source 模式)');
   lines.push('//');
-  lines.push('// 工具执行走 vendor/dsh-plugin.js 加载 + 模拟 ctx 路径，');
+  lines.push(`// 工具执行走 vendor/${vendorFile} 加载 + 模拟 ctx 路径，`);
   lines.push('// 闭包（cfg / recall / formatRecall 等）保留在原 apply() 作用域里，行为真实。');
   lines.push('');
-  lines.push('import dshPlugin from "./vendor/dsh-plugin.js";');
+  lines.push(`import dshPlugin from "./vendor/${vendorFile}";`);
   lines.push('import { Type } from "./typebox-shim.js";');
   lines.push('');
   lines.push('// DSH 工具注册的元数据缓存（mockCtx.tools.register 时写入）');
@@ -643,8 +647,8 @@ function convertPluginSource(srcFile, outDir, opts = {}) {
   }, null, 2) + '\n');
   // 保留原源码作 vendor 加载源
   fs.mkdirSync(path.join(outDir, 'vendor'), { recursive: true });
-  // 用固定名 dsh-plugin.js 以便 mcp-server.js / extension.js 可以稳定 import
-  fs.copyFileSync(srcFile, path.join(outDir, 'vendor', 'dsh-plugin.js'));
+  // vendor 固定名（dsh-plugin.js=ESM / dsh-plugin.cjs=CJS）：.cjs 强制 CommonJS，规避本包 type:module 把 CJS 源误当 ESM
+  fs.copyFileSync(srcFile, path.join(outDir, 'vendor', vendorFile));
   writeFileSafe(path.join(outDir, 'CONVERSION-REPORT.md'), [
     `# 转换报告：DSH 插件源码 → mcode 插件包`,
     '',
@@ -671,7 +675,7 @@ function convertPluginSource(srcFile, outDir, opts = {}) {
     ...(mcpPluginName
       ? [`- agent-plugins MCP 包：\`plugin.json\` + \`mcp.json\` + \`mcp-server.js\`（${mcpToolCount} 个 MCP 工具）→ 复制到 ~/.minimax/plugins/${mcpPluginName}/，MCode /plugins → Local 安装`]
       : []),
-    [`- vendor：原 DSH 插件源码 \`vendor/dsh-plugin.js\`（被 mcp-server.js / extension.js 加载）`],
+    [`- vendor：原 DSH 插件源码 \`vendor/${vendorFile}\`（被 mcp-server.js / extension.js 加载）`],
     [`- pi extension：\`extension.js\` + \`typebox-shim.js\` —— ⚠️ 仅独立 pi CLI 生效；mcode CLI 不加载 pi extension（2026-08-15 实证，mcode-plugin-spec.md §1.1）；mcode 侧生效载体是上面的 agent-plugins MCP 包`],
     '',
     `## 警告`,
@@ -696,7 +700,7 @@ function convertPluginSource(srcFile, outDir, opts = {}) {
 
 // 工具注册型插件 → MCP stdio 服务器（newline JSON-RPC）
 // vendor 加载 + 模拟 ctx：原 DSH 插件的 execute 闭包完整保留（cfg / recall / formatRecall 等不变）
-function renderToolsMcpServer(tools, serverName, sourceBase) {
+function renderToolsMcpServer(tools, serverName, sourceBase, vendorFile) {
   // MCP 广播名（sanitized）→ vendor 注册的原始工具名：MCP 客户端按广播名调用，
   // 派发时必须还原原始名查 mockTools.registered（原名可含 - 等 MCP 广播不允许的字符）。
   const nameMap = {};
@@ -717,7 +721,7 @@ function renderToolsMcpServer(tools, serverName, sourceBase) {
   return `#!/usr/bin/env node
 // 由 crossplug 生成：把 DSH 插件（${sourceBase}）的工具注册桥接为 MCP stdio 服务器。
 // 协议：newline-delimited JSON-RPC 2.0（initialize / tools/list / tools/call / ping / notifications/*）。
-// 执行路径：vendor/dsh-plugin.js → mockCtx.tools.register → mockTools.registered → 本文件派发。
+// 执行路径：vendor/${vendorFile} → mockCtx.tools.register → mockTools.registered → 本文件派发。
 // 闭包（cfg / recall / formatRecall 等）保留在原 apply() 作用域里。
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
@@ -726,8 +730,8 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// 加载原 DSH 插件（ESM）
-const dshPlugin = await import(pathToFileURL(resolvePath(__dirname, "./vendor/dsh-plugin.js")).href);
+// 加载原 DSH 插件（按源模块类型：ESM=.js / CJS=.cjs）
+const dshPlugin = await import(pathToFileURL(resolvePath(__dirname, "./vendor/${vendorFile}")).href);
 
 // 镜像块：与 convertPluginSource 生成的 extension.js 中的 mockTools/mockCtx 保持一致（改动需两侧同步）
 // DSH 工具注册表（apply() 触发后填充）

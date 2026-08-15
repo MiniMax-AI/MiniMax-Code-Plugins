@@ -18,7 +18,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const vm = require('node:vm');
 const { findCalls } = require('./extract.js');
 const { INLINE_BRIDGE_HELPERS, typeboxShimCode } = require('./schema.js');
 
@@ -73,8 +73,14 @@ function stripTypes(source) {
 }
 
 function checkSyntax(file) {
-  const r = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
-  return r.status === 0 ? { ok: true } : { ok: false, error: (r.stderr || '').trim() };
+  // 进程内语法校验（等价 node --check 的 CJS 语义，但不 spawn 子进程）
+  try {
+    const code = fs.readFileSync(file, 'utf8');
+    new vm.Script(code, { filename: file });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: (err && err.message ? err.message : String(err)).trim() };
+  }
 }
 
 // ── typebox 导入重写 ──
@@ -236,8 +242,6 @@ function convert(extensionFile, outDir, opts = {}) {
       '         - id: ' + presetId,
       "           name: './plugins/" + presetId + "/lib/index.js'",
       '  3. 重启 DSH 进程。',
-      '',
-      '或直接运行：node core/run.js install --side dsh-host --src <本目录>',
       '',
     ].join('\n') + '\n', 'utf8');
   } else {

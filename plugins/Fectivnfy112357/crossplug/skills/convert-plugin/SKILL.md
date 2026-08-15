@@ -8,6 +8,11 @@ description: 在 DSH 与 mcode（MiniMax Code / pi）之间双向转换插件。
 本技能教 Agent 如何执行 DSH 与 mcode 之间的插件转换。转换核心（`core/run.js`）随本插件
 安装在插件目录的 `core/` 下，零 npm 依赖，全程本地执行（无网络访问、无凭据）。
 
+副作用与安全边界：
+- 转换命令只写入 `--out` 指定的输出目录（同名文件会覆盖；不会删除目录内其他文件）。
+- `list` 只读扫描用户侧插件目录（`~/.dsh/.agent-presets`、`~/.minimax/plugins`、`~/.pi/agent/extensions`），不做任何写入。
+- 本插件**不含安装器**（社区仓库 CONTRIBUTING 禁止 installers）：不修改 `~/.dsh`、`~/.minimax`、`~/.pi` 的配置或内容，不执行 `npm` 等子进程。安装由用户手工完成（复制产物到目标目录 + 刷新插件列表）。
+
 ## 何时使用
 
 - 用户想把 **DSH** 的 agent preset 或插件源码搬到 mcode / MiniMax Code；
