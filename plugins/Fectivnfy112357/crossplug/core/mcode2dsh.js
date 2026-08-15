@@ -19,12 +19,41 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { findCalls } = require('./extract.js');
+const { findCalls, relativeImports } = require('./extract.js');
 const { INLINE_BRIDGE_HELPERS, typeboxShimCode } = require('./schema.js');
 
 const EXT_NAMES = ['index.js', 'extension.js', 'main.js', 'index.ts', 'extension.ts', 'main.ts'];
 
 // ── 定位 extension 文件 ──
+
+function isInsideDir(parent, child) {
+  const rel = path.relative(parent, child);
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+// 递归复制源码相对导入的本地文件到输出 vendor/（限制在源目录内；越界/缺失跳过）
+function copyRelativeDeps(srcDir, destDir, source, skipName, warnings, seen) {
+  const visited = seen || new Set();
+  for (const rel of relativeImports(source)) {
+    const srcFile = path.resolve(srcDir, rel);
+    if (!isInsideDir(srcDir, srcFile)) {
+      if (!visited.has('out:' + rel)) { visited.add('out:' + rel); warnings.push('相对导入超出源目录，跳过: ' + rel); }
+      continue;
+    }
+    if (!fs.existsSync(srcFile)) {
+      if (!visited.has('miss:' + rel)) { visited.add('miss:' + rel); warnings.push('相对导入文件不存在，跳过: ' + rel); }
+      continue;
+    }
+    const resolved = path.resolve(srcFile);
+    if (visited.has(resolved)) continue;
+    visited.add(resolved);
+    const dest = path.join(destDir, path.relative(srcDir, resolved));
+    if (dest === path.join(destDir, skipName)) continue; // 不覆盖转换产物
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(resolved, dest);
+    copyRelativeDeps(path.dirname(resolved), path.dirname(dest), fs.readFileSync(resolved, 'utf8'), skipName, warnings, visited);
+  }
+}
 
 function locateExtension(dir) {
   const pkgPath = path.join(dir, 'package.json');
@@ -33,7 +62,7 @@ function locateExtension(dir) {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
       if (pkg.main) {
         const main = path.resolve(dir, pkg.main);
-        if (fs.existsSync(main)) return { file: main, pkg };
+        if (fs.existsSync(main) && isInsideDir(dir, main)) return { file: main, pkg };
       }
       // pi 包格式：package.json 的 "pi": { "extensions": ["./src/index.ts"] } 声明扩展入口
       // （见 pi 官方 docs/extensions.md "Package with dependencies"）
@@ -41,7 +70,7 @@ function locateExtension(dir) {
         for (const entry of pkg.pi.extensions) {
           if (typeof entry !== 'string') continue;
           const f = path.resolve(dir, entry);
-          if (fs.existsSync(f)) return { file: f, pkg };
+          if (fs.existsSync(f) && isInsideDir(dir, f)) return { file: f, pkg };
         }
       }
     } catch { /* 忽略坏 package.json */ }
@@ -147,12 +176,15 @@ function convert(extensionFile, outDir, opts = {}) {
   // ── vendor 文件准备 ──
   const vendorDir = path.join(outDir, 'vendor');
   fs.mkdirSync(vendorDir, { recursive: true });
-  let vendorFileName = path.basename(src);
+  // 模块形态：ESM（import/export 开头）→ .js；CommonJS（module.exports）→ .cjs，
+  // 保证 type:module 输出包内 vendor 以正确语义被 import（CJS 被当 ESM 加载会丢 default）。
+  const sourceIsEsm = /^\s*(import\s|export\s)/m.test(source);
+  const sourceIsCjs = !sourceIsEsm && /(?:^|[^\w$.])module\.exports\b|exports\.\w+\s*=/.test(source);
+  let vendorFileName = isTs ? path.basename(src, '.ts') + '.js' : (sourceIsCjs ? path.basename(src, path.extname(src)) + '.cjs' : path.basename(src));
   let vendorSource = source;
+  const stripped = isTs ? stripTypes(source) : null;
   if (isTs) {
     // 生成剥离类型后的 .js
-    const stripped = stripTypes(source);
-    vendorFileName = path.basename(src, '.ts') + '.js';
     fs.writeFileSync(path.join(vendorDir, vendorFileName), stripped, 'utf8');
     fs.copyFileSync(src, path.join(vendorDir, path.basename(src))); // 保留原 .ts
     const chk = checkSyntax(path.join(vendorDir, vendorFileName));
@@ -164,7 +196,7 @@ function convert(extensionFile, outDir, opts = {}) {
     fs.writeFileSync(path.join(vendorDir, vendorFileName), vendorSource, 'utf8');
   }
   // 重写：typebox → 本地垫片；pi 运行时导入 → 注释
-  const rewritten = rewriteVendorSource(vendorSource, vendorFileName, warnings);
+  const rewritten = rewriteVendorSource(isTs ? stripped : vendorSource, vendorFileName, warnings);
   fs.writeFileSync(path.join(vendorDir, vendorFileName), rewritten, 'utf8');
   if (rewritten.includes('from "./typebox-shim.js"')) {
     fs.writeFileSync(path.join(vendorDir, 'typebox-shim.js'), typeboxShimCode(), 'utf8');
@@ -191,6 +223,8 @@ function convert(extensionFile, outDir, opts = {}) {
       warnings.push('源包辅助文件 ' + aux + ' 已复制到输出 vendor/');
     }
   }
+  // 复制 extension 相对导入的本地依赖（./helper.js 等），让多文件 extension 自包含
+  copyRelativeDeps(srcDir, vendorDir, rewritten, vendorFileName, warnings);
   // 包内 skills 目录
   const srcSkills = path.join(srcDir, 'skills');
   const hasSkills = fs.existsSync(srcSkills);

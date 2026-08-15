@@ -15,7 +15,7 @@ const path = require('node:path');
 const { parsePreset } = require('./yaml.js');
 const { classifyRow } = require('./mapping.js');
 const { jsonSchemaToTypeboxCode, typeboxShimCode } = require('./schema.js');
-const { findCalls, propertyValue, jsLiteralToValue } = require('./extract.js');
+const { findCalls, propertyValue, jsLiteralToValue, relativeImports } = require('./extract.js');
 
 const TOOL_REGEXES = [
   /harness\.defineTool/g,
@@ -391,9 +391,9 @@ function convertPluginSource(srcFile, outDir, opts = {}) {
       warnings.push(`跳过非对象字面量的注册调用: ${args.slice(0, 60)}`);
       continue;
     }
-    const name = propertyValue(args, 'name');
-    const description = propertyValue(args, 'description');
-    const parameters = propertyValue(args, 'parameters');
+    const name = propertyValue(args, 'name', { topLevel: true });
+    const description = propertyValue(args, 'description', { topLevel: true });
+    const parameters = propertyValue(args, 'parameters', { topLevel: true });
     if (!name || name.kind !== 'string') {
       warnings.push(`跳过缺少 name 的注册调用（可能 name 是变量）`);
       continue;
@@ -437,7 +437,7 @@ function convertPluginSource(srcFile, outDir, opts = {}) {
   if (tools.length > 0) {
     // 优先用源 plugin 自带的 name 字段，其次用源文件名（去 dsh- 前缀）
     mcpPluginName = makePluginName(sourcePluginName || base.replace(/^dsh-/, '') || base, base);
-    const serverName = sanitizeToolName(mcpPluginName) || 'tools';
+    const serverName = makeMcpServerId(mcpPluginName) || 'tools';
     writeFileSafe(path.join(outDir, 'plugin.json'), JSON.stringify({
       $schema: 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
       name: mcpPluginName,
@@ -469,7 +469,7 @@ function convertPluginSource(srcFile, outDir, opts = {}) {
   lines.push(`// 工具执行走 vendor/${vendorFile} 加载 + 模拟 ctx 路径，`);
   lines.push('// 闭包（cfg / recall / formatRecall 等）保留在原 apply() 作用域里，行为真实。');
   lines.push('');
-  lines.push(`import dshPlugin from "./vendor/${vendorFile}";`);
+  lines.push(`const dshPlugin = await import("./vendor/${vendorFile}");`);
   lines.push('import { Type } from "./typebox-shim.js";');
   lines.push('');
   lines.push('// DSH 工具注册的元数据缓存（mockCtx.tools.register 时写入）');
@@ -649,6 +649,8 @@ function convertPluginSource(srcFile, outDir, opts = {}) {
   fs.mkdirSync(path.join(outDir, 'vendor'), { recursive: true });
   // vendor 固定名（dsh-plugin.js=ESM / dsh-plugin.cjs=CJS）：.cjs 强制 CommonJS，规避本包 type:module 把 CJS 源误当 ESM
   fs.copyFileSync(srcFile, path.join(outDir, 'vendor', vendorFile));
+  // 复制源插件相对导入的本地依赖（./helper.js 等），让多文件插件可加载
+  copyRelativeDeps(path.dirname(srcFile), path.join(outDir, 'vendor'), source, vendorFile, warnings);
   writeFileSafe(path.join(outDir, 'CONVERSION-REPORT.md'), [
     `# 转换报告：DSH 插件源码 → mcode 插件包`,
     '',
@@ -759,13 +761,28 @@ const mockCtx = {
 
 // 触发原 DSH 插件 apply
 // ESM 命名空间对象：真实默认导出在 .default；要兼容：default 是函数 / default 是 { apply } / 直接是函数 / 直接是 { apply }
+let applyPromise;
 try {
   const target = (dshPlugin && dshPlugin.default) ? dshPlugin.default : dshPlugin;
-  if (typeof target === "function") target(mockCtx, {});
-  else if (target && typeof target.apply === "function") target.apply(mockCtx, {});
+  if (typeof target === "function") applyPromise = target(mockCtx, {});
+  else if (target && typeof target.apply === "function") applyPromise = target.apply(mockCtx, {});
   else throw new Error("vendor 没有 default 导出且无 apply 方法（既不是函数也不是带 apply 的对象）");
 } catch (err) {
   process.stderr.write("[crossplug] vendor apply 抛错: " + (err && err.message ? err.message : err) + "\\n");
+}
+// 等待异步 apply（如 async 初始化）完成后再派发；超时兜底避免永久挂起
+const ready = Promise.resolve(applyPromise).catch(() => {});
+async function waitReady() {
+  let timer;
+  const timeout = new Promise((r) => {
+    timer = setTimeout(r, 10000);
+    timer.unref(); // 超时兜底不阻止进程退出（stdin EOF 后进程可立刻退出，不留孤儿）
+  });
+  try {
+    await Promise.race([ready, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 const TOOLS = ${JSON.stringify(toolDefs, null, 2)};
@@ -804,6 +821,7 @@ rl.on("line", async (line) => {
     } else if (method === "tools/list") {
       respond(id, { tools: TOOLS });
     } else if (method === "tools/call") {
+      await waitReady(); // 等 vendor apply（可能 async）完成注册
       const name = params && params.name;
       const args = (params && params.arguments) || {};
       const originalName = NAME_MAP[name] || name;
@@ -840,6 +858,8 @@ rl.on("line", async (line) => {
     respondError(id, -32603, String(e && e.message ? e.message : e));
   }
 });
+// stdin 关闭（父进程退出 / EOF）即自退：避免 mcode 被杀后留下孤儿 MCP server 占住插件目录
+rl.on("close", () => process.exit(0));
 `;
 }
 
@@ -859,6 +879,43 @@ function findPluginPackageName(srcFile) {
     dir = parent;
   }
   return undefined;
+}
+
+function isInsideDir(parent, child) {
+  const rel = path.relative(parent, child);
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+// 递归复制源码相对导入的本地文件到输出 vendor/（限制在源目录内；越界/缺失跳过）
+function copyRelativeDeps(srcDir, destDir, source, skipName, warnings, seen) {
+  const visited = seen || new Set();
+  for (const rel of relativeImports(source)) {
+    const srcFile = path.resolve(srcDir, rel);
+    if (!isInsideDir(srcDir, srcFile)) {
+      if (!visited.has('out:' + rel)) { visited.add('out:' + rel); warnings.push('相对导入超出源目录，跳过: ' + rel); }
+      continue;
+    }
+    if (!fs.existsSync(srcFile)) {
+      if (!visited.has('miss:' + rel)) { visited.add('miss:' + rel); warnings.push('相对导入文件不存在，跳过: ' + rel); }
+      continue;
+    }
+    const resolved = path.resolve(srcFile);
+    if (visited.has(resolved)) continue;
+    visited.add(resolved);
+    const dest = path.join(destDir, path.relative(srcDir, resolved));
+    if (dest === path.join(destDir, skipName)) continue; // 不覆盖转换产物
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(resolved, dest);
+    copyRelativeDeps(path.dirname(resolved), path.dirname(dest), fs.readFileSync(resolved, 'utf8'), skipName, warnings, visited);
+  }
+}
+
+// MCP 服务器 id：小写连字符（agent-plugins 校验 PLUGIN_NAME 不允许下划线）
+function makeMcpServerId(name) {
+  return String(name)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 }
 
 // MCP 工具名：小写下划线，去掉 dsh-/web-search/-provider 等词缀
@@ -1015,25 +1072,36 @@ function renderMcpServer(toolName, description) {
 // 协议：newline-delimited JSON-RPC 2.0（initialize / tools/list / tools/call / ping）。
 // SearXNG 地址从环境变量 SEARXNG_URL 读取（由 mcp.json 的 env 注入）。
 import { createInterface } from "node:readline";
-import { apply } from "./vendor/index.js";
+
+// 加载原 DSH 搜索提供方插件：兼容 default 对象 / named apply / 函数导出三种形态
+const dshPlugin = await import("./vendor/index.js");
+const target = (dshPlugin && dshPlugin.default) ? dshPlugin.default : dshPlugin;
+const apply = (target && typeof target.apply === "function")
+  ? target.apply.bind(target)
+  : (typeof target === "function" ? target : null);
+if (typeof apply !== "function") {
+  process.stderr.write("[crossplug] vendor/index.js 没有可调用的 apply（支持 export default { apply } / export function apply / 函数导出）\\n");
+}
 
 let provider = null;
-apply(
-  {
-    web: {
-      registerSearchProvider(p) {
-        provider = p;
+if (typeof apply === "function") {
+  apply(
+    {
+      web: {
+        registerSearchProvider(p) {
+          provider = p;
+        },
       },
     },
-  },
-  {
-    url: process.env.SEARXNG_URL || "",
-    maxResults: 30,
-    categories: "",
-    language: "",
-    timeoutMs: 20000,
-  },
-);
+    {
+      url: process.env.SEARXNG_URL || "",
+      maxResults: 30,
+      categories: "",
+      language: "",
+      timeoutMs: 20000,
+    },
+  );
+}
 
 const TOOLS = [
   {
@@ -1088,7 +1156,15 @@ rl.on("line", async (line) => {
       if (name !== TOOLS[0].name) return respondError(id, -32602, "unknown tool: " + name);
       if (!provider) return respondError(id, -32603, "SearXNG provider 未就绪：请设置 SEARXNG_URL（mcp.json env 或系统环境变量）");
       const signal = new AbortController().signal;
-      const result = await provider.search({ query: args.query }, signal);
+      const result = await provider.search(
+        {
+          query: args.query,
+          ...(args.categories !== undefined ? { categories: args.categories } : {}),
+          ...(args.language !== undefined ? { language: args.language } : {}),
+          ...(args.maxResults !== undefined ? { maxResults: args.maxResults } : {}),
+        },
+        signal,
+      );
       const text = (result.sources || [])
         .map((s) => "- " + (s.title || s.url) + "\\n  " + s.url + (s.snippet ? "\\n  " + s.snippet : ""))
         .join("\\n");
@@ -1100,6 +1176,8 @@ rl.on("line", async (line) => {
     respondError(id, -32603, String(e && e.message ? e.message : e));
   }
 });
+// stdin 关闭（父进程退出 / EOF）即自退：避免 mcode 被杀后留下孤儿 MCP server 占住插件目录
+rl.on("close", () => process.exit(0));
 `;
 }
 
@@ -1126,13 +1204,20 @@ function convertProviderPlugin(srcFile, outDir) {
   // ── MCP 服务器 ──
   const description = `通过 SearXNG 实例搜索网页（由 DSH 插件「${pluginName}」转换，crossplug 桥接）。`;
   writeFileSafe(path.join(pkgDir, 'mcp-server.js'), renderMcpServer(toolName, description));
+  // mcp-server.js 是 ESM（顶层 import/await）：声明 type:module，否则 Node 按 CJS 解析直接语法错误
+  writeFileSafe(path.join(pkgDir, 'package.json'), JSON.stringify({
+    name: pluginName,
+    version: '1.0.0',
+    private: true,
+    type: 'module',
+  }, null, 2) + '\n');
 
   // ── mcp.json（agent-plugins 1.0.0）──
   const searxngUrl = process.env.SEARXNG_URL || '';
   const mcp = {
     $schema: 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
     mcpServers: {
-      [toolName]: {
+      [makeMcpServerId(toolName)]: {
         type: 'stdio',
         command: 'node',
         args: ['./mcp-server.js'],

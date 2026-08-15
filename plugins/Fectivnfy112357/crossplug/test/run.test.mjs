@@ -8,7 +8,7 @@
 //   5. 失败时不破坏既有目录（转换失败 → 输出目录原样保留）
 
 import assert from 'node:assert/strict';
-import { execFile, spawn } from 'node:child_process';
+import { execFile, spawn, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { mkdtemp, mkdir, readFile, rm, writeFile, symlink, readdir, stat, cp } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -238,7 +238,7 @@ test('generated MCP server completes initialize, tools/list, and tools/call', as
 
   await waitFor(() => responses.filter((r) => r.id !== undefined).length >= 3);
   const byId = Object.fromEntries(responses.filter((r) => r.id !== undefined).map((r) => [r.id, r]));
-  assert.equal(byId[1].result.serverInfo.name, 'crossplug-mini_plugin');
+  assert.equal(byId[1].result.serverInfo.name, 'crossplug-mini-plugin');
   assert.equal(byId[2].result.tools[0].name, 'mini_hello');
   assert.equal(byId[3].result.content[0].text, 'hi');
 
@@ -441,6 +441,20 @@ function resolveCordis() {
   }
 }
 
+// 杀整个进程树：mcode CLI 会派生常驻 MCP server 子进程（Windows 下孤儿进程
+// 会占住插件目录导致 EBUSY），仅杀顶层进程不够。Windows 用 taskkill /T /F
+// 连根拔；非 Windows 用负 pid 发信号（需 detached 进程组，失败忽略）。
+function killTree(pid) {
+  if (!pid) return;
+  if (process.platform === 'win32') {
+    try {
+      spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
+    } catch { /* 忽略 */ }
+  } else {
+    try { process.kill(-pid, 'SIGKILL'); } catch { /* 忽略 */ }
+  }
+}
+
 test('dsh2mcode output is discovered by real mcode (plugin list parses mcp.json)', async (t) => {
   const cmd = resolveMcodeCli();
   if (!cmd) {
@@ -453,34 +467,38 @@ test('dsh2mcode output is discovered by real mcode (plugin list parses mcp.json)
   const out = path.join(ws, 'out');
   dsh2mcode.convert(srcFile, out);
 
-  // 安装到 ~/.minimax/plugins/ 让 mcode 自己发现
+  // 安装到 ~/.minimax/plugins/ 让 mcode 自己发现（不清理旧目录/临时文件）
   const pluginsDir = path.join(os.homedir(), '.minimax', 'plugins');
   await mkdir(pluginsDir, { recursive: true });
   const dest = path.join(pluginsDir, 'crossplug-e2e-test');
-  await rm(dest, { recursive: true, force: true });
   await cp(out, dest, { recursive: true });
 
+  // mcode plugin list 也会派生常驻 MCP server；用 spawn 拿到顶层 pid，
+  // 结束后 killTree 连根杀（Windows 下仅杀顶层会留孤儿进程占住插件目录）。
+  const child = spawn(
+    cmd[0],
+    [...cmd.slice(1), 'plugin', 'list', '--marketplace', 'local', '--json'],
+    { stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (d) => { stdout += d.toString(); });
+  child.stderr.on('data', (d) => { stderr += d.toString(); });
+  await Promise.race([
+    new Promise((r) => child.once('exit', r)),
+    new Promise((r) => setTimeout(r, 60000)),
+  ]);
+  try { child.stdin.end(); } catch { /* 忽略 */ }
+  child.kill();
+  killTree(child.pid);
+
   try {
-    const { stdout } = await execFileAsync(
-      cmd[0],
-      [...cmd.slice(1), 'plugin', 'list', '--marketplace', 'local', '--json'],
-    );
     const parsed = JSON.parse(stdout);
     const ours = (parsed.installed || []).find((p) => p.name === 'mini-plugin');
-    assert.ok(ours, 'mcode 应发现转换产物 mini-plugin');
+    assert.ok(ours, 'mcode 应发现转换产物 mini-plugin；stderr: ' + stderr.slice(-400));
     assert.ok((ours.capabilities && ours.capabilities.mcpServerCount) >= 1, 'mcode 应解析出 mcp.json 里的 MCP server');
   } finally {
-    // mcode CLI 会 spawn 后台 node 进程（Windows 下会占用插件目录），
-    // 清理重试几次并容忍 EBUSY，不让清理失败反过来判测试失败。
-    for (let i = 0; i < 10 && existsSync(dest); i++) {
-      try {
-        await rm(dest, { recursive: true, force: true });
-        break;
-      } catch (err) {
-        if (err.code !== 'EBUSY' && err.code !== 'EPERM') break;
-        await new Promise((r) => setTimeout(r, 200));
-      }
-    }
+    // 不删除安装到 ~/.minimax/plugins/ 的临时插件目录（按需手动清理）
   }
 });
 
@@ -514,7 +532,6 @@ test('mcode really calls the converted tool (exec returns the tool result)', asy
   const pluginsDir = path.join(os.homedir(), '.minimax', 'plugins');
   await mkdir(pluginsDir, { recursive: true });
   const dest = path.join(pluginsDir, 'crossplug-mcode-e2e');
-  await rm(dest, { recursive: true, force: true });
   await cp(out, dest, { recursive: true });
 
   // 关键：mcode exec 调工具后不干净退出（会留常驻 stdio MCP server），
@@ -549,17 +566,9 @@ test('mcode really calls the converted tool (exec returns the tool result)', asy
 
   try { child.stdin.end(); } catch { /* 忽略 */ }
   child.kill();
+  killTree(child.pid); // mcode 派生的 MCP server 子进程一并连根杀，不留孤儿占住插件目录
 
-  // 清理插件目录（mcode 后台进程可能占用，重试容忍 EBUSY）
-  for (let i = 0; i < 10 && existsSync(dest); i++) {
-    try {
-      await rm(dest, { recursive: true, force: true });
-      break;
-    } catch (err) {
-      if (err.code !== 'EBUSY' && err.code !== 'EPERM') break;
-      await new Promise((r) => setTimeout(r, 200));
-    }
-  }
+  // 不删除安装到 ~/.minimax/plugins/ 的临时插件目录（按需手动清理）
 
   assert.ok(found, 'mcode 应在输出里返回工具结果 ' + MARKER + '；实际输出尾: ' + collected.slice(-400));
 });
@@ -571,3 +580,221 @@ async function waitFor(predicate) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
+// ─────────────────────────────────────────────────────────────
+// 回归：codex 审查 14 条问题修复（2026-08-15）
+
+test('extract: 注释内注册不提取、regex literal 不丢调用、顶层属性不被嵌套顶替', async (t) => {
+  const extract = require('../core/extract.js');
+
+  // [9] 注释里的 tools.register 不应被提取
+  const calls = extract.findCalls('// tools.register({ name: "ghost" })\n', /tools\.register/g);
+  assert.equal(calls.length, 0);
+
+  // [4] 工具体含 regex /\\)/ 时调用不丢失
+  const src = "tools.register({\n  name: 'rx',\n  execute: async () => { const re = /\\)/; return 'ok'; },\n});\n";
+  assert.equal(extract.findCalls(src, /tools\.register/g).length, 1);
+
+  // [11] 嵌套 name 不顶替顶层 name
+  const name = extract.propertyValue("{ parameters: { name: 'nested' }, name: 'real' }", 'name', { topLevel: true });
+  assert.equal(name.value, 'real');
+});
+
+test('dsh2mcode: mcp.json server key 无下划线、多文件插件 sidecar 复制', async (t) => {
+  const ws = await tempWorkspace(t);
+  const srcDir = path.join(ws, 'src');
+  await mkdir(srcDir, { recursive: true });
+  await writeFile(path.join(srcDir, 'multi-tool.js'), [
+    "const { fmt } = require('./fmt.js');",
+    "module.exports = {",
+    "  name: 'multi-tool',",
+    "  apply(ctx) {",
+    "    const tools = ctx.get('tools');",
+    "    tools.register({ name: 't', execute: async () => fmt() });",
+    "  },",
+    "};",
+    "",
+  ].join('\n'));
+  await writeFile(path.join(srcDir, 'fmt.js'), "module.exports = { fmt() { return 'hi'; } };\n");
+  const out = path.join(ws, 'out');
+  const result = dsh2mcode.convert(path.join(srcDir, 'multi-tool.js'), out);
+  assert.ok(result);
+
+  // [2] server key 必须符合 PLUGIN_NAME（不允许下划线）
+  const mcp = JSON.parse(await readFile(path.join(out, 'mcp.json'), 'utf8'));
+  for (const key of Object.keys(mcp.mcpServers)) {
+    assert.match(key, PLUGIN_NAME, 'mcpServers key 不允许下划线');
+  }
+
+  // [6] 相对导入依赖被复制到 vendor/
+  assert.ok(existsSync(path.join(out, 'vendor', 'fmt.js')), 'fmt.js 应被复制到 vendor/');
+});
+
+test('dsh2mcode: parameters 在 name 前且 schema 含 name 字段时工具不丢/不错名', async (t) => {
+  const ws = await tempWorkspace(t);
+  const srcFile = path.join(ws, 'ordered.js');
+  await writeFile(srcFile, [
+    "module.exports = {",
+    "  name: 'ordered',",
+    "  apply(ctx) {",
+    "    const tools = ctx.get('tools');",
+    "    tools.register({",
+    "      parameters: { type: 'object', properties: { name: { type: 'string' } } },",
+    "      name: 'ordered_tool',",
+    "      description: 'd',",
+    "      execute: async () => 'ok',",
+    "    });",
+    "  },",
+    "};",
+    "",
+  ].join('\n'));
+  const out = path.join(ws, 'out');
+  const result = dsh2mcode.convert(srcFile, out);
+  assert.ok(result.mcpTools >= 1, '工具不应被丢弃');
+  const server = await readFile(path.join(out, 'mcp-server.js'), 'utf8');
+  assert.ok(server.includes('ordered_tool'), '工具名应为 ordered_tool 而非嵌套 name');
+});
+
+test('mcode2dsh: TS 源剥离后 vendor JS 可加载、CJS 源 host 模式有工具、sidecar 复制', async (t) => {
+  const ws = await tempWorkspace(t);
+
+  // [0] TS 源：vendor/*.js 不再残留 TS 语法
+  const tsFile = path.join(ws, 'ext.ts');
+  await writeFile(tsFile, [
+    "import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';",
+    "export default function (pi: ExtensionAPI) {",
+    "  const s: string = 'x';",
+    "  pi.registerTool({ name: 't1', description: 'd', parameters: { type: 'object', properties: {} }, execute: async () => ({ content: [{ type: 'text', text: s }] }) });",
+    "}",
+    "",
+  ].join('\n'));
+  const tsOut = path.join(ws, 'ts-out');
+  mcode2dsh.convert(tsFile, tsOut, {});
+  await nodeCheck(t, path.join(tsOut, 'vendor', 'ext.js'));
+
+  // [5] CJS 源 host 模式：vendor 用 .cjs，桥接加载有工具
+  const cjsFile = path.join(ws, 'cjs-ext.js');
+  await writeFile(cjsFile, [
+    "module.exports = function (pi) {",
+    "  pi.registerTool({ name: 'c1', description: 'd', parameters: { type: 'object', properties: {} }, execute: async () => ({ content: [{ type: 'text', text: 'ok' }] }) });",
+    "};",
+    "",
+  ].join('\n'));
+  const cjsOut = path.join(ws, 'cjs-out');
+  const cjsResult = mcode2dsh.convert(cjsFile, cjsOut, { host: true });
+  assert.ok(cjsResult);
+  assert.ok(existsSync(path.join(cjsOut, 'vendor', 'cjs-ext.cjs')), 'CJS 源 vendor 应为 .cjs');
+  const { tools } = await loadDshBridge(path.join(cjsOut, 'lib', 'index.js'));
+  assert.ok(tools.has('c1'), 'CJS 源转换后工具应可注册');
+
+  // [1] 多文件 extension：相对导入依赖复制到 vendor/
+  const pkgDir = path.join(ws, 'pkg');
+  await mkdir(pkgDir, { recursive: true });
+  await writeFile(path.join(pkgDir, 'package.json'), JSON.stringify({ name: 'multi', main: 'index.js', type: 'module' }));
+  await writeFile(path.join(pkgDir, 'index.js'), [
+    "import { helper } from './helper.js';",
+    "export default function (pi) { pi.registerTool({ name: 'm', description: 'd', parameters: { type: 'object', properties: {} }, execute: async () => ({ content: [{ type: 'text', text: helper() }] }) }); }",
+    "",
+  ].join('\n'));
+  await writeFile(path.join(pkgDir, 'helper.js'), "export function helper() { return 'from-helper'; }\n");
+  const multiOut = path.join(ws, 'multi-out');
+  mcode2dsh.convert(path.join(pkgDir, 'index.js'), multiOut, {});
+  assert.ok(existsSync(path.join(multiOut, 'vendor', 'helper.js')), 'helper.js 应被复制到 vendor/');
+  const { tools: mt } = await loadDshBridge(path.join(multiOut, 'plugins', 'bridge.js'));
+  assert.ok(mt.has('m'), '多文件 extension 转换后工具应可注册');
+});
+
+test('dsh2mcode: async apply 完成前 tools/call 等待注册（不丢请求）', async (t) => {
+  const ws = await tempWorkspace(t);
+  const srcFile = path.join(ws, 'slow.js');
+  await writeFile(srcFile, [
+    "module.exports = {",
+    "  name: 'slow',",
+    "  async apply(ctx) {",
+    "    await new Promise((r) => setTimeout(r, 600));",
+    "    const tools = ctx.get('tools');",
+    "    tools.register({ name: 'slow_ping', execute: async () => 'slow-ok' });",
+    "  },",
+    "};",
+    "",
+  ].join('\n'));
+  const out = path.join(ws, 'out');
+  dsh2mcode.convert(srcFile, out);
+
+  const child = spawn(process.execPath, ['mcp-server.js'], { cwd: out, stdio: ['pipe', 'pipe', 'pipe'] });
+  const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
+  const responses = [];
+  lines.on('line', (line) => { try { responses.push(JSON.parse(line)); } catch { /* 忽略 */ } });
+  child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }) + '\n');
+  // 立即（apply 未完成时）调用工具
+  child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'slow_ping', arguments: {} } }) + '\n');
+  await waitFor(() => responses.some((r) => r.id === 2));
+  const call = responses.find((r) => r.id === 2);
+  assert.equal(call.result.content[0].text, 'slow-ok', 'async apply 期间到达的调用应等注册完成后成功');
+  child.stdin.end();
+  child.kill();
+  await new Promise((resolve) => child.once('exit', resolve));
+  lines.close();
+});
+
+test('dsh2mcode provider: default 形态可启动、有 package.json、server key 合法', async (t) => {
+  const ws = await tempWorkspace(t);
+  const srcFile = path.join(ws, 'provider.js');
+  await writeFile(srcFile, [
+    "export default {",
+    "  async apply(ctx) {",
+    "    ctx.web.registerSearchProvider({ name: 'sx', async search(query, signal) { return { sources: [] }; } });",
+    "  },",
+    "};",
+    "",
+  ].join('\n'));
+  const out = path.join(ws, 'out');
+  const result = dsh2mcode.convert(srcFile, out);
+  assert.ok(result);
+
+  // [8] 输出包有 package.json 且 type: module（mcp-server.js 是 ESM）
+  const pkg = JSON.parse(await readFile(path.join(out, 'package.json'), 'utf8'));
+  assert.equal(pkg.type, 'module');
+
+  // [7] default 形态也能通过语法检查，且不再静态 named import apply
+  await nodeCheck(t, path.join(out, 'mcp-server.js'));
+  const server = await readFile(path.join(out, 'mcp-server.js'), 'utf8');
+  assert.ok(!server.includes('import { apply }'), '不应再静态 named import apply');
+
+  // [2] provider server key 无下划线
+  const mcp = JSON.parse(await readFile(path.join(out, 'mcp.json'), 'utf8'));
+  for (const key of Object.keys(mcp.mcpServers)) assert.match(key, PLUGIN_NAME);
+});
+
+test('dsh2mcode provider: 调用参数透传到 provider.search', async (t) => {
+  const ws = await tempWorkspace(t);
+  const srcFile = path.join(ws, 'provider.js');
+  await writeFile(srcFile, [
+    "export async function apply(ctx) {",
+    "  ctx.web.registerSearchProvider({",
+    "    name: 'sx',",
+    "    async search(query, signal) {",
+    "      process.stdout.write('SEEN=' + JSON.stringify(query) + '\\n');",
+    "      return { sources: [{ title: 'x', url: 'https://x', snippet: 'y' }] };",
+    "    },",
+    "  });",
+    "}",
+    "",
+  ].join('\n'));
+  const out = path.join(ws, 'out');
+  dsh2mcode.convert(srcFile, out);
+
+  const child = spawn(process.execPath, ['mcp-server.js'], { cwd: out, stdio: ['pipe', 'pipe', 'pipe'] });
+  const chunks = [];
+  child.stdout.on('data', (d) => chunks.push(d.toString()));
+  child.stderr.on('data', (d) => chunks.push(d.toString()));
+  await new Promise((r) => setTimeout(r, 200));
+  child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }) + '\n');
+  child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'provider_search', arguments: { query: 'hello', maxResults: 5 } } }) + '\n');
+  await new Promise((r) => setTimeout(r, 600));
+  try { child.stdin.end(); } catch { /* 忽略 */ }
+  child.kill();
+  await new Promise((resolve) => child.once('exit', resolve));
+
+  const all = chunks.join('');
+  assert.match(all, /SEEN=\{"query":"hello","maxResults":5\}/, 'maxResults 应透传给 provider.search');
+});
