@@ -38,6 +38,34 @@ Log learnings and errors to markdown files for continuous improvement. Coding ag
 | Tool gotchas | Promote to `TOOLS.md` (OpenClaw workspace) |
 | Behavioral patterns | Promote to `SOUL.md` (OpenClaw workspace) |
 
+## References
+
+Detailed content moved out of this SKILL.md for size. Read these when the main flow above references them:
+
+- [`openclaw-setup-recommended.md`](references/openclaw-setup-recommended.md)
+- [`generic-setup-other-agents.md`](references/generic-setup-other-agents.md)
+- [`logging-format.md`](references/logging-format.md)
+- [`lrn-yyyymmdd-xxx-category.md`](references/lrn-yyyymmdd-xxx-category.md)
+- [`err-yyyymmdd-xxx-skill_or_command_name.md`](references/err-yyyymmdd-xxx-skill_or_command_name.md)
+- [`feat-yyyymmdd-xxx-capability_name.md`](references/feat-yyyymmdd-xxx-capability_name.md)
+- [`id-generation.md`](references/id-generation.md)
+- [`resolving-entries.md`](references/resolving-entries.md)
+- [`promoting-to-project-memory.md`](references/promoting-to-project-memory.md)
+- [`build-dependencies.md`](references/build-dependencies.md)
+- [`after-api-changes.md`](references/after-api-changes.md)
+- [`recurring-pattern-detection.md`](references/recurring-pattern-detection.md)
+- [`simplify-harden-feed.md`](references/simplify-harden-feed.md)
+- [`periodic-review.md`](references/periodic-review.md)
+- [`detection-triggers.md`](references/detection-triggers.md)
+- [`priority-guidelines.md`](references/priority-guidelines.md)
+- [`area-tags.md`](references/area-tags.md)
+- [`best-practices.md`](references/best-practices.md)
+- [`gitignore-options.md`](references/gitignore-options.md)
+- [`hook-integration.md`](references/hook-integration.md)
+- [`automatic-skill-extraction.md`](references/automatic-skill-extraction.md)
+- [`multi-agent-support.md`](references/multi-agent-support.md)
+- [`self-improvement.md`](references/self-improvement.md)
+
 ## Output contract
 
 This skill does not produce files by itself; the converted openclaw skill should declare its outputs in a new section here. (Filled in by the user after first run.)

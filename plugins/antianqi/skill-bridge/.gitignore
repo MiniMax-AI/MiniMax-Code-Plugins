@@ -1,2 +1,4 @@
 node_modules/
 tests/last-run.log
+tests/lint-debug.log
+probe-*.mjs
