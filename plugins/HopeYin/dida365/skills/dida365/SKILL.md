@@ -15,7 +15,7 @@ description: Manage 滴答清单 (Dida365 China) tasks, lists, habits, focus rec
 ## 操作守则
 
 1. **先查后改**。更新、完成、移动、删除任务前，先通过 `search_task` 或 `filter_tasks` 确认目标任务，把将要执行的操作告诉用户，再执行。
-2. **删除不可逆**。`delete_task` 会把任务移入垃圾箱，`delete_project_group` 会解散文件夹下所有清单 —— 执行前必须得到用户的明确确认。
+2. **删除不可逆**。`delete_task` 会把任务移入垃圾箱，`delete_project_group` 会解散文件夹下所有清单，`delete_comment` 和 `delete_focus` 会永久删除评论和专注记录 —— 执行这些操作前必须得到用户的明确确认。
 3. **描述要明确**。用户表述模糊时（没说是哪个清单、哪天、什么优先级），先问清楚再创建或修改，不要猜。
 4. **复杂请求拆步执行**。例如「把上周任务复盘并重新安排这周」应拆成：查询 → 汇总给用户 → 确认后批量操作。
 
