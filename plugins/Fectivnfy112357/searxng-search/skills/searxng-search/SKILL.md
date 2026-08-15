@@ -10,6 +10,24 @@ allowed-tools:
 
 Search the web using a SearXNG instance via its API.
 
+## Network destinations
+
+Two levels — both matter:
+
+- **Direct (this script):** the script makes a single request to your
+  configured `base_url`. HTTPS by default; plain HTTP is allowed only
+  for loopback hosts (127.0.0.1, ::1, localhost) or for non-loopback
+  hosts if the config contains `allow_insecure_http = true` (with a
+  warning). If `auth.type` is set, the Authorization header travels to
+  that single host and nowhere else.
+- **Downstream (your SearXNG instance):** the instance then forwards
+  the **query**, **language**, and **categories** to the engines it
+  itself has been configured with (Google, Bing, DuckDuckGo, Brave,
+  Baidu, etc., as enabled by the instance operator). This skill does
+  not control that hop — it is a property of any SearXNG client. If
+  query contents reaching the upstream engines is a concern, configure
+  your instance to use engines you trust, or self-host engines locally.
+
 ## Configuration issues
 
 This skill depends on a local SearXNG config file. Keep setup details out of this

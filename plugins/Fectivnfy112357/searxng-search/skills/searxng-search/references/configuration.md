@@ -6,6 +6,18 @@ Use this document when you need to:
 - change the SearXNG instance or auth settings
 - debug configuration/auth/setup errors from `scripts/search.py`
 
+## Recommended: keep secrets out of the file
+
+The configuration file is world-readable on most systems. **Prefer
+`$ENV_VAR` references for any secret** (bearer token, basic auth user
+and password) and `chmod 600` the file so only your user can read it.
+The script will exit with a clear error if a referenced environment
+variable is not set; it does not silently send a literal `$NAME` value.
+
+Plaintext secrets in the config file are supported for testing but are
+**not recommended** — see the [Plaintext secrets in the config](#plaintext-secrets-in-the-config)
+section for the trade-offs and the file-permissions warning.
+
 ## Config file locations
 
 The script reads configuration from:
@@ -19,16 +31,31 @@ In practice, the common paths are:
 - `~/.config/agents/searxng.toml`
 - `~/.config/agents/searxng.json` (legacy fallback)
 
+## File permissions
+
+On POSIX systems, restrict the config file to the owner. The script
+emits a warning if the file is readable by group or others.
+
+```bash
+# read/write for owner only
+chmod 600 ~/.config/agents/searxng.toml
+```
+
+On Windows, use the file Properties → Security tab to limit read access
+to your user account. The script does not currently detect overly
+permissive ACLs on Windows.
+
 ## Supported fields
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `base_url` | `string` | **Yes** | Base URL of the SearXNG instance, for example `https://searx.example.com` |
+| `base_url` | `string` | **Yes** | Base URL of the SearXNG instance, for example `https://searx.example.com`. Plain HTTP is allowed only for loopback hosts, or for non-loopback hosts if `allow_insecure_http = true` is set. |
+| `allow_insecure_http` | `bool` | No | Opt-in gate that allows plain `http://` to a non-loopback host. Triggers a strong warning at load time because the Authorization header would travel in cleartext. |
 | `auth` | `object` | No | Authentication config |
 | `auth.type` | `string` | If `auth` is set | Must be `"bearer"` or `"basic"` |
-| `auth.token` | `string` | If `auth.type = "bearer"` | Bearer token value; supports `$ENV_VAR` or `${ENV_VAR}` |
-| `auth.user` | `string` | If `auth.type = "basic"` | Basic auth username; supports `$ENV_VAR` or `${ENV_VAR}` |
-| `auth.pass` | `string` | If `auth.type = "basic"` | Basic auth password; supports `$ENV_VAR` or `${ENV_VAR}` |
+| `auth.token` | `string` | If `auth.type = "bearer"` | Bearer token value; supports `$ENV_VAR` or `${ENV_VAR}` (recommended) |
+| `auth.user` | `string` | If `auth.type = "basic"` | Basic auth username; supports `$ENV_VAR` or `${ENV_VAR}` (recommended) |
+| `auth.pass` | `string` | If `auth.type = "basic"` | Basic auth password; supports `$ENV_VAR` or `${ENV_VAR}` (recommended) |
 | `headers` | `object` | No | Extra HTTP headers to send with the request |
 | `default_language` | `string` | No | Default language code, for example `en` or `zh-CN` |
 | `default_categories` | `string[]` | No | Default categories, for example `["general", "news"]` |
@@ -38,7 +65,7 @@ In practice, the common paths are:
 | `default_max_results` | `number` | No | Default number of results to display; script default is `5` |
 | `timeout` | `number` | No | Request timeout in seconds; script default is `30` |
 
-## Example TOML config: bearer auth
+## Example TOML config: bearer auth with environment variable (recommended)
 
 ```toml
 base_url = "https://searx.example.com"
@@ -48,42 +75,23 @@ default_max_results = 10
 
 [auth]
 type = "bearer"
-token = "your-token-here"
+token = "$SEARXNG_TOKEN"
 
 [headers]
 X-Custom-Header = "value"
 ```
 
-## Example TOML config: bearer auth with environment variable
-
-```toml
-base_url = "https://searx.example.com"
-default_categories = ["general"]
-
-[auth]
-type = "bearer"
-token = "$SEARXNG_TOKEN"
-```
-
-Then export the variable before running the script:
+Export the variable before running the script:
 
 ```bash
 export SEARXNG_TOKEN='your-token-here'
 ```
 
-## Example TOML config: basic auth
+The script exits with `ERROR: Environment variable SEARXNG_TOKEN is not set`
+if the variable is missing; it does not send a malformed `Bearer $NAME`
+header.
 
-```toml
-base_url = "https://searx.example.com"
-default_safesearch = 1
-
-[auth]
-type = "basic"
-user = "admin"
-pass = "password"
-```
-
-## Example TOML config: basic auth with environment variables
+## Example TOML config: basic auth with environment variables (recommended)
 
 ```toml
 base_url = "https://searx.example.com"
@@ -98,6 +106,33 @@ pass = "$SEARXNG_PASS"
 export SEARXNG_USER='admin'
 export SEARXNG_PASS='password'
 ```
+
+## Plaintext secrets in the config
+
+Plaintext values in the config file are supported. They are easier to
+set up but live in a file that may be readable beyond the owner.
+
+If you must use them, restrict the file:
+
+```bash
+chmod 600 ~/.config/agents/searxng.toml
+```
+
+The script will warn at load time if the file is readable by group or
+others.
+
+```toml
+base_url = "https://searx.example.com"
+default_safesearch = 1
+
+[auth]
+type = "basic"
+user = "admin"
+pass = "password"
+```
+
+Treat the file as sensitive: do not commit it, do not share it, and
+rotate the credentials if the file is ever exposed.
 
 ## Legacy JSON fallback
 
@@ -167,6 +202,32 @@ base_url = "https://searx.example.com"
 ```
 
 Use the SearXNG instance root URL. The script will normalize trailing slashes automatically.
+
+### `ERROR: base_url uses plain HTTP for non-loopback host ...` / `WARN: ... cleartext`
+
+The script refuses to send an `Authorization` header (or query
+parameters) over plain HTTP to a non-loopback host. Pick one of:
+
+- Switch the instance to HTTPS (recommended).
+- Point `base_url` at a loopback address (e.g. `http://127.0.0.1:8888`)
+  if you run SearXNG behind a local reverse proxy.
+- Set `allow_insecure_http = true` in the config to opt in. The script
+  emits a warning each run, and you should rotate any credentials that
+  have been sent over plain HTTP.
+
+### `WARN: Config file ... is readable beyond the owner ...`
+
+The config file's POSIX mode is wider than `0600`, so other users on the
+system can read it.
+
+Fix:
+
+```bash
+chmod 600 ~/.config/agents/searxng.toml
+```
+
+On Windows, restrict read access in the file Properties → Security tab.
+The script does not currently detect overly permissive ACLs on Windows.
 
 ### `ERROR: Environment variable SOME_VAR is not set`
 
@@ -258,10 +319,11 @@ Checks:
 ## Quick setup checklist
 
 1. Create `~/.config/agents/searxng.toml`
-2. Set `base_url`
-3. Add auth only if your instance requires it
-4. Export any referenced environment variables
-5. Run a smoke test:
+2. Set `base_url` (HTTPS preferred; loopback HTTP also accepted)
+3. `chmod 600` the file so only your user can read it
+4. Add auth only if your instance requires it; prefer `$ENV_VAR` references
+5. Export any referenced environment variables
+6. Run a smoke test:
 
 ```bash
 python3 scripts/search.py "SearXNG documentation"

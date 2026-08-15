@@ -41,11 +41,39 @@ python3 scripts/search.py -l zh-CN -n 10 "开源搜索引擎"
 
 ## Data and network
 
-- The script talks **only to your configured SearXNG instance** (the
-  `base_url` in your config). No other network destinations.
-- Credentials for your instance (bearer token / basic auth, if any) live in
-  your local config file; they are never sent anywhere else.
-- No telemetry, no third-party services.
+This skill has **two levels of network destinations**; the difference matters.
+
+### Direct destination (the script itself)
+
+The script makes a single HTTPS (or loopback HTTP) request to **your
+configured SearXNG instance** — the `base_url` in your config. The
+script does not contact any other host.
+
+### Downstream destinations (the SearXNG instance, not the script)
+
+Your SearXNG instance then forwards the **query string**, **language
+code**, and **selected categories** to the upstream **engines** it has
+been configured with (Google, Bing, DuckDuckGo, Brave, Baidu, etc., as
+enabled by the instance operator). Those engines receive the request
+content from your instance — the script does not see or control that
+hop.
+
+**Practical implication:** anything you put in the search query
+(personal context, project names, internal jargon) reaches the engines
+your instance is configured to use. This is true of any SearXNG client,
+not something this skill introduces. If that is a concern, configure
+your instance to use only engines you trust, or self-host engines
+locally.
+
+### Credentials and config
+
+- Credentials for your instance (bearer token / basic auth, if any) live
+  in your local config file. They are sent only to your instance — the
+  script never sends them anywhere else.
+- Use `$ENV_VAR` references in the config instead of writing tokens in
+  plaintext, and `chmod 600` the file on POSIX systems. See
+  `skills/searxng-search/references/configuration.md`.
+- No telemetry, no third-party services run by this script.
 
 ## License
 

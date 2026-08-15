@@ -2,7 +2,7 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "searxng-search",
   "version": "1.0.0",
-  "description": "Search the web through your own self-hosted SearXNG instance: categories, engines, time range, language and safe-search filters via a zero-dependency Python script, with bearer/basic auth and TOML or JSON config.",
+  "description": "Search the web through your own self-hosted SearXNG instance: categories, engines, time range, language and safe-search filters via a zero-dependency Python script, with bearer/basic auth and TOML or JSON config. The script contacts only the configured SearXNG instance (HTTPS by default; HTTP only for loopback or explicit opt-in); the instance then forwards the query, language, and categories to its own configured upstream engines (Google, Bing, DuckDuckGo, etc., as enabled by the instance operator). No telemetry, no third-party services run by this script.",
   "author": {
     "name": "Fectivnfy112357",
     "url": "https://github.com/Fectivnfy112357"
