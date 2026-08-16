@@ -1,0 +1,182 @@
+{
+  "project_name": "课程管理",
+  "platform_type": "deployed HTML",
+  "prototype_url": "fixtures/sample-prototype.html",
+  "total_pages": 3,
+  "pages": [
+    {
+      "page_name": "创建课程",
+      "page_type": "form",
+      "navigation_path": "课程管理 > 创建课程",
+      "confidence": 0.95,
+      "sections": [
+        {
+          "section_name": "课程创建表单",
+          "fields": [
+            {
+              "label": "课程名称",
+              "field_key": "course_name",
+              "control_type": "text",
+              "required": true,
+              "max_length": 50,
+              "placeholder": "请输入课程名称",
+              "validation_rules": ["required", "max_length:50"],
+              "data_source": "用户输入",
+              "confidence": "high",
+              "notes": null
+            },
+            {
+              "label": "课程分类",
+              "field_key": "course_category",
+              "control_type": "select",
+              "required": true,
+              "max_length": null,
+              "placeholder": "请选择",
+              "validation_rules": ["required", "enum:[language,exam,it,art]"],
+              "data_source": "字典接口",
+              "confidence": "high",
+              "notes": null
+            },
+            {
+              "label": "课程价格(元)",
+              "field_key": "course_price",
+              "control_type": "number",
+              "required": true,
+              "max_length": null,
+              "placeholder": null,
+              "validation_rules": ["required", "min:0", "step:0.01"],
+              "data_source": "用户输入",
+              "confidence": "high",
+              "notes": null
+            },
+            {
+              "label": "课程简介",
+              "field_key": "course_intro",
+              "control_type": "textarea",
+              "required": false,
+              "max_length": 500,
+              "placeholder": "简要描述课程内容",
+              "validation_rules": ["max_length:500"],
+              "data_source": "用户输入",
+              "confidence": "high",
+              "notes": null
+            },
+            {
+              "label": "课程封面",
+              "field_key": "course_cover",
+              "control_type": "file",
+              "required": false,
+              "max_length": null,
+              "placeholder": null,
+              "validation_rules": ["accept:image/*"],
+              "data_source": "用户上传",
+              "confidence": "high",
+              "notes": null
+            }
+          ],
+          "actions": [
+            {"label": "提交", "type": "submit", "requires_confirmation": false, "target_page": "list"},
+            {"label": "重置", "type": "reset", "requires_confirmation": false, "target_page": null},
+            {"label": "取消", "type": "navigate", "requires_confirmation": true, "target_page": "list"}
+          ]
+        }
+      ],
+      "excluded_items": [
+        {
+          "text": "aside.mock-card 中的「示例课程」长段落与示例数据",
+          "reason": "mock_content — 显式标记为 mock，且内容长度远超表单字段，且包含完整业务内容",
+          "rule_applied": "Rule 3: Context-Based Mock Data Detection"
+        }
+      ]
+    },
+    {
+      "page_name": "课程列表",
+      "page_type": "list",
+      "navigation_path": "课程管理 > 课程列表",
+      "confidence": 0.9,
+      "sections": [
+        {
+          "section_name": "筛选区",
+          "fields": [
+            {
+              "label": "分类",
+              "field_key": "filter_category",
+              "control_type": "select",
+              "required": false,
+              "max_length": null,
+              "placeholder": "全部",
+              "validation_rules": ["enum:[language,exam,it,art]"],
+              "data_source": "字典接口",
+              "confidence": "high",
+              "notes": null
+            },
+            {
+              "label": "最低价",
+              "field_key": "filter_price_min",
+              "control_type": "number",
+              "required": false,
+              "max_length": null,
+              "placeholder": null,
+              "validation_rules": ["min:0"],
+              "data_source": "用户输入",
+              "confidence": "high",
+              "notes": null
+            },
+            {
+              "label": "最高价",
+              "field_key": "filter_price_max",
+              "control_type": "number",
+              "required": false,
+              "max_length": null,
+              "placeholder": null,
+              "validation_rules": ["min:0"],
+              "data_source": "用户输入",
+              "confidence": "high",
+              "notes": null
+            }
+          ],
+          "actions": []
+        }
+      ],
+      "excluded_items": [
+        {
+          "text": "table tbody 三个数据行（\"2026年中级经济法VIP高效通关班\" 等）",
+          "reason": "data_instance — Rule 2: 列表行是数据实例，应提取结构（列定义）而非具体值",
+          "rule_applied": "Rule 2: Data Instance vs. Field Definition"
+        },
+        {
+          "text": "p.pagination \"共 3 条记录 · 第 1/1 页\"",
+          "reason": "aggregated_display — 分页汇总信息，是 UI metadata 而非字段定义",
+          "rule_applied": "Rule 4: Aggregated/Computed Displays"
+        }
+      ]
+    },
+    {
+      "page_name": "课程详情",
+      "page_type": "detail",
+      "navigation_path": "课程管理 > 课程详情",
+      "confidence": 0.85,
+      "sections": [
+        {
+          "section_name": "课程详情",
+          "fields": [],
+          "actions": []
+        }
+      ],
+      "excluded_items": [
+        {
+          "text": "dl 内的 7 个 dd 值（具体课程名、分类、价格、创建时间、学员数 12345、评分 4.8）",
+          "reason": "data_instance — 详情页展示的是单条数据的具体值，不构成新的字段定义；字段定义已在创建表单中",
+          "rule_applied": "Rule 2: Data Instance vs. Field Definition"
+        }
+      ]
+    }
+  ],
+  "navigation_tree": [
+    "课程管理 > 仪表盘",
+    "课程管理 > 课程列表",
+    "课程管理 > 创建课程"
+  ],
+  "auth_required": false,
+  "analysis_notes": "Static HTML fixture. Form page has 5 fields (3 required); list page has 3 filter fields and 3 data rows; detail page is read-only. No auth required. The mock-card aside is explicitly excluded by Rule 3; table rows and detail values are excluded by Rule 2."
+}
