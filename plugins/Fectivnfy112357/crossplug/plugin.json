@@ -1,0 +1,12 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "crossplug",
+  "version": "0.1.0",
+  "description": "Bidirectional plugin converter between DSH (DeepSeek Harness) and mcode (MiniMax Code / pi): convert DSH agent presets / plugin sources into mcode plugin packages (agent-plugins 1.0.0), and mcode / pi extensions into DSH presets or host plugins.",
+  "author": {
+    "name": "Fectivnfy112357",
+    "url": "https://github.com/Fectivnfy112357"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["dsh", "mcode", "converter", "bridge", "plugin"]
+}
