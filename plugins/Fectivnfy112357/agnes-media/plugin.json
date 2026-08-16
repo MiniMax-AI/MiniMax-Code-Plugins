@@ -1,0 +1,12 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "agnes-media",
+  "version": "1.0.0",
+  "description": "Generate images and videos through the Agnes AI API: text-to-image, image-to-image, multi-image composition, text-to-video, image-to-video and keyframe animation — one Python script (stdlib-only) handles request building, async task polling and result download; the agent only writes the prompt.",
+  "author": {
+    "name": "Fectivnfy112357",
+    "url": "https://github.com/Fectivnfy112357"
+  },
+  "license": "MIT",
+  "keywords": ["agnes-ai", "image-generation", "video-generation", "text-to-image", "text-to-video"]
+}
