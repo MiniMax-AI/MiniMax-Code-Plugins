@@ -1,6 +1,6 @@
 # dida365 — 滴答清单任务管理
 
-> Manage your 滴答清单 (Dida365 China) tasks, lists, habits, focus records and countdowns from MiniMax Code through the official Dida365 MCP server. 在 AI 对话里直接管理你的滴答清单：查任务、建计划、做复盘、习惯打卡，不用切换应用。
+> Skills for managing your 滴答清单 (Dida365 China) tasks, lists, habits, focus records and countdowns through the official Dida365 MCP server. 本插件是纯 Skill 包：教会 Agent 安全、专业地操作滴答清单官方 MCP（40+ 工具），并提供「周报/文章批量转待办」的场景化工作流。
 
 ## Try it
 
@@ -9,11 +9,7 @@
 ```
 
 ```text
-帮我把这周的高数复习拆成 5 天的任务，放进「学习」清单，每天下午 2 点，中优先级。
-```
-
-```text
-看看我上周完成了哪些任务，然后给我的「早起」习惯补上今天的打卡。
+帮我把这周的高数复习拆成 5 天的任务，放进「学习」清单，每天下午 2 点。
 ```
 
 ```text
@@ -22,34 +18,37 @@
 
 ## How it works
 
-本插件将 MiniMax Code 连接到滴答清单官方 MCP 服务器：
+这是一个 **Skill-only 插件**，包含两个 Skill：
 
-- Endpoint: `https://mcp.dida365.com`（Streamable HTTP，不支持 SSE）
-- 提供 40+ 个官方工具：任务增删改查、清单 / 分组 / 文件夹管理、评论、指派、标签、习惯打卡、专注记录、纪念日
-- 附带两个 Skill：
-  - `dida365`：教 Agent 安全地使用这些工具 —— 先查后改、删除前确认、模糊请求先澄清、复杂请求拆步执行
-  - `article2tasks`：场景化工作流 —— 把技术周报（批量）或单篇文章整理成待办，自动匹配你已有的清单并打标签，写入前必须预览确认。全程纯 MCP 调用，不依赖本地脚本或 URL Scheme，Windows / macOS / Linux 行为一致
+- `dida365`：任务管理守则 —— 先查后改、删除类操作（`delete_task` / `delete_project_group` / `delete_comment` / `delete_focus`）前必须明确确认、模糊请求先澄清、复杂请求拆步执行，附参数约定（优先级 0/1/3/5 必须为 JSON 数字、ISO 8601 日期偏移量带冒号、批量上限、`delete_task` 需要 `task_id` + `project_id`）和失败排查指引。
+- `article2tasks`：场景化工作流 —— 把技术周报（批量）或单篇文章整理成待办，通过 `list_projects` 动态匹配你已有的清单并打标签，写入前必须预览确认。纯 MCP 调用，不依赖本地脚本，Windows / macOS / Linux 行为一致。
 
-## Requirements
+**为什么不自带 MCP 连接**：MCode 当前的可移植插件不支持插件级密钥/OAuth 配置，插件内声明的 MCP 连接无法携带你的凭据。因此本插件不内置 `mcp.json`，由你在客户端全局 MCP 设置中自行添加官方服务器（见下方配置）。
 
-- 一个**中国版滴答清单（dida365.com）账号**。国际版 TickTick 账号数据不互通，请使用本仓库的 `ticktick` 插件。
-- 授权（推荐第一种）：
-  - **API 口令（Bearer Token，已验证可用）**：网页版滴答清单 → 头像 → 设置 → 账户与安全 → API 口令，创建后在客户端的 MCP 配置中添加 `Authorization: Bearer <你的口令>` 请求头。MiniMax Code 目前不为插件声明的 MCP 服务器提供 OAuth 连接界面，请使用此方式。
-  - **OAuth**：滴答清单 MCP 端点本身支持 OAuth 发现，如果你的客户端为远程 MCP 提供原生授权弹窗（如 Claude、Cursor），可以只填 URL 由客户端发起授权。
-- 本插件不包含任何密钥，也不要求你向插件本身提供凭据；凭据只存在于你和客户端、滴答清单官方服务之间。
+## Setup（一次性配置）
+
+1. 获取 API 口令：网页版滴答清单 → 头像 → 设置 → 账户与安全 → API 口令。
+2. 在 MiniMax Code 的**全局 MCP 设置**中添加服务器：
+   - 类型：Streamable HTTP
+   - URL：`https://mcp.dida365.com`
+   - Header：`Authorization: Bearer <你的口令>`
+3. 安装本插件，Skills 会在你提出任务管理需求时自动生效。
+
+如果你的客户端为远程 MCP 提供原生 OAuth 弹窗（如 Claude、Cursor），也可以只填 URL 走 OAuth 授权。
+
+需要一个**中国版滴答清单（dida365.com）账号**；国际版 TickTick 账号数据不互通，请使用本仓库的 `ticktick` 插件。
 
 ## Data and network
 
-- 网络目标：仅 `mcp.dida365.com`（HTTPS），滴答清单官方服务。
-- 数据用途：在你的指令下读取、创建、更新、删除你自己账号下的任务、清单、习惯、专注记录和纪念日数据。
-- 数据不经过任何第三方服务器，本插件自身不收集、不上传任何信息。
-- 删除任务（移入垃圾箱）、解散文件夹等操作不可逆，Agent 被指示在执行前必须得到你的明确确认。
+- 本插件自身**不发起任何网络请求**、不收集上传任何信息、不含任何凭据。
+- 任务数据读写发生在你配置的官方 MCP 服务器（`mcp.dida365.com`，HTTPS）与你自己的账号之间，仅在你的指令下进行。
+- `article2tasks` 会处理你提供的**周报正文、文章 URL 和本地文件路径**：这些内容由 Agent/模型读取和整理，整理结果（标题、推荐语、来源链接、分类、标签）可能写入你的滴答清单。请勿输入你不希望模型处理或写入任务列表的内容。
+- 你的 API 口令只保存在你自己的客户端配置中，插件不会也无法读取它。
 
 ## 局限性
 
-- 仅支持任务、清单、习惯、专注记录、纪念日的基础操作；日历视图、智能清单等高级功能暂不支持（官方 MCP 的限制）。
-- 习惯打卡补录范围限最近 90 天；未完成任务的日期范围查询跨度最大 14 天；专注记录一次最多查询一个月。
-- 批量完成清单内任务每次最多 20 个。
+- 官方 MCP 仅支持任务、清单、习惯、专注记录、纪念日的基础操作；日历视图、智能清单等高级功能暂不支持。
+- 习惯打卡补录范围限最近 90 天；未完成任务的日期范围查询跨度最大 14 天；专注记录一次最多查询一个月；批量完成清单内任务每次最多 20 个。
 
 ## 已知问题（实测记录）
 

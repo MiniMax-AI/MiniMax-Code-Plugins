@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "dida365",
-  "version": "0.1.0",
-  "description": "Manage Dida365 (滴答清单, China) tasks, lists, habits, focus records and countdowns through the official Dida365 MCP server.",
+  "version": "0.2.0",
+  "description": "Skills for managing Dida365 (滴答清单, China) tasks, lists, habits, focus records and countdowns through the official Dida365 MCP server, which you add yourself in your client's MCP settings.",
   "author": {
     "name": "HopeYin",
     "url": "https://github.com/HopeYin"
