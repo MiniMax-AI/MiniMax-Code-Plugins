@@ -1,6 +1,6 @@
 # ticktick — TickTick task management
 
-> Manage your TickTick (international) tasks, lists, habits, focus records and countdowns from MiniMax Code through the official TickTick MCP server. 适用于国际版 TickTick（ticktick.com）账号；国内版滴答清单用户请使用 `dida365` 插件。
+> Skills for managing your TickTick (international) tasks, lists, habits, focus records and countdowns through the official TickTick MCP server. 适用于国际版 TickTick（ticktick.com）账号；国内版滴答清单用户请使用 `dida365` 插件。
 
 ## Try it
 
@@ -9,7 +9,7 @@ What are my tasks today? Group them by list and priority.
 ```
 
 ```text
-Split this week's exam prep into 5 daily tasks in my "Study" list, 2 PM every day, medium priority.
+Split this week's exam prep into 5 daily tasks in my "Study" list, 2 PM every day.
 ```
 
 ```text
@@ -18,32 +18,36 @@ Show me what I completed last week, then check in my "early rise" habit for toda
 
 ## How it works
 
-This plugin connects MiniMax Code to the official TickTick MCP server:
+This is a **Skill-only Plugin** containing one Skill:
 
-- Endpoint: `https://mcp.ticktick.com` (Streamable HTTP only; SSE is not supported)
-- Exposes 40+ official tools: task CRUD, list / column / folder management, comments, assignment, tags, habit check-ins, focus records and countdowns
-- The bundled Skill teaches the agent to use these tools safely: look before changing, confirm before deleting, clarify ambiguous requests, and split complex requests into steps
+- `ticktick`: task-management rules — look up before mutating, require explicit confirmation before destructive actions (`delete_task` / `delete_project_group` / `delete_comment` / `delete_focus`), clarify ambiguous requests, and split complex requests into steps. Ships parameter conventions (priority 0/1/3/5 as a JSON number, ISO 8601 datetimes with colon offsets, batch limits, `delete_task` requiring both `task_id` and `project_id`) and troubleshooting guidance.
 
-## Requirements
+**Why no bundled MCP connection**: MCode's portable Plugins currently cannot carry per-plugin secrets/OAuth configuration, so an MCP connection declared inside a Plugin cannot authenticate. Instead of shipping a dead `mcp.json`, this Plugin asks you to add the official server yourself in your client's global MCP settings (see Setup below).
 
-- An **international TickTick (ticktick.com) account**. China-version 滴答清单 (dida365.com) accounts are a separate system with no shared data — use the `dida365` plugin in this repository instead.
-- Authorization (the first is recommended):
-  - **API Token (Bearer, verified working)**: TickTick web app → avatar → Settings → Account → API Token, then add the `Authorization: Bearer <your token>` header in your client's MCP configuration. MiniMax Code currently offers no OAuth connect UI for plugin-declared MCP servers, so use this method there.
-  - **OAuth**: the TickTick MCP endpoint itself supports OAuth discovery; if your client provides a native authorization popup for remote MCP servers (e.g. Claude, Cursor), you can supply just the URL and let the client start the flow.
-- This plugin ships no credentials and never asks you to hand credentials to the plugin itself; tokens stay between you, your client, and the official TickTick service.
+## Setup (one-time)
+
+1. Get an API Token: TickTick web app → avatar → Settings → Account → API Token.
+2. Add a server in MiniMax Code's **global MCP settings**:
+   - Type: Streamable HTTP
+   - URL: `https://mcp.ticktick.com`
+   - Header: `Authorization: Bearer <your token>`
+3. Install this Plugin; the Skill activates whenever you ask about task management.
+
+If your client provides a native OAuth popup for remote MCP servers (e.g. Claude, Cursor), you can supply just the URL and authorize via OAuth instead.
+
+Requires an **international TickTick (ticktick.com) account**; China-version 滴答清单 (dida365.com) accounts are a separate system with no shared data — use the `dida365` Plugin in this repository instead.
 
 ## Data and network
 
-- Network target: `mcp.ticktick.com` (HTTPS) only, the official TickTick service.
-- Data usage: reads, creates, updates and deletes tasks, lists, habits, focus records and countdowns in your own account, only at your instruction.
-- No data passes through any third-party server; this plugin collects and uploads nothing.
-- Destructive operations (trashing tasks, dissolving folders) are irreversible — the agent is instructed to require your explicit confirmation first.
+- This Plugin itself **makes no network requests**, collects and uploads nothing, and ships no credentials.
+- Task data is read and written between the official MCP server you configured (`mcp.ticktick.com`, HTTPS) and your own account, only at your instruction.
+- Your API Token lives only in your own client configuration; the Plugin cannot read it.
+- Destructive operations (trashing tasks, dissolving folders, deleting comments or focus records) are irreversible — the Skill instructs the agent to require your explicit confirmation first.
 
 ## Limitations
 
-- Only basic operations for tasks, lists, habits, focus records and countdowns are supported; advanced features such as calendar views and smart lists are not available (an official MCP limitation).
-- Habit check-in backfill is limited to the last 90 days; undone-task date-range queries span at most 14 days; focus records are returned at most one month per call.
-- Completing tasks in a list in bulk is limited to 20 per call.
+- The official MCP covers only basic operations for tasks, lists, habits, focus records and countdowns; advanced features such as calendar views and smart lists are not available.
+- Habit check-in backfill is limited to the last 90 days; undone-task date-range queries span at most 14 days; focus records are returned at most one month per call; completing tasks in a list in bulk is limited to 20 per call.
 
 ## Known issues (observed in manual testing)
 

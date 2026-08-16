@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "ticktick",
-  "version": "0.1.0",
-  "description": "Manage TickTick (international) tasks, lists, habits, focus records and countdowns through the official TickTick MCP server.",
+  "version": "0.2.0",
+  "description": "Skills for managing TickTick (international) tasks, lists, habits, focus records and countdowns through the official TickTick MCP server, which you add yourself in your client's MCP settings.",
   "author": {
     "name": "HopeYin",
     "url": "https://github.com/HopeYin"
