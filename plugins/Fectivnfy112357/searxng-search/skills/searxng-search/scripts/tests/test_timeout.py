@@ -1,5 +1,6 @@
-"""Review point 4: the configured `timeout` is passed through to
-`urllib.request.urlopen`. We mock urlopen and inspect the call.
+"""Review point 4: the configured `timeout` is passed through to the
+HTTP opener. We mock `_build_opener` (returns an opener whose `.open`
+is the call we inspect) so the timeout kwarg is observable.
 """
 import os
 import sys
@@ -14,18 +15,20 @@ from _fixtures import FakeResponse
 
 def _run_main(load_config_return, argv=("search.py", "q")):
     """Run `search.main()` with all network/config side effects mocked,
-    and return the urlopen mock so the test can inspect its call args."""
-    u = mock.Mock(return_value=FakeResponse(b'{"results":[]}'))
+    and return the opener.open mock so the test can inspect its call args."""
+    open_mock = mock.Mock(return_value=FakeResponse(b'{"results":[]}'))
+    opener = mock.Mock()
+    opener.open = open_mock
     with mock.patch.object(sys, "argv", list(argv)), \
          mock.patch.object(search, "load_config", return_value=load_config_return), \
          mock.patch.object(search, "build_request", return_value=mock.Mock()), \
-         mock.patch.object(search.urllib.request, "urlopen", u), \
+         mock.patch.object(search, "_build_opener", return_value=opener), \
          mock.patch.object(search.sys, "exit", side_effect=SystemExit):
         try:
             search.main()
         except SystemExit:
             pass
-    return u
+    return open_mock
 
 
 class TestTimeoutConfig(unittest.TestCase):

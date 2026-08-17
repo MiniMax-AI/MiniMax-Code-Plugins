@@ -47,7 +47,10 @@ This skill has **two levels of network destinations**; the difference matters.
 
 The script makes a single HTTPS (or loopback HTTP) request to **your
 configured SearXNG instance** — the `base_url` in your config. The
-script does not contact any other host.
+script does not contact any other host. It never follows HTTP
+redirects: a 30x response is an error, because following a redirect
+could forward the Authorization header to an unexpected host. Point
+`base_url` directly at the final endpoint.
 
 ### Downstream destinations (the SearXNG instance, not the script)
 

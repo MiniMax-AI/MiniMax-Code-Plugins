@@ -99,6 +99,61 @@ class TestResolveEnv(unittest.TestCase):
         self.assertEqual(search.resolve_env(""), "")
 
 
+class TestConfigFieldTypes(unittest.TestCase):
+    """Numeric config fields must be integers. A hand-edited TOML with
+    `timeout = "30"` used to raise a raw TypeError from urllib (and
+    `default_max_results = "5"` from result slicing); both now fail
+    fast with a clear message during load_config.
+    """
+
+    def _write(self, d, body):
+        os.makedirs(os.path.join(d, "agents"), exist_ok=True)
+        with open(os.path.join(d, "agents", "searxng.toml"), "w") as f:
+            f.write(body)
+
+    def test_timeout_as_string_exits(self):
+        with tempfile.TemporaryDirectory() as d, \
+             mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": d}, clear=True), \
+             mock.patch.object(search, "validate_base_url"), \
+             mock.patch.object(search, "check_file_permissions"):
+            self._write(d, 'base_url = "https://searx.example.com"\ntimeout = "30"\n')
+            rc, err = _capture(search.load_config)
+        self.assertEqual(rc, 1)
+        self.assertIn("timeout", err)
+        self.assertIn("must be an integer", err)
+
+    def test_default_max_results_as_string_exits(self):
+        with tempfile.TemporaryDirectory() as d, \
+             mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": d}, clear=True), \
+             mock.patch.object(search, "validate_base_url"), \
+             mock.patch.object(search, "check_file_permissions"):
+            self._write(d, 'base_url = "https://searx.example.com"\ndefault_max_results = "5"\n')
+            rc, err = _capture(search.load_config)
+        self.assertEqual(rc, 1)
+        self.assertIn("default_max_results", err)
+        self.assertIn("must be an integer", err)
+
+    def test_boolean_is_rejected(self):
+        # `True` is an int subclass; treat it as a config typo, not a number.
+        with tempfile.TemporaryDirectory() as d, \
+             mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": d}, clear=True), \
+             mock.patch.object(search, "validate_base_url"), \
+             mock.patch.object(search, "check_file_permissions"):
+            self._write(d, 'base_url = "https://searx.example.com"\ntimeout = true\n')
+            rc, err = _capture(search.load_config)
+        self.assertEqual(rc, 1)
+        self.assertIn("timeout", err)
+
+    def test_valid_integers_load_ok(self):
+        with tempfile.TemporaryDirectory() as d, \
+             mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": d}, clear=True), \
+             mock.patch.object(search, "check_file_permissions"):
+            self._write(d, 'base_url = "https://searx.example.com"\ntimeout = 12\ndefault_max_results = 3\n')
+            config = search.load_config()
+        self.assertEqual(config["timeout"], 12)
+        self.assertEqual(config["default_max_results"], 3)
+
+
 class TestFilePermissions(unittest.TestCase):
     def test_world_readable_warns(self):
         if os.name != "posix":

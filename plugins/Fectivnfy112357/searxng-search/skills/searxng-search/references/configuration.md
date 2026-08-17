@@ -56,7 +56,7 @@ permissive ACLs on Windows.
 | `auth.token` | `string` | If `auth.type = "bearer"` | Bearer token value; supports `$ENV_VAR` or `${ENV_VAR}` (recommended) |
 | `auth.user` | `string` | If `auth.type = "basic"` | Basic auth username; supports `$ENV_VAR` or `${ENV_VAR}` (recommended) |
 | `auth.pass` | `string` | If `auth.type = "basic"` | Basic auth password; supports `$ENV_VAR` or `${ENV_VAR}` (recommended) |
-| `headers` | `object` | No | Extra HTTP headers to send with the request |
+| `headers` | `object` | No | Extra HTTP headers to send with the request; values support `$ENV_VAR` / `\${ENV_VAR}` references (recommended for keys) |
 | `default_language` | `string` | No | Default language code, for example `en` or `zh-CN` |
 | `default_categories` | `string[]` | No | Default categories, for example `["general", "news"]` |
 | `default_engines` | `string[]` | No | Default engines, for example `["google", "duckduckgo"]` |
@@ -295,6 +295,20 @@ Checks:
 - verify `base_url`
 - make sure the instance is reachable from your machine
 - check VPN, proxy, DNS, or certificate issues
+
+### `ERROR: HTTP 30x: redirect blocked: ...`
+
+The instance (or a load balancer in front of it) answered with a 30x
+redirect. The script never follows redirects — urllib's default redirect
+handler would forward the `Authorization` header to the redirect
+target, so redirects are treated as errors on purpose.
+
+Checks:
+
+- point `base_url` directly at the final endpoint (the URL that
+  answers `/search?format=json` with 200)
+- if your instance is behind a load balancer that 302s, front it with a
+  same-origin reverse proxy that terminates the redirect instead
 
 ### `ERROR: Invalid JSON response from SearXNG`
 

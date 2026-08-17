@@ -11,8 +11,10 @@ class FakeResponse:
         self._body = body
         self.status = status
 
-    def read(self) -> bytes:
-        return self._body
+    def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            return self._body
+        return self._body[:size]
 
     def __enter__(self):
         return self
@@ -30,8 +32,16 @@ class FakeHTTPError(urllib.error.HTTPError):
         def __init__(self, body: bytes):
             self._body = body
 
-        def read(self) -> bytes:
-            return self._body
+        def read(self, size: int = -1) -> bytes:
+            if size is None or size < 0:
+                return self._body
+            return self._body[:size]
+
+        def close(self) -> None:
+            """No-op so urllib's addbase (_TemporaryFileWrapper) GC
+            cleanup does not raise AttributeError when the FakeHTTPError
+            is garbage-collected."""
+            return None
 
     def __init__(self, code: int, body: bytes = b"", reason: str = "HTTP Error") -> None:
         super().__init__(
@@ -43,5 +53,7 @@ class FakeHTTPError(urllib.error.HTTPError):
         )
         self._body = body
 
-    def read(self) -> bytes:
-        return self._body
+    def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            return self._body
+        return self._body[:size]

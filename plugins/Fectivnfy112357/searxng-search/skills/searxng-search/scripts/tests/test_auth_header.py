@@ -7,6 +7,7 @@ directly without touching the network.
 """
 import argparse
 import base64
+import io
 import os
 import sys
 import unittest
@@ -69,6 +70,63 @@ class TestBuildRequestAuthHeader(unittest.TestCase):
         req = search.build_request(config, _args())
         self.assertNotIn("abc123", req.full_url)
         self.assertIn("q=q", req.full_url)
+
+
+def _get_header_ci(req, name):
+    """urllib stores header names via `key.capitalize()` and `get_header`
+    is an exact dict lookup, so look the value up case-insensitively."""
+    for key, value in req.header_items():
+        if key.lower() == name.lower():
+            return value
+    return None
+
+
+class TestBuildRequestCustomHeaders(unittest.TestCase):
+    """Custom `headers` config values get the same treatment as auth.*:
+    `$ENV_VAR` references are resolved (instead of being sent as the
+    literal `$NAME` text), and env-referenced values are registered for
+    exact redaction in later error output."""
+
+    def test_plain_header_passes_through(self):
+        config = {"base_url": "https://searx.example.com", "headers": {"X-Custom": "value"}}
+        req = search.build_request(config, _args())
+        self.assertEqual(_get_header_ci(req, "X-Custom"), "value")
+
+    def test_env_var_header_is_resolved(self):
+        config = {"base_url": "https://searx.example.com", "headers": {"X-API-Key": "$SEARXNG_API_KEY"}}
+        with mock.patch.dict(os.environ, {"SEARXNG_API_KEY": "hunter2"}):
+            req = search.build_request(config, _args())
+        self.assertEqual(_get_header_ci(req, "X-API-Key"), "hunter2")
+
+    def test_env_var_header_registers_secret_for_redaction(self):
+        search.reset_active_secrets()
+        config = {"base_url": "https://searx.example.com", "headers": {"X-API-Key": "$SEARXNG_API_KEY"}}
+        with mock.patch.dict(os.environ, {"SEARXNG_API_KEY": "hunter2"}):
+            search.build_request(config, _args())
+        out = search.redact_secrets("server echoed hunter2 in error body")
+        self.assertNotIn("hunter2", out)
+        self.assertIn("***", out)
+        search.reset_active_secrets()
+
+    def test_missing_env_var_header_exits(self):
+        err = io.StringIO()
+        config = {"base_url": "https://searx.example.com", "headers": {"X-Key": "$MISSING_VAR"}}
+        with mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch.object(sys, "stderr", err), \
+             mock.patch.object(search.sys, "exit", side_effect=SystemExit) as e:
+            with self.assertRaises(SystemExit):
+                search.build_request(config, _args())
+        self.assertIn("MISSING_VAR is not set", err.getvalue())
+
+    def test_non_string_header_value_exits(self):
+        err = io.StringIO()
+        config = {"base_url": "https://searx.example.com", "headers": {"X-Num": 42}}
+        with mock.patch.object(sys, "stderr", err), \
+             mock.patch.object(search.sys, "exit", side_effect=SystemExit) as e:
+            with self.assertRaises(SystemExit):
+                search.build_request(config, _args())
+        self.assertIn("X-Num", err.getvalue())
+        self.assertIn("headers", err.getvalue())
 
 
 class TestUserAgent(unittest.TestCase):

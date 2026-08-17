@@ -19,7 +19,11 @@ Two levels — both matter:
   for loopback hosts (127.0.0.1, ::1, localhost) or for non-loopback
   hosts if the config contains `allow_insecure_http = true` (with a
   warning). If `auth.type` is set, the Authorization header travels to
-  that single host and nowhere else.
+  that single host and nowhere else. **Redirects are never followed**: a
+  30x response is an error, because following a redirect could forward
+  the Authorization header to a host you did not configure. Point
+  `base_url` directly at the final endpoint (or front the instance
+  with a same-origin reverse proxy).
 - **Downstream (your SearXNG instance):** the instance then forwards
   the **query**, **language**, and **categories** to the engines it
   itself has been configured with (Google, Bing, DuckDuckGo, Brave,
