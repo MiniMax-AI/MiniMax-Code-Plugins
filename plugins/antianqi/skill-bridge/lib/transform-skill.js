@@ -9,22 +9,21 @@
 //
 // Atomicity:
 //   Writes happen in a sibling staging directory first
-//   (`<outDir>.staging-<rand>`), then `fs.rename`d onto outDir. If anything
-//   fails before the rename, the staging dir is removed and outDir is left
-//   untouched. This makes `--force` safe and prevents the "old references
-//   leak into new output" bug.
+//   (`<outDir>.staging-<rand>`), then we use a backup-rename dance to
+//   move it onto outDir atomically. At every observable point in time,
+//   outDir either points at the OLD content or the NEW content — never
+//   empty, never half-written. This makes `--force` safe and prevents
+//   the "old references/ leak into new output" bug that bit v0.1.
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import * as yaml from 'js-yaml';
 import { parameterizePaths, suggestFilename } from './paths.js';
-import { parseFrontmatter } from './analyze.js';
+import { parseFrontmatter, dumpYamlBlock } from './analyze.js';
 
 const MAX_BODY_LINES = 500;
 
 function kebab(name) {
-  // Strict ASCII kebab-case. Chinese / CJK names move to displayNames.zh-Hans.
   return String(name)
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, '-')
@@ -40,16 +39,13 @@ const TRIGGER_PHRASES = [
 ];
 
 function extractChineseSummary(body) {
-  // Grab the first non-heading paragraph that contains Chinese.
-  // Skip the first H1 if it doubles as a title; look for the first
-  // paragraph that's plain prose.
   const blocks = body.split(/\r?\n\r?\n/);
   for (const p of blocks) {
     const t = p.trim();
     if (!t) continue;
-    if (/^#+\s/.test(t)) continue;       // skip headings
-    if (/^```/.test(t)) continue;          // skip code blocks
-    if (/^[-*+]\s/.test(t)) continue;      // skip list items
+    if (/^#+\s/.test(t)) continue;
+    if (/^```/.test(t)) continue;
+    if (/^[-*+]\s/.test(t)) continue;
     if (!/[\u3400-\u9FFF]/.test(t)) continue;
     return t.replace(/\s+/g, ' ').slice(0, 200);
   }
@@ -57,11 +53,9 @@ function extractChineseSummary(body) {
 }
 
 function extractDisplayNameZh(frontmatter, body) {
-  // Try existing name first (if it's Chinese, use it as displayName)
   if (frontmatter.name && /[\u3400-\u9FFF]/.test(frontmatter.name)) {
     return String(frontmatter.name).trim();
   }
-  // Else grab the first H1's text
   const h1 = body.match(/^#\s+(.+)$/m);
   if (h1) return h1[1].trim().slice(0, 32);
   return null;
@@ -69,13 +63,9 @@ function extractDisplayNameZh(frontmatter, body) {
 
 function enrichFrontmatter(original, body, classifyResult, targetName) {
   const fm = { ...original };
-  // The output directory name is the source of truth for the kebab-case
-  // name. openclaw skills often have CJK or inconsistent names; we ignore
-  // those and use the ASCII dir name from --out.
   const name = targetName || kebab(fm.name || 'unnamed-skill');
   fm.name = name;
 
-  // description: ensure it has a trigger phrase
   let desc = typeof fm.description === 'string' ? fm.description : (fm.description || '');
   desc = desc.replace(/\s+/g, ' ').trim();
   if (!desc) {
@@ -88,7 +78,6 @@ function enrichFrontmatter(original, body, classifyResult, targetName) {
   if (!desc.endsWith('.')) desc += '.';
   fm.description = desc;
 
-  // Locale (only emit keys if we actually have content)
   const zhSummary = extractChineseSummary(body);
   const displayZh = extractDisplayNameZh(original, body);
   if (zhSummary) {
@@ -100,7 +89,6 @@ function enrichFrontmatter(original, body, classifyResult, targetName) {
     fm.displayNames['zh-Hans'] = displayZh;
   }
 
-  // Metadata hints
   fm.metadata = fm.metadata || {};
   fm.metadata['openclaw_compat'] = true;
   fm.metadata['skill-bridge'] = {
@@ -143,8 +131,6 @@ function addReferencesIndex(body, references) {
 }
 
 function maybeSplitReferences(name, body) {
-  // v0.1 simple split: if body > 500 lines AND has clearly demarcated
-  // sub-sections (## ...), move the later ones into references/.
   const lines = body.split(/\r?\n/);
   if (lines.length <= MAX_BODY_LINES) return { body, references: [] };
 
@@ -167,7 +153,6 @@ function maybeSplitReferences(name, body) {
 
   if (sections.length < 3) return { body, references: [] };
 
-  // Keep the first 2 sections (intro + first ## heading) in body, move the rest.
   const keep = sections.slice(0, 2).map(s => s.lines.join('\n')).join('\n\n');
   const moved = sections.slice(2);
   const references = moved.map(s => {
@@ -186,10 +171,58 @@ function maybeSplitReferences(name, body) {
 }
 
 /**
+ * Atomic directory replace using a backup-and-rename dance.
+ *
+ * At any observable point in time, outDir is either the OLD content or
+ * the NEW content. There is no window where outDir is missing or
+ * half-written. The staging directory is always cleaned up.
+ *
+ * @param {string} staging   The directory holding the new content.
+ * @param {string} outDir    The destination to replace.
+ */
+async function atomicReplace(staging, outDir) {
+  const backup = `${outDir}.bak-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+  let backupCreated = false;
+  try {
+    const exists = await fs.stat(outDir).catch(() => null);
+    if (exists) {
+      // Move the existing outDir out of the way. fs.rename is atomic on
+      // the same volume and never returns a partially-moved directory.
+      await fs.rename(outDir, backup);
+      backupCreated = true;
+    }
+    // Move staging into place.
+    await fs.rename(staging, outDir);
+    // OutDir is now the new content. Drop the backup.
+    if (backupCreated) {
+      await fs.rm(backup, { recursive: true, force: true });
+      backupCreated = false;
+    }
+  } catch (err) {
+    // Recovery: if we created a backup but the final rename failed,
+    // restore the backup so the caller still sees the old outDir.
+    if (backupCreated) {
+      const backupExists = await fs.stat(backup).catch(() => null);
+      if (backupExists) {
+        await fs.rename(backup, outDir).catch(() => {});
+      }
+    }
+    throw err;
+  } finally {
+    if (backupCreated) {
+      await fs.rm(backup, { recursive: true, force: true }).catch(() => {});
+    }
+    // Staging should already be gone (renamed onto outDir). If it
+    // somehow remains, clean it up.
+    await fs.rm(staging, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/**
  * @param {object} args
  * @param {string} args.inputPath
  * @param {import('./analyze.js').AnalyzedSkill} args.report
- * @param {ClassifyResult} args.classify
+ * @param {import('./classify.js').ClassifyResult} args.classify
  * @param {string} args.outDir
  * @returns {Promise<{ written: string[], warnings: string[] }>}
  */
@@ -224,18 +257,14 @@ export async function transformSkill({ inputPath, report, classify, outDir }) {
   const enrichedFm = enrichFrontmatter(report.frontmatter, finalBody, classify, targetName);
 
   // 6. Serialize
-  const fmYaml = yaml.dump(enrichedFm, { lineWidth: 100, noRefs: true, sortKeys: false });
+  const fmYaml = dumpYamlBlock(enrichedFm);
   const skillText = `---\n${fmYaml}---\n\n${finalBody.trimStart()}`;
 
-  // 7. Atomic write: stage everything under a sibling temp dir, then rename.
-  //    This means `--force` is safe (old outDir is replaced wholesale, no
-  //    stale references/) and partial failures never leave a half-written
-  //    outDir behind.
+  // 7. Atomic write: stage everything under a sibling temp dir, then
+  //    swap into outDir via the backup-rename dance.
   const stageDir = `${outDir}.staging-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
-  let stageSucceeded = false;
   try {
     await fs.mkdir(stageDir, { recursive: true });
-
     const skillOut = path.join(stageDir, 'SKILL.md');
     await fs.writeFile(skillOut, skillText, 'utf-8');
 
@@ -249,15 +278,11 @@ export async function transformSkill({ inputPath, report, classify, outDir }) {
     const reportPath = path.join(stageDir, 'conversion-report.md');
     await fs.writeFile(reportPath, reportMd, 'utf-8');
 
-    // Replace the destination. If outDir exists, remove it first so the
-    // rename is a simple same-volume move (works on Windows too).
-    await fs.rm(outDir, { recursive: true, force: true });
-    await fs.rename(stageDir, outDir);
-    stageSucceeded = true;
-  } finally {
-    if (!stageSucceeded) {
-      await fs.rm(stageDir, { recursive: true, force: true }).catch(() => {});
-    }
+    await atomicReplace(stageDir, outDir);
+  } catch (err) {
+    // Make sure staging is gone even if the catch ran mid-write.
+    await fs.rm(stageDir, { recursive: true, force: true }).catch(() => {});
+    throw err;
   }
 
   // 8. Record the final paths (post-rename) for the caller.
@@ -292,7 +317,7 @@ function renderConversionReport({ inputPath, classify, pathChanges, written, war
     `## Warnings`,
     warnings.length === 0 ? `_none_` : warnings.map(w => `- ${w}`).join('\n'),
     ``,
-    `_generated by skill-bridge v0.1.0 on ${new Date().toISOString()}_`,
+    `_generated by skill-bridge v0.2.0 on ${new Date().toISOString()}_`,
     ``,
   ].join('\n');
 }

@@ -1,14 +1,20 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "skill-bridge",
-  "version": "0.1.0",
-  "description": "Convert openclaw (and similar) skills into mavis/mcode-compatible skills or plugins. Detects encoding, parameterizes hardcoded paths, enriches frontmatter, runs the official lint, and produces a portable Skill-only Agent Plugin.",
+  "version": "0.2.0",
+  "description": "Convert an openclaw (or similar) skill into a portable mavis/mcode-compatible skill, exposed as a stdio MCP server. Detects encoding, parameterizes hardcoded paths, enriches frontmatter, and runs the official skill-creator lint.",
   "author": {
     "name": "antianqi",
     "url": "https://github.com/antianqi"
   },
   "homepage": "https://github.com/antianqi/skill-bridge",
   "repository": "https://github.com/antianqi/skill-bridge.git",
-  "license": "MIT",
-  "keywords": ["mcode", "mavis", "openclaw", "skill-migration", "converter"]
+  "license": "Apache-2.0",
+  "keywords": [
+    "minimax-code",
+    "mcp",
+    "skill-migration",
+    "openclaw",
+    "converter"
+  ]
 }

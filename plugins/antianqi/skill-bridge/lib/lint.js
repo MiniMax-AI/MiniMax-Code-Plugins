@@ -2,19 +2,24 @@
 //
 // The official `lint-skill.js` ships as ES module source but is named
 // with a `.js` extension and is not under a package.json with
-// `"type": "module"`. Spawning `node` on it fails with a confusing
-// SyntaxError. We avoid the problem by importing the source via the
-// data: URL trick (Node will parse it as ESM when the import assertion
-// says so) or by reading the source and eval-ing it.
+// `"type": "module"`. Spawning `node` on it directly fails with a
+// confusing SyntaxError. We avoid the problem in one of two ways:
 //
-// v0.1 uses the dynamic import path: read the file, write a temp
-// `.mjs` next to it, then dynamic-import that. This stays compatible
-// with all Node 22+ setups.
+//   - Fast path: dynamic import the script in-process. Works for CJS
+//     modules (we read `mod.lint` and `mod.default.lint`) and for any
+//     script that already exposes a `lint(skillPath)` function.
+//   - Subprocess path: copy the source to a unique temp `.mjs` and run
+//     it with `node`. The temp dir is created in `os.tmpdir()` and is
+//     always removed, even on early return.
 //
-// IMPORTANT: the staged `.mjs` MUST NOT live in `~/.minimax/.builtin-skills/`
-// or any other user-install location. We use a unique temp dir under
-// `os.tmpdir()` and remove it in a `finally` block on every code path
-// (success, lint failure, spawn error).
+// CRITICAL: the temp dir MUST live under `os.tmpdir()`, NEVER under
+// `~/.minimax/.builtin-skills/` or any user-install path. v0.1 was
+// racy here; v0.2 forces a unique `sb-lint-<pid>-<rand>` directory.
+//
+// The return shape `{ ok, code, stdout, stderr }` is the failure
+// contract. The caller (the MCP server, the CLI, or a test) decides
+// what to do with `ok === false`. LintSkill itself does not exit the
+// process.
 
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -23,12 +28,6 @@ import fs from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import crypto from 'node:crypto';
 
-/**
- * Stage `lintScript` as a `.mjs` in a fresh temp directory.
- *
- * Returns `{ dir, mjs }`. Caller is responsible for `fs.rm(dir, ...)`
- * when done. Never writes into the user's install area.
- */
 async function stageMjsInTmp(lintScript) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), `sb-lint-${process.pid}-`));
   const mjs = path.join(dir, `${crypto.randomBytes(4).toString('hex')}.mjs`);
@@ -47,9 +46,9 @@ export async function lintSkill(skillPath, opts = {}) {
   const lintScript = opts.lintScript
     || path.join(os.homedir(), '.minimax', '.builtin-skills', 'skill-creator', 'scripts', 'lint-skill.js');
 
-  // Fast path: dynamic import the script in-process. No files written.
-  // Handle both ESM (`export function lint`) and CJS interop
-  // (`module.exports.lint` shows up at `mod.default.lint`).
+  // Fast path: dynamic import in-process. No files written.
+  // Handle ESM (`export function lint`) and CJS interop
+  // (`module.exports.lint` appears at `mod.default.lint`).
   try {
     const mod = await import(pathToFileURL(lintScript).href);
     const fn = typeof mod.lint === 'function'
@@ -57,9 +56,14 @@ export async function lintSkill(skillPath, opts = {}) {
       : (mod.default && typeof mod.default.lint === 'function' ? mod.default.lint : null);
     if (fn) {
       const result = await fn(skillPath);
-      return { ok: result.ok ?? true, code: result.code ?? 0, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+      return {
+        ok: result.ok === true,
+        code: typeof result.code === 'number' ? result.code : (result.ok ? 0 : 1),
+        stdout: result.stdout ?? '',
+        stderr: result.stderr ?? '',
+      };
     }
-  } catch (e) {
+  } catch {
     // Fall through to subprocess path
   }
 
@@ -78,10 +82,6 @@ export async function lintSkill(skillPath, opts = {}) {
       const settle = (payload) => {
         if (settled) return;
         settled = true;
-        // Drop the stdio handles so node's test runner doesn't see a
-        // still-tracked child (which would fail the surrounding test on
-        // non-zero exit). On Windows the handles keep the child process
-        // pinned if not explicitly destroyed.
         try { child.stdout?.destroy(); } catch {}
         try { child.stderr?.destroy(); } catch {}
         resolve(payload);
@@ -96,7 +96,7 @@ export async function lintSkill(skillPath, opts = {}) {
       });
     });
   } finally {
-    // Always clean up the staged dir, even on early return / thrown error.
+    // Always clean up the staged dir.
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 }

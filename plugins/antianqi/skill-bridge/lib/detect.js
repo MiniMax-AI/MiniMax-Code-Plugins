@@ -1,17 +1,18 @@
 // lib/detect.js — Encoding detection (GBK vs UTF-8) and mojibake recovery.
 //
 // Strategy:
-//   1. Read raw bytes.
-//   2. Try UTF-8 strict decode: if no replacement chars, it's UTF-8.
-//   3. Else try GBK decode via iconv-lite: if it produces mostly CJK
-//      printable characters (no replacement chars), the source was GBK
-//      and we can restore it to UTF-8.
-//   4. Else: declare unknown (do not modify).
+//   1. Try strict UTF-8 decode; if it succeeds, the file is UTF-8.
+//   2. Try strict GB18030 decode (Node 22+ ships this in `TextDecoder`);
+//      if it produces CJK printable text, the source was GBK and we have
+//      the restored UTF-8.
+//   3. Otherwise: declare unknown, do not modify.
 //
-// We deliberately avoid chardet-style heuristics in v0.1 because the
-// failure mode of guessing wrong is silent corruption of skill text.
+// We deliberately avoid chardet-style heuristics because guessing wrong
+// silently corrupts skill text.
+//
+// GB18030 is a strict superset of GBK and GB2312, so a "gbk" byte stream
+// round-trips through `TextDecoder('gb18030')` losslessly in practice.
 
-import iconv from 'iconv-lite';
 import fs from 'node:fs/promises';
 
 const REPLACEMENT = '\uFFFD';
@@ -21,10 +22,10 @@ const NON_ASCII_PRINTABLE = /[^\x00-\x7F]/;
 /**
  * @typedef {Object} DetectResult
  * @property {'utf-8'|'gbk'|'unknown'} encoding
- * @property {string} text            - The recovered UTF-8 text.
- * @property {string} originalEncoding - What we believe the source was.
- * @property {boolean} replaced        - True if conversion was needed.
- * @property {number} confidence       - 0..1 heuristic confidence.
+ * @property {string} text
+ * @property {string} originalEncoding
+ * @property {boolean} replaced
+ * @property {number} confidence  0..1
  * @property {string} reason
  */
 
@@ -34,47 +35,41 @@ const NON_ASCII_PRINTABLE = /[^\x00-\x7F]/;
  * @returns {DetectResult}
  */
 export function detectEncoding(buf) {
-  // 1. UTF-8 strict
+  // 1. Strict UTF-8
   try {
-    const text = buf.toString('utf-8');
-    if (!text.includes(REPLACEMENT)) {
-      // Cheap "is this actually CJK text" check: at least one non-ASCII printable.
-      const hasNonAscii = NON_ASCII_PRINTABLE.test(text);
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(buf);
+    const hasNonAscii = NON_ASCII_PRINTABLE.test(text);
+    return {
+      encoding: 'utf-8',
+      text,
+      originalEncoding: 'utf-8',
+      replaced: false,
+      confidence: hasNonAscii ? 0.95 : 0.8,
+      reason: 'utf-8 decode clean',
+    };
+  } catch {
+    /* fall through to GBK */
+  }
+
+  // 2. GBK / GB18030 (built-in TextDecoder since Node 18)
+  try {
+    const text = new TextDecoder('gb18030', { fatal: true }).decode(buf);
+    if (!text.includes(REPLACEMENT) && PRINTABLE_CJK.test(text)) {
       return {
-        encoding: 'utf-8',
+        encoding: 'gbk',
         text,
-        originalEncoding: 'utf-8',
-        replaced: false,
-        confidence: hasNonAscii ? 0.95 : 0.8,
-        reason: 'utf-8 decode clean',
+        originalEncoding: 'gbk',
+        replaced: true,
+        confidence: 0.9,
+        reason: 'gb18030 decode clean and contains CJK',
       };
     }
   } catch {
-    /* fall through */
-  }
-
-  // 2. GBK via iconv-lite
-  if (iconv.encodingExists('gbk')) {
-    try {
-      const text = iconv.decode(buf, 'gbk');
-      // GBK almost never produces \uFFFD for valid byte sequences.
-      if (!text.includes(REPLACEMENT) && PRINTABLE_CJK.test(text)) {
-        return {
-          encoding: 'gbk',
-          text,
-          originalEncoding: 'gbk',
-          replaced: true,
-          confidence: 0.9,
-          reason: 'gbk decode clean and contains CJK',
-        };
-      }
-    } catch {
-      /* fall through */
-    }
+    /* not valid gb18030 either */
   }
 
   // 3. Last resort: lossy UTF-8, marked unknown so caller can warn.
-  const text = buf.toString('utf-8');
+  const text = new TextDecoder('utf-8').decode(buf);
   return {
     encoding: 'unknown',
     text,
@@ -96,16 +91,14 @@ export async function readFileSafe(filePath) {
 }
 
 /**
- * Heuristic: does the given UTF-8 text LOOK like GBK mojibake that
- * was already partially normalized? Useful when the file on disk is
- * already a mess of replacement characters and there's no clean byte
- * stream to go back to.
+ * Heuristic: does the given UTF-8 text LOOK like GBK mojibake that was
+ * already partially normalized? Useful when the file on disk is a mess
+ * of replacement characters and there is no clean byte stream to
+ * recover from.
  *
  * @param {string} text
  * @returns {boolean}
  */
 export function isLikelyGbkMojibake(text) {
-  // Pattern: 2+ consecutive U+FFFD surrounded by ASCII or whitespace.
-  // This catches the common "????-???" rendering we see in terminal output.
-  return /\uFFFD{2,}/.test(text) || /[?]{3,}/.test(text);
+  return /\uFFFD{2,}/.test(text) || /\?{3,}/.test(text);
 }
