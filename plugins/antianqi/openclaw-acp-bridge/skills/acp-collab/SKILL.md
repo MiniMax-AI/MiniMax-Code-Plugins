@@ -2,11 +2,11 @@
 name: acp-collab
 description: Use the OpenClaw-mcode-ACP inbox to collaborate peer-to-peer with goudan (OpenClaw main session) instead of one-shot task calls. Read incoming messages, push progress, ask blocking questions, and answer peer questions. Use when working on multi-step tasks that span MiniMax Code and OpenClaw sessions, when uncertain decisions need goudan's input, or when long-running work should report progress back to the parent session.
 license: Apache-2.0
-compatibility: Requires MiniMax Code with Agent Plugins 1.0 support and an OpenClaw-mcode-ACP server reachable on http://localhost:9999.
+compatibility: Requires MiniMax Code with Agent Plugins 1.0 support and an OpenClaw-mcode-ACP server v7-bidir or later reachable on http://127.0.0.1:9999.
 metadata:
   author: 安天齐 (antianqi)
   homepage: https://github.com/antianqi/openclaw-mcode-acp
-  version: "0.1.0"
+  version: "0.1.3"
 ---
 
 # ACP Peer Collaboration
@@ -25,20 +25,30 @@ Activate this Skill whenever any of the following is true:
 
 ## Setup
 
-The ACP server is at `http://localhost:9999`. Your `session_id` is given in the task prompt as `session_id: <id>`. The Python SDK lives at `D:/openclaw-acp/openclaw-skill/acp_tools.py` (override with the `ACP_HOME` environment variable if your checkout is elsewhere).
+The ACP server is at `http://127.0.0.1:9999`. Your `session_id` is given in the task prompt as `session_id: <id>`. The Python SDK lives at `$ACP_HOME/openclaw-skill/acp_tools.py` — `$ACP_HOME` is the only path source. See the Plugin README for the **Supported platforms** and the **Server contract (minimum)** this Skill depends on.
 
 To use the SDK from a shell:
 
 ```python
-import os, sys
-_acr_root = os.environ.get('ACP_HOME')
-if not _acr_root:
+import os
+import sys
+from pathlib import Path
+
+# 1. Resolve the SDK directory from the user-configured ACP_HOME.
+#    ACP_HOME is the ONLY path source. This Plugin never hardcodes it.
+acr_root = os.environ.get('ACP_HOME')
+if not acr_root:
     raise RuntimeError(
         'ACP_HOME env var is not set. Install OpenClaw-mcode-ACP and set '
-        'ACP_HOME to its install path (PowerShell: $env:ACP_HOME = "<path>"). '
+        'ACP_HOME to its install path. PowerShell: $env:ACP_HOME = "<path>"; '
+        'bash/zsh: export ACP_HOME=/path/to/openclaw-mcode-acp. '
         'See https://github.com/antianqi/openclaw-mcode-acp for setup.'
     )
-sys.path.insert(0, os.path.join(_acr_root, 'openclaw-skill'))
+sdk_path = Path(acr_root).expanduser().resolve() / 'openclaw-skill'
+if not sdk_path.is_dir():
+    raise RuntimeError(f'SDK directory not found at {sdk_path}. Check ACP_HOME.')
+
+sys.path.insert(0, str(sdk_path))
 from acp_tools import (
     inbox_read, inbox_write, inbox_ask, inbox_answer,
     inbox_sessions, peer_session_id, peer_greet,
@@ -72,7 +82,7 @@ result = inbox_ask(
     sender="mavis",
     timeout=120,
 )
-# result == {"question_id": <int>, "answer": "<string>"} on success
+# result == {"question_id": <int>, "answer": "<string>} on success
 # result == {"error": "timeout", "question_id": <int>} on timeout
 if "error" in result:
     raise RuntimeError(f"goudan did not answer within 120s (qid={result['question_id']})")
@@ -110,3 +120,9 @@ inbox_write(
 ## Failure handling
 
 If the ACP server is unreachable, fall back to your final-answer channel and note that peer communication was skipped. Do not silently retry in a loop.
+
+## Authentication reminder
+
+- The server's shared secret is read from the environment by the SDK at request time. This Skill never embeds, prints, logs, echoes, or persists it.
+- This Skill never sends the secret to any endpoint other than the configured ACP server (default `http://127.0.0.1:9999`).
+- Do not request the secret from the user, and do not include it in any Skill output, error message, or tool response.
