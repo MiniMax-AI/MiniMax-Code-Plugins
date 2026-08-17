@@ -4,8 +4,7 @@
     "code-index": {
       "type": "stdio",
       "command": "node",
-      "args": ["./server.mjs"],
-      "cwd": "${PLUGIN_ROOT}"
+      "args": ["${PLUGIN_ROOT}/server.mjs"]
     }
   }
 }

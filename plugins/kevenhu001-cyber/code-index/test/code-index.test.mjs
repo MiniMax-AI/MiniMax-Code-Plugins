@@ -4,10 +4,10 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { buildIndex, findReferences, getIndex, indexStatus, searchCode, searchFiles, searchSymbols } from '../lib/indexer.mjs';
-import { handleRpc } from '../server.mjs';
+import { drainOutboundRequests, handleRpc } from '../server.mjs';
 
 const PLUGIN_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -278,7 +278,8 @@ test('serves MCP requests over the configured stdio process boundary', async (co
   try {
     const serverPath = path.join(PLUGIN_ROOT, 'server.mjs');
     const child = spawn(process.execPath, [serverPath], {
-      env: { ...process.env, PLUGIN_ROOT: root, PLUGIN_DATA: dataDir },
+      cwd: root,
+      env: { ...process.env, PLUGIN_ROOT: PLUGIN_ROOT },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     context.after(() => {
@@ -313,6 +314,133 @@ test('serves MCP requests over the configured stdio process boundary', async (co
     assert.equal(responses[3].result.structuredContent.results[0].name, 'greet');
   } finally {
     await cleanup(root, dataDir);
+  }
+});
+
+test('launched from the plugin directory it refuses to index the plugin and accepts an explicit root', async (context) => {
+  const { root, dataDir } = await makeFixture();
+  try {
+    const requests = [
+      rpc(1, 'initialize', {}),
+      rpc(2, 'tools/call', { name: 'build_code_index', arguments: {} }),
+      rpc(3, 'tools/call', { name: 'build_code_index', arguments: { root } }),
+      rpc(4, 'tools/call', { name: 'search_symbol', arguments: { query: 'greet' } }),
+    ];
+    const { exit, stdout, stderr } = await runStdio(requests, {
+      cwd: PLUGIN_ROOT,
+      env: { PLUGIN_ROOT },
+    });
+    assert.equal(exit.code, 0, stderr);
+    const responses = parseResponses(stdout);
+    assert.deepEqual(responses.map((r) => r.id), [1, 2, 3, 4]);
+
+    assert.equal(responses[1].result.isError, true);
+    assert.match(responses[1].result.content[0].text, /workspace_root_unknown/u);
+
+    assert.equal(responses[2].result.structuredContent.fileCount, 6);
+    assert.equal(path.resolve(responses[2].result.structuredContent.root), path.resolve(root));
+
+    assert.equal(responses[3].result.structuredContent.results[0].name, 'greet');
+    assert.equal(responses[3].result.structuredContent.results[0].definitions[0].file, 'src/index.js');
+  } finally {
+    await cleanup(root, dataDir);
+  }
+});
+
+test('honors CODE_INDEX_ROOT when the host offers no other project signal', async (context) => {
+  const { root, dataDir } = await makeFixture();
+  try {
+    const requests = [
+      rpc(1, 'initialize', {}),
+      rpc(2, 'tools/call', { name: 'build_code_index', arguments: {} }),
+    ];
+    const { exit, stdout, stderr } = await runStdio(requests, {
+      cwd: PLUGIN_ROOT,
+      env: { PLUGIN_ROOT, CODE_INDEX_ROOT: root },
+    });
+    assert.equal(exit.code, 0, stderr);
+    const responses = parseResponses(stdout);
+    assert.equal(path.resolve(responses[1].result.structuredContent.root), path.resolve(root));
+    assert.equal(responses[1].result.structuredContent.fileCount, 6);
+  } finally {
+    await cleanup(root, dataDir);
+  }
+});
+
+test('persists and reuses the active root under PLUGIN_DATA across server restarts', async (context) => {
+  const { root } = await makeFixture();
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), 'code-index-data-persist-'));
+  try {
+    const build = await runStdio(
+      [
+        rpc(1, 'initialize', {}),
+        rpc(2, 'tools/call', { name: 'build_code_index', arguments: { root } }),
+      ],
+      { cwd: PLUGIN_ROOT, env: { PLUGIN_ROOT, PLUGIN_DATA: dataDir } },
+    );
+    assert.equal(build.exit.code, 0, build.stderr);
+    const stateFile = path.join(dataDir, 'code-index', 'active-root.json');
+    assert.ok((await stat(stateFile)).isFile());
+    assert.equal(JSON.parse(await readFile(stateFile, 'utf8')).root, path.resolve(root));
+
+    const restart = await runStdio(
+      [
+        rpc(1, 'initialize', {}),
+        rpc(2, 'tools/call', { name: 'index_status', arguments: {} }),
+        rpc(3, 'tools/call', { name: 'search_symbol', arguments: { query: 'top_level' } }),
+      ],
+      { cwd: PLUGIN_ROOT, env: { PLUGIN_ROOT, PLUGIN_DATA: dataDir } },
+    );
+    assert.equal(restart.exit.code, 0, restart.stderr);
+    const responses = parseResponses(restart.stdout);
+    assert.equal(responses[1].result.structuredContent.indexed, true);
+    assert.equal(path.resolve(responses[1].result.structuredContent.root), path.resolve(root));
+    assert.equal(responses[2].result.structuredContent.results[0].name, 'top_level');
+  } finally {
+    await cleanup(root, null);
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('accepts the project root from MCP roots, both announced and pulled', async () => {
+  const { root } = await makeFixture();
+  try {
+    await handleRpc({
+      method: 'notifications/roots/list_changed',
+      params: { roots: [{ uri: pathToFileURL(root).href }] },
+    });
+    const built = await handleRpc({ method: 'tools/call', params: { name: 'build_code_index', arguments: {} } });
+    assert.equal(built.result.structuredContent.fileCount, 6);
+    assert.equal(path.resolve(built.result.structuredContent.root), path.resolve(root));
+    const searched = await handleRpc({ method: 'tools/call', params: { name: 'search_symbol', arguments: { query: 'greet' } } });
+    assert.equal(searched.result.structuredContent.results[0].name, 'greet');
+  } finally {
+    await handleRpc({ method: 'notifications/roots/list_changed', params: { roots: [] } });
+    await cleanup(root, null);
+  }
+});
+
+test('requests the root list from clients that only announce a change', async () => {
+  const { root } = await makeFixture();
+  try {
+    await handleRpc({
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', clientCapabilities: { roots: { listChanged: true } } },
+    });
+    const handled = await handleRpc({ method: 'notifications/roots/list_changed' });
+    assert.equal(handled, null);
+    const outbound = drainOutboundRequests();
+    assert.equal(outbound.length, 1);
+    assert.equal(outbound[0].method, 'roots/list');
+    assert.ok(typeof outbound[0].id === 'string');
+
+    await handleRpc({ id: outbound[0].id, result: { roots: [{ uri: pathToFileURL(root).href }] } });
+    const built = await handleRpc({ method: 'tools/call', params: { name: 'build_code_index', arguments: {} } });
+    assert.equal(built.result.structuredContent.fileCount, 6);
+    assert.equal(path.resolve(built.result.structuredContent.root), path.resolve(root));
+  } finally {
+    await handleRpc({ method: 'notifications/roots/list_changed', params: { roots: [] } });
+    await cleanup(root, null);
   }
 });
 
@@ -408,6 +536,36 @@ async function makeFixture() {
 async function cleanup(root, dataDir) {
   await rm(root, { recursive: true, force: true });
   if (dataDir) await rm(dataDir, { recursive: true, force: true });
+}
+
+function rpc(id, method, params) {
+  return { jsonrpc: '2.0', id, method, params };
+}
+
+function parseResponses(stdout) {
+  return stdout
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+async function runStdio(requests, { cwd, env }) {
+  const serverPath = path.join(PLUGIN_ROOT, 'server.mjs');
+  const child = spawn(process.execPath, [serverPath], {
+    cwd,
+    env: { ...process.env, ...env },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  child.stdin.end(`${requests.map((request) => JSON.stringify(request)).join('\n')}\n`);
+  const exit = await waitForExit(child);
+  return { exit, stdout, stderr };
 }
 
 function waitForExit(child) {

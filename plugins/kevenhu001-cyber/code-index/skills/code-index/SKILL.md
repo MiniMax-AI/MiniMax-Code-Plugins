@@ -19,7 +19,11 @@ imports, ...) with exact `file:line:column` locations.
 
 1. **Check the index first.** Call `index_status`. If `indexed` is false, call
    `build_code_index` before searching. The build is incremental and usually fast;
-   only changed files are re-parsed.
+   only changed files are re-parsed. If a call fails with `workspace_root_unknown`,
+   the host launched this server from the plugin's own directory (MiniMax Code
+   does this) and the project cannot be auto-detected: retry `build_code_index`
+   with `root` set to the absolute path of the active project (your workspace
+   directory). The root is then remembered for the rest of the session.
 2. **Where is X defined?** Call `search_symbol` with the symbol name (or a fragment).
    Read the returned `file:line` locations and snippets, then read only the specific
    lines you need — do not read the whole file.
@@ -41,8 +45,8 @@ imports, ...) with exact `file:line:column` locations.
 
 | Tool | Purpose | Key arguments |
 |---|---|---|
-| `index_status` | Is the index built? stats | — |
-| `build_code_index` | Build/refresh the index | `force` |
+| `index_status` | Is the index built? stats | `root` (only when auto-detection fails) |
+| `build_code_index` | Build/refresh the index | `force`, `root` (only when auto-detection fails) |
 | `search_symbol` | Symbol definitions | `query`, `kind`, `caseSensitive`, `limit` |
 | `find_references` | Usage sites + definitions | `name`, `caseSensitive`, `limit` |
 | `search_file` | File discovery | `query`, `limit` |
@@ -63,8 +67,14 @@ imports, ...) with exact `file:line:column` locations.
 
 ## Failure handling
 
+- `workspace_root_unknown`: the server could not determine the project root
+  (hosts such as MiniMax Code launch plugin MCP servers from the plugin
+  directory, so `index_status` / `build_code_index` need the project path).
+  Retry `build_code_index` with `root` set to the absolute path of the active
+  project; it is remembered for the rest of the session and persisted under
+  PLUGIN_DATA for the next one.
 - `index_not_built`: call `build_code_index` first.
-- `project_root_unavailable`: the active project directory could not be read.
+- `project_root_unavailable`: the resolved project directory could not be read.
 - `query_required` / `name_required` / `path_required`: retry with a non-empty value.
 - `invalid_regex`: the `search_code` pattern is not a valid regular expression.
 - `file_not_in_index`: the path was not indexed (hidden/ignored/non-project file);
