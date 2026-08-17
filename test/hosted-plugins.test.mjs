@@ -36,7 +36,7 @@ test('contributor can scaffold a hosted Skill plugin with one command', async (c
   assert.match(readme, /# Hello World/u);
   assert.match(license, /Apache License/u);
   assert.match(skill, /^---\nname: hello-world\n/mu);
-  assert.match(stdout, /plugins\/alice\/hello-world/u);
+  assert.match(stdout.replace(/\\/g, '/'), /plugins\/alice\/hello-world/u);
 });
 
 test('hosted Plugin is valid when its package and contribution docs are complete', async (context) => {
@@ -138,8 +138,16 @@ test('hosted Plugin rejects symlinks that can escape its package root', async (c
     })}\n`),
     writeFile(path.join(pluginRoot, 'LICENSE'), 'Apache License\nVersion 2.0\n'),
     writeFile(path.join(pluginRoot, 'skills', 'hello-world', 'SKILL.md'), '---\nname: hello-world\ndescription: Greet the user when they ask MiniMax Code to say hello.\n---\n\n# Instructions\n\nRespond with a friendly greeting.\n'),
-    symlink(path.join(workspace, 'outside.md'), path.join(pluginRoot, 'README.md')),
   ]);
+  try {
+    await symlink(path.join(workspace, 'outside.md'), path.join(pluginRoot, 'README.md'));
+  } catch (error) {
+    if (error?.code === 'EPERM') {
+      context.skip('symlink creation is unavailable on this platform');
+      return;
+    }
+    throw error;
+  }
 
   await assert.rejects(
     validateHostedPluginDirectory(pluginRoot, { owner: 'alice', pluginName: 'hello-world' }),
