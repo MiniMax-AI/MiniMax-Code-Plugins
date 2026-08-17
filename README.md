@@ -85,38 +85,6 @@ plugin-root/
 This repository is for **Agent capabilities**. TUI Extensions are a separate system and are not
 loaded from this package format.
 
-## Install and use a Plugin
-
-A Plugin is a portable folder that follows the Agent Plugins 1.0 contract. MiniMax Code reads the
-folder directly — there is no catalog to register with and no commit to pin.
-
-1. Choose a Plugin under [`plugins/<owner>/<name>`](plugins/) (or start with an
-   [`examples/`](examples/) Plugin to try it out).
-2. Copy that folder into your MiniMax Code Plugins location, or point MiniMax Code at its path.
-3. Keep the required package shape intact:
-
-   ```text
-   plugin-root/
-   ├── README.md
-   ├── LICENSE
-   ├── plugin.json
-   ├── mcp.json        # optional
-   └── skills/
-       └── <skill-name>/
-           └── SKILL.md
-   ```
-
-4. Reload the session. MiniMax Code then automatically:
-   - reads every `skills/<skill>/SKILL.md` and activates the Skill when its `description` matches;
-   - connects any `mcp.json` server over `stdio`, `streamable-http`, or `sse`.
-
-MiniMax Code supplies `PLUGIN_ROOT` and `PLUGIN_DATA` to the Plugin for you; do not set them
-yourself. For the exact supported contract, transport limits, and unsupported capabilities, see
-[`docs/plugin-compatibility.md`](docs/plugin-compatibility.md).
-
-Before installing, read the Plugin's own README for its example prompt, required executables or
-accounts, network destinations, and data handling.
-
 ## The gate is simple
 
 A contribution must:

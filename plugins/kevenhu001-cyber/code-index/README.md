@@ -19,6 +19,24 @@ servers — notably [LLMTooling/code-search-mcp](https://github.com/LLMTooling/c
 standard library so the Plugin runs with `node ./server.mjs` and no install step;
 it does not copy those projects' source code.
 
+## Install and use
+
+This Plugin is a portable Agent Plugins 1.0 package made of a Skill and an MCP
+server. To use it in MiniMax Code:
+
+1. Copy the `kevenhu001-cyber/code-index` folder into your MiniMax Code Plugins
+   location, or point MiniMax Code at its path.
+2. Reload the session. MiniMax Code reads `mcp.json` and starts the server
+   automatically over `stdio` with `node ./server.mjs` (working directory set to
+   `PLUGIN_ROOT`), and loads the `code-index` Skill from `skills/`.
+3. Make sure Node.js 22+ is on `PATH`. Optionally install `rg` (ripgrep) to
+   accelerate `search_code`; the built-in scanner works without it.
+4. Ask the agent to use the skill — see the prompt under "Try it" below.
+
+The index is cached under `PLUGIN_DATA/code-index/index.json` and is rebuilt
+incrementally. After large edits, ask the agent to run `build_code_index` again to
+refresh it (the server does not watch files).
+
 ## Try it
 
 ```text

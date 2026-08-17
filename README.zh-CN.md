@@ -82,36 +82,6 @@ plugin-root/
 
 这个仓库只承接 **Agent 能力**。TUI Extension 是另一套独立扩展体系，不使用这里的包格式和加载流程。
 
-## 安装并使用插件
-
-Plugin 是一个遵循 Agent Plugins 1.0 契约的可移植目录。MiniMax Code 直接读取这个目录——不需要登记
-Catalog，也不用手抄 commit SHA。
-
-1. 在 [`plugins/<用户名>/<插件名>`](plugins/) 中挑选一个插件（或先用 [`examples/`](examples/) 里的
-   插件试手）。
-2. 把这个文件夹复制到你的 MiniMax Code 插件目录，或让 MiniMax Code 指向它的路径。
-3. 保持以下必需的目录结构完整：
-
-   ```text
-   plugin-root/
-   ├── README.md
-   ├── LICENSE
-   ├── plugin.json
-   ├── mcp.json        # 可选
-   └── skills/
-       └── <skill-name>/
-           └── SKILL.md
-   ```
-
-4. 重新加载会话。MiniMax Code 会随之自动：
-   - 读取每一个 `skills/<skill>/SKILL.md`，并在其 `description` 命中时激活对应 Skill；
-   - 通过 `stdio`、`streamable-http` 或 `sse` 连接 `mcp.json` 中声明的服务。
-
-MiniMax Code 会替插件注入 `PLUGIN_ROOT` 与 `PLUGIN_DATA`，你无需自己设置。精确的契约、传输上限与
-不支持的能力见 [`docs/plugin-compatibility.md`](docs/plugin-compatibility.md)。
-
-安装前，请阅读插件自带的 README，了解它的示例 prompt、所需可执行文件或账号、网络目标与数据处理方式。
-
 ## 门槛也很简单
 
 一个贡献必须：
