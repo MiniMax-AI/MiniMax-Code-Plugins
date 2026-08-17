@@ -36,7 +36,7 @@ test('contributor can scaffold a hosted Skill plugin with one command', async (c
   assert.match(readme, /# Hello World/u);
   assert.match(license, /Apache License/u);
   assert.match(skill, /^---\nname: hello-world\n/mu);
-  assert.match(stdout, /plugins\/alice\/hello-world/u);
+  assert.match(stdout, /plugins[\\/]alice[\\/]hello-world/u);
 });
 
 test('hosted Plugin is valid when its package and contribution docs are complete', async (context) => {
