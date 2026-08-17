@@ -62,16 +62,19 @@ export function validatePluginManifest(value, label = 'plugin.json') {
 }
 
 export function validateSkillText(text, expectedName, label = 'SKILL.md') {
-  assert(text.startsWith('---\n'), `${label}: YAML frontmatter is required`);
-  const end = text.indexOf('\n---\n', 4);
+  // Windows checkouts (core.autocrlf=true) carry CRLF line endings; normalize so
+  // the YAML frontmatter contract is platform-independent.
+  const normalized = text.replace(/\r\n/g, '\n');
+  assert(normalized.startsWith('---\n'), `${label}: YAML frontmatter is required`);
+  const end = normalized.indexOf('\n---\n', 4);
   assert(end > 4, `${label}: YAML frontmatter is not closed`);
-  const frontmatter = text.slice(4, end);
+  const frontmatter = normalized.slice(4, end);
   const name = frontmatter.match(/^name:\s*([^\n]+)$/mu)?.[1]?.trim();
   const description = frontmatter.match(/^description:\s*([^\n]+)$/mu)?.[1]?.trim();
   assert(name === expectedName, `${label}: frontmatter name must equal ${expectedName}`);
   assert(SKILL_NAME.test(name) && name.length <= 64, `${label}: invalid Skill name`);
   assert(Boolean(description) && description.length <= 1024, `${label}: description is required and must be at most 1024 characters`);
-  assert(text.slice(end + 5).trim().length > 0, `${label}: instructions are required`);
+  assert(normalized.slice(end + 5).trim().length > 0, `${label}: instructions are required`);
   return { name, description };
 }
 

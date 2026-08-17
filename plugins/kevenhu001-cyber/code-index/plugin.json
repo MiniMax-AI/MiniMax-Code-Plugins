@@ -1,0 +1,20 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "code-index",
+  "version": "0.1.0",
+  "description": "Build a fast local code index for the active project so MiniMax Code can locate symbols, definitions, references, and files in milliseconds instead of scanning the whole repository. A Skill teaches the search-before-explore workflow and an MCP server provides the indexing tools; the index is cached under PLUGIN_DATA with no network access.",
+  "author": {
+    "name": "kevenhu001-cyber",
+    "url": "https://github.com/kevenhu001-cyber"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "minimax-code",
+    "plugin",
+    "code-index",
+    "code-search",
+    "symbol",
+    "navigation",
+    "mcp"
+  ]
+}
