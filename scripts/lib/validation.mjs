@@ -75,7 +75,7 @@ export function validateSkillText(text, expectedName, label = 'SKILL.md') {
   return { name, description };
 }
 
-export function validateMcp(value, label = 'mcp.json') {
+export function validateMcp(value, label = 'mcp.json', options = {}) {
   assert(isRecord(value), `${label}: root must be an object`);
   assert(value.$schema === MCP_SCHEMA, `${label}: unsupported $schema`);
   assert(Object.keys(value).every((key) => ['$schema', 'mcpServers'].includes(key)), `${label}: unknown root field`);
@@ -89,7 +89,10 @@ export function validateMcp(value, label = 'mcp.json') {
       assert(typeof server.command === 'string' && server.command.length > 0 && (isBareCommand(server.command) || isContainedRelativePath(server.command)), `${label}: ${name} needs a bare executable or contained ./ path`);
       assert(server.args === undefined || (Array.isArray(server.args) && server.args.every((item) => typeof item === 'string')), `${label}: ${name}.args must be strings`);
       assert(server.env === undefined || (isRecord(server.env) && Object.entries(server.env).every(([key, item]) => !['PLUGIN_ROOT', 'PLUGIN_DATA'].includes(key) && typeof item === 'string')), `${label}: ${name}.env is invalid`);
-      assert(server.cwd === undefined || (typeof server.cwd === 'string' && /^(?:\.\/|\$\{PLUGIN_ROOT\}(?:\/|$)|\$\{PLUGIN_DATA\}(?:\/|$))/u.test(server.cwd)), `${label}: ${name}.cwd is invalid`);
+      if (server.cwd !== undefined) {
+        assert(typeof server.cwd === 'string', `${label}: ${name}.cwd must be a string`);
+        resolveCwd(server.cwd, options.pluginRoot, options.pluginData, label, name);
+      }
       assert(Object.keys(server).every((key) => ['type', 'command', 'args', 'env', 'cwd'].includes(key)), `${label}: ${name} has unsupported fields`);
     } else if (server.type === 'streamable-http' || server.type === 'sse') {
       assert(typeof server.url === 'string' && isSafeRemoteUrl(server.url), `${label}: ${name}.url must be HTTPS or loopback HTTP without credentials or fragment`);
@@ -123,7 +126,38 @@ function isSafeRemoteUrl(value) {
   }
 }
 
-export async function validatePluginDirectory(root) {
+function isContainedWithin(parent, child) {
+  if (typeof parent !== 'string' || typeof child !== 'string') return false;
+  const rel = path.relative(parent, child);
+  if (rel === '') return true;
+  return !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+export function resolveCwd(cwd, pluginRoot, pluginData, label = 'mcp.json', serverName = 'cwd') {
+  assert(typeof cwd === 'string' && cwd.length > 0, `${label}: ${serverName}.cwd must be a non-empty string`);
+  assert(!path.isAbsolute(cwd), `${label}: ${serverName}.cwd must be relative: ${cwd}`);
+  assert(!cwd.includes('\\'), `${label}: ${serverName}.cwd must use forward slashes: ${cwd}`);
+  assert(!/\x00/u.test(cwd), `${label}: ${serverName}.cwd must not contain NUL bytes: ${cwd}`);
+  let resolved;
+  if (cwd.startsWith('./')) {
+    assert(typeof pluginRoot === 'string' && pluginRoot.length > 0, `${label}: ${serverName}.cwd requires a plugin root to resolve ${cwd}`);
+    resolved = path.resolve(pluginRoot, cwd);
+  } else if (cwd.startsWith('${PLUGIN_ROOT}')) {
+    assert(typeof pluginRoot === 'string' && pluginRoot.length > 0, `${label}: ${serverName}.cwd requires a plugin root to resolve ${cwd}`);
+    resolved = path.resolve(pluginRoot, cwd.slice('${PLUGIN_ROOT}'.length).replace(/^\/+/u, ''));
+  } else if (cwd.startsWith('${PLUGIN_DATA}')) {
+    assert(typeof pluginData === 'string' && pluginData.length > 0, `${label}: ${serverName}.cwd requires a plugin data directory to resolve ${cwd}`);
+    resolved = path.resolve(pluginData, cwd.slice('${PLUGIN_DATA}'.length).replace(/^\/+/u, ''));
+  } else {
+    throw new Error(`${label}: ${serverName}.cwd must start with "./", "\${PLUGIN_ROOT}", or "\${PLUGIN_DATA}": ${cwd}`);
+  }
+  const insideRoot = isContainedWithin(pluginRoot, resolved);
+  const insideData = typeof pluginData === 'string' && pluginData.length > 0 && isContainedWithin(pluginData, resolved);
+  assert(insideRoot || insideData, `${label}: ${serverName}.cwd escapes the Plugin sandbox: ${cwd}`);
+  return resolved;
+}
+
+export async function validatePluginDirectory(root, options = {}) {
   const manifestPath = path.join(root, 'plugin.json');
   const manifest = validatePluginManifest(parseJson(await readFile(manifestPath, 'utf8'), manifestPath), manifestPath);
   const skills = [];
@@ -143,7 +177,7 @@ export async function validatePluginDirectory(root) {
   let mcpServers = [];
   const mcpPath = path.join(root, 'mcp.json');
   try {
-    mcpServers = validateMcp(parseJson(await readFile(mcpPath, 'utf8'), mcpPath), mcpPath);
+    mcpServers = validateMcp(parseJson(await readFile(mcpPath, 'utf8'), mcpPath), mcpPath, options);
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
@@ -151,11 +185,13 @@ export async function validatePluginDirectory(root) {
   return { manifest, skills: skills.sort(), mcpServers };
 }
 
-export async function validateHostedPluginDirectory(root, { owner, pluginName }) {
+export async function validateHostedPluginDirectory(root, { owner, pluginName, pluginRoot, pluginData } = {}) {
   assert(OWNER_NAME.test(owner), `${root}: invalid GitHub owner directory ${owner}`);
   assert(PLUGIN_NAME.test(pluginName) && pluginName.length <= 64, `${root}: invalid Plugin directory ${pluginName}`);
   await assertNoSymlinks(root);
-  const result = await validatePluginDirectory(root);
+  const resolvedPluginRoot = pluginRoot ?? root;
+  const resolvedPluginData = pluginData ?? path.join(root, '.data');
+  const result = await validatePluginDirectory(root, { pluginRoot: resolvedPluginRoot, pluginData: resolvedPluginData });
   assert(result.manifest.name === pluginName, `${root}: plugin.json name must equal directory name ${pluginName}`);
   assert(typeof result.manifest.license === 'string' && result.manifest.license.length > 0, `${root}: plugin.json must declare a license`);
   for (const file of ['README.md', 'LICENSE']) {
