@@ -62,16 +62,18 @@ export function validatePluginManifest(value, label = 'plugin.json') {
 }
 
 export function validateSkillText(text, expectedName, label = 'SKILL.md') {
-  assert(text.startsWith('---\n'), `${label}: YAML frontmatter is required`);
-  const end = text.indexOf('\n---\n', 4);
+  assert(!text.startsWith('\uFEFF'), `${label}: UTF-8 BOM is not allowed`);
+  const normalized = text.includes('\r') ? text.replace(/\r\n?/gu, '\n') : text;
+  assert(normalized.startsWith('---\n'), `${label}: YAML frontmatter is required`);
+  const end = normalized.indexOf('\n---\n', 4);
   assert(end > 4, `${label}: YAML frontmatter is not closed`);
-  const frontmatter = text.slice(4, end);
+  const frontmatter = normalized.slice(4, end);
   const name = frontmatter.match(/^name:\s*([^\n]+)$/mu)?.[1]?.trim();
   const description = frontmatter.match(/^description:\s*([^\n]+)$/mu)?.[1]?.trim();
   assert(name === expectedName, `${label}: frontmatter name must equal ${expectedName}`);
   assert(SKILL_NAME.test(name) && name.length <= 64, `${label}: invalid Skill name`);
   assert(Boolean(description) && description.length <= 1024, `${label}: description is required and must be at most 1024 characters`);
-  assert(text.slice(end + 5).trim().length > 0, `${label}: instructions are required`);
+  assert(normalized.slice(end + 5).trim().length > 0, `${label}: instructions are required`);
   return { name, description };
 }
 
@@ -83,20 +85,34 @@ export function validateMcp(value, label = 'mcp.json', options = {}) {
   const entries = Object.entries(value.mcpServers);
   assert(entries.length <= 8, `${label}: MiniMax Code supports at most 8 MCP servers per plugin`);
   for (const [name, server] of entries) {
-    assert(PLUGIN_NAME.test(name), `${label}: invalid MCP server name ${name}`);
+    assert(PLUGIN_NAME.test(name) && name.length <= 64, `${label}: invalid MCP server name ${name}`);
     assert(isRecord(server), `${label}: MCP server ${name} must be an object`);
     if (server.type === 'stdio') {
-      assert(typeof server.command === 'string' && server.command.length > 0 && (isBareCommand(server.command) || isContainedRelativePath(server.command)), `${label}: ${name} needs a bare executable or contained ./ path`);
-      assert(server.args === undefined || (Array.isArray(server.args) && server.args.every((item) => typeof item === 'string')), `${label}: ${name}.args must be strings`);
-      assert(server.env === undefined || (isRecord(server.env) && Object.entries(server.env).every(([key, item]) => !['PLUGIN_ROOT', 'PLUGIN_DATA'].includes(key) && typeof item === 'string')), `${label}: ${name}.env is invalid`);
+      assert(typeof server.command === 'string' && server.command.length > 0 && server.command.length <= 1024 && !/\x00/u.test(server.command) && (isBareCommand(server.command) || isContainedRelativePath(server.command)), `${label}: ${name} needs a bare executable or contained ./ path without NUL bytes (max 1024 chars)`);
+      assert(server.args === undefined || (Array.isArray(server.args) && server.args.length <= 1024 && server.args.every((item) => typeof item === 'string' && item.length <= 4096 && !/\x00/u.test(item))), `${label}: ${name}.args must be strings without NUL bytes (max 1024 items, 4096 chars each)`);
+      assert(server.env === undefined || (isRecord(server.env) && Object.entries(server.env).length <= 256 && Object.entries(server.env).every(([key, item]) => !['PLUGIN_ROOT', 'PLUGIN_DATA'].includes(key) && typeof item === 'string' && !/\x00/u.test(item) && !/\x00/u.test(key))), `${label}: ${name}.env is invalid (max 256 entries)`);
       if (server.cwd !== undefined) {
-        assert(typeof server.cwd === 'string', `${label}: ${name}.cwd must be a string`);
+        assert(typeof server.cwd === 'string' && server.cwd.length <= 1024, `${label}: ${name}.cwd must be a string of at most 1024 chars`);
         resolveCwd(server.cwd, options.pluginRoot, options.pluginData, label, name);
       }
       assert(Object.keys(server).every((key) => ['type', 'command', 'args', 'env', 'cwd'].includes(key)), `${label}: ${name} has unsupported fields`);
     } else if (server.type === 'streamable-http' || server.type === 'sse') {
       assert(typeof server.url === 'string' && isSafeRemoteUrl(server.url), `${label}: ${name}.url must be HTTPS or loopback HTTP without credentials or fragment`);
-      assert(server.headers === undefined || (isRecord(server.headers) && Object.values(server.headers).every((item) => typeof item === 'string')), `${label}: ${name}.headers must contain strings`);
+      assert(server.headers === undefined || (isRecord(server.headers) && Object.entries(server.headers).length <= 100 && Object.entries(server.headers).every(([key, item]) => {
+        // Trim before matching so trailing whitespace cannot smuggle a credential header past the blacklist.
+        const trimmedKey = key.trim();
+        const reservedKeys = ['PLUGIN_ROOT', 'PLUGIN_DATA'];
+        const credentialHeaders = /^(authorization|cookie|set-cookie|proxy-authorization|x-api-key|x-auth-token|x-access-token|x-token|x-secret|x-api-token|api-key|auth-token|access-token)$/iu;
+        // \x0a-\x1f covers LF (\x0a) and CR (\x0d); tab (\x09) is allowed as RFC 7230 OWS.
+        const controlBytes = /[\x00-\x08\x0a-\x1f\x7f]/u;
+        return !reservedKeys.includes(trimmedKey)
+          && !credentialHeaders.test(trimmedKey)
+          && typeof item === 'string'
+          && item.length <= 8192
+          && key.length <= 256
+          && !controlBytes.test(item)
+          && !controlBytes.test(key);
+      })), `${label}: ${name}.headers must be strings without reserved keys, credentials, or control bytes (NUL/CR/LF/>0x7f; tab is allowed as RFC 7230 OWS; max 100 entries, key 256 chars, value 8192 chars)`);
       assert(Object.keys(server).every((key) => ['type', 'url', 'headers'].includes(key)), `${label}: ${name} has unsupported fields`);
     } else {
       throw new Error(`${label}: ${name} uses unsupported transport ${String(server.type)}`);
