@@ -10,9 +10,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/hetaoBackend/MiniMax-Code-Plugins/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/hetaoBackend/MiniMax-Code-Plugins/ci.yml?branch=main&amp;style=flat-square&amp;label=build" alt="Build status" /></a>
+  <a href="https://github.com/MiniMax-AI/MiniMax-Code-Plugins/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/MiniMax-AI/MiniMax-Code-Plugins/ci.yml?branch=main&amp;style=flat-square&amp;label=build" alt="Build status" /></a>
   <img src="https://img.shields.io/badge/Agent_Plugins-1.0-8b5cf6?style=flat-square" alt="Agent Plugins 1.0" />
-  <img src="https://img.shields.io/github/license/hetaoBackend/MiniMax-Code-Plugins?style=flat-square&amp;color=22c55e" alt="Apache-2.0 license" />
+  <img src="https://img.shields.io/github/license/MiniMax-AI/MiniMax-Code-Plugins?style=flat-square&amp;color=22c55e" alt="Apache-2.0 license" />
   <img src="https://img.shields.io/badge/PRs-welcome-ec4899?style=flat-square" alt="Pull requests welcome" />
 </p>
 

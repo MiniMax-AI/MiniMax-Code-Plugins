@@ -185,3 +185,73 @@ test('scaffold rejects paths that cannot identify a GitHub owner and portable Pl
     );
   }
 });
+
+test('hosted Plugin accepts a stdio server whose cwd stays inside the sandbox', async (context) => {
+  const workspace = await mkdtemp(path.join(os.tmpdir(), 'minimax-code-plugin-cwd-safe-'));
+  context.after(async () => {
+    const { rm } = await import('node:fs/promises');
+    await rm(workspace, { recursive: true, force: true });
+  });
+  const pluginRoot = path.join(workspace, 'plugins', 'alice', 'hello-world');
+  const skillsRoot = path.join(pluginRoot, 'skills', 'hello-world');
+  await mkdir(skillsRoot, { recursive: true });
+  await Promise.all([
+    writeFile(path.join(pluginRoot, 'plugin.json'), `${JSON.stringify({
+      $schema: 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
+      name: 'hello-world',
+      version: '1.0.0',
+      description: 'Greets MiniMax Code users with a reusable Skill and a sandboxed stdio MCP server.',
+      license: 'Apache-2.0',
+    })}\n`),
+    writeFile(path.join(pluginRoot, 'README.md'), '# Hello World\n\nUse the Skill and MCP server safely.\n'),
+    writeFile(path.join(pluginRoot, 'LICENSE'), 'Apache License\nVersion 2.0\n'),
+    writeFile(path.join(skillsRoot, 'SKILL.md'), '---\nname: hello-world\ndescription: Greet the user when they ask MiniMax Code to say hello.\n---\n\n# Instructions\n\nRespond with a friendly greeting.\n'),
+    writeFile(path.join(pluginRoot, 'mcp.json'), `${JSON.stringify({
+      $schema: 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
+      mcpServers: {
+        local: { type: 'stdio', command: './server.js', cwd: '${PLUGIN_DATA}/subdir' },
+      },
+    })}\n`),
+  ]);
+
+  const result = await validateHostedPluginDirectory(pluginRoot, {
+    owner: 'alice',
+    pluginName: 'hello-world',
+  });
+  assert.equal(result.id, 'alice/hello-world');
+  assert.deepEqual(result.mcpServers, ['local']);
+});
+
+test('hosted Plugin rejects a stdio server whose cwd escapes the sandbox', async (context) => {
+  const workspace = await mkdtemp(path.join(os.tmpdir(), 'minimax-code-plugin-cwd-escape-'));
+  context.after(async () => {
+    const { rm } = await import('node:fs/promises');
+    await rm(workspace, { recursive: true, force: true });
+  });
+  const pluginRoot = path.join(workspace, 'plugins', 'alice', 'hello-world');
+  const skillsRoot = path.join(pluginRoot, 'skills', 'hello-world');
+  await mkdir(skillsRoot, { recursive: true });
+  await Promise.all([
+    writeFile(path.join(pluginRoot, 'plugin.json'), `${JSON.stringify({
+      $schema: 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
+      name: 'hello-world',
+      version: '1.0.0',
+      description: 'Greets MiniMax Code users with a malicious stdio MCP server.',
+      license: 'Apache-2.0',
+    })}\n`),
+    writeFile(path.join(pluginRoot, 'README.md'), '# Hello World\n\nUse the Skill and MCP server safely.\n'),
+    writeFile(path.join(pluginRoot, 'LICENSE'), 'Apache License\nVersion 2.0\n'),
+    writeFile(path.join(skillsRoot, 'SKILL.md'), '---\nname: hello-world\ndescription: Greet the user when they ask MiniMax Code to say hello.\n---\n\n# Instructions\n\nRespond with a friendly greeting.\n'),
+    writeFile(path.join(pluginRoot, 'mcp.json'), `${JSON.stringify({
+      $schema: 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
+      mcpServers: {
+        bad: { type: 'stdio', command: './server.js', cwd: '${PLUGIN_DATA}/../../etc' },
+      },
+    })}\n`),
+  ]);
+
+  await assert.rejects(
+    validateHostedPluginDirectory(pluginRoot, { owner: 'alice', pluginName: 'hello-world' }),
+    /escapes the Plugin sandbox/u,
+  );
+});
