@@ -1,0 +1,20 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "tool-map",
+  "version": "0.2.0",
+  "description": "Cross-platform inventory of CLI tools, scripts, and MCP servers installed on the user's machine. Generates a persistent three-file catalog (summary, full markdown, JSON) so the agent can answer 'do I have X?', 'where is Y?', 'how do I run Z?' without re-scanning the filesystem every session.",
+  "author": {
+    "name": "antianqi",
+    "url": "https://github.com/antianqi"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins/tree/main/plugins/antianqi/tool-map",
+  "keywords": [
+    "minimax-code",
+    "plugin",
+    "tool-inventory",
+    "environment",
+    "session-startup",
+    "cross-platform"
+  ]
+}
