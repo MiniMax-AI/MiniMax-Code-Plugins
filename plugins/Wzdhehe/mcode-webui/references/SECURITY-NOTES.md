@@ -212,5 +212,5 @@ log + a disabled feature) — it does not crash.
 ## 8. Reporting issues
 
 Security-relevant bugs: open a private advisory on the
-[mavis/plugins GitHub repo](https://github.com/Wzdhehe/mcode-webui/security/advisories)
+[mavis/plugins GitHub repo](https://github.com/Wzdhehe/Mcode-webui/security/advisories)
 (once published). Non-security bugs: use the issue tracker.
