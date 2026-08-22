@@ -1,0 +1,21 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "comfyui-studio",
+  "version": "0.1.0",
+  "description": "Generic toolkit for driving a local ComfyUI 8188 server: workflow submission, queue monitoring, image download, and reproducible generation patterns. Includes a dependency-free stdio MCP server and three Skills for agent-driven workflow automation.",
+  "author": {
+    "name": "antianqi",
+    "url": "https://github.com/antianqi"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "minimax-code",
+    "plugin",
+    "comfyui",
+    "stable-diffusion",
+    "image-generation",
+    "mcp",
+    "workflow",
+    "local-inference"
+  ]
+}
