@@ -1,6 +1,6 @@
-# Security Notes — mcode Web UI Plugin
+# Security Notes — Mcode Web UI Plugin
 
-> **Canonical security disclosure for the mcode-webui plugin.**
+> **Canonical security disclosure for the Mcode-webui plugin.**
 >
 > Per mcode-plugin-guide [red-line 7 / 披露完整性](https://github.com/Fectivnfy112357/mcode-plugin-guide/blob/main/references/red-lines.md),
 > this file is the **single source of truth**. The `SKILL.md`, `plugin.json`,
@@ -101,7 +101,7 @@ runtime database** the user shares with their `mavis` desktop install.
 **Why**: `mcode acp` `session/delete` returns "Method not found" (a known
 mcode 0.1.4 protocol gap). Without a server-side cross-delete, the
 mcode side would keep orphaned sessions forever. v1.0 extended the
-table list from 9 to 32: the mcode schema has 33 session-keyed tables,
+table list from 9 to 32: the Mcode schema has 33 session-keyed tables,
 and the old 9-table list left `local_runtime_message_rows` (message
 bodies), `local_runtime_token_usage`, and `local_runtime_pi_history_rows`
 orphaned. Only `questionnaire_requests` is deliberately skipped (not
@@ -149,7 +149,7 @@ production** — it bypasses the standard error handling.
 
 `server/lib/acp-client.js` spawns a long-lived `mcode acp` child
 process. If the webui process is killed without cleanup, the child
-is orphaned until the mcode runtime's own TTL kicks in (typically
+is orphaned until the Mcode runtime's own TTL kicks in (typically
 30 minutes for the mavis-managed subprocess). The webui attempts
 `SIGTERM` + 3s grace + `SIGKILL` on `process.on('exit')` and
 `process.on('SIGINT')`, but a hard kill (`kill -9` the webui, OS
@@ -184,7 +184,7 @@ crash) leaves the child.
 ## 6. Host capability assumptions
 
 - **Node 22.19+** (uses `node:test` module, `URL.parse`, `Blob.stream`).
-- **mcode CLI 0.1.4+** for `mcode acp` (default transport).
+- **Mcode CLI 0.1.4+** for `mcode acp` (default transport).
 - **sqlite3 binary** on PATH (or one of the platform fallback paths —
   see `server/lib/config.js#detectSqlite3Bin`).
 - **mavis 0.1.0+** desktop install (provides the runtime sqlite). If
@@ -212,5 +212,5 @@ log + a disabled feature) — it does not crash.
 ## 8. Reporting issues
 
 Security-relevant bugs: open a private advisory on the
-[mavis/plugins GitHub repo](https://github.com/Wzdhehe/mcode-webui/security/advisories)
+[mavis/plugins GitHub repo](https://github.com/Wzdhehe/Mcode-webui/security/advisories)
 (once published). Non-security bugs: use the issue tracker.

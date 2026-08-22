@@ -1,4 +1,4 @@
-# PR Description — mcode-webui plugin
+# PR Description — Mcode-webui plugin
 
 > **Submission body for the upstream PR to the
 > [MiniMax-Code-Plugins](https://github.com/MiniMax-AI/MiniMax-Code-Plugins)
@@ -6,9 +6,9 @@
 
 ## What this PR adds
 
-- New plugin at `plugins/Wzdhehe/mcode-webui/` per Agent Plugins 1.0 spec
+- New plugin at `plugins/Wzdhehe/Mcode-webui/` per Agent Plugins 1.0 spec
   - `plugin.json` with the 10 white-listed top-level fields
-  - `skills/mcode-webui/SKILL.md` with `{name, description}` frontmatter (343 chars) + body (official skills/ layout)
+  - `skills/Mcode-webui/SKILL.md` with `{name, description}` frontmatter (343 chars) + body (official skills/ layout)
   - `LICENSE` (MIT)
   - `README.md` (user-facing quick start)
   - `references/SECURITY-NOTES.md` (canonical security disclosure)
@@ -23,25 +23,25 @@
 A Kimi-Code-style web frontend for the `mcode` agent runtime. It lets
 users open `mcode` sessions in a browser instead of the terminal,
 stream real-time tool events, switch workspaces, and use the
-`ask-user` modal — all without the mcode TUI eating their terminal.
+`ask-user` modal — all without the Mcode TUI eating their terminal.
 
 ## Example prompts (with expected results)
 
-**Prompt 1** — User: "open mcode webui"
+**Prompt 1** — User: "open Mcode webui"
 
 Expected:
 1. Run `node server.js` (foreground or background, your call)
 2. Wait for the SSE `open` log line on stdout
 3. Tell the user: "webui running at http://127.0.0.1:8080/  (or http://<lan-ip>:8080/ for LAN)"
 
-**Prompt 2** — User: "mcode webui status"
+**Prompt 2** — User: "Mcode webui status"
 
 Expected:
 1. Check if port 8080 is in use
 2. If listening: report "running" + URL; if not: report "not running"
 3. Optionally read `.server.err` for last error
 
-**Prompt 3** — User: "show mcode webui url"
+**Prompt 3** — User: "show Mcode webui url"
 
 Expected:
 1. Print `http://<lan-ip>:8080/`
@@ -120,7 +120,7 @@ CI: GitHub Actions on Node 22 / Node 24, Windows + Linux + macOS.
   `MCODE_RUNTIME_DB=<copy>`; a session with 11,176 rows across 12 tables
   was reduced to 7 rows (only `questionnaire_requests` remains, skipped
   by design — not `local_runtime_*`-prefixed). The table list covers
-  32 of the 33 session-keyed tables in the mcode schema.
+  32 of the 33 session-keyed tables in the Mcode schema.
 - Re-ran delete with `?dryRun=true` — preview shows row count, no
   modification
 - Restarted server — orphan mcode acp child cleaned up via SIGTERM
@@ -151,4 +151,4 @@ CI: GitHub Actions on Node 22 / Node 24, Windows + Linux + macOS.
 - [x] No UTF-8 BOM in any text file
 - [x] No placeholder markers in shipped files
 - [x] No `hooks` / unsupported capability fields
-- [x] One plugin per PR (this PR is only `plugins/Wzdhehe/mcode-webui/`)
+- [x] One plugin per PR (this PR is only `plugins/Wzdhehe/Mcode-webui/`)

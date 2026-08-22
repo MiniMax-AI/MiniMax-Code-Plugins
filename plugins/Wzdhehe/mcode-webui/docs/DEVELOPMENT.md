@@ -120,7 +120,7 @@ node server.js
 
 ## Adding a slash command (webui-side)
 
-These are commands the webui handles itself without forwarding to mcode
+These are commands the webui handles itself without forwarding to Mcode
 (used for things like `/clear`, `/exec`).
 
 1. In `server/lib/slash.js`, add an entry:
@@ -128,14 +128,14 @@ These are commands the webui handles itself without forwarding to mcode
    { cmd: '/foo', handler: handleFoo, hidden: false }
    ```
 2. `handleFoo` receives `(content, ctx)` and returns either:
-   - `null` (not handled, forward to mcode)
+   - `null` (not handled, forward to Mcode)
    - `{ handled: true, response: '…' }` (handled, send to user as a
      synthetic message)
-3. The webui displays `response` as if it came from mcode.
+3. The webui displays `response` as if it came from Mcode.
 
-## Adding a mcode-translated slash command
+## Adding a Mcode-translated slash command
 
-If you want a slash command that maps to an mcode command, you don't
+If you want a slash command that maps to an Mcode command, you don't
 add code — mcode returns the command list via `session/commands` and
 the webui already renders it. Just make sure mcode knows about the
 command; the webui picks it up on connect.
@@ -166,7 +166,7 @@ The webui-side session store is plain JSON:
 Get-Content "$env:USERPROFILE\.minimax-code\webui\.webui-sessions.json" | ConvertFrom-Json
 ```
 
-The mcode-side session store is SQLite:
+The Mcode-side session store is SQLite:
 ```powershell
 # v0.5.bx-44: webui no longer hardcodes an anaconda sqlite3 path.
 # webui/server/lib/config.js#detectSqlite3Bin probes PATH first, then
@@ -194,7 +194,7 @@ Two options:
 - Web UI: bottom-left "局域网访问" button
 - API: `POST /api/settings {lanBroadcast: true}`
 
-### Debug a stuck mcode subprocess
+### Debug a stuck Mcode subprocess
 The webui keeps one subprocess per CID. If it's stuck:
 ```powershell
 # find the cid

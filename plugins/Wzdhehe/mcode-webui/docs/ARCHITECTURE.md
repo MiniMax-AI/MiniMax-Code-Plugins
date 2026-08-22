@@ -146,7 +146,7 @@ The `state` payload is documented in § 5 below. The `clientState.state`
 object is the **only** thing the rest of the codebase reads from.
 
 ### `acp-client.js`
-Wraps mcode's JSON-RPC-over-stdio protocol. Exports:
+Wraps Mcode's JSON-RPC-over-stdio protocol. Exports:
 
 - `McodeAcpClient` class — `start()`, `request(method, params)`,
   `notify(method, params)`, `stop()`, `events` EventEmitter.
@@ -177,7 +177,7 @@ on the client.
 
 ### `mcode-acp.js` vs `mcode-exec.js`
 Two transports with a shared shape. The transport layer is selected
-by `mcode-rpc.js` based on `mcode version >= 0.1.4` and the per-request
+by `mcode-rpc.js` based on `Mcode version >= 0.1.4` and the per-request
 `/exec` opt-in.
 
 Both expose:
@@ -210,7 +210,7 @@ it 1:1 into the `state` JS variable.
   model: { name: string,            // e.g. "minimax_api/MiniMax-M3"
            ctx: string,            // e.g. "512k"
            thinking: 'On'|'Off'|string },
-  permissions: string,             // mcode-side: 'ask'|'auto'|'full'|'plan'|...
+  permissions: string,             // Mcode-side: 'ask'|'auto'|'full'|'plan'|...
   commands: Array<{                // mcode slash commands
     cmd: string, zh: string, en: string,
     description_zh?: string, description_en?: string,
@@ -223,7 +223,7 @@ it 1:1 into the `state` JS variable.
     workspace: string,
     mcodeSessionId?: string,        // linked mcode session id
     updatedAt: number }>,
-  mcodeSessions: Array<{            // mcode-side session list (raw)
+  mcodeSessions: Array<{            // Mcode-side session list (raw)
     sessionId: string,
     title: string,
     cwd: string,
