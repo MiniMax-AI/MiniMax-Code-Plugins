@@ -12,13 +12,24 @@ if (!(Test-Path $configDir)) { New-Item -ItemType Directory -Path $configDir -Fo
 $widget = Join-Path $PSScriptRoot 'mcode-island.ps1'
 $pidFile = Join-Path $configDir 'widget.pid'
 
-# 防止重复启动
+# 防止重复启动：先校验已有 PID 是否真的在跑 widget（不是 PID 复用）
+function Test-IsWidgetProcess($proc, $widgetPath) {
+  if (-not $proc -or $proc.HasExited) { return $false }
+  $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId=$($proc.Id)" -ErrorAction SilentlyContinue).CommandLine
+  if (-not $cmd) { return $false }
+  # CommandLine contains the widget script path (case-insensitive)
+  return $cmd.IndexOf($widgetPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+}
+
 if (Test-Path $pidFile) {
-  $oldPid = Get-Content $pidFile -ErrorAction SilentlyContinue
-  if ($oldPid -and (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {
-    Write-Output ("已在运行（PID $oldPid）")
-    exit 0
-  } else {
+  $old = Get-Content $pidFile -ErrorAction SilentlyContinue
+  if ($old) {
+    $existing = Get-Process -Id ([int]$old) -ErrorAction SilentlyContinue
+    if ($existing -and (Test-IsWidgetProcess $existing $widget)) {
+      Write-Output ("已在运行（PID " + $old + "）")
+      exit 0
+    }
+    # Stale PID file (process dead or PID reused) — clear and continue
     Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
   }
 }
@@ -30,23 +41,21 @@ $proc = Start-Process powershell.exe -ArgumentList $args -PassThru
 # 写 PID（先写，后面 status / stop 都靠这个）
 Set-Content -Path $pidFile -Value $proc.Id -Encoding ASCII
 
-# 等待 widget 起来（最多 8 秒）
+# 等待 widget 起来（最多 8 秒），用 .ps1 已加载 WPF 窗口作为 readiness 信号
+$widgetWindowClass = 'HwndWrapper[DefaultDomain*'  # WPF 窗口类名前缀
 $ok = $false
 for ($i = 0; $i -lt 16; $i++) {
   Start-Sleep -Milliseconds 500
   try {
     $p = Get-Process -Id $proc.Id -ErrorAction Stop
     if ($p.HasExited) { break }
-    $log = Join-Path $configDir 'widget.log'
-    if ((Test-Path $log) -and ((Get-Item $log).Length -gt 0)) {
-      $content = Get-Content $log -Tail 5 -ErrorAction SilentlyContinue
-      if ($content -match 'about to ShowDialog') { $ok = $true; break }
-    }
+    # WPF widget 启动后会创建主窗口；MainWindowHandle 非 0 即就绪
+    if ($p.MainWindowHandle -ne 0) { $ok = $true; break }
   } catch {}
 }
 
 if ($ok) {
-  Write-Output "mcode-island 已启动 (PID $($proc.Id)，已就绪)"
+  Write-Output ("mcode-island 已启动 (PID " + $proc.Id + "，已就绪)")
 } else {
-  Write-Output "mcode-island 已启动 (PID $($proc.Id)，等待中...)"
+  Write-Output ("mcode-island 已启动 (PID " + $proc.Id + "，等待中...)")
 }

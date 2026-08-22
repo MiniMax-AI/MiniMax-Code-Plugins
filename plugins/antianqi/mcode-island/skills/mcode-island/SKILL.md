@@ -46,21 +46,27 @@ state+message. Push only on transitions, or include a fresh message each time.
 
 ## Copyable example (agent side)
 
-The plugin ships a thin wrapper `wrap-tool.ps1` that handles state transitions
-automatically. Wrap every `bash` invocation through it:
+The plugin ships a thin wrapper `wrap-tool.ps1` that **publishes state only**
+(it does NOT execute the command). Run the command via mcode's own bash tool,
+then call `wrap-tool.ps1` to publish the outcome:
 
 ```powershell
-# Instead of: bash "npm test"
-& "$PSScriptRoot\wrap-tool.ps1" -Tool bash -Command "npm test" -Description "run tests"
+# Step 1: announce "working" before invoking mcode's bash tool
+& "<plugin install dir>\wrap-tool.ps1" -Tool bash -Command "npm test" -Description "run tests"
 
-# state flow this triggers: working("bash: run tests") → done("bash 完成") | error(...) | waiting(...)
+# Step 2: after mcode's bash tool returns, publish the outcome
+& "<plugin install dir>\wrap-tool.ps1" -Tool bash -Command "npm test" -ExitCode $LASTEXITCODE
 ```
+
+`$LASTEXITCODE` is interpreted as: `0` → `done`, codes in `-WaitingExitCodes`
+(default `[1]`) → `waiting`, anything else → `error`. The wrapper returns the
+exit code unchanged so the calling shell still sees it.
 
 For other tools (read/write/edit) — and for any state push that is not a single
 command — call `notify-island.ps1` directly:
 
 ```powershell
-$plugin = Split-Path -Parent $PSScriptRoot   # <plugin install dir>
+$plugin = "<plugin install dir>"   # directory that contains notify-island.ps1
 & "$plugin\notify-island.ps1" -State thinking
 & "$plugin\notify-island.ps1" -State working  -Message "read source tree"
 & "$plugin\notify-island.ps1" -State done     -Message "indexed 142 files"

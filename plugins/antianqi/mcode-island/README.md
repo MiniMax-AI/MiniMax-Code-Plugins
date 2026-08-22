@@ -61,13 +61,32 @@ If the file does not exist:
 
 ### Wrap every bash call (recommended for power users)
 
-The shipped `wrap-tool.ps1` is a one-stop wrapper: it pushes `working` before
-the command, then `done` / `error` / `waiting` based on `$LASTEXITCODE`, all
-without changing the command's exit code:
+The shipped `wrap-tool.ps1` is a **status-only wrapper**: it never executes the
+command itself (v0.2.1 removed the prior `Invoke-Expression` path to avoid
+shell-injection ambiguity). The agent runs the command via mcode's own bash
+tool, then calls `wrap-tool.ps1` to publish the state. Two-step pattern:
 
 ```powershell
+# 1. Push "working" before the command
 & "%PLUGIN_DIR%\mcode-island\wrap-tool.ps1" `
     -Tool bash -Command "npm test" -Description "run tests"
+
+# 2. After mcode's bash tool returns, push the outcome
+& "%PLUGIN_DIR%\mcode-island\wrap-tool.ps1" `
+    -Tool bash -Command "npm test" -ExitCode $LASTEXITCODE
+```
+
+`$LASTEXITCODE` is interpreted as: `0` → `done`, codes in `-WaitingExitCodes`
+(default `[1]`) → `waiting`, anything else → `error`. The wrapper returns the
+exit code unchanged so the calling shell still sees it.
+
+If you do not need a custom message, `notify-island.ps1` is a leaner direct
+alternative:
+
+```powershell
+& "%PLUGIN_DIR%\mcode-island\notify-island.ps1" -State working  -Message "bash : npm test"
+& "%PLUGIN_DIR%\mcode-island\notify-island.ps1" -State done     -Message "npm test passed"
+& "%PLUGIN_DIR%\mcode-island\notify-island.ps1" -State error    -Message "npm test failed"
 ```
 
 ## Quick start
@@ -86,7 +105,7 @@ without changing the command's exit code:
    The pill should turn blue and pulse for as long as you don't push another state.
 4. **Enable logon auto-start** (optional):
    ```powershell
-   & "%PLUGIN_DIR%\mcode-island\autostart.ps1" -Enable
+   & "%PLUGIN_DIR%\mcode-island\autostart.ps1" -Action Enable
    ```
    This writes to `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. No
    admin rights required.
@@ -193,7 +212,10 @@ a live MiniMax Code session. Empirical evidence (captured during development):
 - Click-to-focus round-trip verified: from a Feishu tab, click the pill, focus
   jumps to the originating Windows Terminal tab (HWND consistent).
 - `wrap-tool.ps1` exit-code semantics: 0 → `done`, 1 → `waiting` (default;
-  configurable via `-WaitingExitCodes`), other → `error`.
+  configurable via `-WaitingExitCodes`), other → `error`. As of v0.2.1 the
+  wrapper no longer executes the command itself; the agent runs the command
+  through mcode's own bash tool and passes the exit code to `wrap-tool.ps1
+  -ExitCode`.
 
 ## Limitations
 
