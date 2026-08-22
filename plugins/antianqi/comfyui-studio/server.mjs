@@ -83,11 +83,18 @@ function httpJson(method, path, body) {
         },
       },
       (res) => {
+        // Collect raw bytes; never decode as UTF-8 here. The bytes are the
+        // source of truth; callers that need a string can call
+        // `buf.toString("utf8")` themselves, and binary callers (get_image)
+        // can base64-encode the buffer directly without round-tripping
+        // through a lossy text decode. See security notes for the bug this
+        // fixes: re-encoding binary responses as UTF-8 text corrupts any
+        // byte >= 0x80 that is not part of a valid multi-byte sequence.
         const chunks = [];
         res.on("data", (c) => chunks.push(c));
         res.on("end", () => {
-          const text = Buffer.concat(chunks).toString("utf8");
-          resolve({ status: res.statusCode, text });
+          const buf = Buffer.concat(chunks);
+          resolve({ status: res.statusCode, buf });
         });
       }
     );
@@ -98,7 +105,8 @@ function httpJson(method, path, body) {
 }
 
 async function callSubmitPrompt({ workflow }) {
-  const { status, text } = await httpJson("POST", "/prompt", { prompt: workflow });
+  const { status, buf } = await httpJson("POST", "/prompt", { prompt: workflow });
+  const text = buf.toString("utf8");
   if (status >= 400) {
     return { content: [{ type: "text", text: `ComfyUI error ${status}: ${text}` }], isError: true };
   }
@@ -125,11 +133,17 @@ async function callSubmitPrompt({ workflow }) {
 }
 
 async function callCheckQueue() {
-  const { status, text } = await httpJson("GET", "/queue");
+  const { status, buf } = await httpJson("GET", "/queue");
+  const text = buf.toString("utf8");
   if (status >= 400) {
     return { content: [{ type: "text", text: `ComfyUI error ${status}: ${text}` }], isError: true };
   }
-  const data = JSON.parse(text);
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (err) {
+    return { content: [{ type: "text", text: `Non-JSON response: ${text}` }], isError: true };
+  }
   return {
     content: [
       {
@@ -151,14 +165,21 @@ async function callCheckQueue() {
 
 async function callGetImage({ filename, subfolder = "", folder_type = "output" }) {
   const params = new URLSearchParams({ filename, subfolder, type: folder_type });
-  const { status, text } = await httpJson("GET", `/view?${params.toString()}`);
+  const { status, buf } = await httpJson("GET", `/view?${params.toString()}`);
   if (status >= 400) {
+    const text = buf.toString("utf8");
     return { content: [{ type: "text", text: `ComfyUI error ${status}: ${text}` }], isError: true };
   }
   // We cannot send raw binary in a stdio JSON-RPC response, so we return the
-  // bytes as base64 alongside the inferred content type.
-  const buf = Buffer.from(text, "binary");
-  const contentType = filename.toLowerCase().endsWith(".png") ? "image/png" : "image/octet-stream";
+  // bytes as base64 alongside the inferred content type. The buffer came
+  // straight from the HTTP response without any text decoding, so PNG/JPEG
+  // binary content (including bytes >= 0x80) round-trips faithfully.
+  const lower = filename.toLowerCase();
+  let contentType = "image/octet-stream";
+  if (lower.endsWith(".png")) contentType = "image/png";
+  else if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) contentType = "image/jpeg";
+  else if (lower.endsWith(".webp")) contentType = "image/webp";
+  else if (lower.endsWith(".gif")) contentType = "image/gif";
   return {
     content: [
       {

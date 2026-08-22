@@ -15,6 +15,12 @@ Examples:
     python submit_workflow.py --workflow path/to/wf.json --prompt "a cat"
     python submit_workflow.py --queue
     python submit_workflow.py --download --filename out.png --output-dir ./out
+
+Marker substitution (when --workflow is provided):
+    --prompt    replaces the literal "__PROMPT__"  in any text input
+    --trigger   replaces the literal "__TRIGGER__" in any text input
+    --filename  binds the value to the literal "__IMAGE1__" LoadImage marker
+    --filename2 binds the value to the literal "__IMAGE2__" LoadImage marker
 """
 from __future__ import annotations
 
@@ -30,8 +36,82 @@ from pathlib import Path
 
 DEFAULT_URL = "http://127.0.0.1:8188"
 PROMPT_MARKER = "__PROMPT__"
+TRIGGER_MARKER = "__TRIGGER__"
+IMAGE1_MARKER = "__IMAGE1__"
+IMAGE2_MARKER = "__IMAGE2__"
 POLL_INTERVAL_S = 2.0
 POLL_TIMEOUT_S = 15 * 60  # 15 minutes cap; long jobs are a VRAM risk
+
+
+# ---------------------------------------------------------------------------
+# HTTP plumbing
+# ---------------------------------------------------------------------------
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse HTTP redirects.
+
+    A redirected endpoint may live on a different host (proxy misconfig,
+    DNS hijack, accidental public URL). Forwarding COMFYUI_API_TOKEN there
+    would violate the security model in docs/security-notes.md. We fail
+    closed: any 3xx is surfaced to the caller as an HTTPError with the
+    original status code and the offending Location header.
+    """
+
+    @staticmethod
+    def _deny(req, fp, code, msg, headers):
+        location = headers.get("Location", "?") if headers else "?"
+        raise urllib.error.HTTPError(
+            req.full_url,
+            code,
+            f"redirect refused by comfyui-studio: {code} -> {location}",
+            headers,
+            fp,
+        )
+
+    # Override every redirect code Python knows about. The base class
+    # dispatches by method name (http_error_301, _302, _303, _307, _308),
+    # not via a generic http_error_30x.
+    http_error_301 = _deny
+    http_error_302 = _deny
+    http_error_303 = _deny
+    http_error_307 = _deny
+    http_error_308 = _deny
+
+
+def _build_opener() -> urllib.request.OpenerDirector:
+    """Build an opener that never follows redirects.
+
+    `urllib.request.build_opener` registers a default HTTPRedirectHandler
+    in BOTH the legacy `opener.handlers` list AND the dispatch dict
+    `opener.handle_error["http"][code]`. The dispatch dict is what
+    actually routes 3xx responses to handlers (see
+    `OpenerDirector.error` / `_call_chain`); the `handlers` list is
+    retained only for backward compatibility. To make our subclass win,
+    we have to remove the default from BOTH structures.
+    """
+    opener = urllib.request.build_opener()
+
+    # 1. Strip the default HTTPRedirectHandler from the legacy list.
+    opener.handlers[:] = [
+        h for h in opener.handlers
+        if not isinstance(h, urllib.request.HTTPRedirectHandler)
+    ]
+
+    # 2. Strip the default from the dispatch dict. This is the one that
+    #    actually matters at request time.
+    for protocol, by_code in list(opener.handle_error.items()):
+        for code, lst in list(by_code.items()):
+            by_code[code] = [h for h in lst if not isinstance(h, urllib.request.HTTPRedirectHandler)]
+
+    # 3. Register our subclass. It's now the only http redirect handler.
+    opener.add_handler(_NoRedirectHandler())
+    return opener
+
+
+# Module-level opener used by every request below. `install_opener` also
+# makes `urllib.request.urlopen` honor the same policy.
+_opener = _build_opener()
+urllib.request.install_opener(_opener)
 
 
 def base_url() -> str:
@@ -53,7 +133,7 @@ def http_json(method: str, path: str, body: dict | None = None) -> tuple[int, di
         headers={"content-type": "application/json", "accept": "application/json", **auth_headers()},
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with _opener.open(req, timeout=30) as resp:
             raw = resp.read().decode("utf-8")
             try:
                 return resp.status, json.loads(raw)
@@ -69,7 +149,7 @@ def http_download(path: str, dest: Path) -> int:
     url = base_url() + path
     req = urllib.request.Request(url, headers=auth_headers())
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with _opener.open(req, timeout=60) as resp:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(resp.read())
             return resp.status
@@ -78,30 +158,126 @@ def http_download(path: str, dest: Path) -> int:
         return 0
 
 
-def apply_prompt_override(workflow: dict, prompt_text: str | None) -> dict:
-    """If --prompt was given and the workflow has a __PROMPT__ marker, substitute.
+# ---------------------------------------------------------------------------
+# Output-path containment
+# ---------------------------------------------------------------------------
 
-    Walks every node in the workflow. For any CLIPTextEncode-style node whose
-    `text` input is exactly the literal marker, replace with the user's text.
-    Nodes that already have a value are left alone.
+def safe_join_under(root: Path, name: str) -> Path:
+    """Resolve root/name and verify it stays inside root.
+
+    Rejects:
+      - non-string or empty names
+      - names containing NUL bytes
+      - absolute paths (POSIX "/" or Windows drive roots like "C:\\")
+      - any name whose resolved form is not a descendant of root
+        (covers "..", "..\\..", symlink escapes, etc.)
     """
-    if not prompt_text:
-        return workflow
-    changed = []
+    if not isinstance(name, str) or not name:
+        raise ValueError(f"filename must be a non-empty string, got {name!r}")
+    if "\x00" in name:
+        raise ValueError(f"filename contains NUL byte: {name!r}")
+    if name.startswith(("/", "\\")) or (len(name) >= 2 and name[1] == ":"):
+        raise ValueError(f"filename must be a relative path under output-dir: {name!r}")
+    root_resolved = root.resolve(strict=False)
+    candidate = (root / name).resolve(strict=False)
+    try:
+        candidate.relative_to(root_resolved)
+    except ValueError:
+        raise ValueError(
+            f"filename {name!r} escapes output-dir {root_resolved}"
+        ) from None
+    return candidate
+
+
+# ---------------------------------------------------------------------------
+# Marker substitution
+# ---------------------------------------------------------------------------
+
+def apply_marker_substitution(
+    workflow: dict,
+    *,
+    prompt: str | None = None,
+    trigger: str | None = None,
+    image1: str | None = None,
+    image2: str | None = None,
+) -> dict:
+    """Replace marker strings in workflow nodes with the user's values.
+
+    Marker contract (matches the Plugin's docs):
+      __PROMPT__  -> --prompt     in any text input
+      __TRIGGER__ -> --trigger    in any text input (typically CR Text.text)
+      __IMAGE1__  -> --filename   in any LoadImage.image input
+      __IMAGE2__  -> --filename2  in any LoadImage.image input
+
+    Matching is exact (==), never substring, so user prompts that happen
+    to contain a marker prefix are left alone. Empty / None substitutions
+    are skipped; any marker left in the workflow after this call is a
+    signal to the user that they forgot the corresponding flag (we log
+    a warning below).
+    """
+    text_subs = (
+        (PROMPT_MARKER, prompt),
+        (TRIGGER_MARKER, trigger),
+    )
+    image_subs = (
+        (IMAGE1_MARKER, image1),
+        (IMAGE2_MARKER, image2),
+    )
+    applied: list[tuple[str, str, int]] = []  # (node_id, marker, n_chars)
     for node_id, node in workflow.items():
         if not isinstance(node, dict):
             continue
         inputs = node.get("inputs")
         if not isinstance(inputs, dict):
             continue
-        text = inputs.get("text")
-        if text == PROMPT_MARKER:
-            inputs["text"] = prompt_text
-            changed.append(node_id)
-    if changed:
-        print(f"[prompt] substituted __PROMPT__ in nodes: {changed}", file=sys.stderr)
+        for marker, value in text_subs:
+            if not value:
+                continue
+            if inputs.get("text") == marker:
+                inputs["text"] = value
+                applied.append((node_id, marker, len(value)))
+        for marker, value in image_subs:
+            if not value:
+                continue
+            if inputs.get("image") == marker:
+                inputs["image"] = value
+                applied.append((node_id, marker, len(value)))
+    if applied:
+        summary = ", ".join(f"{mid}@{nid}({n}ch)" for nid, mid, n in applied)
+        print(f"[markers] substituted {len(applied)} marker(s): {summary}", file=sys.stderr)
+
+    # Warn on any markers still present so a forgotten flag is obvious.
+    leftover = _collect_unresolved_markers(workflow)
+    if leftover:
+        for marker, node_ids in leftover.items():
+            print(
+                f"[markers] WARNING: {marker} still present in nodes {node_ids}; "
+                f"pass the corresponding --flag to replace it",
+                file=sys.stderr,
+            )
     return workflow
 
+
+def _collect_unresolved_markers(workflow: dict) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {}
+    for marker in (PROMPT_MARKER, TRIGGER_MARKER, IMAGE1_MARKER, IMAGE2_MARKER):
+        hits: list[str] = []
+        for node_id, node in workflow.items():
+            if not isinstance(node, dict):
+                continue
+            inputs = node.get("inputs")
+            if not isinstance(inputs, dict):
+                continue
+            if inputs.get("text") == marker or inputs.get("image") == marker:
+                hits.append(node_id)
+        if hits:
+            out[marker] = hits
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Subcommands
+# ---------------------------------------------------------------------------
 
 def cmd_probe(_args) -> int:
     status, body = http_json("GET", "/system_stats")
@@ -137,14 +313,19 @@ def cmd_queue(_args) -> int:
 
 def cmd_download(args) -> int:
     out_dir = Path(args.output_dir or ".")
+    try:
+        dest = safe_join_under(out_dir, args.filename)
+    except ValueError as e:
+        print(f"[download] refusing {e}", file=sys.stderr)
+        return 2
     params = urllib.parse.urlencode({
         "filename": args.filename,
         "subfolder": args.subfolder or "",
         "type": args.folder_type or "output",
     })
-    status = http_download(f"/view?{params}", out_dir / args.filename)
+    status = http_download(f"/view?{params}", dest)
     if status == 200:
-        print(f"[download] saved {out_dir / args.filename}")
+        print(f"[download] saved {dest}")
         return 0
     return 2
 
@@ -163,7 +344,13 @@ def cmd_submit(args) -> int:
         print(f"[submit] invalid JSON: {e}", file=sys.stderr)
         return 2
 
-    workflow = apply_prompt_override(workflow, args.prompt)
+    apply_marker_substitution(
+        workflow,
+        prompt=args.prompt,
+        trigger=args.trigger,
+        image1=args.filename,
+        image2=args.filename2,
+    )
 
     status, body = http_json("POST", "/prompt", {"prompt": workflow})
     if status != 200:
@@ -194,16 +381,29 @@ def cmd_submit(args) -> int:
         if st == "success":
             outputs = entry.get("outputs") or {}
             saved = []
+            skipped = []
             for node_out in outputs.values():
                 for media in node_out.get("images", []) + node_out.get("gifs", []) + node_out.get("videos", []):
                     fname = media.get("filename")
+                    if not fname:
+                        continue
+                    try:
+                        dest = safe_join_under(out_dir, fname)
+                    except ValueError as e:
+                        # Server-supplied filename tried to escape --output-dir.
+                        # We refuse the file but keep polling the rest of the
+                        # outputs so a single bad name doesn't lose the run.
+                        skipped.append((fname, str(e)))
+                        continue
                     sub = media.get("subfolder", "")
                     typ = media.get("type", "output")
                     qs = urllib.parse.urlencode({"filename": fname, "subfolder": sub, "type": typ})
-                    dest = out_dir / fname
                     s = http_download(f"/view?{qs}", dest)
                     if s == 200:
                         saved.append(str(dest))
+            if skipped:
+                for fname, reason in skipped:
+                    print(f"[poll] skipped {fname!r}: {reason}", file=sys.stderr)
             if not saved:
                 print("[poll] success but no output files reported (workflow may not have a Save node)")
                 return 0
@@ -221,9 +421,20 @@ def main() -> int:
     ap.add_argument("--url", help="Override COMFYUI_URL for this invocation only")
     ap.add_argument("--workflow", help="Path to a workflow JSON file")
     ap.add_argument("--prompt", help="Optional prompt override (replaces __PROMPT__ in the workflow)")
+    ap.add_argument("--trigger", help="Optional LoRA trigger word (replaces __TRIGGER__ in CR Text.text)")
+    ap.add_argument(
+        "--filename",
+        help=(
+            "Dual meaning: in --download mode, the file to fetch from ComfyUI; "
+            "in submit mode, the image name to bind to __IMAGE1__ in LoadImage nodes."
+        ),
+    )
+    ap.add_argument(
+        "--filename2",
+        help="Image name to bind to __IMAGE2__ in LoadImage nodes (submit mode only, for fusion presets).",
+    )
     ap.add_argument("--output-dir", help="Directory to save generated outputs")
-    ap.add_argument("--filename", help="Filename to download (with --download)")
-    ap.add_argument("--subfolder", default="", help="Subfolder under ComfyUI output dir")
+    ap.add_argument("--subfolder", default="", help="Subfolder under ComfyUI output dir (download mode)")
     ap.add_argument("--folder-type", default="output", choices=["output", "input", "temp"])
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--probe", action="store_true", help="Health probe /system_stats")

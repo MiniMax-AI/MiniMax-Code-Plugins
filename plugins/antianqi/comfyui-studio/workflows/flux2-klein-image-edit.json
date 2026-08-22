@@ -14,16 +14,7 @@
   },
   "76": {
     "inputs": {
-      "image": ""
-    },
-    "class_type": "LoadImage",
-    "_meta": {
-      "title": "Load Image"
-    }
-  },
-  "81": {
-    "inputs": {
-      "image": "__IMAGE2__"
+      "image": "__IMAGE1__"
     },
     "class_type": "LoadImage",
     "_meta": {
