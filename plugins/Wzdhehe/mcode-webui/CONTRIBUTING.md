@@ -3,7 +3,7 @@
 This is the packaged plugin view of the project. The full
 contribution guide lives in the **source repo**:
 
-**[github.com/Wzdhehe/mcode-webui → CONTRIBUTING.md](https://github.com/Wzdhehe/mcode-webui/blob/main/CONTRIBUTING.md)**
+**[github.com/Wzdhehe/Mcode-webui → CONTRIBUTING.md](https://github.com/Wzdhehe/Mcode-webui/blob/main/CONTRIBUTING.md)**
 
 ## Quick reference
 
