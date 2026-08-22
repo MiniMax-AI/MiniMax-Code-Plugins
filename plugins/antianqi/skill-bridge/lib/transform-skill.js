@@ -177,10 +177,26 @@ function maybeSplitReferences(name, body) {
  * the NEW content. There is no window where outDir is missing or
  * half-written. The staging directory is always cleaned up.
  *
+ * The window where outDir is *temporarily absent* does exist: it is
+ * the time between the `outDir -> backup` rename and the
+ * `staging -> outDir` rename. A crash in that window leaves
+ * `<outDir>.bak-<rand>` on disk; the caller can recover by renaming
+ * the backup back to outDir. We do that recovery automatically in
+ * the catch block, and we propagate any recovery error so the caller
+ * is not silently left with a missing outDir.
+ *
  * @param {string} staging   The directory holding the new content.
  * @param {string} outDir    The destination to replace.
+ * @param {object} [opts]
+ * @param {(staging: string, outDir: string) => Promise<void>} [opts.renameStaging]
+ *   Test hook. Defaults to `fs.rename(staging, outDir)`. Throwing here
+ *   simulates a crash in the "staging -> outDir" step.
+ * @param {(src: string, dst: string) => Promise<void>} [opts.rename]
+ *   Test hook for the inner rename calls. Defaults to `fs.rename`.
  */
-async function atomicReplace(staging, outDir) {
+export async function atomicReplace(staging, outDir, opts = {}) {
+  const rename = opts.rename || ((src, dst) => fs.rename(src, dst));
+  const renameStaging = opts.renameStaging || (() => rename(staging, outDir));
   const backup = `${outDir}.bak-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
   let backupCreated = false;
   try {
@@ -188,11 +204,12 @@ async function atomicReplace(staging, outDir) {
     if (exists) {
       // Move the existing outDir out of the way. fs.rename is atomic on
       // the same volume and never returns a partially-moved directory.
-      await fs.rename(outDir, backup);
+      await rename(outDir, backup);
       backupCreated = true;
     }
-    // Move staging into place.
-    await fs.rename(staging, outDir);
+    // Move staging into place. If this fails (renameStaging throws),
+    // the catch block restores the backup so outDir is preserved.
+    await renameStaging();
     // OutDir is now the new content. Drop the backup.
     if (backupCreated) {
       await fs.rm(backup, { recursive: true, force: true });
@@ -201,10 +218,21 @@ async function atomicReplace(staging, outDir) {
   } catch (err) {
     // Recovery: if we created a backup but the final rename failed,
     // restore the backup so the caller still sees the old outDir.
+    // We must NOT swallow a recovery error — the whole point of the
+    // atomic guarantee is that the caller can rely on either the old
+    // or the new outDir, never neither. If recovery itself fails,
+    // surface both errors so the caller can take manual action.
     if (backupCreated) {
       const backupExists = await fs.stat(backup).catch(() => null);
       if (backupExists) {
-        await fs.rename(backup, outDir).catch(() => {});
+        try {
+          await rename(backup, outDir);
+        } catch (recoveryErr) {
+          err.recovery = {
+            message: `atomic-replace recovery failed: outDir is missing; backup is at ${backup}`,
+            cause: recoveryErr,
+          };
+        }
       }
     }
     throw err;

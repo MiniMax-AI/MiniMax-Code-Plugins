@@ -17,6 +17,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { transformSkill } from '../lib/transform-skill.js';
+import { atomicReplace } from '../lib/transform-skill.js';
 
 const SAMPLE = {
   inputPath: 'fake.md',
@@ -115,6 +116,99 @@ test('outDir is preserved when transformSkill fails before any write', async () 
   assert.ok(stillThere.isDirectory(), 'outDir must still exist');
   const content = await fs.readFile(sentinel, 'utf-8');
   assert.equal(content, 'keep me', 'sentinel must be unchanged');
+
+  await fs.rm(out, { recursive: true, force: true });
+});
+
+test('atomicReplace: outDir is restored when the staging -> outDir rename fails', async () => {
+  // Review #4 asked for a test that simulates a crash in the window
+  // between `outDir -> backup` and `staging -> outDir`. We inject a
+  // throwing renameStaging hook so we can deterministically reproduce
+  // it.
+  const out = await tmpdir();
+  const outDir = path.join(out, 'atomic-4');
+  await fs.mkdir(outDir, { recursive: true });
+  const sentinel = path.join(outDir, 'KEEP.md');
+  await fs.writeFile(sentinel, 'old content', 'utf-8');
+
+  const staging = path.join(out, 'staging-4');
+  await fs.mkdir(staging, { recursive: true });
+  await fs.writeFile(path.join(staging, 'NEW.md'), 'new content', 'utf-8');
+
+  let renameCalls = 0;
+  await assert.rejects(
+    atomicReplace(staging, outDir, {
+      renameStaging: async () => {
+        renameCalls += 1;
+        const err = new Error('simulated staging rename failure');
+        err.code = 'EACCES';
+        throw err;
+      },
+    }),
+    (err) => err instanceof Error && err.message === 'simulated staging rename failure',
+  );
+  assert.equal(renameCalls, 1, 'staging rename should be attempted exactly once');
+
+  // After the failed atomicReplace, the original outDir must still
+  // exist (the backup was restored) and contain the original sentinel.
+  const dirAfter = await fs.stat(outDir);
+  assert.ok(dirAfter.isDirectory(), 'outDir must still exist after a failed atomicReplace');
+  const sentinelAfter = await fs.readFile(sentinel, 'utf-8');
+  assert.equal(sentinelAfter, 'old content', 'sentinel must be the original content');
+
+  // The .bak-* dir that atomicReplace created must be cleaned up.
+  const siblings = await fs.readdir(out);
+  const strayBak = siblings.filter((e) => e.includes(`${path.basename(outDir)}.bak-`));
+  assert.equal(strayBak.length, 0, `stray backup dirs left behind: ${strayBak.join(', ')}`);
+
+  await fs.rm(out, { recursive: true, force: true });
+});
+
+test('atomicReplace: surfaces a recovery error when both the swap and the rollback fail', async () => {
+  // When the swap fails AND the rollback fails too, atomicReplace must
+  // NOT swallow the second error. The caller's contract is "outDir is
+  // either OLD or NEW, never missing"; if both are missing we have to
+  // tell them.
+  //
+  // We force every rename call to fail. The first rename (outDir ->
+  // backup) fails, so backupCreated stays false; that path does not
+  // exercise the recovery branch. To exercise the recovery branch we
+  // instead use a counter and let the FIRST rename succeed (so a
+  // backup is created), the SECOND rename fail (the swap), and the
+  // THIRD rename fail too (the rollback).
+  const out = await tmpdir();
+  const outDir = path.join(out, 'atomic-5');
+  await fs.mkdir(outDir, { recursive: true });
+  await fs.writeFile(path.join(outDir, 'KEEP.md'), 'old', 'utf-8');
+
+  const staging = path.join(out, 'staging-5');
+  await fs.mkdir(staging, { recursive: true });
+
+  let calls = 0;
+  await assert.rejects(
+    atomicReplace(staging, outDir, {
+      rename: async (src, dst) => {
+        calls += 1;
+        if (calls === 1) {
+          // First call: outDir -> backup. Let it succeed.
+          return fs.rename(src, dst);
+        }
+        if (calls === 2) {
+          // Second call: staging -> outDir. Throw.
+          throw new Error('boom: swap failed');
+        }
+        // Third call: backup -> outDir (rollback). Throw.
+        throw new Error('boom: rollback failed');
+      },
+    }),
+    (err) => {
+      if (!(err instanceof Error)) return false;
+      return err.message === 'boom: swap failed'
+        && err.recovery
+        && /atomic-replace recovery failed/.test(err.recovery.message);
+    },
+    'atomicReplace must attach .recovery when both swap and rollback fail',
+  );
 
   await fs.rm(out, { recursive: true, force: true });
 });
