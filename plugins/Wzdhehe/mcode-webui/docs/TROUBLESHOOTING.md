@@ -185,7 +185,7 @@ is waiting on stdin and we're not feeding it.
 
 **Fix**:
 1. Open devtools → Network → find the `/api/events` EventSource.
-   If it's still open, the issue is on the Mcode side.
+   If it's still open, the issue is on the mcode side.
 2. Find the Mcode subprocess: `Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.CommandLine -like "*acp*" }`
 3. Kill it: `Stop-Process -Id <PID> -Force`
 4. The webui will spawn a fresh subprocess on the next message.

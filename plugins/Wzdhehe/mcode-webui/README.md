@@ -4,8 +4,8 @@
 > Streams `mcode acp` / `mcode exec` sessions in real time. Zero npm
 > dependencies; runs on Node 22.19+.
 
-This is the Mcode-plugin-guide (Agent Plugins 1.0) packaging of the
-[Mcode-webui](https://github.com/Wzdhehe/Mcode-webui) web frontend.
+This is the mcode-plugin-guide (Agent Plugins 1.0) packaging of the
+[Mcode-webui](https://github.com/Wzdhehe/mcode-webui) web frontend.
 
 ## Quick start
 
@@ -79,5 +79,5 @@ MIT — see [LICENSE](LICENSE).
 ## Maintainer
 
 - **Author**: Wzdhehe
-- **Repository**: https://github.com/Wzdhehe/Mcode-webui
-- **Homepage**: https://github.com/Wzdhehe/Mcode-webui
+- **Repository**: https://github.com/Wzdhehe/mcode-webui
+- **Homepage**: https://github.com/Wzdhehe/mcode-webui

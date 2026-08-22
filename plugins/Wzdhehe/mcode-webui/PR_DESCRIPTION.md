@@ -6,9 +6,9 @@
 
 ## What this PR adds
 
-- New plugin at `plugins/Wzdhehe/Mcode-webui/` per Agent Plugins 1.0 spec
+- New plugin at `plugins/Wzdhehe/mcode-webui/` per Agent Plugins 1.0 spec
   - `plugin.json` with the 10 white-listed top-level fields
-  - `skills/Mcode-webui/SKILL.md` with `{name, description}` frontmatter (343 chars) + body (official skills/ layout)
+  - `skills/mcode-webui/SKILL.md` with `{name, description}` frontmatter (343 chars) + body (official skills/ layout)
   - `LICENSE` (MIT)
   - `README.md` (user-facing quick start)
   - `references/SECURITY-NOTES.md` (canonical security disclosure)
@@ -151,4 +151,4 @@ CI: GitHub Actions on Node 22 / Node 24, Windows + Linux + macOS.
 - [x] No UTF-8 BOM in any text file
 - [x] No placeholder markers in shipped files
 - [x] No `hooks` / unsupported capability fields
-- [x] One plugin per PR (this PR is only `plugins/Wzdhehe/Mcode-webui/`)
+- [x] One plugin per PR (this PR is only `plugins/Wzdhehe/mcode-webui/`)

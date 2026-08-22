@@ -43,7 +43,7 @@ the mcode agent runtime, or anything not about the webui HTTP/SSE server.
 - **ask-user-tool** — multi-choice modal for tool `AskUserQuestion`
 - **permission-prompts** — mcode acp `RequestPermission` shown as inline cards
 - **workspace-switching** — sidebar chip + picker dialog
-- **session-management** — list / new / switch / delete with Mcode sid cross-reference
+- **session-management** — list / new / switch / delete with mcode sid cross-reference
 - **file-attachments** — multipart upload (10MB default, configurable)
 - **quota-usage** — 5h + weekly usage fetched from mmx quota API
 - **bilingual-ui** — zh-CN / en toggle, instant
@@ -148,7 +148,7 @@ contribution workflow, see `docs/DEVELOPMENT.md`.
 
 ## Development vs Release layout
 
-- **In this repo (development)**: `plugins/Wzdhehe/Mcode-webui/{server,public,test}`
+- **In this repo (development)**: `plugins/Wzdhehe/mcode-webui/{server,public,test}`
   are **real directory copies** of the project-root `server/`, `public/`,
   `test/` (earlier revisions used Windows junctions; the trees have since
   been expanded). Keep both copies in sync when editing — the plugin tree is
