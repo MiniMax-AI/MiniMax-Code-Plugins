@@ -1,98 +1,513 @@
 {
-  "3": {
-    "class_type": "CheckpointLoaderSimple",
-    "inputs": {
-      "ckpt_name": "any_portrait_checkpoint.safetensors"
-    }
-  },
-  "4": {
-    "class_type": "CLIPLoader",
-    "inputs": {
-      "clip_name1": "any_clip.safetensors",
-      "type": "stable_diffusion"
-    }
-  },
-  "10": {
-    "class_type": "LoraLoader",
-    "inputs": {
-      "model": ["3", 0],
-      "clip": ["4", 0],
-      "lora_name": "your_face_lora.safetensors",
-      "strength_model": 0.85,
-      "strength_clip": 0.85
-    }
-  },
-  "20": {
-    "class_type": "IPAdapterModelLoader",
-    "inputs": {
-      "ipadapter_file": "ip-adapter-faceid-portrait.bin"
-    }
-  },
-  "30": {
-    "class_type": "CLIPTextEncode",
+  "89": {
     "inputs": {
       "text": "__PROMPT__",
-      "clip": ["10", 1]
-    }
-  },
-  "31": {
+      "clip": [
+        "406",
+        1
+      ]
+    },
     "class_type": "CLIPTextEncode",
-    "inputs": {
-      "text": "deformed, bad anatomy, extra fingers, blurry, low quality, watermark, different character, identity drift, multiple people, two people, group",
-      "clip": ["10", 1]
+    "_meta": {
+      "title": "CLIP Text Encode (Prompt)"
     }
   },
-  "40": {
+  "251": {
+    "inputs": {
+      "rgthree_comparer": {
+        "images": [
+          {
+            "name": "A",
+            "selected": true,
+            "url": "/api/view?filename=rgthree.compare._temp_pqzjp_00001_.png&type=temp&subfolder=&rand=0.7865590674908698"
+          },
+          {
+            "name": "B",
+            "selected": true,
+            "url": "/api/view?filename=rgthree.compare._temp_pqzjp_00002_.png&type=temp&subfolder=&rand=0.4441934895916896"
+          }
+        ]
+      },
+      "image_a": [
+        "322",
+        0
+      ],
+      "image_b": [
+        "314",
+        0
+      ]
+    },
+    "class_type": "Image Comparer (rgthree)",
+    "_meta": {
+      "title": "Image Comparer (rgthree)"
+    }
+  },
+  "314": {
+    "inputs": {
+      "image": "__IMAGE1__"
+    },
     "class_type": "LoadImage",
-    "inputs": {
-      "image": "reference_face.png"
+    "_meta": {
+      "title": "Load Image"
     }
   },
-  "50": {
-    "class_type": "IPAdapterApply",
+  "316": {
     "inputs": {
-      "ipadapter": ["20", 0],
-      "image": ["40", 0],
-      "weight": 0.7,
-      "noise": 0.05,
-      "weight_type": "linear"
+      "preprocessor": "LineArtPreprocessor",
+      "resolution": [
+        "403",
+        0
+      ],
+      "image": [
+        "380",
+        0
+      ]
+    },
+    "class_type": "AIO_Preprocessor",
+    "_meta": {
+      "title": "AIO Aux Preprocessor"
     }
   },
-  "60": {
-    "class_type": "EmptyLatentImage",
+  "317": {
     "inputs": {
-      "width": 832,
-      "height": 1216,
-      "batch_size": 1
+      "images": [
+        "404",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "Preview Image"
     }
   },
-  "70": {
-    "class_type": "KSampler",
+  "319": {
     "inputs": {
-      "model": ["10", 0],
-      "positive": ["50", 0],
-      "negative": ["31", 0],
-      "latent_image": ["60", 0],
-      "seed": 42,
-      "steps": 25,
-      "cfg": 6.0,
-      "sampler_name": "dpmpp_2m",
-      "scheduler": "karras",
-      "denoise": 1.0
+      "strength": 0.8,
+      "model": [
+        "477",
+        0
+      ],
+      "model_patch": [
+        "320",
+        0
+      ],
+      "vae": [
+        "406",
+        2
+      ],
+      "image": [
+        "404",
+        0
+      ]
+    },
+    "class_type": "ZImageFunControlnet",
+    "_meta": {
+      "title": "ZImageFunControlnet"
     }
   },
-  "80": {
+  "320": {
+    "inputs": {
+      "name": "Z-Image-Fun-Controlnet-Union-2.1.safetensors"
+    },
+    "class_type": "ModelPatchLoader",
+    "_meta": {
+      "title": "ModelPatchLoader"
+    }
+  },
+  "322": {
+    "inputs": {
+      "samples": [
+        "410",
+        0
+      ],
+      "vae": [
+        "406",
+        2
+      ]
+    },
     "class_type": "VAEDecode",
-    "inputs": {
-      "samples": ["70", 0],
-      "vae": ["3", 2]
+    "_meta": {
+      "title": "VAE Decode"
     }
   },
-  "90": {
-    "class_type": "SaveImage",
+  "380": {
     "inputs": {
-      "images": ["80", 0],
-      "filename_prefix": "selfie_mimic"
+      "aspect_ratio": "original",
+      "proportional_width": 1,
+      "proportional_height": 1,
+      "fit": "crop",
+      "method": "lanczos",
+      "round_to_multiple": "16",
+      "scale_to_side": "longest",
+      "scale_to_length": [
+        "455",
+        0
+      ],
+      "background_color": "#000000",
+      "image": [
+        "314",
+        0
+      ],
+      "mask": [
+        "314",
+        1
+      ]
+    },
+    "class_type": "LayerUtility: ImageScaleByAspectRatio V2",
+    "_meta": {
+      "title": "LayerUtility: ImageScaleByAspectRatio V2"
+    }
+  },
+  "399": {
+    "inputs": {
+      "text": "画面风格：高清晰度商业人像摄影风格，采用暖色调室内布光，光影对比强烈，主体突出，背景虚化柔和，色彩饱和度适中，整体氛围神秘而高贵，具有强烈的时尚杂志质感，视觉焦点集中在人物面部与上半身，细节丰富且锐利。\n\n核心元素：年轻亚洲女性角色，深棕色长发自然垂落，略带波浪卷曲，发丝蓬松有光泽，部分头发向后梳理露出额头与耳朵，耳侧有碎发修饰脸型。人物佩戴一对大尺寸圆形珍珠耳环，左手无名指戴有一枚花朵造型戒指，右手手腕叠戴多层细珠链手镯，右臂内侧可见一条纤细红色手绳。身着黑色无袖紧身连衣裙，领口呈高领圆领设计，胸前垂直开衩并缀有两圈横向排列的珍珠装饰环，腰间系有一条镶嵌水钻的金属质感腰带，呈不规则环形结构，腰身两侧有褶皱收束设计，凸显身材曲线。左腿膝盖上方可见黑色吊袜带连接至腿部，暗示穿着丝袜或长筒袜。背景为暖金色调墙面，表面带有浮雕式纹理或壁纸图案，右侧隐约可见一盏壁灯轮廓，光线从左上方投射，在人物面部与肩部形成柔和的高光，阴影过渡自然，增强立体感。\n\n具体内容：女性角色五官精致立体，眉形流畅上扬，眼妆浓重且层次分明，眼线拉长上扬，睫毛纤长卷翘，瞳孔深邃有神，鼻梁高挺，唇色为柔和的裸粉色，唇形饱满，嘴角微抿，表情冷艳中带一丝慵懒，眼神直视镜头，充满自信与吸引力。身体姿态呈半坐半倚状态，左手轻托下巴靠近脸颊，手指修长，指甲修剪整齐，右手自然搭在身侧或椅背上，肩部微微内扣，脊柱挺直，胸部微挺，腰部收紧，腿部线条流畅，整体坐姿优雅且富有张力，展现出成熟女性的魅力与掌控力。\n\n构图方式：采用中心偏右构图，人物占据画面主要区域，头部略高于画面中线，视线方向朝向镜头，留出适当空间。前景为人物面部与手部特写，中景为躯干与服装细节，远景为模糊的背景墙面与灯具轮廓，形成清晰的前后景深层次。相机参数设定为中画幅或高端单反相机，使用85mm定焦镜头，光圈f/2.0-f/2.8，快门速度1/125秒，ISO 200-400，白平衡设置为3500K-4000K暖色温，对焦模式为单点对焦锁定于眼部，确保面部与珠宝细节极致清晰锐利。光线来自左前方45度角，主光源柔和均匀，辅光补亮右侧暗部，轮廓光从右后方勾勒发丝边缘，增强立体感。整体色彩基调以黑色服装与暖金色背景形成冷暖对比，辅以肤色、珍珠白、金属银等点缀色，营造奢华而性感的视觉体验。\n\n光影效果：主光源为暖色温柔光箱或大型LED平板灯，从左侧斜向照射，照亮人物正面与左侧轮廓，右侧保留适度阴影增强立体感。高光集中在额头、鼻梁、颧骨、锁骨及肩部，反射柔和，无明显硬边。阴影区域如颈部下方、腋下、裙摆内侧呈现渐变过渡，无突兀黑块。环境光来自右侧背景，轻微提亮暗部，平衡整体明暗。体积光不明显，但通过暖色背景反射营造出包围式柔光氛围，人物轮廓边缘有微弱辉光，增强分离感。\n\n材质质感：皮肤呈现健康光泽，毛孔与细微纹理清晰可见，尤其在脸颊与鼻翼处，体现真实肤质。头发丝缕分明，富有弹性与光泽，反射柔和光线。服装面料为哑光针织或弹性棉混纺，贴合身体曲线，褶皱自然流畅，腰部与胸前开衩处有轻微拉伸感。珍珠饰品表面光滑圆润，折射柔和光泽，金属腰带与手镯具有镜面反射特性，钻石或水钻部分呈现细碎闪光。\n\n纹理密度：皮肤纹理细腻，毛孔分布自然，无过度磨皮痕迹。头发密度适中，发根蓬松，发梢微卷，层次分明。服装织物纹理细腻，有轻微竖向条纹或编织结构，尤其在腰部与袖口处可见细微褶皱。饰品表面抛光度高，反光清晰，无划痕或瑕疵。\n\n解剖结构：人物身材比例匀称，肩宽适中，锁骨明显，胸部饱满，腰部纤细，臀部圆润，腿部修长，肌肉线条流畅但不夸张，关节弯曲自然，脊柱曲线优美，整体姿态符合人体工学，无僵硬或扭曲感。\n\n空间位置：人物位于画面右侧三分之二处，头部居中偏右，视线正对镜头，身体略微侧转，左手抬起靠近面部，右手自然下垂，双腿交叉或并拢，左腿在前，右腿在后，形成动态平衡。背景墙面占据左侧三分之一，灯具位于右上角，构成稳定的三角构图。\n\n姿势分析：整体姿态为半坐姿，躯干微倾，头部略低，眼神专注，双手一上一下形成视觉引导线，肩部放松但挺拔，手臂自然弯曲，肘部微屈，手腕柔韧，手指姿态优雅，大腿与膝盖角度协调，骨盆轻微旋转，展现柔美曲线，整体动作流畅自然，富有表现力。\n\n技术参数：相机型号建议为索尼A7R IV或佳能R5，镜头为索尼FE 85mm f/1.4 GM或佳能RF 85mm f/1.2 L USM，拍摄模式为手动档，焦距85mm，光圈f/2.2，快门1/125s，ISO 200，白平衡3800K，对焦模式AF-C + 眼部追踪，曝光补偿+0.3EV，使用反光板或柔光箱辅助补光，三脚架固定拍摄，确保稳定性与清晰度。",
+      "anything": [
+        "457",
+        0
+      ]
+    },
+    "class_type": "easy showAnything",
+    "_meta": {
+      "title": "Show Any"
+    }
+  },
+  "403": {
+    "inputs": {
+      "value": "min(a,b)",
+      "a": [
+        "380",
+        3
+      ],
+      "b": [
+        "380",
+        4
+      ]
+    },
+    "class_type": "SimpleMath+",
+    "_meta": {
+      "title": "🔧 Simple Math"
+    }
+  },
+  "404": {
+    "inputs": {
+      "any_01": [
+        "316",
+        0
+      ]
+    },
+    "class_type": "Any Switch (rgthree)",
+    "_meta": {
+      "title": "Any Switch (rgthree)"
+    }
+  },
+  "406": {
+    "inputs": {
+      "ckpt_name": "Z-Image-Base-8steps-豹豹喵呜の白玉v2White_Marble-AIO_v2-bf16.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {
+      "title": "Load Checkpoint"
+    }
+  },
+  "407": {
+    "inputs": {
+      "conditioning": [
+        "89",
+        0
+      ]
+    },
+    "class_type": "ConditioningZeroOut",
+    "_meta": {
+      "title": "ConditioningZeroOut"
+    }
+  },
+  "408": {
+    "inputs": {
+      "pixels": [
+        "380",
+        0
+      ],
+      "vae": [
+        "406",
+        2
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE Encode"
+    }
+  },
+  "409": {
+    "inputs": {
+      "seed": 46214279332840,
+      "steps": 8,
+      "cfg": 1,
+      "sampler_name": "res_2s",
+      "scheduler": "linear_quadratic",
+      "denoise": 1,
+      "model": [
+        "319",
+        0
+      ],
+      "positive": [
+        "89",
+        0
+      ],
+      "negative": [
+        "407",
+        0
+      ],
+      "latent_image": [
+        "408",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "410": {
+    "inputs": {
+      "add_noise": "enable",
+      "noise_seed": 276067442284220,
+      "steps": 8,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "start_at_step": 5,
+      "end_at_step": 10000,
+      "return_with_leftover_noise": "disable",
+      "model": [
+        "411",
+        0
+      ],
+      "positive": [
+        "89",
+        0
+      ],
+      "negative": [
+        "407",
+        0
+      ],
+      "latent_image": [
+        "409",
+        0
+      ]
+    },
+    "class_type": "KSamplerAdvanced",
+    "_meta": {
+      "title": "KSampler (Advanced)"
+    }
+  },
+  "411": {
+    "inputs": {
+      "unet_name": "ZIT-moodyPornMix_zitV10R1DPO_fp16.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "455": {
+    "inputs": {
+      "value": 1920
+    },
+    "class_type": "INTConstant",
+    "_meta": {
+      "title": "整数常量"
+    }
+  },
+  "456": {
+    "inputs": {
+      "text": "__TRIGGER__"
+    },
+    "class_type": "CR Text",
+    "_meta": {
+      "title": "文本"
+    }
+  },
+  "457": {
+    "inputs": {
+      "any_01": [
+        "474",
+        0
+      ],
+      "any_02": [
+        "456",
+        0
+      ]
+    },
+    "class_type": "Any Switch (rgthree)",
+    "_meta": {
+      "title": "Any Switch (rgthree)"
+    }
+  },
+  "458": {
+    "inputs": {
+      "offload_model": true,
+      "offload_cache": true,
+      "anything": [
+        "322",
+        0
+      ]
+    },
+    "class_type": "VRAMCleanup",
+    "_meta": {
+      "title": "释放显存"
+    }
+  },
+  "459": {
+    "inputs": {
+      "clean_file_cache": true,
+      "clean_processes": true,
+      "clean_dlls": true,
+      "retry_times": 3,
+      "anything": [
+        "322",
+        0
+      ]
+    },
+    "class_type": "RAMCleanup",
+    "_meta": {
+      "title": "释放内存"
+    }
+  },
+  "460": {
+    "inputs": {
+      "offload_model": true,
+      "offload_cache": true,
+      "anything": [
+        "409",
+        0
+      ]
+    },
+    "class_type": "VRAMCleanup",
+    "_meta": {
+      "title": "释放显存"
+    }
+  },
+  "461": {
+    "inputs": {
+      "clean_file_cache": true,
+      "clean_processes": true,
+      "clean_dlls": true,
+      "retry_times": 3,
+      "anything": [
+        "409",
+        0
+      ]
+    },
+    "class_type": "RAMCleanup",
+    "_meta": {
+      "title": "释放内存"
+    }
+  },
+  "471": {
+    "inputs": {
+      "filename_prefix": "selfie_mimic",
+      "images": [
+        "322",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "472": {
+    "inputs": {
+      "model": "Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf",
+      "mmproj": "mmproj-Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-BF16.gguf",
+      "chat_handler": "Qwen3.5",
+      "n_ctx": 8192,
+      "vram_limit": -1,
+      "image_min_tokens": 0,
+      "image_max_tokens": 0
+    },
+    "class_type": "llama_cpp_model_loader",
+    "_meta": {
+      "title": "Llama-cpp Model Loader"
+    }
+  },
+  "473": {
+    "inputs": {
+      "max_tokens": 4096,
+      "top_k": 30,
+      "top_p": 0.9,
+      "min_p": 0.05,
+      "typical_p": 1,
+      "temperature": 0.8,
+      "repeat_penalty": 1,
+      "frequency_penalty": 0,
+      "presence_penalty": 1,
+      "mirostat_mode": 0,
+      "mirostat_eta": 0.1,
+      "mirostat_tau": 5,
+      "state_uid": -1
+    },
+    "class_type": "llama_cpp_parameters",
+    "_meta": {
+      "title": "Llama-cpp Parameters"
+    }
+  },
+  "474": {
+    "inputs": {
+      "preset_prompt": "Prompt Style - Extreme Detailed",
+      "custom_prompt": "严禁输出思考过程，只反推输出中文提示词",
+      "system_prompt": "你是专注于图像反推提示词生成的专业AI助手，需基于用户上传的角色照片，分析并提取详细的图片信息，最终为图像编辑模型生成提示词。具体执行步骤如下：\n\n### 最高指令\n1.语言自适应：识别用户输入语言。用户用中文提问，你输出中文指令；用户用英文提问，你输出英文指令；若未输入语言，默认输出中文指令。\n2.格式绝对纯净：严禁输出 Markdown 符号（如星号、井号）、严禁中英对照括号、严禁输出任何解释或前缀。\n3.输出提示词总字数控制在1000字以内。\n4.不要描述设计师名称、日期等文字水印。\n\n### 核心规则\n1.详细提取图片中的画面信息，当用户提供参考图时，需对图片进行全面详细分析，提取所有可见元素（包括主体、背景、文字、光影、材质、纹理、解剖结构等），确保无遗漏。\n2.生成的提示词必须进行多层次、多维度的细节挖掘，达到像素级的细节提取精度。；\n3.生成的提示词中禁止包含水印、边框等多余内容。\n4.所有提示词必须包含画面风格、核心元素、具体内容、构图方式四个核心模块，每个模块描述需达到AI可直接识别并生成的精度，不得遗漏。\n\n### 约束条件\n1.正向引导：禁用负面提示词，完全使用正向约束表达（例：不用不要模糊，而写极致锐利的对焦，画面细节清晰）。\n2.自然语言：使用自然语言语法，语句连贯、符合语法，禁止无逻辑的标签堆料，需用有逻辑、有流畅度的句式。\n3.拒绝模糊：禁止使用模糊性描述（如好看的颜色、大概的形状），需采用精准术语（如金黄色渐变、等边三角形的几何结构）。\n4.禁止使用微观悬浮粒子类描述：不得出现“微尘”“漂浮粒子”“空气中的细小颗粒”“光雾粒子”“盐粒”“花粉”“水雾微粒”等无法被主流图像模型稳定可视化的微观悬浮物描写。若需表现氛围感，必须使用“体积光”“丁达尔光束”“光晕扩散”“柔焦虚化”等可视觉化的宏观光学现象，并确保其描述方式符合主流图像生成模型的训练数据模式。。\n5.通用适配：提示词需适配所有主流AI绘图工具，避免使用工具专属语法。\n6.纯净格式：输出不得包含任何Markdown标记、代码块符号。文字之间需保留正常空格以确保语义通顺，但段落之间紧凑排列，不要出现多余空行。\n7.最大生成量：输出提示词总字数控制在1000字以内。\n\n### 提示词生成\n1.提示词生成内容应包含图片场景、构图比例、服装搭配、动作姿势、色彩基调、整体氛围、相机参数（如果为写实拍摄的情况下）等描述；\n1.若用户输入特定需求，按照用户要求对提示词中的元素进行变更；\n2.若用户无特定要求，严格根据参考图内容生成提示词；\n\n### 核心要素\n**场景描述**：详细描述背景环境、场景布局、整体氛围。\n**构图及空间描述**：详细描述图片的整体构图方式以及前景、中景、近景和远景等空间关系。\n**主体内容**：详细描述人物/物体主体特征，包含人物国籍、长相特征等。\n**服装搭配**：详细描述服装、配饰、道具。\n**动作姿势**：详细描述动作，动作必须自然。\n**面部表情**：详细描述整体氛围和面部情绪。\n**技术参数**：描述拍摄使用的相机参数。\n\n###细节特征\n**光影效果**：描述光源方向、强度、色温、阴影形状与过渡、高光位置；若需表现空气感或氛围，仅允许使用“丁达尔光束”“柔和体积光”“逆光轮廓辉光”“环境光遮蔽”等AI可识别的宏观光学现象，禁止引用不可见或微观粒子作为光影成因。\n**材质质感**：描述表面纹理、反光特性、透明度、柔软度。\n**纹理密度**：描述皮肤纹理、织物纹路、衣物褶皱、毛发细节。\n**解剖结构**：描述身体比例、肌肉线条、骨骼结构、面部特征。\n**空间位置**：明确人物朝向、元素相对位置、构图方式（如对称、三分法），并细化前景、中景、远景的层次关系。\n**姿势分析**：详细描述身体整体姿态、四肢位置角度、关节弯曲程度、肌肉紧张状态、运动方向和动态感。\n**技术参数（如果为写实拍摄的情况下）**：描述相机型号、镜头参数、拍摄模式、焦距、光圈等参数。\n\n###格式校验\n1.无模糊性描述，所有细节均精准可量化。\n2.姿势描述详细完整，包含身体整体姿态、四肢位置角度、关节弯曲程度、肌肉紧张状态、运动方向和动态感。\n3.符合了用户的特定要求（如有）。\n4.适配所有主流AI绘图工具，无工具专属语法。\n5.无Markdown符号，无多余空行。\n\n###输出规范\n1.所有提示词直接输出，不得包含任何额外内容（如好的，这是提示词）。\n2.提示词需详尽到AI可直接生成与描述完全一致的画面，每个元素都有充分的细节描述，不得遗漏任何关键细节。\n3.若生成多组提示词，每组之间仅用换行分隔，不得添加任何分隔符。\n4.最终输出提示词总字数控制在1000字以内。\n\n###实例\n画面风格：自然写实摄影风格，采用高清晰度与高分辨率呈现，光影过渡柔和细腻，色彩还原真实且富有层次感，整体氛围清新自然，具有强烈的沉浸式视觉体验。\n核心元素：年轻的亚洲女性角色，手持双束粉色玫瑰花，身着浅粉色针织开衫，背景为开阔的玫瑰花田，绿色植被与粉花形成鲜明色彩对比，人物位于画面中心偏右位置，构图采用三分法与视觉引导线结合，前景为人物与花束，中景为花田延伸，远景为模糊的绿色山丘轮廓，增强空间纵深感。\n具体内容：女性角色拥有深棕色长发，自然垂落肩头，面部五官精致，眼神柔和专注，嘴唇微启，表情自然放松。她双手各持一束粉色玫瑰，左手花束靠近面部，右手花束高举过肩，姿态优雅且富有动态感。服装为浅粉色V领针织开衫，纹理清晰可见，袖口自然收束。花束由多支盛开的粉色玫瑰组成，花瓣层次分明，绿叶点缀其间，茎秆挺拔。背景花田中玫瑰花密集分布，颜色从浅粉到深粉渐变，远处山丘轮廓柔和，天空呈现淡蓝色，无明显云层。\n构图方式：采用三分法构图，人物位于右侧三分之一处，视线方向留有适当空间。前景花束与人物面部形成视觉焦点，中景花田引导视线向远景延伸，形成自然的视觉动线。相机参数设定为全画幅传感器，使用85mm定焦镜头，光圈f/2.8，快门速度1/200秒，ISO 100，白平衡自动，对焦模式为单点对焦，确保人物面部与花束细节清晰锐利。光线来自左前方，形成柔和的侧逆光效果，人物轮廓边缘有轻微辉光，阴影过渡自然，无明显硬边。整体色彩基调以粉色与绿色为主，辅以淡蓝色天空，营造出温馨浪漫的春日氛围。",
+      "inference_mode": "images",
+      "max_frames": 24,
+      "max_size": 256,
+      "seed": 331347452927766,
+      "force_offload": true,
+      "save_states": false,
+      "llama_model": [
+        "472",
+        0
+      ],
+      "parameters": [
+        "473",
+        0
+      ],
+      "images": [
+        "380",
+        0
+      ]
+    },
+    "class_type": "llama_cpp_instruct_adv",
+    "_meta": {
+      "title": "Llama-cpp Instruct"
+    }
+  },
+  "476": {
+    "inputs": {
+      "lora_name": "your_face_lora.safetensors",
+      "strength_model": 1,
+      "model": [
+        "406",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "Load LoRA"
+    }
+  },
+  "477": {
+    "inputs": {
+      "lora_name": "your_style_lora.safetensors",
+      "strength_model": 1,
+      "model": [
+        "476",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "Load LoRA"
     }
   }
 }

@@ -2,7 +2,7 @@
   "3": {
     "class_type": "CheckpointLoaderSimple",
     "inputs": {
-      "ckpt_name": "any_anime_or_cinematic_checkpoint.safetensors"
+      "ckpt_name": "Z-Image-Base-8steps-豹豹喵呜の白玉v2White_Marble-AIO_v2-bf16.safetensors"
     }
   },
   "10": {
