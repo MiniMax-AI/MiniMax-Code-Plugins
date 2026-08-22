@@ -42,7 +42,15 @@ the same way you treat the path of any binary you run.
 Plain ComfyUI has no authentication. If the user runs ComfyUI behind a reverse proxy that
 requires a bearer token, set `COMFYUI_API_TOKEN` in the environment. The Plugin's MCP server
 and the Python script both add it as `Authorization: Bearer <token>` to every request. The
-token never leaves the host; it is not logged, echoed, or sent to any other destination.
+token is sent only as `Authorization: Bearer <token>` to the configured
+`COMFYUI_URL`. Both `server.mjs` and `submit_workflow.py` install an HTTP client
+that **refuses all 3xx redirects**: a redirected endpoint may live on a
+different host (proxy misconfig, DNS hijack, accidental public URL), and
+forwarding the bearer header there would leak the token. Refusing the
+redirect rather than following it closes that path. If you front ComfyUI
+with an auth proxy that itself uses redirects, switch to a same-origin
+reverse proxy instead. The token is also never logged, echoed, or sent
+to any other destination.
 
 ## The MCP server boundary
 
