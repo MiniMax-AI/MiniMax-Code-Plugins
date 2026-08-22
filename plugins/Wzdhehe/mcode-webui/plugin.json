@@ -1,0 +1,117 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "mcode-webui",
+  "version": "1.0.0",
+  "description": "Browser-based chat frontend for the mcode agent runtime. Streams mcode acp / exec sessions with real-time tool events, plan review, ask-user prompts, context usage, and quota. Zero npm dependencies; runs on Node 22+.",
+  "author": {
+    "name": "Wzdhehe"
+  },
+  "homepage": "https://github.com/Wzdhehe/mcode-webui",
+  "repository": "https://github.com/Wzdhehe/mcode-webui.git",
+  "license": "MIT",
+  "keywords": [
+    "mcode",
+    "webui",
+    "acp",
+    "chat",
+    "sse",
+    "zero-deps",
+    "developer-tools"
+  ],
+  "extensions": {
+    "displayName": "mcode Web UI",
+    "icon": "🌐",
+    "securityNotes": "See references/SECURITY-NOTES.md — canonical disclosure (network bind 0.0.0.0, ?token= query, mavis sqlite cross-delete, file upload, no telemetry). Per red-line 7 of mcode-plugin-guide, this is the single source of truth.",
+    "runtime": {
+      "minNodeVersion": "22.19",
+      "maxNodeVersion": "26",
+      "platforms": [
+        "windows",
+        "linux",
+        "macos"
+      ],
+      "entry": "server.js",
+      "defaultPort": 8080
+    },
+    "config": {
+      "PORT": {
+        "type": "number",
+        "default": 8080,
+        "env": "PORT",
+        "description": "HTTP server port"
+      },
+      "HOST": {
+        "type": "string",
+        "default": "0.0.0.0",
+        "env": "HOST",
+        "description": "HTTP bind address (loopback-only or all interfaces)"
+      },
+      "TOKEN": {
+        "type": "string",
+        "default": "",
+        "env": "TOKEN",
+        "description": "Required token for non-local requests (use ?token= or Authorization: Bearer)"
+      },
+      "MCODE_MODEL": {
+        "type": "string",
+        "default": "minimax_api/MiniMax-M3",
+        "env": "MCODE_MODEL",
+        "description": "Default model"
+      },
+      "MCODE_CMD": {
+        "type": "string",
+        "default": "auto-detect",
+        "env": "MCODE_CMD",
+        "description": "Path to mcode.cmd / mcode binary"
+      },
+      "MCODE_WEBUI_UPLOAD_DIR": {
+        "type": "string",
+        "default": "auto-detect",
+        "env": "MCODE_WEBUI_UPLOAD_DIR",
+        "description": "Directory for uploaded attachments"
+      },
+      "DEBUG_INJECT": {
+        "type": "string",
+        "default": "",
+        "env": "DEBUG_INJECT",
+        "description": "Set to '1' to enable /api/debug/* (testing only)"
+      }
+    },
+    "capabilities": [
+      "chat-streaming",
+      "tool-execution",
+      "plan-mode",
+      "ask-user-tool",
+      "permission-prompts",
+      "workspace-switching",
+      "session-management",
+      "file-attachments",
+      "quota-usage",
+      "bilingual-ui",
+      "lan-sharing",
+      "token-auth",
+      "mobile-responsive"
+    ],
+    "endpoints": {
+      "health": "GET /api/health",
+      "events": "GET /api/events (SSE)",
+      "state": "GET /api/state",
+      "sessions": "GET|POST|DELETE /api/sessions[/:id|/switch]",
+      "chat": "POST /api/send|stop|cmd",
+      "workspace": "GET|POST /api/workspace[?/browse]",
+      "settings": "GET|POST /api/settings",
+      "upload": "POST /api/upload",
+      "model": "GET /api/models, POST /api/set-model|permissions|answer",
+      "usage": "GET|POST /api/usage[-real|-trigger|/refresh]",
+      "protocol": "GET|POST /api/protocol/* (acp shim)",
+      "debug": "GET|POST /api/debug/* (DEBUG_INJECT gated)"
+    },
+    "exampleQueries": [
+      "open mcode webui",
+      "start the mcode webui",
+      "launch mcode browser",
+      "mcode webui status",
+      "show mcode webui url"
+    ]
+  }
+}
