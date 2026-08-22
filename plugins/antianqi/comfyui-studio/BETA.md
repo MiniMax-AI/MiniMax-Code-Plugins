@@ -2,20 +2,24 @@
 
 > **Status**: This is the beta test distribution of `comfyui-studio`. The official
 > PR ([MiniMax-AI/MiniMax-Code-Plugins#15](https://github.com/MiniMax-AI/MiniMax-Code-Plugins/pull/15))
-> is open and waiting for review. While the merge is pending, **this fork is the public test
-> channel** for the mcode internal beta group. Please install from here, try the 6 scenarios,
-> and report issues back so we can fix them before the official release.
+> is open and waiting for review. While the merge is pending, the **standalone beta
+> channel** lives at **[`antianqi/comfyui-studio`](https://github.com/antianqi/comfyui-studio)**
+> (a single-plugin repo, not this monorepo fork). Please install from that repo, try the 6
+> scenarios, and report issues back so we can fix them before the official release.
+>
+> This monorepo fork (`MiniMax-Code-Plugins-1`) is only kept alive so the upstream PR
+> can be force-pushed. The install instructions below point at the standalone repo.
 
 ---
 
 ## TL;DR
 
 ```bash
-# 1. Clone the fork (or download the tarball from the latest beta release)
-git clone https://github.com/antianqi/MiniMax-Code-Plugins-1.git
+# 1. Clone the standalone beta repo (or download the latest beta release tarball)
+git clone https://github.com/antianqi/comfyui-studio.git
 
 # 2. Symlink / copy the plugin into your MiniMax Code Plugins directory
-ln -s "$(pwd)/MiniMax-Code-Plugins-1/plugins/antianqi/comfyui-studio" \
+ln -s "$(pwd)/comfyui-studio" \
        "$MCODE_HOME/plugins/antianqi/comfyui-studio"
 
 # 3. (Optional) Verify
@@ -24,16 +28,16 @@ ls "$MCODE_HOME/plugins/antianqi/comfyui-studio/plugin.json"
 
 > Don't know `$MCODE_HOME`? On most installs it is `~/.minimax/plugins/` (Linux/macOS) or
 > `%USERPROFILE%\.minimax\plugins\` (Windows). The Plugin manager UI in mcode also has a
-> "Install from local path" button — point it at the `plugins/antianqi/comfyui-studio`
-> directory and you are done.
+> "Install from local path" button — point it at the standalone repo root and you are done —
+> the plugin is the whole repo, not a sub-folder.
 
 ## 3 install options
 
-### Option A — Clone the fork (recommended for testing)
+### Option A — Clone the standalone beta repo (recommended for testing)
 
 ```bash
-git clone https://github.com/antianqi/MiniMax-Code-Plugins-1.git
-# then point mcode at plugins/antianqi/comfyui-studio/
+git clone https://github.com/antianqi/comfyui-studio.git
+# the plugin is the whole repo root
 ```
 
 Pros: `git pull` later gets you the latest fixes without re-downloading.
@@ -42,26 +46,26 @@ Cons: requires git on the host.
 ### Option B — Download a release tarball (recommended for one-shot test)
 
 Latest beta release:
-**[`v0.2.0-beta.1`](https://github.com/antianqi/MiniMax-Code-Plugins-1/releases/tag/v0.2.0-beta.1)**
+**[`v0.2.0-beta.1`](https://github.com/antianqi/comfyui-studio/releases/tag/v0.2.0-beta.1)**
 
 ```bash
-curl -L https://github.com/antianqi/MiniMax-Code-Plugins-1/archive/refs/tags/v0.2.0-beta.1.tar.gz \
+curl -L https://github.com/antianqi/comfyui-studio/archive/refs/tags/v0.2.0-beta.1.tar.gz \
   | tar -xz
-cd MiniMax-Code-Plugins-1-0.2.0-beta.1
-# then point mcode at plugins/antianqi/comfyui-studio/
+cd comfyui-studio-0.2.0-beta.1
+# the plugin is the whole folder
 ```
 
 Pros: a frozen version, easy to roll back.
 Cons: you have to re-download to get fixes.
 
-### Option C — Download just the plugin folder (smallest payload)
+### Option C — Download just the files you need (smallest payload)
 
-[Browse the plugin folder at this tag](https://github.com/antianqi/MiniMax-Code-Plugins-1/tree/v0.2.0-beta.1/plugins/antianqi/comfyui-studio),
+[Browse the standalone beta repo at this tag](https://github.com/antianqi/comfyui-studio/tree/v0.2.0-beta.1),
 hit "Download raw file" per file, OR use the GitHub CLI:
 
 ```bash
 gh release download v0.2.0-beta.1 \
-  --repo antianqi/MiniMax-Code-Plugins-1 \
+  --repo antianqi/comfyui-studio \
   --pattern '*' \
   --dir comfyui-studio-beta
 ```
@@ -99,8 +103,8 @@ full face-LoRA + style-LoRA + Z-Image stack.
 
 Pick whichever channel fits you best:
 
-- **GitHub issues on the fork** (preferred for reproducible bugs):
-  https://github.com/antianqi/MiniMax-Code-Plugins-1/issues
+- **GitHub issues on the standalone beta repo** (preferred for reproducible bugs):
+  https://github.com/antianqi/comfyui-studio/issues
   Please include: your OS, your ComfyUI version, the scenario number, the prompt you used,
   and the full error output (or the prompt_id if ComfyUI swallowed the job).
 
@@ -135,11 +139,13 @@ look like bugs:
 
 ## Versioning
 
-- **`v0.2.0-beta.1`** (this one) — the version in `plugin.json` matches the PR #15 commit.
-  Mirrors the official PR for testing.
-- Future betas will tag on this fork only, with semver `-beta.N` suffixes.
+- **`v0.2.0-beta.1`** — the version in `plugin.json` matches the PR #15 commit. The
+  standalone beta repo is at [`antianqi/comfyui-studio`](https://github.com/antianqi/comfyui-studio);
+  release tags live there, not in this fork.
+- Future betas will tag on the standalone repo, with semver `-beta.N` suffixes.
 - The first non-beta release (`v0.2.0`) will be published from the **official** repo
-  (`MiniMax-AI/MiniMax-Code-Plugins`), not this fork.
+  (`MiniMax-AI/MiniMax-Code-Plugins`), not the standalone beta repo. Once that happens,
+  the standalone beta repo will archive but stay readable as a historical reference.
 
 ## License
 
