@@ -3,7 +3,7 @@
 This is the packaged plugin view of the project. The full
 contribution guide lives in the **source repo**:
 
-**[github.com/Wzdhehe/Mcode-webui → CONTRIBUTING.md](https://github.com/Wzdhehe/Mcode-webui/blob/main/CONTRIBUTING.md)**
+**[github.com/Wzdhehe/mcode-webui → CONTRIBUTING.md](https://github.com/Wzdhehe/mcode-webui/blob/main/CONTRIBUTING.md)**
 
 ## Quick reference
 
@@ -28,7 +28,7 @@ plugin tree.
 The official
 [MiniMax-Code-Plugins](https://github.com/MiniMax-AI/MiniMax-Code-Plugins)
 repo accepts plugin submissions as folders under
-`plugins/<author>/<plugin-name>/`. The `plugins/Wzdhehe/Mcode-webui/`
+`plugins/<author>/<plugin-name>/`. The `plugins/Wzdhehe/mcode-webui/`
 tree in this repo is the unit of submission — fork the registry,
 copy this folder in, open a PR.
 
