@@ -1,0 +1,80 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "any_ltx2_distilled_checkpoint.safetensors"
+    }
+  },
+  "2": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "model": ["1", 0],
+      "clip": ["1", 1],
+      "lora_name": "any_motion_lora.safetensors",
+      "strength_model": 0.7,
+      "strength_clip": 0.7
+    }
+  },
+  "3": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "first_frame.png"
+    }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "__PROMPT__",
+      "clip": ["2", 1]
+    }
+  },
+  "5": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "static, no movement, jitter, flicker, watermark, blurry, low quality",
+      "clip": ["2", 1]
+    }
+  },
+  "10": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 1280,
+      "height": 720,
+      "batch_size": 1
+    }
+  },
+  "20": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["2", 0],
+      "positive": ["4", 0],
+      "negative": ["5", 0],
+      "latent_image": ["10", 0],
+      "seed": 42,
+      "steps": 8,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0
+    }
+  },
+  "30": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["20", 0],
+      "vae": ["1", 2]
+    }
+  },
+  "40": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "frames": ["30", 0],
+      "frame_rate": 24,
+      "loop_count": 0,
+      "filename_prefix": "drama_clip",
+      "format": "video/h264-mp4",
+      "save_output": true,
+      "pingpong": false
+    }
+  }
+}

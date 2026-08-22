@@ -1,0 +1,79 @@
+{
+  "3": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "any_anime_or_cinematic_checkpoint.safetensors"
+    }
+  },
+  "10": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "model": ["3", 0],
+      "clip": ["3", 1],
+      "lora_name": "character_a_lora.safetensors",
+      "strength_model": 0.8,
+      "strength_clip": 0.8
+    }
+  },
+  "20": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "model": ["10", 0],
+      "clip": ["10", 1],
+      "lora_name": "character_b_lora.safetensors",
+      "strength_model": 0.8,
+      "strength_clip": 0.8
+    }
+  },
+  "30": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "__PROMPT__",
+      "clip": ["20", 1]
+    }
+  },
+  "31": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "deformed, bad anatomy, extra fingers, blurry, low quality, watermark, blurry text, three people, four people, crowd",
+      "clip": ["20", 1]
+    }
+  },
+  "40": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 1280,
+      "height": 720,
+      "batch_size": 1
+    }
+  },
+  "50": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["20", 0],
+      "positive": ["30", 0],
+      "negative": ["31", 0],
+      "latent_image": ["40", 0],
+      "seed": 42,
+      "steps": 8,
+      "cfg": 1.5,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0
+    }
+  },
+  "60": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["50", 0],
+      "vae": ["3", 2]
+    }
+  },
+  "70": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["60", 0],
+      "filename_prefix": "drama_frame"
+    }
+  }
+}
