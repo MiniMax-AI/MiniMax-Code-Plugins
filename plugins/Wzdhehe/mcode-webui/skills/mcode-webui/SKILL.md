@@ -1,11 +1,11 @@
 ---
-name: Mcode-webui
-description: 'Browser-based chat frontend for the Mcode agent runtime. Streams mcode acp / exec sessions with real-time tool events, plan review, ask-user prompts, context usage, and quota. Zero npm dependencies; runs on Node 22+. Trigger on: "open Mcode webui", "start the Mcode webui", "launch mcode browser", "Mcode webui status", "show Mcode webui url".'
+name: mcode-webui
+description: 'Browser-based chat frontend for the mcode agent runtime. Streams mcode acp / exec sessions with real-time tool events, plan review, ask-user prompts, context usage, and quota. Zero npm dependencies; runs on Node 22+. Trigger on: "open mcode webui", "start the mcode webui", "launch mcode browser", "mcode webui status", "show mcode webui url".'
 ---
 
 # Mcode Web UI
 
-> 🌐 Browser-based chat frontend for the Mcode agent runtime.
+> 🌐 Browser-based chat frontend for the mcode agent runtime.
 
 - **Version**: 1.0.0
 - **Author**: Wzdhehe
@@ -13,7 +13,7 @@ description: 'Browser-based chat frontend for the Mcode agent runtime. Streams m
 - **Entry**: `server.js` (Node 22.19+)
 - **Default port**: 8080 (LAN-accessible on `0.0.0.0`)
 
-A Kimi-Code-style web UI for the Mcode CLI. Streams `mcode acp` (Agent
+A Kimi-Code-style web UI for the mcode CLI. Streams `mcode acp` (Agent
 Client Protocol) and `mcode exec` sessions to the browser in real time:
 tool events, plan review, ask-user prompts, context usage bar, quota, and
 session switching. Zero npm dependencies at runtime — only Node 22+ stdlib.
@@ -24,14 +24,14 @@ Trigger when the user wants any of:
 
 | User says | Skill should |
 |-----------|--------------|
-| "open Mcode webui" / "start the Mcode webui" | start `server.js` and tell the user the URL |
+| "open mcode webui" / "start the mcode webui" | start `server.js` and tell the user the URL |
 | "launch mcode browser" | start server + (optional) open browser |
-| "Mcode webui status" | report running / port / last error |
-| "show Mcode webui url" | print `http://<lan-ip>:8080/` |
-| "Mcode webui config" | list environment variables below |
+| "mcode webui status" | report running / port / last error |
+| "show mcode webui url" | print `http://<lan-ip>:8080/` |
+| "mcode webui config" | list environment variables below |
 
 Do not use this Skill for: editing the webui source code itself, debugging
-the Mcode agent runtime, or anything not about the webui HTTP/SSE server.
+the mcode agent runtime, or anything not about the webui HTTP/SSE server.
 
 ## Capabilities
 
@@ -75,21 +75,21 @@ All optional. Defaults shown. See `server/lib/config.js` for full list.
 
 ## Triggers (Real example prompts + expected results)
 
-**Prompt 1** — User: `打开 Mcode webui` (or "open Mcode webui")
+**Prompt 1** — User: `打开 mcode webui` (or "open mcode webui")
 
 **Expected**:
 1. Run `node server.js` (foreground or background, your call)
 2. Wait for the SSE `open` log line on stdout
 3. Tell the user: "webui running at http://127.0.0.1:8080/  (or http://<lan-ip>:8080/ for LAN)"
 
-**Prompt 2** — User: `Mcode webui status`
+**Prompt 2** — User: `mcode webui status`
 
 **Expected**:
 1. Check if port 8080 is in use (`netstat -an | findstr 8080` on Win / `lsof -iTCP:8080` on Unix)
 2. If listening: report "running" + URL; if not: report "not running"
 3. Optionally read `C:\...\minimax-code\.server.err` for last error
 
-**Prompt 3** — User: `配置 Mcode webui 用端口 9000 绑定 127.0.0.1`
+**Prompt 3** — User: `配置 mcode webui 用端口 9000 绑定 127.0.0.1`
 
 **Expected**:
 1. Suggest the user set `PORT=9000 HOST=127.0.0.1` in their env
@@ -137,7 +137,7 @@ contribution workflow, see `docs/DEVELOPMENT.md`.
 ## Files in this plugin
 
 - `plugin.json` — Agent Plugins 1.0 manifest (10 top-level fields, white-listed)
-- `skills/Mcode-webui/SKILL.md` — this file (official skills/ layout)
+- `skills/mcode-webui/SKILL.md` — this file (official skills/ layout)
 - `LICENSE` — MIT
 - `README.md` — user-facing quick start
 - `docs/` — ARCHITECTURE, API, CAPABILITIES, DEVELOPMENT, TROUBLESHOOTING
@@ -156,7 +156,7 @@ contribution workflow, see `docs/DEVELOPMENT.md`.
 - **For release** (the artifact pushed to the community plugin repo):
   `npm run package:plugin` copies the plugin tree into a real `dist/Wzdhehe/
   Mcode-webui/` tree and zips it, verifying the output contains zero
-  symlinks/junctions, satisfying the Mcode-plugin-guide contract.
+  symlinks/junctions, satisfying the mcode-plugin-guide contract.
 
 `npm run setup:plugin` is the historical junction-setup script; on the
 current layout it is a no-op for existing directories.
