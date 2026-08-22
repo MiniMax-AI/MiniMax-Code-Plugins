@@ -1,7 +1,10 @@
 // tests/detect.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { detectEncoding, isLikelyGbkMojibake } from '../lib/detect.js';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { detectEncoding, isLikelyGbkMojibake, readFileSafe, resolveSkillSource } from '../lib/detect.js';
 
 // Minimal GBK encoder for tests. We do NOT want a production dependency
 // on iconv-lite (the whole point of v0.2 is to ship with zero npm deps),
@@ -87,4 +90,37 @@ test('Unknown bytes fall through to lossy utf-8', () => {
 test('isLikelyGbkMojibake detects U+FFFD cluster', () => {
   assert.equal(isLikelyGbkMojibake('xxx ���� xxx'), true);
   assert.equal(isLikelyGbkMojibake('正常中文'), false);
+});
+
+test('readFileSafe accepts a directory containing SKILL.md', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sb-detect-'));
+  try {
+    await fs.writeFile(path.join(dir, 'SKILL.md'), '# hello\n', 'utf-8');
+    const r = await readFileSafe(dir);
+    assert.equal(r.encoding, 'utf-8');
+    assert.equal(r.text, '# hello\n');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveSkillSource throws when directory has no SKILL.md', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sb-detect-'));
+  try {
+    await assert.rejects(resolveSkillSource(dir), /no SKILL\.md/);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveSkillSource returns the file path unchanged for a file', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sb-detect-'));
+  try {
+    const f = path.join(dir, 'a.md');
+    await fs.writeFile(f, 'hi', 'utf-8');
+    const resolved = await resolveSkillSource(f);
+    assert.equal(resolved, f);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });

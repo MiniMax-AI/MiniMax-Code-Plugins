@@ -12,7 +12,7 @@
 // by design; skill authors should keep frontmatter simple.
 
 import fs from 'node:fs/promises';
-import { readFileSafe } from './detect.js';
+import { readFileSafe, resolveSkillSource } from './detect.js';
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
 
@@ -187,11 +187,13 @@ export function reconstructText(frontmatter, body) {
 // ---------- Full file analyze ----------
 
 /**
- * @param {string} filePath
+ * @param {string} filePath  a SKILL.md path or a directory containing one
  * @returns {Promise<AnalyzedSkill>}
  */
 export async function analyzeSkillFile(filePath) {
-  const det = await readFileSafe(filePath);
+  // Resolve directory → SKILL.md; throws a descriptive error if not found.
+  const resolved = await resolveSkillSource(filePath);
+  const det = await readFileSafe(resolved);
   const text = det.text;
   const { frontmatter, body, ok, err } = parseFrontmatter(text);
 
@@ -203,7 +205,7 @@ export async function analyzeSkillFile(filePath) {
   if (det.encoding === 'gbk' && det.replaced) warnings.push('encoding: converted from GBK to UTF-8');
 
   return {
-    inputPath: filePath,
+    inputPath: resolved,
     encoding: det.encoding,
     convertedFromGbk: det.replaced,
     frontmatter,

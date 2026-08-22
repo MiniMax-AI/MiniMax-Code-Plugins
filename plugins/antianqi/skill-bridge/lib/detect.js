@@ -14,6 +14,7 @@
 // round-trips through `TextDecoder('gb18030')` losslessly in practice.
 
 import fs from 'node:fs/promises';
+import path from 'node:path';
 
 const REPLACEMENT = '\uFFFD';
 const PRINTABLE_CJK = /[\u3400-\u9FFF]/;
@@ -81,12 +82,42 @@ export function detectEncoding(buf) {
 }
 
 /**
+ * Resolve a skill source: if filePath is a directory, look for a
+ * `SKILL.md` inside it. If filePath is already a file, return it.
+ * Throws a descriptive error if neither is found.
+ *
+ * @param {string} filePath
+ * @returns {Promise<string>}  the resolved file path
+ */
+export async function resolveSkillSource(filePath) {
+  const stat = await fs.stat(filePath);
+  if (stat.isFile()) return filePath;
+  if (stat.isDirectory()) {
+    const nested = path.join(filePath, 'SKILL.md');
+    try {
+      const nestedStat = await fs.stat(nested);
+      if (nestedStat.isFile()) return nested;
+    } catch {
+      // fall through to the error below
+    }
+    throw new Error(
+      `source is a directory but contains no SKILL.md: ${filePath} (looked for ${nested})`
+    );
+  }
+  throw new Error(`source is neither file nor directory: ${filePath}`);
+}
+
+/**
  * Read a file from disk and return its detected encoding + UTF-8 text.
+ * Accepts either a SKILL.md file path or a directory containing one
+ * (delegates to resolveSkillSource).
+ *
  * @param {string} filePath
  * @returns {Promise<DetectResult>}
  */
 export async function readFileSafe(filePath) {
-  const buf = await fs.readFile(filePath);
+  const resolved = await resolveSkillSource(filePath);
+  const buf = await fs.readFile(resolved);
   return detectEncoding(buf);
 }
 
