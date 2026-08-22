@@ -84,7 +84,7 @@ the webui handles reconnection with exponential backoff.
 
 ### `POST /api/send`
 
-Send a user message. Spawns (or reuses) the mcode subprocess for this CID
+Send a user message. Spawns (or reuses) the Mcode subprocess for this CID
 and streams the result via SSE.
 
 **Request**
@@ -124,7 +124,7 @@ Cancel the current run. Best-effort: tries `session/cancel` via acp
 ### `POST /api/cmd`
 
 Send a raw slash command (e.g. `/compact`, `/clear`). The server sends
-the command to mcode and streams the result.
+the command to Mcode and streams the result.
 
 **Request**
 ```json
@@ -166,7 +166,7 @@ Create a new webui session. Optionally tied to a workspace.
 ### `POST /api/sessions/switch`
 
 Switch to an existing session. Loads its chat history and (if linked)
-re-attaches to the mcode session.
+re-attaches to the Mcode session.
 
 **Request**
 ```json
@@ -349,7 +349,7 @@ Returns the builtin + currently-configured model list.
 ```
 
 If the list is empty, the response includes a `hint` field pointing
-the user at the mcode TUI for model configuration.
+the user at the Mcode TUI for model configuration.
 
 ### `POST /api/set-model`
 
@@ -512,7 +512,7 @@ enable.
 ### `POST /api/debug/inject`
 
 Inject a fake event into the SSE channel for a CID. Used for testing
-the UI without a real mcode subprocess.
+the UI without a real Mcode subprocess.
 
 **Request**
 ```json

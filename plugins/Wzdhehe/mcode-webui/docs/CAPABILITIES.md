@@ -43,7 +43,7 @@ Anything outside these three is either ❌ blocked (no workaround) or
 
 | Feature | Status | Why / where |
 |---|---|---|
-| Session-level permission mode (`ask`/`auto`/`full`) | ✅ | `state.permissions`; webui sends `setMode` only via the `/api/protocol/set-mode` endpoint, which mcode 0.1.5 returns "Method not found" for. The mode shown is mcode's last-known value. |
+| Session-level permission mode (`ask`/`auto`/`full`) | ✅ | `state.permissions`; webui sends `setMode` only via the `/api/protocol/set-mode` endpoint, which mcode 0.1.5 returns "Method not found" for. The mode shown is Mcode's last-known value. |
 | Per-tool permission prompt modal | ✅ | when acp emits a `permission` event, `checkModals()` opens `#perm-modal` |
 | Approve / deny / always-allow-this-tool | ✅ | three options: `ask`, `auto`, `full`; sent via `/api/answer` |
 | Pre-grant a tool for the rest of the session | ⚠ | same as mode setting; per-call only — there's no per-tool whitelist in mcode 0.1.5 |
@@ -68,7 +68,7 @@ Anything outside these three is either ❌ blocked (no workaround) or
 |---|---|---|
 | Built-in command list (`/help`, `/compact`, `/model`, …) | ✅ | mcode acp `session/commands` is fetched at connect; cached in `mcodeCommandsCache` |
 | Command autocomplete on `/` | ✅ | `filterSlash()` builds the overlay; matches against `cmd` and `description_*` |
-| Local (webui-side) commands | ✅ | `/exec` switches transport to mcode exec; `/clear` clears the chat UI without touching mcode |
+| Local (webui-side) commands | ✅ | `/exec` switches transport to Mcode exec; `/clear` clears the chat UI without touching mcode |
 | Hidden / experimental commands | ⚠ | the acp `commands` list returns everything mcode knows about. The webui has no `hidden` flag yet. |
 
 ## 6. Workspaces
@@ -97,7 +97,7 @@ Anything outside these three is either ❌ blocked (no workaround) or
 | Cleanup orphaned mcode sessions | ✅ | `/api/sessions/cleanup-orphans` lists mcode sessions not referenced by any webui session, then deletes them (scope: `orphans` or `all`) |
 | Resume an mcode session opened in the TUI | ❌ | the acp session has a single owner; the webui shows a read-only banner when it detects a foreign owner |
 | Cross-workspace session search | ⚠ | the search input filters the current list; it does not aggregate across workspaces. Switching the filter to a different workspace works. |
-| Export a session to Markdown / JSON | ❌ | not in mcode acp; would require reading mcode's sqlite directly |
+| Export a session to Markdown / JSON | ❌ | not in mcode acp; would require reading Mcode's sqlite directly |
 
 ## 8. Token usage & quota
 
@@ -148,7 +148,7 @@ Anything outside these three is either ❌ blocked (no workaround) or
 | LAN sharing with on/off toggle | ✅ | runtime state in `settings.lanBroadcastEnabled`; closed by default for non-local IPs |
 | Friendly 403 page when LAN is off | ✅ | `LAN_REJECT_HTML` template in `settings.js` |
 | Token auth (`?token=` or `Authorization: Bearer`) | ✅ | `server.js` validates `req.url` and `req.headers.authorization`; if set, every request must include the token |
-| Per-cid SSE channel | ✅ | one EventSource per browser tab; one mcode subprocess per cid |
+| Per-cid SSE channel | ✅ | one EventSource per browser tab; one Mcode subprocess per cid |
 | HTTPS | ❌ | would need a reverse proxy (nginx, caddy). Documented in the README. |
 | mTLS / client cert | ❌ | same as above |
 | Rate limiting | ❌ | not implemented; rely on LAN-only deployment + token auth |
@@ -181,4 +181,4 @@ Anything outside these three is either ❌ blocked (no workaround) or
 - A path-prefix resolver for WSL symlinks → WSL path support
 
 These are upstream asks. See [docs/acp-goal-plan-status.md](acp-goal-plan-status.md)
-for the historical list and the response from the mcode team.
+for the historical list and the response from the Mcode team.
