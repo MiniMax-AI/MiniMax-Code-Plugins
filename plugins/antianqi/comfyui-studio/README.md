@@ -1,5 +1,13 @@
 # ComfyUI Studio
 
+> 🧪 **Beta test build** — `v0.2.0-beta.1`. The official PR
+> ([MiniMax-AI/MiniMax-Code-Plugins#15](https://github.com/MiniMax-AI/MiniMax-Code-Plugins/pull/15))
+> is open and waiting for review. **To participate in the beta**: install from the
+> [`antianqi/MiniMax-Code-Plugins-1`](https://github.com/antianqi/MiniMax-Code-Plugins-1) fork
+> following the instructions in [`BETA.md`](BETA.md), then report issues back so we can fix
+> them before the official merge. See the bottom of this README for the mcode internal beta
+> group context.
+
 A generic, dependency-free toolkit for driving a local ComfyUI server. **Two parts in one Plugin**:
 **A. a natural-language control layer** for submitting any ComfyUI workflow, polling the queue, and
 downloading outputs, and **B. six preset workflow templates** that cover the most common recurring
