@@ -190,11 +190,19 @@ function Get-LatestSessionFile {
   $all = Get-ChildItem -Path $sessionsRoot -Recurse -ErrorAction SilentlyContinue |
     Where-Object { $_.PSIsContainer -eq $false -and ($_.Name -eq $FNAME_LEDGER -or $_.Name -eq $FNAME_MESSAGES) }
   if (-not $all) { return $null }
-  # 优先 ledger.jsonl 最新的；如果同 session 有 ledger 就用 ledger
+  # mcode v0.2.x writes messages.jsonl live; ledger.jsonl is best-effort and may
+  # be left behind by an old session. Always pick whichever file is most
+  # recently touched, otherwise a stale ledger would dominate and the
+  # 60s-idle fallback would fire against ancient timestamps.
   $ledger = $all | Where-Object { $_.Name -eq $FNAME_LEDGER } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+  $msgs   = $all | Where-Object { $_.Name -eq $FNAME_MESSAGES } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+  if ($ledger -and $msgs) {
+    if ($ledger.LastWriteTime -ge $msgs.LastWriteTime) { return $ledger }
+    return $msgs
+  }
   if ($ledger) { return $ledger }
-  $msgs = $all | Where-Object { $_.Name -eq $FNAME_MESSAGES } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-  return $msgs
+  if ($msgs) { return $msgs }
+  return $null
 }
 
 function Read-LastMessage($file) {
