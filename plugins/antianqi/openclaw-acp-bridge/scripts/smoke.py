@@ -103,6 +103,19 @@ if acp_home:
 # --- 4. /acp/health returns 200 (no auth) ---------------------------------
 print('\n[Check 4] Server /acp/health (no auth required)')
 base_url = os.environ.get('ACP_BASE_URL', 'http://127.0.0.1:9999')
+# Refuse to talk to anything but loopback. The token in Check 5 below
+# would be sent to this base_url, so an attacker-controlled
+# ACP_BASE_URL would capture the bearer token. This is the v0.1.3
+# security gap the review called out.
+from urllib.parse import urlparse
+parsed_base = urlparse(base_url)
+ALLOWED_HOSTS = {'127.0.0.1', 'localhost', '::1', '[::1]'}
+if parsed_base.scheme != 'http' or parsed_base.hostname not in ALLOWED_HOSTS:
+    record_fail(
+        f'ACP_BASE_URL must be a loopback http URL; got {base_url!r}. '
+        'Refusing to send the ACP_TOKEN to a non-loopback host.'
+    )
+    sys.exit(1)
 try:
     with urllib.request.urlopen(f'{base_url}/acp/health', timeout=5) as r:
         check(r.status == 200, f'GET /acp/health → 200')
