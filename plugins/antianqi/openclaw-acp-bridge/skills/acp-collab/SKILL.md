@@ -56,10 +56,19 @@ from acp_tools import (
 
 ## Protocol
 
-### 1. Greet goudan (first action of the session)
+### 1. First message of the session (mavis announces itself)
+
+`peer_greet()` is a goudan-side helper that posts under
+`sender='goudan'`. Calling it from mavis would attribute the
+message to the wrong peer. As mavis, announce yourself with
+`inbox_write(sender='mavis')` instead:
 
 ```python
-peer_greet(session_id, "[mavis] Starting: <one-line summary of the task>")
+inbox_write(
+    session_id,
+    "[mavis] Starting: <one-line summary of the task>",
+    sender="mavis",
+)
 ```
 
 ### 2. Push progress (during work)
@@ -90,11 +99,11 @@ choice = result["answer"]
 
 ### 4. Answer goudan's question (when asked)
 
-If `inbox_read` shows a message with `msg_type == "question"`, answer it before continuing:
+If `inbox_read` shows a message with `msg_type == "question"`, answer it before continuing. `inbox_read` returns a **list** directly, not a mapping:
 
 ```python
-pending = inbox_read(session_id, sender="goudan", msg_type="question", limit=1)
-for q in pending.get("messages", []):
+for q in inbox_read(session_id, sender="goudan", msg_type="question", limit=1):
+    # q["id"] is the question's message id (an int).
     inbox_answer(q["id"], "<your answer>")
 ```
 

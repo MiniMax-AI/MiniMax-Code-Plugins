@@ -76,18 +76,36 @@ The token is never sent to a remote host, never logged to disk, and never echoed
 
 This Plugin assumes the following functions exist in `<ACP_HOME>/openclaw-skill/acp_tools.py` (server **v7-bidir+**). If any of them disappear or change signature in a future server release, the Plugin will break:
 
-| Function | Required | Notes |
+| Function | Required | Returns |
 | --- | --- | --- |
-| `create_task(prompt, workspace, timeout)` | yes | returns `{task_id, status, ...}` |
-| `get_task(task_id)` | yes | returns `{status, answer?, error?, duration_ms?}` |
-| `list_history(limit)` | yes | returns `{tasks: [...]}` |
-| `inbox_read(session_id, sender?, msg_type?, limit?)` | yes | returns `{messages: [...]}` |
-| `inbox_write(session_id, text, sender)` | yes | returns `{ok: bool}` |
-| `inbox_ask(session_id, question, sender, timeout)` | yes | blocks server-side until answered or timeout |
-| `inbox_answer(question_id, text)` | yes | unblocks the asker |
-| `peer_greet(session_id, text)` | yes | first message in a peer session |
+| `create_task(prompt, workspace, files?, timeout?)` | yes | `task_id` (string) |
+| `get_task(task_id)` | yes | `{status, answer?, error?, duration_ms?}` |
+| `wait_task(task_id, timeout?, poll_interval?)` | yes | final task dict |
+| `cancel_task(task_id)` | yes | task dict |
+| `history(status?, workspace?, limit?, since?)` | yes | list of task dicts |
+| `list_tasks(limit?)` | yes | list of task dicts (in-memory) |
+| `stream_task(task_id, on_event?)` | yes | iterator of `{type, data}` |
+| `run_and_stream(prompt, workspace, ...)` | yes | final task dict |
+| `stats()` | yes | queue + DB summary |
+| `inbox_write(session_id, content, sender, msg_type?, parent_id?)` | yes | `message_id` (int) |
+| `inbox_read(session_id, since_id?, sender?, msg_type?, limit?)` | yes | **list** of message dicts (auto-marked-read) |
+| `inbox_ask(session_id, question, sender, timeout?)` | yes | `{question_id, answer?, error?}` |
+| `inbox_answer(question_id, answer)` | yes | `answer_id` (int) |
+| `inbox_sessions(limit?)` | yes | list of session summaries |
+| `peer_session_id(prefix?)` | yes | fresh session id string |
+| `peer_greet(session_id, message)` | yes | message id; **hard-codes `sender=goudan`**, so mavis should not call this — use `inbox_write(sender=mavis)` instead |
 
 If a future server release breaks this contract, this Plugin's version must be bumped to `0.2.x` and a migration note added to `CHANGELOG.md`.
+
+The terminal success state for `create_task` is `succeeded`, not `completed`. Polling code should check for `succeeded` / `failed` / `timeout` / `cancelled`.
+
+### Pinned SDK revision
+
+The contract above is verified against the SDK at
+`antianqi/openclaw-mcode-acp` commit `0641f5c` (the
+`v7-bidir` line). When bumping to a newer SDK revision, re-run
+the bundled smoke test against the new server and update this
+pin.
 
 ## Verify the Plugin works (smoke test)
 

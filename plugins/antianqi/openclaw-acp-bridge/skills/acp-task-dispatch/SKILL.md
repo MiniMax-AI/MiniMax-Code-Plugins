@@ -37,26 +37,27 @@ if not _acr_root:
         'ACP_HOME to its install path (PowerShell: $env:ACP_HOME = "<path>").'
     )
 sys.path.insert(0, os.path.join(_acr_root, 'openclaw-skill'))
-from acp_tools import create_task, get_task, list_history
+from acp_tools import create_task, get_task, history
 
-task = create_task(
+# create_task returns the task_id as a string directly (not a dict).
+task_id = create_task(
     prompt="用一句话回答:1+1=?",
     workspace="D:/some/work/dir",
     timeout=300,
 )
-print(task["task_id"])
+print(task_id)
 ```
 
-`create_task` returns `{task_id, status, ...}`. The server runs it on a worker pool (default 3 concurrent) and persists every transition to SQLite.
+`create_task` is fire-and-forget. The server runs the task on a worker pool (default 3 concurrent) and persists every transition to SQLite.
 
 ## Poll for completion
 
 ```python
 import time
-task_id = task["task_id"]
 while True:
     state = get_task(task_id)
-    if state["status"] in ("completed", "failed", "timeout", "cancelled"):
+    # The terminal success state is `succeeded`, not `completed`.
+    if state["status"] in ("succeeded", "failed", "timeout", "cancelled"):
         break
     time.sleep(2)
 print(state.get("answer", state.get("error")))
@@ -65,8 +66,9 @@ print(state.get("answer", state.get("error")))
 ## Inspect history
 
 ```python
-recent = list_history(limit=20)
-for t in recent["tasks"]:
+# `history()` returns a list of task dicts directly, not
+# `{"tasks": [...]}`.
+for t in history(limit=20):
     print(t["task_id"], t["status"], t.get("duration_ms"))
 ```
 
