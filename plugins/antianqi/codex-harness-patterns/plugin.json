@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "codex-harness-patterns",
-  "version": "0.1.0",
-  "description": "Long-running task patterns distilled from OpenAI Codex harness v0.149.0 — tool output budgeting, context pressure compaction, parallel sub-agent fan-out, and structured plan streaming. Activates when an agent must manage token budget, decompose work, or sustain multi-step tasks without losing focus. Inspired by codex-rs/core/src/compact.rs, run_turn, and Op/EventMsg protocol.",
+  "version": "0.2.0",
+  "description": "Long-running task patterns distilled from OpenAI Codex harness v0.149.0 — tool output budgeting, context pressure compaction, parallel sub-agent fan-out, structured plan streaming, self-review, sub-agent delegation, world-state tracking, and background task management. Activates when an agent must manage token budget, decompose work, sustain multi-step tasks without losing focus, or coordinate sub-agents. Inspired by codex-rs/core/src/compact.rs, run_turn, Op/EventMsg protocol, and the InterAgentCommunication / CollabAgent / WorldState sub-systems.",
   "author": {
     "name": "antianqi",
     "url": "https://github.com/antianqi"
@@ -18,6 +18,9 @@
     "context-compaction",
     "sub-agent",
     "task-planning",
-    "long-running"
+    "long-running",
+    "review",
+    "world-state",
+    "background-task"
   ]
 }
