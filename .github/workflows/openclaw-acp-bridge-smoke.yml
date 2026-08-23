@@ -1,0 +1,43 @@
+name: openclaw-acp-bridge smoke
+
+# Runs the Plugin-bundled smoke test on every push that touches
+# the Plugin and on every PR that does the same. The smoke test is
+# offline-friendly: it uses SMOKE_SKIP_LIVE=1 so the network checks
+# degrade to "skipped" rather than fail when no ACP server is
+# reachable in CI. To run against a real server, set ACP_HOME and
+# ACP_TOKEN on the workflow run.
+
+on:
+  push:
+    paths:
+      - 'plugins/antianqi/openclaw-acp-bridge/**'
+      - '.github/workflows/openclaw-acp-bridge-smoke.yml'
+  pull_request:
+    paths:
+      - 'plugins/antianqi/openclaw-acp-bridge/**'
+      - '.github/workflows/openclaw-acp-bridge-smoke.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b18 # v7.0.1
+
+      - uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d # v5.3.0
+        with:
+          python-version: '3.11'
+
+      - name: Run bundled smoke test (offline)
+        env:
+          SMOKE_SKIP_LIVE: '1'
+        run: |
+          set -euo pipefail
+          python plugins/antianqi/openclaw-acp-bridge/scripts/smoke.py
+
+      - name: Validate plugin manifest
+        run: |
+          set -euo pipefail
+          node scripts/validate.mjs
