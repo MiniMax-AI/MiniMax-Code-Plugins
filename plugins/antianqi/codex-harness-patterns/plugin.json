@@ -1,0 +1,23 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "codex-harness-patterns",
+  "version": "0.1.0",
+  "description": "Long-running task patterns distilled from OpenAI Codex harness v0.149.0 — tool output budgeting, context pressure compaction, parallel sub-agent fan-out, and structured plan streaming. Activates when an agent must manage token budget, decompose work, or sustain multi-step tasks without losing focus. Inspired by codex-rs/core/src/compact.rs, run_turn, and Op/EventMsg protocol.",
+  "author": {
+    "name": "antianqi",
+    "url": "https://github.com/antianqi"
+  },
+  "homepage": "https://github.com/antianqi/MiniMax-Code-Plugins/tree/main/plugins/antianqi/codex-harness-patterns",
+  "repository": "https://github.com/antianqi/MiniMax-Code-Plugins",
+  "license": "Apache-2.0",
+  "keywords": [
+    "minimax-code",
+    "plugin",
+    "codex-harness",
+    "token-budget",
+    "context-compaction",
+    "sub-agent",
+    "task-planning",
+    "long-running"
+  ]
+}
