@@ -107,11 +107,14 @@ function Get-CallerFocusInfo {
 $ts = (Get-Date).ToString('o')
 
 # 写 status.json（widget 轮询用）
+# 加 source='agent' 让 detector 识别这是 agent 主动推的，保留不被 working/thinking/done
+# 覆盖（detector 推 idle/error 兜底仍然可以接管，符合 takeover 语义）。
 $payload = [PSCustomObject]@{
   state    = $State
   message  = $Message
   progress = $Progress
   ts       = $ts
+  source   = 'agent'
 } | ConvertTo-Json -Compress
 
 # 写 caller.json（widget 点击切回用）
