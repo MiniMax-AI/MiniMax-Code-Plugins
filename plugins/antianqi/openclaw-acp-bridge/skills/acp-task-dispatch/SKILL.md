@@ -22,6 +22,10 @@ Send a discrete, self-contained task to the OpenClaw-mcode-ACP server instead of
 
 Same as `acp-collab`. The SDK lives at `<ACP_HOME>/openclaw-skill/acp_tools.py` — `ACP_HOME` is required.
 
+### Authentication
+
+The SDK (not this Plugin) reads the bearer token from `$ACP_TOKEN` (or `<ACP_HOME>/.acp_token`) and attaches it to every request as `Authorization: Bearer <token>`. Do not handle the token in this Skill.
+
 ## Dispatch a task
 
 ```python

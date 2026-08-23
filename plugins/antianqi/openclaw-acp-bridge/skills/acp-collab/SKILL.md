@@ -27,6 +27,15 @@ Activate this Skill whenever any of the following is true:
 
 The ACP server is at `http://localhost:9999`. Your `session_id` is given in the task prompt as `session_id: <id>`. The Python SDK lives at `<ACP_HOME>/openclaw-skill/acp_tools.py` — `ACP_HOME` is required (see Requirements).
 
+### Authentication
+
+The SDK (not this Plugin) reads the bearer token from one of:
+
+- `$ACP_TOKEN` environment variable (recommended for CI and shells)
+- The first line of `<ACP_HOME>/.acp_token` (user-mode convenience)
+
+The SDK attaches `Authorization: Bearer <token>` to every request to `http://127.0.0.1:9999/acp/*`. Do not read, print, or pass the token yourself; the SDK handles it.
+
 To use the SDK from a shell:
 
 ```python

@@ -58,17 +58,18 @@ The Plugin uses forward slashes internally (`posixpath`) and only ever resolves 
 
 ## Authentication
 
-The server requires every request to carry `Authorization: Bearer <token>`. The token is **never embedded in this Plugin**. It is read at call time from one of:
+The server requires every request to carry `Authorization: Bearer <token>`. The **Plugin does not read or store the token itself** — it is read by the bundled Python SDK at `<ACP_HOME>/openclaw-skill/acp_tools.py`, which on each call:
 
-1. Environment variable `ACP_TOKEN` (recommended for CI and shells)
-2. A file at `<ACP_HOME>/.acp_token` whose first line is the token (user-mode convenience)
+1. Reads `$ACP_TOKEN` from the environment (recommended for CI and shells).
+2. If unset, reads the first line of `<ACP_HOME>/.acp_token` (user-mode convenience).
+3. Sends the token as `Authorization: Bearer <token>` to `http://127.0.0.1:9999/acp/*` (HTTP loopback only).
 
-The token is sent **only** to `http://localhost:9999/acp/*` (HTTP loopback). It is never sent to any remote host, logged to disk, or echoed to the model.
+The token is never sent to a remote host, never logged to disk, and never echoed to the model. The Plugin's Skills only call the SDK; they never construct HTTP requests or read the token directly.
 
 **Rules for the Agent:**
 
 - Do not read, print, log, or include the token in any user-facing output. If a command would expose the token (`echo $ACP_TOKEN`, `env | grep TOKEN`, etc.), refuse and explain.
-- Do not ask the user to paste the token into chat. If it is missing, tell them to set `ACP_TOKEN` and stop.
+- Do not ask the user to paste the token into chat. If it is missing, tell them to set `ACP_TOKEN` (or write `<ACP_HOME>/.acp_token`) and stop.
 - Do not pass the token as a parameter to any Skill function. The SDK reads it directly from the environment.
 
 ## SDK compatibility contract
