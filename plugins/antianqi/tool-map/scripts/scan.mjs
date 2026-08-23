@@ -3,18 +3,23 @@
 // Cross-platform tool inventory scanner for the tool-map Plugin.
 // Run: node scan.mjs [output.md]
 //   - default output: $PLUGIN_DATA/tools.md, with .json and .summary.md siblings
-//   - fallback when $PLUGIN_DATA is unset: ~/.local/share/tool-map/tools.md
+//   - fallback when $PLUGIN_DATA is unset: $XDG_DATA_HOME/tool-map
+//   - or: $HOME/.local/share/tool-map (XDG default)
 //   - if argv[2] is given, the catalog is written to that path's directory
 //
-// Design: zero external deps, atomic write (staging + rename), no hardcoded
-// per-user absolute paths. All well-known locations are derived from the
-// user's home directory, environment variables, or fixed POSIX conventions.
+// Design: zero external deps, atomic bundle write (staging dir + rename), no
+// hardcoded per-user absolute paths. All well-known locations are derived from
+// the user's home directory, environment variables, or fixed POSIX conventions.
+//
+// Side effects: probes 15 well-known CLIs with `--version` (5s timeout each).
+// See README.md "Side effects" section for the explicit list and the rationale.
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   readdirSync, readFileSync, statSync, existsSync, writeFileSync, mkdirSync,
-  realpathSync, renameSync, rmSync,
+  realpathSync, renameSync as _fsRename, rmSync,
 } from 'node:fs';
 import { join, dirname, basename, sep, extname, resolve, delimiter } from 'node:path';
 import { homedir, hostname, platform } from 'node:os';
@@ -27,32 +32,108 @@ const HOME = homedir();
 const IS_WIN = PLATFORM === 'win32';
 const ENV = process.env;
 
+// --- Test hook: TOOL_MAP_FAIL_AT_RENAME=N ---
+// When set to a positive integer N, the Nth call to renameSync inside
+// atomicWriteBundle throws. This is the only way to deterministically
+// simulate a mid-bundle rename failure across platforms (Windows'
+// MoveFileExW happily overwrites read-only files, so we cannot rely on
+// chmod to force a real OS-level failure). Defaults to 0 (no hook).
+const _failAtRename = Number(ENV.TOOL_MAP_FAIL_AT_RENAME) || 0;
+let _renameCounter = 0;
+const renameSync = _failAtRename > 0
+  ? (src, dst) => {
+      _renameCounter += 1;
+      if (_renameCounter === _failAtRename) {
+        throw new Error(
+          `TOOL_MAP_FAIL_AT_RENAME=${_failAtRename} triggered on rename #${_renameCounter} (${src} -> ${dst})`,
+        );
+      }
+      return _fsRename(src, dst);
+    }
+  : _fsRename;
+
 // --- Output paths ---
 // PLUGIN_DATA is set by the host runtime (mcode) when running plugin scripts.
-// Fall back to the XDG_DATA_HOME convention so the scanner is also usable
-// standalone from a developer's shell.
-const DATA_ROOT = ENV.PLUGIN_DATA || join(HOME, '.local', 'share', 'tool-map');
+// Fall back to the XDG_DATA_HOME convention, then the XDG default
+// ($HOME/.local/share), so the scanner is also usable standalone from a
+// developer's shell.
+const DATA_ROOT = ENV.PLUGIN_DATA
+  || (ENV.XDG_DATA_HOME && join(ENV.XDG_DATA_HOME, 'tool-map'))
+  || join(HOME, '.local', 'share', 'tool-map');
 const outMd = resolve(process.argv[2] || join(DATA_ROOT, 'tools.md'));
 const outJson = outMd.replace(/\.md$/, '') + '.json';
 const outSummary = outMd.replace(/\.md$/, '') + '.summary.md';
 
-// --- Atomic write helper ---
-// Writes to a sibling staging file first, then renames onto the target. The
-// rename is atomic on POSIX and on Windows when the source and target live on
-// the same filesystem, which is guaranteed here because the staging path sits
-// in the same directory as the target. On any failure, the staging file is
-// removed and the original target (if any) is left untouched.
-function atomicWriteSync(targetPath, contents) {
-  const dir = dirname(targetPath);
-  mkdirSync(dir, { recursive: true });
+// --- Bundle atomic write ---
+// Two-phase commit: every existing target file is first moved to a private
+// backup directory, then the new contents are written into a staging
+// directory, then each staging file is renamed onto its target. If any
+// rename fails, the backups are restored and the staging dir is removed.
+// Net effect: the previous catalog is left completely untouched unless
+// every file in the bundle renames successfully.
+//
+// On POSIX `rename(2)` is atomic. On Windows `fs.renameSync` calls
+// `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`; same-volume moves are
+// atomic from the caller's point of view. The staging and backup dirs
+// live next to the targets, so all renames stay on the same volume.
+//
+// Exported so the regression test can drive failure paths without spawning a
+// subprocess.
+function atomicWriteBundle(targetDir, files) {
+  if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true });
   const pid = process.pid;
   const rand = randomBytes(8).toString('hex');
-  const stagingPath = join(dir, `.${basename(targetPath)}.staging-${pid}-${rand}`);
+  const stagingDir = join(targetDir, `.bundle.staging-${pid}-${rand}`);
+  const backupDir = join(targetDir, `.bundle.backup-${pid}-${rand}`);
+  mkdirSync(stagingDir, { recursive: true });
+  mkdirSync(backupDir, { recursive: true });
+
+  // Phase 1: back up any existing target files. Track which names had a
+  // previous version so we know whether to remove the backup or restore it.
+  const backups = {}; // name -> backup path (or null if target didn't exist)
+  for (const name of Object.keys(files)) {
+    const targetPath = join(targetDir, name);
+    if (existsSync(targetPath)) {
+      const backupPath = join(backupDir, name);
+      renameSync(targetPath, backupPath);
+      backups[name] = backupPath;
+    } else {
+      backups[name] = null;
+    }
+  }
+
   try {
-    writeFileSync(stagingPath, contents, 'utf8');
-    renameSync(stagingPath, targetPath);
+    // Phase 2: write all new content into the staging dir.
+    for (const [name, contents] of Object.entries(files)) {
+      writeFileSync(join(stagingDir, name), contents, 'utf8');
+    }
+
+    // Phase 3: rename each staging file onto its target. If any rename
+    // fails, restore the previous targets from backup before throwing.
+    try {
+      for (const name of Object.keys(files)) {
+        renameSync(join(stagingDir, name), join(targetDir, name));
+      }
+    } catch (renameErr) {
+      // Restore backups (target paths are now empty or partially written)
+      for (const [name, backupPath] of Object.entries(backups)) {
+        if (backupPath) {
+          try { renameSync(backupPath, join(targetDir, name)); } catch { /* best effort */ }
+        }
+      }
+      // Re-throw after restoring
+      throw renameErr;
+    }
+
+    // Phase 4: success. Remove the backup and staging directories.
+    try { rmSync(backupDir, { recursive: true, force: true }); } catch { /* swallow */ }
+    try { rmSync(stagingDir, { recursive: true, force: true }); } catch { /* swallow */ }
   } catch (err) {
-    try { rmSync(stagingPath, { force: true }); } catch { /* swallow */ }
+    // Any failure inside Phase 2 (write) or 3 (rename): also restore backups
+    // and clean up both staging and backup dirs. Phase 3 already restores
+    // backups in its catch above, so we only need to clean up here.
+    try { rmSync(backupDir, { recursive: true, force: true }); } catch { /* swallow */ }
+    try { rmSync(stagingDir, { recursive: true, force: true }); } catch { /* swallow */ }
     throw err;
   }
 }
@@ -113,6 +194,9 @@ function parseExtraRoots() {
 }
 
 // --- Version probes (with timeout, never throw) ---
+// The hardcoded list of names is the security boundary: only these exact
+// basename strings are ever spawned. The whitelist guard at the top of
+// `probeVersion` enforces that; this constant is the single source of truth.
 const VERSION_PROBES = [
   ['node', ['node', '--version']],
   ['npm', ['npm', '--version']],
@@ -131,7 +215,12 @@ const VERSION_PROBES = [
   ['powershell', ['powershell', '-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()']],
 ];
 
+const ALLOWED_PROBE_NAMES = new Set(VERSION_PROBES.map(([n]) => n));
+
 async function probeVersion(cmd) {
+  // Defence-in-depth: even if a future caller misuses this function, only
+  // whitelisted basenames can ever be spawned. fail-closed.
+  if (!ALLOWED_PROBE_NAMES.has(cmd[0])) return null;
   try {
     const { stdout } = await execFileP(cmd[0], cmd.slice(1), {
       timeout: 5000,
@@ -146,12 +235,20 @@ async function probeVersion(cmd) {
 
 // --- File walker ---
 const NPM_BIN_HINT = /minimax-code[\\\/]|openclaw[\\\/]|minimax[\\\/]bin|node_modules[\\\/]|\.Codex[\\\/]|\.claude[\\\/]|[\\\/]npm[\\\/]|tauri[\\\/]/i;
-function isToolFile(name, size, dirLower) {
+function isToolFile(name, size, dirLower, stat) {
   if (name.startsWith('.')) return false; // dotfiles (.gitignore, .npmrc, ...) are not tools
   const ext = extname(name).toLowerCase();
-  if (ext !== '') return EXEC_EXTS.has(ext);
+  if (ext !== '') {
+    if (!EXEC_EXTS.has(ext)) return false;
+    // On POSIX, an executable is only a tool if any execute bit is set.
+    // Windows ignores the execute bit, so skip the check there.
+    if (!IS_WIN && !(stat.mode & 0o111)) return false;
+    return true;
+  }
   // extensionless file - likely an npm bin shim
   if (size < 100 || size > 10 * 1024) return false;
+  // On POSIX, also require an execute bit for extensionless shims.
+  if (!IS_WIN && !(stat.mode & 0o111)) return false;
   return NPM_BIN_HINT.test(dirLower);
 }
 
@@ -187,7 +284,7 @@ function walk(dir, opts, out) {
       try { st = statSync(full); } catch { continue; }
       if (st.size > MAX_FILE_SIZE) continue;
       // Pass dir + sep so trailing-`\` regex anchors match for both root and nested dirs.
-      if (!isToolFile(e.name, st.size, (dir + sep).toLowerCase())) continue;
+      if (!isToolFile(e.name, st.size, (dir + sep).toLowerCase(), st)) continue;
       const ext = extname(e.name);
       out.push({
         name: basename(e.name, ext),
@@ -258,7 +355,8 @@ function renderMarkdown({ scanned, pf, host, core, extras, tools }) {
   sb.push('- To refresh: re-run the scanner, or trigger the `tool-map` Skill.');
   sb.push('- Cross-platform: works on Windows / macOS / Linux. Pure Node, no external dependencies.');
   sb.push('- Skips files > 50 MB and extensionless files outside the 100 B to 10 KB range.');
-  sb.push('- Writes are atomic (staging + rename) so a crash mid-scan never leaves a partial catalog.');
+  sb.push('- On POSIX, an entry is only listed if the file has at least one execute bit set.');
+  sb.push('- Writes are bundle-atomic: staging dir + per-file rename + rollback. A failure mid-bundle leaves the previous catalog untouched.');
   sb.push('');
   return sb.join('\n');
 }
@@ -327,17 +425,24 @@ async function main() {
     walk(d, { category: 'PATH', depth: 0 }, out);
   }
 
-  // 4) Dedupe by full path (prefer real path)
-  const seen = new Map();
+  // 4) Dedupe by full path (preserve case). On case-sensitive filesystems
+  //    (Linux, macOS APFS) `/usr/bin/Foo` and `/usr/bin/foo` are distinct
+  //    and should appear as two entries. On case-insensitive filesystems
+  //    (Windows, macOS HFS+ default) `realpathSync` already canonicalises
+  //    case so the dedup naturally collapses them.
+  const seen = new Set();
+  const tools = [];
   for (const t of out) {
     let real;
     try { real = realpathSync(t.path); } catch { real = t.path; }
-    const key = real.toLowerCase();
-    if (!seen.has(key)) seen.set(key, { ...t, path: real });
+    if (seen.has(real)) continue;
+    seen.add(real);
+    tools.push({ ...t, path: real });
   }
-  const tools = [...seen.values()].sort((a, b) => a.path.localeCompare(b.path));
+  tools.sort((a, b) => a.path.localeCompare(b.path));
 
-  // 5) Version probes (parallel)
+  // 5) Version probes (parallel). Each name is whitelisted in
+  //    ALLOWED_PROBE_NAMES inside probeVersion.
   const coreEntries = await Promise.all(
     VERSION_PROBES.map(async ([name, cmd]) => {
       const v = await probeVersion(cmd);
@@ -366,14 +471,16 @@ async function main() {
     }
   } catch { /* unreadable .ssh - skip */ }
 
-  // 7) Render and write atomically
+  // 7) Render and write the bundle atomically
   const md = renderMarkdown({ scanned: startTs, pf: PLATFORM, host: hostname(), core, extras, tools });
   const json = { scanned: startTs, platform: PLATFORM, host: hostname(), core, extras, tools };
   const summary = renderSummary({ scanned: startTs, pf: PLATFORM, core, extras, tools });
-
-  atomicWriteSync(outMd, md);
-  atomicWriteSync(outJson, JSON.stringify(json, null, 2));
-  atomicWriteSync(outSummary, summary);
+  const outDir = dirname(outMd);
+  atomicWriteBundle(outDir, {
+    [basename(outMd)]: md,
+    [basename(outJson)]: JSON.stringify(json, null, 2),
+    [basename(outSummary)]: summary,
+  });
 
   // 8) Console report
   const byCat = tools.reduce((acc, t) => { acc[t.category] = (acc[t.category] || 0) + 1; return acc; }, {});
@@ -386,7 +493,26 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error('FATAL:', err);
-  process.exit(1);
-});
+// Detect "run directly" vs "imported" so the regression test can import
+// `atomicWriteBundle` etc. without spawning a subprocess.
+const isMain = (() => {
+  try {
+    if (!process.argv[1]) return false;
+    return import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+})();
+
+export {
+  atomicWriteBundle, ALLOWED_PROBE_NAMES, VERSION_PROBES,
+  isToolFile, classify, walk,
+  renderMarkdown, renderSummary,
+};
+
+if (isMain) {
+  main().catch((err) => {
+    console.error('FATAL:', err);
+    process.exit(1);
+  });
+}

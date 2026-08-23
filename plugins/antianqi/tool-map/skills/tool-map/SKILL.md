@@ -25,7 +25,7 @@ To regenerate the inventory, run the bundled scanner:
 node "${PLUGIN_ROOT}/scripts/scan.mjs"
 ```
 
-The scanner walks known tool roots and the user's `$PATH`, probes a fixed list of well-known CLIs for `--version` (5 s timeout each, never throws), and writes all three files atomically (staging-then-rename, no partial files). The scan is read-only and never modifies anything outside `${PLUGIN_DATA}`. Typical run: under 2 s on a developer workstation.
+The scanner walks known tool roots and the user's `$PATH`, probes a fixed list of well-known CLIs for `--version` (5 s timeout each, never throws), and writes all three files with bundle-level atomicity (two-phase commit: backup previous targets → write to staging → atomic rename per file → restore on failure). The scan is read-only and never modifies anything outside `${PLUGIN_DATA}`. Typical run: under 2 s on a developer workstation.
 
 You may pass an optional output path to redirect the catalog (useful for testing):
 
@@ -57,16 +57,28 @@ Plus everything on the user's `$PATH`. To add an extra root, set the `TOOL_MAP_R
 
 ## What the scanner reads and writes
 
-- **Reads**: filesystem metadata (size, mtime) for executables under known roots and `$PATH`; the first line of stdout for `tool --version` for a fixed list of 15 well-known CLIs (node, npm, pnpm, yarn, mcode, openclaw, clawhub, codex, git, python, python3, gh, docker, pwsh, powershell); `~/.gitconfig` for user/email; the list of filenames under `~/.ssh/` (NOT the key contents, NOT any other directory).
-- **Writes**: `${PLUGIN_DATA}/tools.{md,json,summary.md}` (or the path given as `argv[2]`) only.
+- **Reads**: filesystem metadata (size, mtime, mode) for executables under known roots and `$PATH`; the first line of stdout for `tool --version` for a fixed list of 15 well-known CLIs (node, npm, pnpm, yarn, mcode, openclaw, clawhub, codex, git, python, python3, gh, docker, pwsh, powershell); `~/.gitconfig` for user/email; the list of filenames under `~/.ssh/` (NOT the key contents, NOT any other directory).
+- **Writes**: `${PLUGIN_DATA}/tools.{md,json,summary.md}` (or the path given as `argv[2]`) only. Bundle-level atomicity: existing targets are backed up, new content is written to a staging directory, then each staging file is renamed onto its target. If any rename fails the previous catalog is restored and the staging/backup directories are removed.
 - **Does not read**: the contents of any file under `~/.ssh/`; environment variable values that look like secrets; any registry, browser data, source code, or user documents.
 - **Does not write**: any file outside the output directory; any user or host install area; any registry or config under `~/.config/`, `~/.minimax/`, or `~/.openclaw*/`.
 - **Does not send**: any network request, any telemetry, any data to any third party. The scanner is fully offline.
+
+## Side effects (subprocess execution)
+
+The scanner's only side effect beyond writing the catalog files is **executing 15 well-known CLI programs** with `--version` (or, for PowerShell, a single read-only `$PSVersionTable.PSVersion.ToString()` call). This is a deliberate, declared behaviour — version strings make the catalog more useful.
+
+- The exact set of executable names is hardcoded as `VERSION_PROBES` in `scripts/scan.mjs` and is mirrored in `ALLOWED_PROBE_NAMES`. Any probe request for a name outside the whitelist is refused inside `probeVersion` (fail-closed).
+- Probes are run via `execFile`, not `shell`: the program name and the single `--version` argument are passed as a separate argv, so a same-named wrapper on `$PATH` cannot be tricked into executing arbitrary code from shell metacharacters in the path.
+- Every probe has a hard 5 s `execFile` timeout; timeouts, ENOENT, and non-zero exits are all swallowed. A tool that hangs longer than 5 s is simply omitted from the `core` versions table.
+- No user input is ever passed to a probe. The whitelist is the single source of truth for what may run.
+
+Review your `$PATH` and any same-named wrappers in the well-known roots before installing this Plugin if you consider arbitrary command execution a concern.
 
 ## Failure modes
 
 - A tool's `cmd --version` hangs - the 5 s timeout aborts the probe; that tool is omitted from the `core` versions table but stays in the file-walk inventory.
 - A directory is unreadable (permission denied, broken symlink) - skipped silently; the walk continues.
 - Output path is on a different filesystem from the staging location - atomic rename still works because staging lives next to the target file, not in `os.tmpdir()`.
-- `${PLUGIN_DATA}` is not set - the scanner falls back to `~/.local/share/tool-map` (XDG_DATA_HOME compliant).
+- `${PLUGIN_DATA}` is not set - the scanner falls back to `$XDG_DATA_HOME/tool-map` (or `~/.local/share/tool-map` when the env var is also unset).
+- A mid-bundle rename fails (extremely rare: disk full, AV lock) - the previous catalog is restored from backup and the staging/backup directories are removed. The agent sees the same catalog it saw before the failed scan.
 - `TOOL_MAP_ROOTS` contains a non-existent path - that path is skipped; the rest of the walk continues.

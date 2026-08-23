@@ -58,14 +58,25 @@ This Plugin itself:
 
 The scanner reads (read-only):
 
-- Filesystem metadata (size, mtime) for executables under the configured roots.
+- Filesystem metadata (size, mtime, mode) for executables under the configured roots.
 - The first line of stdout for `tool --version` for 15 well-known CLIs (node, npm, pnpm, yarn, mcode, openclaw, clawhub, codex, git, python, python3, gh, docker, pwsh, powershell). Each probe has a 5 s timeout and never throws.
 - `~/.gitconfig` for the `user.name` and `user.email` fields (treated as public identity, displayed in the summary).
 - The list of filenames under `~/.ssh/` that match `id_*` (without `.pub`). File contents are never read.
 
 The scanner writes (only):
 
-- `${PLUGIN_DATA}/tools.md`, `${PLUGIN_DATA}/tools.json`, `${PLUGIN_DATA}/tools.summary.md` (or whatever path is passed as `argv[2]`). Writes are atomic: staging file in the same directory, then `rename`. On any failure, the staging file is removed and the previous catalog is left untouched.
+- `${PLUGIN_DATA}/tools.md`, `${PLUGIN_DATA}/tools.json`, `${PLUGIN_DATA}/tools.summary.md` (or whatever path is passed as `argv[2]`). Writes are **bundle-atomic**: every existing target file is first moved to a private backup directory, then the new contents are written into a staging directory, then each staging file is renamed onto its target. If any rename fails, the previous catalog is restored from backup and the staging / backup directories are removed. See `scripts/scan.mjs:atomicWriteBundle` and the `TOOL_MAP_FAIL_AT_RENAME` regression test for the failure-path behaviour.
+
+## Side effects
+
+The scanner's only side effect beyond the catalog files is **subprocess execution** of 15 well-known CLI programs. This is a deliberate, declared behaviour — the catalog is more useful when the agent can see actual installed versions, not just file existence. To make the policy explicit:
+
+- **Whitelisted names only.** The exact set of programs that may be spawned is hardcoded as `VERSION_PROBES` in `scripts/scan.mjs` and the same set is exposed as `ALLOWED_PROBE_NAMES`. Any future caller that would probe a name not in the whitelist is rejected inside `probeVersion` (fail-closed). Adding a new probe requires editing `VERSION_PROBES`.
+- **Probes are `execFile`, not `shell`.** The scanner passes the program as a separate argv (`execFileP('node', ['node', '--version'], ...)`), so it cannot be tricked into running a different program by a wrapper named `node` that contains shell metacharacters in its path.
+- **5-second timeout, no exceptions.** Every probe runs under a hard 5 s `execFile` timeout and any error (timeout, ENOENT, non-zero exit) is swallowed. A wrapper that hangs longer than 5 s is omitted from the `core` versions table; nothing else is affected.
+- **No arguments beyond `--version`** (or the single read-only `pwsh -NoProfile -Command $PSVersionTable.PSVersion.ToString()` for PowerShell). The scanner never passes user input as a CLI argument.
+
+Review your `$PATH` and any same-named wrappers in the well-known roots before installing this Plugin if you consider arbitrary command execution a concern. The full source of `probeVersion` and `VERSION_PROBES` is in `scripts/scan.mjs`.
 
 ## Limitations
 
@@ -73,6 +84,7 @@ The scanner writes (only):
 - `--version` probes use a 5 s timeout. A tool that hangs longer than that is omitted from the `core` versions table but stays in the file-walk inventory (so the agent still knows the file exists).
 - The walk has a safety cap of 5000 entries; very large tool collections (e.g. a build farm with thousands of node_modules shims) are truncated. Raise `MAX_RESULTS` in `scripts/scan.mjs` if you need more.
 - Files larger than 50 MB are skipped (CUDA SDKs, game engines, etc.) to keep the catalog readable.
+- On POSIX, an entry is only listed if the file has at least one execute bit set (`mode & 0o111`). On Windows the execute bit is ignored (per platform convention).
 - The scanner does not enumerate npm packages, pip packages, or system packages. It finds executables on disk, not installable artifacts.
 
 ## Test evidence
@@ -96,7 +108,26 @@ pass 7
 fail 0
 ```
 
-`npm run check` runs `npm run validate` (the Plugin shape validator, hardened to the rules proposed in PR #4) and then `npm test` (which discovers `test/tool-map.test.mjs` via the `node --test` runner). The bundled `scripts/smoke.mjs` exits 0 against the Plugin's own source tree, confirming no hardcoded paths, no literal credentials, and no leftover scaffold markers.
+```text
+$ node --test test/tool-map.test.mjs
+> scan.mjs writes the three catalog files atomically (~700ms)
+> scan.mjs JSON has the expected schema (~700ms)
+> scan.mjs writes nothing outside the output directory (~700ms)
+> scan.mjs leaves no staging files on success (~700ms)
+> scan.mjs completes with an empty PATH and still produces a valid catalog (~110ms)
+> smoke.mjs exits 0 against the plugin source tree (~35ms)
+> atomicWriteBundle rolls back when a mid-bundle rename fails (~10ms)
+> atomicWriteBundle is idempotent on the happy path (no residue, all 3 present) (~5ms)
+> ALLOWED_PROBE_NAMES is exactly the 15 declared names (<1ms)
+> POSIX: a .sh file without the execute bit is not reported as a tool (<1ms)
+> POSIX: case-distinct tool names on case-sensitive filesystems are kept distinct (<1ms)
+> XDG_DATA_HOME is honoured when PLUGIN_DATA is unset (~700ms)
+tests 12
+pass 12
+fail 0
+```
+
+`npm run check` runs `npm run validate` (the Plugin shape validator, hardened to the rules proposed in PR #4) and then `npm test` (which discovers `test/tool-map.test.mjs` via the `node --test` runner). The bundled `scripts/smoke.mjs` exits 0 against the Plugin's own source tree, confirming no hardcoded paths, no literal credentials, and no leftover scaffold markers. The 12-case test suite covers the v0.2.0 review blockers end-to-end: bundle-level atomicity (with a deterministic mid-bundle failure path), the 15-name whitelist, `XDG_DATA_HOME` precedence, execute-bit filtering, and case-sensitive dedup.
 
 ## Links
 
