@@ -4,7 +4,8 @@ A focused collection of Skills distilled from the **OpenAI Codex harness v0.149.
 model (`codex-rs/core/`). These Skills teach a MiniMax Code agent how to survive long-running
 multi-step tasks without losing focus, blowing its token budget, stalling on serial work,
 shipping unverified changes, burning context on bad sub-agent briefs, drifting from the
-original goal, or paying main-model prices for cheap-model work.
+original goal, paying main-model prices for cheap-model work, or losing track of which
+sub-agent is doing what.
 
 ## The problem
 
@@ -32,6 +33,10 @@ Long agentic sessions fail for predictable reasons:
   that a cheap model could handle in a fraction of the time and cost.
 - **Sub-agent context over-spend** — the agent gives every sub-agent the full history when a
   small brief would do.
+- **Lost sub-agents** — the agent spawns 3 children, loses track of which is which, and either
+  duplicates work or never reads a child's result.
+- **Runaway goal cost** — the user sets a token budget for a goal; the agent blows past it
+  without surfacing the warning.
 
 OpenAI's Codex harness solves each of these with specific code (see
 [`codex-rs/core/src/compact.rs`](https://github.com/openai/codex/blob/main/codex-rs/core/src/compact.rs),
@@ -39,7 +44,9 @@ OpenAI's Codex harness solves each of these with specific code (see
 [`session/turn.rs::run_turn`](https://github.com/openai/codex/blob/main/codex-rs/core/src/session/turn.rs),
 [`context/world_state.rs`](https://github.com/openai/codex/blob/main/codex-rs/core/src/context/world_state.rs),
 [`ext/goal/templates/goals/continuation.md`](https://github.com/openai/codex/blob/main/codex-rs/ext/goal/templates/goals/continuation.md),
-[`model-provider-info/`](https://github.com/openai/codex/tree/main/codex-rs/model-provider-info))
+[`ext/goal/src/accounting.rs`](https://github.com/openai/codex/blob/main/codex-rs/ext/goal/src/accounting.rs),
+[`model-provider-info/`](https://github.com/openai/codex/tree/main/codex-rs/model-provider-info),
+[`agent-graph-store/`](https://github.com/openai/codex/tree/main/codex-rs/agent-graph-store))
 and reports a 3× score lift on ARC-AGI-3 with the same model, just by changing the harness.
 This Plugin packages those patterns as portable Skills.
 
@@ -70,50 +77,73 @@ each non-trivial change."
 "Before you say 'done' on the auth refactor, run a completion audit. Show me the evidence for each requirement."
 
 "I'm about to spawn 4 sub-agents. Decide the fork_turns for each — full history or just the brief?"
+
+"Show me the sub-agent family tree — which are still running?"
+
+"This goal has a 20,000-token budget. Tell me at 50% / 80% / 100%."
 ```
 
 **Expected result**: the agent picks the right Skill, follows the documented process, and produces
 output that matches the Skill's output contract (see each Skill's `SKILL.md` for its specific
 contract and example).
 
-## What this Plugin adds (v0.4.0, 12 Skills)
+## What this Plugin adds (v0.5.0, 14 Skills)
 
-Twelve Skills, all Skill-only (no MCP server, no network access):
+Fourteen Skills, all Skill-only (no MCP server, no network access):
 
-| # | Skill | When to activate | v0.4.0 |
+| # | Skill | When to activate | v |
 |---|---|---|---|
 | 1 | `tool-output-budget` | A tool returns output you suspect is too large to keep verbatim (large logs, JSON, fetched HTML, minified files). | v0.1.0 |
-| 2 | `context-pressure-compact` | The task is multi-step and long; the running `todowrite` exceeds 5 items, or the agent has been reasoning for many turns. | v0.1.0 |
-| 3 | `parallel-fanout` | The user task is clearly decomposable into 2+ independent sub-tasks (independent files, independent probes, independent analyses). | v0.1.0 → **v1.0** |
+| 2 | `context-pressure-compact` | The task is multi-step and long; the running `todowrite` exceeds 5 items, or the agent has been reasoning for many turns. | v0.1.0 → **v1.0** |
+| 3 | `parallel-fanout` | The user task is clearly decomposable into 2+ independent sub-tasks (independent files, independent probes, independent analyses). | v0.1.0 → v1.0 |
 | 4 | `plan-stream-emit` | The user task is non-trivial and the user has not yet approved a plan; emit a structured plan before touching files. | v0.1.0 |
 | 5 | `review-mode` | A non-trivial sub-task has just finished and the work is about to be marked done; the user wants verification before relying on the result. | v0.2.0 |
-| 6 | `delegate-with-context` | About to call `task` to hand off a sub-task; the full conversation history is too large to forward and a minimal-context brief would do. | v0.2.0 |
+| 6 | `delegate-with-context` | About to call `task` to hand off a sub-task; the full conversation history is too large to forward and a minimal-context brief would do. | v0.2.0 → **v1.0** |
 | 7 | `world-state-tracking` | The task is long enough that the agent has lost the thread at least once, or `context-pressure-compact` is about to be applied. | v0.2.0 |
 | 8 | `background-task` | A command is expected to take > 30 seconds, or the user wants a long-running process to coexist with ongoing work. | v0.2.0 |
-| 9 | `goal-persistence` | A non-trivial task has just been stated (set the goal); the user has redirected (update the goal); or a `context-pressure-compact` is about to be applied (alignment check). | v0.3.0 → **v1.0** |
+| 9 | `goal-persistence` | A non-trivial task has just been stated (set the goal); the user has redirected (update the goal); or a `context-pressure-compact` is about to be applied (alignment check). | v0.3.0 → v1.0 |
 | 10 | `model-router` | About to call `task` for a non-trivial sub-task, or about to spend the main model on work a cheaper model could do. | v0.3.0 |
-| 11 | `completion-audit` | About to say "done" / "complete" / "ship it" on a non-trivial task. Derives requirements, identifies authoritative evidence, verifies each. | **v0.4.0 (new)** |
-| 12 | `fork-context-decision` | About to call `task` to hand off a sub-task. Decides how much parent context to give the sub-agent via the `fork_turns` parameter. | **v0.4.0 (new)** |
+| 11 | `completion-audit` | About to say "done" / "complete" / "ship it" on a non-trivial task. Derives requirements, identifies authoritative evidence, verifies each. | v0.4.0 |
+| 12 | `fork-context-decision` | About to call `task` to hand off a sub-task. Decides how much parent context to give the sub-agent via the `fork_turns` parameter. | v0.4.0 |
+| 13 | `subagent-family-tracking` | Spawned a sub-agent (or have one running). Track the parent/child tree so you do not lose children, duplicate work, or leave anyone running. | **v0.5.0 (new)** |
+| 14 | `goal-token-budgeting` | The user set an explicit `token_budget` on a goal. Track running usage against the budget and report the final number on completion. | **v0.5.0 (new)** |
 
-## v0.4.0 changelog
+## v0.5.0 changelog
 
 ### Added
 
-- `completion-audit` Skill — derive requirements, identify authoritative evidence, verify each,
-  only declare done when every requirement has its own ✅. Mirrors the completion-audit section
-  of the Codex goal continuation template.
-- `fork-context-decision` Skill — pick `all` / `N` / `none` for `fork_turns` explicitly, not
-  by default. Mirrors the `fork_turns` semantics in Codex's V2 multi-agent protocol.
+- `subagent-family-tracking` Skill — track the parent/child thread tree of spawned sub-agents.
+  Mirrors `codex-rs/agent-graph-store/`'s `ThreadSpawnEdgeStatus` (Open/Closed) plus the
+  `SessionSource::SubAgent(SubAgentSource::ThreadSpawn)` marker.
+- `goal-token-budgeting` Skill — when the user sets an explicit `token_budget` on a goal,
+  track running usage, surface at 50%/80%/100% thresholds, stop at 100% and ask. Mirrors
+  `ext/goal/src/accounting.rs` (GoalAccountingState) and the "Tokens used / Token budget /
+  Tokens remaining" section of the goal continuation template.
 
 ### Updated
 
-- `goal-persistence` v1.0 — incorporated the completion-audit and blocked-audit sections
-  from the Codex continuation template. Added token-budget reporting rule. Aligned
-  language with the canonical "treat completion as unproven" principle.
-- `parallel-fanout` v1.0 — added explicit-spawn principle (P-20: spawn is opt-in, not auto).
-  Added `max_concurrency` awareness. Cross-referenced `fork-context-decision` and
-  `delegate-with-context`. Added `completion-audit` on the aggregation before declaring
-  done.
+- `context-pressure-compact` v1.0 — added the 64K retention budget concept from
+  `compact_remote_v2.rs::RETAINED_MESSAGE_TOKEN_BUDGET`. Snapshots now report the retained
+  token estimate and the "discarded N tool calls / M lines" count. Cross-referenced all
+  five persistent-state files so the snapshot is the single coordination point.
+- `delegate-with-context` v1.0 — added the V2 message envelope (Message Type / Task name /
+  Sender / Payload) so sub-agent replies are parsed consistently. Added explicit
+  "return path" section in the brief. Cross-referenced `fork-context-decision`,
+  `model-router`, and `subagent-family-tracking`.
+
+Total Skills: 14 (12 from v0.4.0 + 2 new + 2 skill upgrades to v1.0).
+
+## v0.4.0 changelog (prior)
+
+### Added
+
+- `completion-audit` Skill.
+- `fork-context-decision` Skill.
+
+### Updated
+
+- `goal-persistence` v1.0.
+- `parallel-fanout` v1.0.
 
 ## Requirements
 
@@ -129,13 +159,12 @@ Twelve Skills, all Skill-only (no MCP server, no network access):
   tool calls).
 - **No file modification outside the agent's existing write surface.** The Skills may instruct
   the agent to use `write` / `edit` / `bash` to persist a compact summary, a plan file, a
-  world-state file, or a goal file, but only on paths the user already authorised through the
-  active session.
+  world-state file, a goal file, a family file, or a usage log, but only on paths the user
+  already authorised through the active session.
 - **No sub-agent launch without user intent.** `parallel-fanout`, `delegate-with-context`, and
   `fork-context-decision` instruct the agent to use `task` for fan-out / delegation, but only
   when the user task is independently decomposable **and** the user has opted in to
-  multi-agent work. The agent must still justify the decomposition in the plan and stop if
-  the user says "do it one by one".
+  multi-agent work.
 - **No model switching that the harness does not support.** `model-router` only works if the
   underlying `task` tool exposes `model_config_id` (or equivalent). If the harness does not
   support model routing, the Skill degrades to "classify the sub-task" and the model choice
