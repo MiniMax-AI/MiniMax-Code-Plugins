@@ -3,7 +3,8 @@
 A focused collection of Skills distilled from the **OpenAI Codex harness v0.149.0** execution
 model (`codex-rs/core/`). These Skills teach a MiniMax Code agent how to survive long-running
 multi-step tasks without losing focus, blowing its token budget, stalling on serial work,
-shipping unverified changes, or burning context on bad sub-agent briefs.
+shipping unverified changes, burning context on bad sub-agent briefs, drifting from the
+original goal, or paying main-model prices for cheap-model work.
 
 ## The problem
 
@@ -24,12 +25,17 @@ Long agentic sessions fail for predictable reasons:
   compaction, so the model keeps re-deriving "where are we?".
 - **Foreground blocks** — the model `bash`es a 5-minute build, blocks the conversation, and
   times out.
+- **Goal drift** — the original user request gets silently replaced by an inferred goal, and
+  the agent ends up doing a side quest with confident justification.
+- **Model over-spend** — the agent uses the main model for routine lookups and transforms
+  that a cheap model could handle in a fraction of the time and cost.
 
 OpenAI's Codex harness solves each of these with specific code (see
 [`codex-rs/core/src/compact.rs`](https://github.com/openai/codex/blob/main/codex-rs/core/src/compact.rs),
 [`utils/output-truncation/`](https://github.com/openai/codex/tree/main/codex-rs/utils/output-truncation),
 [`session/turn.rs::run_turn`](https://github.com/openai/codex/blob/main/codex-rs/core/src/session/turn.rs),
-[`context/world_state.rs`](https://github.com/openai/codex/blob/main/codex-rs/core/src/context/world_state.rs))
+[`context/world_state.rs`](https://github.com/openai/codex/blob/main/codex-rs/core/src/context/world_state.rs),
+[`model-provider-info/`](https://github.com/openai/codex/tree/main/codex-rs/model-provider-info))
 and reports a 3× score lift on ARC-AGI-3 with the same model, just by changing the harness.
 This Plugin packages those patterns as portable Skills.
 
@@ -51,6 +57,11 @@ Install from `/plugins` → **Local**, then ask any of:
 "Spawn a sub-agent to scan the codebase for unused imports. Give it a tight brief, not the full history."
 
 "Start a long dev server in the background so I can keep asking you things while it warms up."
+
+"Set the goal of this thread: migrate the auth subsystem to OIDC alongside SAML. Drift-check before
+each non-trivial change."
+
+"This sub-task is a one-shot file reformat — use the cheap model for it."
 ```
 
 **Expected result**: the agent picks the right Skill, follows the documented process, and produces
@@ -59,7 +70,7 @@ contract and example).
 
 ## What this Plugin adds
 
-Eight Skills, all Skill-only (no MCP server, no network access):
+Ten Skills, all Skill-only (no MCP server, no network access):
 
 | Skill | When to activate |
 |---|---|
@@ -71,6 +82,8 @@ Eight Skills, all Skill-only (no MCP server, no network access):
 | `delegate-with-context` | About to call `task` to hand off a sub-task; the full conversation history is too large to forward and a minimal-context brief would do. |
 | `world-state-tracking` | The task is long enough that the agent has lost the thread at least once, or `context-pressure-compact` is about to be applied. |
 | `background-task` | A command is expected to take > 30 seconds, or the user wants a long-running process to coexist with ongoing work. |
+| `goal-persistence` | A non-trivial task has just been stated (set the goal); the user has redirected (update the goal); or a `context-pressure-compact` is about to be applied (alignment check). |
+| `model-router` | About to call `task` for a non-trivial sub-task, or about to spend the main model on work a cheaper model could do. |
 
 ## Requirements
 
@@ -85,12 +98,17 @@ Eight Skills, all Skill-only (no MCP server, no network access):
 - **Read-only by default** (these Skills only change how the agent shapes its own output and
   tool calls).
 - **No file modification outside the agent's existing write surface.** The Skills may instruct
-  the agent to use `write` / `edit` / `bash` to persist a compact summary, a plan file, or a
-  world-state file, but only on paths the user already authorised through the active session.
-- **No sub-agent launch without user intent.** `parallel-fanout` and `delegate-with-context`
-  instruct the agent to use `task` for fan-out / delegation, but only when the user task is
-  independently decomposable. The agent must still justify the decomposition in the plan
-  and stop if the user says "do it one by one".
+  the agent to use `write` / `edit` / `bash` to persist a compact summary, a plan file, a
+  world-state file, or a goal file, but only on paths the user already authorised through the
+  active session.
+- **No sub-agent launch without user intent.** `parallel-fanout`, `delegate-with-context`, and
+  `model-router` instruct the agent to use `task` for fan-out / delegation, but only when the
+  user task is independently decomposable. The agent must still justify the decomposition in
+  the plan and stop if the user says "do it one by one".
+- **No model switching that the harness does not support.** `model-router` only works if the
+  underlying `task` tool exposes `model_config_id` (or equivalent). If the harness does not
+  support model routing, the Skill degrades to "classify the sub-task" and the model choice
+  follows whatever default the harness provides.
 
 ## Data and network
 
