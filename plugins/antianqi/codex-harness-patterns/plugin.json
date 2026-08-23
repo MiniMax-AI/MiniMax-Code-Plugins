@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "codex-harness-patterns",
-  "version": "0.3.0",
-  "description": "Long-running task patterns distilled from OpenAI Codex harness v0.149.0 — tool output budgeting, context pressure compaction, parallel sub-agent fan-out, structured plan streaming, self-review, sub-agent delegation, world-state tracking, background task management, thread-level goal persistence, and per-sub-task model routing. Activates when an agent must manage token budget, decompose work, sustain multi-step tasks without losing focus, coordinate sub-agents, or pick the right model for the job. Inspired by codex-rs/core/src/compact.rs, run_turn, Op/EventMsg protocol, InterAgentCommunication, WorldState, model-provider-info, and the models-manager sub-systems.",
+  "version": "0.4.0",
+  "description": "Long-running task patterns distilled from OpenAI Codex harness v0.149.0 — tool output budgeting, context pressure compaction, parallel sub-agent fan-out, structured plan streaming, self-review, sub-agent delegation, world-state tracking, background task management, thread-level goal persistence, per-sub-task model routing, completion auditing, and fork-context decision. Activates when an agent must manage token budget, decompose work, sustain multi-step tasks without losing focus, coordinate sub-agents, pick the right model for the job, or prove that a non-trivial task is actually done. Inspired by codex-rs/core/src/compact.rs, run_turn, Op/EventMsg protocol, InterAgentCommunication, WorldState, ext/goal continuation template, model-provider-info, and the models-manager sub-systems.",
   "author": {
     "name": "antianqi",
     "url": "https://github.com/antianqi"
@@ -23,6 +23,8 @@
     "world-state",
     "background-task",
     "goal",
-    "model-routing"
+    "model-routing",
+    "completion-audit",
+    "fork-context"
   ]
 }

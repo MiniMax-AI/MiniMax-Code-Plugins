@@ -19,6 +19,7 @@ Long agentic sessions fail for predictable reasons:
 - **No plan** — the model dives into a complex task without first surfacing a structured plan,
   so the user cannot course-correct early.
 - **No review** — the model writes code, says "done", and ships a defect the user has to find.
+- **No proof of done** — the model marks a task complete from memory, not from evidence.
 - **Bloated sub-agent briefs** — the model dumps the full conversation history into a `task`
   call, paying the token cost twice.
 - **No shared state** — long tasks have no persistent ground truth that survives context
@@ -29,12 +30,15 @@ Long agentic sessions fail for predictable reasons:
   the agent ends up doing a side quest with confident justification.
 - **Model over-spend** — the agent uses the main model for routine lookups and transforms
   that a cheap model could handle in a fraction of the time and cost.
+- **Sub-agent context over-spend** — the agent gives every sub-agent the full history when a
+  small brief would do.
 
 OpenAI's Codex harness solves each of these with specific code (see
 [`codex-rs/core/src/compact.rs`](https://github.com/openai/codex/blob/main/codex-rs/core/src/compact.rs),
 [`utils/output-truncation/`](https://github.com/openai/codex/tree/main/codex-rs/utils/output-truncation),
 [`session/turn.rs::run_turn`](https://github.com/openai/codex/blob/main/codex-rs/core/src/session/turn.rs),
 [`context/world_state.rs`](https://github.com/openai/codex/blob/main/codex-rs/core/src/context/world_state.rs),
+[`ext/goal/templates/goals/continuation.md`](https://github.com/openai/codex/blob/main/codex-rs/ext/goal/templates/goals/continuation.md),
 [`model-provider-info/`](https://github.com/openai/codex/tree/main/codex-rs/model-provider-info))
 and reports a 3× score lift on ARC-AGI-3 with the same model, just by changing the harness.
 This Plugin packages those patterns as portable Skills.
@@ -62,28 +66,54 @@ Install from `/plugins` → **Local**, then ask any of:
 each non-trivial change."
 
 "This sub-task is a one-shot file reformat — use the cheap model for it."
+
+"Before you say 'done' on the auth refactor, run a completion audit. Show me the evidence for each requirement."
+
+"I'm about to spawn 4 sub-agents. Decide the fork_turns for each — full history or just the brief?"
 ```
 
 **Expected result**: the agent picks the right Skill, follows the documented process, and produces
 output that matches the Skill's output contract (see each Skill's `SKILL.md` for its specific
 contract and example).
 
-## What this Plugin adds
+## What this Plugin adds (v0.4.0, 12 Skills)
 
-Ten Skills, all Skill-only (no MCP server, no network access):
+Twelve Skills, all Skill-only (no MCP server, no network access):
 
-| Skill | When to activate |
-|---|---|
-| `tool-output-budget` | A tool returns output you suspect is too large to keep verbatim (large logs, JSON, fetched HTML, minified files). |
-| `context-pressure-compact` | The task is multi-step and long; the running `todowrite` exceeds 5 items, or the agent has been reasoning for many turns. |
-| `parallel-fanout` | The user task is clearly decomposable into 2+ independent sub-tasks (independent files, independent probes, independent analyses). |
-| `plan-stream-emit` | The user task is non-trivial and the user has not yet approved a plan; emit a structured plan before touching files. |
-| `review-mode` | A non-trivial sub-task has just finished and the work is about to be marked done; the user wants verification before relying on the result. |
-| `delegate-with-context` | About to call `task` to hand off a sub-task; the full conversation history is too large to forward and a minimal-context brief would do. |
-| `world-state-tracking` | The task is long enough that the agent has lost the thread at least once, or `context-pressure-compact` is about to be applied. |
-| `background-task` | A command is expected to take > 30 seconds, or the user wants a long-running process to coexist with ongoing work. |
-| `goal-persistence` | A non-trivial task has just been stated (set the goal); the user has redirected (update the goal); or a `context-pressure-compact` is about to be applied (alignment check). |
-| `model-router` | About to call `task` for a non-trivial sub-task, or about to spend the main model on work a cheaper model could do. |
+| # | Skill | When to activate | v0.4.0 |
+|---|---|---|---|
+| 1 | `tool-output-budget` | A tool returns output you suspect is too large to keep verbatim (large logs, JSON, fetched HTML, minified files). | v0.1.0 |
+| 2 | `context-pressure-compact` | The task is multi-step and long; the running `todowrite` exceeds 5 items, or the agent has been reasoning for many turns. | v0.1.0 |
+| 3 | `parallel-fanout` | The user task is clearly decomposable into 2+ independent sub-tasks (independent files, independent probes, independent analyses). | v0.1.0 → **v1.0** |
+| 4 | `plan-stream-emit` | The user task is non-trivial and the user has not yet approved a plan; emit a structured plan before touching files. | v0.1.0 |
+| 5 | `review-mode` | A non-trivial sub-task has just finished and the work is about to be marked done; the user wants verification before relying on the result. | v0.2.0 |
+| 6 | `delegate-with-context` | About to call `task` to hand off a sub-task; the full conversation history is too large to forward and a minimal-context brief would do. | v0.2.0 |
+| 7 | `world-state-tracking` | The task is long enough that the agent has lost the thread at least once, or `context-pressure-compact` is about to be applied. | v0.2.0 |
+| 8 | `background-task` | A command is expected to take > 30 seconds, or the user wants a long-running process to coexist with ongoing work. | v0.2.0 |
+| 9 | `goal-persistence` | A non-trivial task has just been stated (set the goal); the user has redirected (update the goal); or a `context-pressure-compact` is about to be applied (alignment check). | v0.3.0 → **v1.0** |
+| 10 | `model-router` | About to call `task` for a non-trivial sub-task, or about to spend the main model on work a cheaper model could do. | v0.3.0 |
+| 11 | `completion-audit` | About to say "done" / "complete" / "ship it" on a non-trivial task. Derives requirements, identifies authoritative evidence, verifies each. | **v0.4.0 (new)** |
+| 12 | `fork-context-decision` | About to call `task` to hand off a sub-task. Decides how much parent context to give the sub-agent via the `fork_turns` parameter. | **v0.4.0 (new)** |
+
+## v0.4.0 changelog
+
+### Added
+
+- `completion-audit` Skill — derive requirements, identify authoritative evidence, verify each,
+  only declare done when every requirement has its own ✅. Mirrors the completion-audit section
+  of the Codex goal continuation template.
+- `fork-context-decision` Skill — pick `all` / `N` / `none` for `fork_turns` explicitly, not
+  by default. Mirrors the `fork_turns` semantics in Codex's V2 multi-agent protocol.
+
+### Updated
+
+- `goal-persistence` v1.0 — incorporated the completion-audit and blocked-audit sections
+  from the Codex continuation template. Added token-budget reporting rule. Aligned
+  language with the canonical "treat completion as unproven" principle.
+- `parallel-fanout` v1.0 — added explicit-spawn principle (P-20: spawn is opt-in, not auto).
+  Added `max_concurrency` awareness. Cross-referenced `fork-context-decision` and
+  `delegate-with-context`. Added `completion-audit` on the aggregation before declaring
+  done.
 
 ## Requirements
 
@@ -102,9 +132,10 @@ Ten Skills, all Skill-only (no MCP server, no network access):
   world-state file, or a goal file, but only on paths the user already authorised through the
   active session.
 - **No sub-agent launch without user intent.** `parallel-fanout`, `delegate-with-context`, and
-  `model-router` instruct the agent to use `task` for fan-out / delegation, but only when the
-  user task is independently decomposable. The agent must still justify the decomposition in
-  the plan and stop if the user says "do it one by one".
+  `fork-context-decision` instruct the agent to use `task` for fan-out / delegation, but only
+  when the user task is independently decomposable **and** the user has opted in to
+  multi-agent work. The agent must still justify the decomposition in the plan and stop if
+  the user says "do it one by one".
 - **No model switching that the harness does not support.** `model-router` only works if the
   underlying `task` tool exposes `model_config_id` (or equivalent). If the harness does not
   support model routing, the Skill degrades to "classify the sub-task" and the model choice

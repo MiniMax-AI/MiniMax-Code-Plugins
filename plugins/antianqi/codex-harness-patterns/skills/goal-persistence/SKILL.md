@@ -1,12 +1,13 @@
 ---
 name: goal-persistence
-description: "Maintain an explicit north-star goal for the whole thread that survives compactions and detects drift. Use at the start of any non-trivial task (one-time set), after every user redirection (one-time update), and at every `context-pressure-compact` boundary (one-line alignment check). Mirrors codex-rs `Op::SetThreadMemoryMode` + `EventMsg::ThreadGoalUpdated` in protocol/src/protocol.rs."
+description: "Maintain an explicit north-star goal for the whole thread that survives compactions and detects drift. Use at the start of any non-trivial task (one-time set), after every user redirection (one-time update), and at every `context-pressure-compact` boundary (one-line alignment check). Before declaring done, run a completion audit (see also `completion-audit` Skill). Mirrors codex-rs `Op::SetThreadMemoryMode` + `EventMsg::ThreadGoalUpdated` in protocol/src/protocol.rs and the continuation template in ext/goal/templates/goals/continuation.md."
 license: Apache-2.0
 compatibility: Requires MiniMax Code with Agent Plugins 1.0 support.
 metadata:
   author: antianqi
-  version: "0.1.0"
-  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/protocol/src/protocol.rs (SetThreadMemoryMode, ThreadGoalUpdatedEvent)
+  version: "1.0.0"
+  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/protocol/src/protocol.rs (SetThreadMemoryMode, ThreadGoalUpdatedEvent) and ext/goal/templates/goals/continuation.md
+  changes-from-v0.1.0: "Added completion-audit and blocked-audit sections from the Codex continuation template; added token-budget reporting rule; aligned language with the canonical 'treat completion as unproven' principle."
 ---
 
 # Goal Persistence
@@ -19,6 +20,10 @@ silently replaced by a goal the agent inferred.
 This Skill keeps the original goal *visible*, *versioned*, and *checkable* across the whole
 thread. It is the *why* of the task; `world-state-tracking` is the *where*.
 
+**v1.0 update**: now incorporates the canonical completion audit and blocked audit
+from the Codex goal continuation template, so declaring "done" is always evidence-based,
+not intent-based.
+
 ## When to use
 
 Activate when **any** of these is true:
@@ -29,6 +34,8 @@ Activate when **any** of these is true:
 - A `context-pressure-compact` is about to be applied — one-line **alignment check**.
 - The agent is about to start a tool call that has *any* chance of being misaligned with
   the original ask (a "drift self-test").
+- The agent is about to mark the goal as `complete` or `blocked` — the **completion audit**
+  and **blocked audit** sections apply.
 
 ## When NOT to use
 
@@ -96,9 +103,63 @@ Activate when **any** of these is true:
 5. **At every `context-pressure-compact`**, the compact summary must reference the goal
    file by path, not duplicate it. The goal file is the thing that survives; the
    summary is the thing that gets re-derived.
-6. **When the user finally says "done" / "ship it" / "looks good"**, mark the goal as
+6. **Before marking the goal `complete`**, run a **completion audit** (next section).
+7. **When the user finally says "done" / "ship it" / "looks good"**, mark the goal as
    achieved in the file (`Status: achieved, <ISO>`) and leave the file in place as part
-   of the audit trail.
+   of the audit trail. **On a budgeted goal, also report the final token usage to the
+   user** (token accountability).
+
+## Completion Audit (before declaring done)
+
+**Treat completion as unproven until you have evidence for each requirement.**
+
+```text
+Verifying before declaring "<goal name>" done.
+
+| Requirement                                | Evidence                                          | Result |
+|--------------------------------------------|---------------------------------------------------|--------|
+| <requirement 1>                            | <how I verified it>                                | ✅     |
+| <requirement 2>                            | <how I verified it>                                | ✅     |
+| ...                                        | ...                                               | ...    |
+```
+
+Result legend: ✅ proves completion · ❌ contradicts · 🟡 incomplete · ⚪ too weak · 🚫 missing.
+
+**All items must be ✅ before declaring done.** If any item is not ✅, surface the unfinished
+items; do not mark complete. See `completion-audit` Skill for the full protocol.
+
+## Blocked Audit (before declaring blocked)
+
+**Do not declare blocked the first time a blocker appears.** Only use `blocked` when the
+same blocking condition has repeated for at least **three consecutive goal turns** (the
+original/user-triggered turn plus any automatic continuations), and the agent is at a true
+impasse.
+
+```text
+Checking if "<goal name>" should be marked blocked.
+
+- Turn N: blocker = <first time I hit it>           ← not yet
+- Turn N+1: blocker = <same condition>               ← not yet
+- Turn N+2: blocker = <same condition>               ← not yet
+- Turn N+3: blocker = <same condition>               ← THRESHOLD MET, can mark blocked
+
+If after 3 turns the blocker is different, reset the count.
+```
+
+**Do not mark blocked merely because the work is hard, slow, uncertain, incomplete, or would
+benefit from clarification.** "I don't know what to do next" is not blocked — it is
+uninformed, and the response is to ask, not to stop.
+
+## Token Budget Reporting (on a budgeted goal)
+
+If the goal has a `token_budget`, when marking `complete` (or `blocked`):
+
+```text
+Final token usage: 18,420 / 20,000 (92% of goal budget).
+```
+
+The user set the budget; they get the report. Do not omit the final number; do not estimate —
+read it from the actual usage.
 
 ## Output contract
 
@@ -108,8 +169,11 @@ The user sees, in this order:
 - On update: the diff (one line: "v1 → v2: <what changed>").
 - On drift check: one line verdict (`aligned` / `misaligned: <why>` / `superseded: <why>`).
 - On compact: a one-line "Goal still in scope, see <path>".
+- Before done: the completion audit table + final token usage (if budgeted).
+- Before blocked: the blocked audit count + the actual blocker.
+- On "done": the goal file marked `Status: achieved, <ISO>`.
 
-## Example
+## Example goal file
 
 ```markdown
 # Goal — Auth refactor (OIDC alongside SAML)
@@ -176,14 +240,18 @@ is "add OIDC without breaking SAML".
   bumping the version more than once per 20 turns, you are not using it as a goal.
 - **Do not conflate goal with state.** The goal file is *what*; the world-state file
   is *where*. They are different files for different questions.
-- **Do not let the goal silently drift via tool calls.** The whole point of this
-  Skill is that drift is *visible*, not hidden.
+- **Do not mark complete without a completion audit.** "I think it works" is not
+  evidence. Each requirement needs its own ✅.
+- **Do not mark blocked at the first blocker.** Three consecutive turns of the same
+  blocker is the threshold. "Hard" is not "blocked."
+- **Do not omit token usage on a budgeted goal.** The user set the budget to know what
+  the work costs; they get the final number.
 
 ## Verification checklist
 
 - [ ] Did you pick a single, predictable path for the goal file?
 - [ ] Is the goal file under ~40 lines?
-- [ ] Does it have all 6 sections (Set / Owner / Last checked / Version / Original
+- [ ] Does it have all sections (Set / Owner / Last checked / Version / Original
       goal / Why this goal / Success / Out of scope / Version history)?
 - [ ] Is the "Original goal" copied verbatim where possible?
 - [ ] Does the "Why this goal" paragraph explain motivation, not just the surface
@@ -191,4 +259,8 @@ is "add OIDC without breaking SAML".
 - [ ] Did you do a drift self-test before the last non-trivial tool call?
 - [ ] At the next `context-pressure-compact`, does the summary reference the goal
       file by path?
-- [ ] On "done", did you mark the goal as achieved in the file (audit trail)?
+- [ ] Before marking done, did you run the completion audit (all items ✅)?
+- [ ] Before marking blocked, did you count to 3 consecutive turns of the same
+      blocker?
+- [ ] On done, did you report final token usage (if budgeted)?
+- [ ] On done, did you mark the goal as achieved in the file (audit trail)?
