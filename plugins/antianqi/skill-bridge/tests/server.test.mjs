@@ -189,3 +189,66 @@ test('server: unknown method returns JSON-RPC error', async () => {
     await s.stop();
   }
 });
+
+test('server: convert refuses to write when frontmatter parse fails (review #3 fail-closed)', async () => {
+  // v0.2.0 silently fell through with an empty frontmatter when the
+  // parser rejected a list-shaped value, which embedded the raw
+  // frontmatter in the body and dropped the original metadata. The
+  // v0.2.1 fix must (a) return ok=false with the parse error and
+  // (b) not create any files in target_dir.
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sb-server-'));
+  const file = path.join(dir, 'SKILL.md');
+  // Deliberately malformed YAML: "metadata:" opens a nested object,
+  // but the next line is indented 3 spaces instead of 4, so the
+  // strict-indent parser must reject it.
+  await fs.writeFile(
+    file,
+    '---\nname: bad\ndescription: "Has weird content."\nmetadata:\n   badindent: 1\n---\n\n# Bad\n',
+    'utf-8',
+  );
+  const out = path.join(dir, 'out');
+  const s = startServer();
+  try {
+    const r = await s.send('tools/call', {
+      name: 'convert',
+      arguments: { source: file, target_dir: out, run_lint: false },
+    });
+    const payload = JSON.parse(r.content[0].text);
+    assert.equal(payload.ok, false, `expected ok=false, got ${JSON.stringify(payload)}`);
+    assert.equal(payload.reason, 'frontmatter parse failed');
+    assert.match(payload.err, /yaml parse/);
+    // The transformer must NOT have touched target_dir.
+    const outExists = await fs.stat(out).catch(() => null);
+    assert.equal(outExists, null, 'target_dir must not exist when analyze fails');
+  } finally {
+    await s.stop();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('server: convert on a directory source resolves SKILL.md (review #2)', async () => {
+  // review #2 said docs promised directory support but the code
+  // passed the path directly to fs.readFile. Confirm the directory
+  // contract works end-to-end through the JSON-RPC layer.
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sb-server-'));
+  const srcDir = path.join(dir, 'src-skill');
+  await fs.mkdir(srcDir, { recursive: true });
+  await fs.writeFile(
+    path.join(srcDir, 'SKILL.md'),
+    '---\nname: dir-skill\ndescription: "From a directory."\n---\n\n# Dir\n',
+    'utf-8',
+  );
+  const out = path.join(dir, 'out');
+  const s = startServer();
+  try {
+    const r = await s.send('tools/call', {
+      name: 'convert',
+      arguments: { source: srcDir, target_dir: out, run_lint: false },
+    });
+    const payload = JSON.parse(r.content[0].text);
+    assert.equal(payload.ok, true, `convert failed: ${JSON.stringify(payload)}`);
+  } finally {
+    await s.stop();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});

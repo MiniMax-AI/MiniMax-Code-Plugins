@@ -109,3 +109,49 @@ test('dumpYamlBlock: leading/trailing space gets quoted', () => {
   assert.match(text, /x: " hi"/);
   assert.match(text, /y: "bye "/);
 });
+
+test('parseYamlBlock: block-style list of scalars', () => {
+  const fm = parseYamlBlock(`keywords:\n  - alpha\n  - beta\n  - gamma\n`);
+  assert.deepEqual(fm.keywords, ['alpha', 'beta', 'gamma']);
+});
+
+test('parseYamlBlock: flow-style list', () => {
+  const fm = parseYamlBlock('tags: [a, b, c]\n');
+  assert.deepEqual(fm.tags, ['a', 'b', 'c']);
+});
+
+test('parseYamlBlock: list of objects (inline mapping on the dash line)', () => {
+  const fm = parseYamlBlock(`items:\n  - name: foo\n    value: 1\n  - name: bar\n    value: 2\n`);
+  assert.deepEqual(fm.items, [
+    { name: 'foo', value: 1 },
+    { name: 'bar', value: 2 },
+  ]);
+});
+
+test('parseYamlBlock: dump -> parse round-trips arrays', () => {
+  // dumpYamlBlock emits list items as a block list; parseYamlBlock
+  // must accept that shape. This is the round-trip the review asked
+  // for, and it was broken in v0.2.0 (parser rejected the block list).
+  const original = {
+    name: 'rt',
+    keywords: ['a', 'b', 'c'],
+    authors: [
+      { name: 'alice', role: 'maintainer' },
+      { name: 'bob', role: 'contributor' },
+    ],
+  };
+  const text = dumpYamlBlock(original);
+  const parsed = parseYamlBlock(text);
+  assert.deepEqual(parsed.keywords, original.keywords);
+  assert.deepEqual(parsed.authors, original.authors);
+  assert.equal(parsed.name, 'rt');
+});
+
+test('parseYamlBlock: nested object still works (regression for v0.2.0 i++ bug)', () => {
+  // The earlier v0.2.0 parser had a missing-i++ bug on the nested
+  // object branch that caused an infinite loop. This test fails-fast
+  // by timing out (test runner) so we notice immediately if it
+  // regresses.
+  const fm = parseYamlBlock(`a:\n  b:\n    c: 1\n    d: 2\n  e: 3\n`);
+  assert.deepEqual(fm.a, { b: { c: 1, d: 2 }, e: 3 });
+});

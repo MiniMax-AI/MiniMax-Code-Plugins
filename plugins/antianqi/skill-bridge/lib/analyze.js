@@ -47,11 +47,14 @@ const PATH_PATTERNS = [
  * @property {Array<{label:string, samples:string[]}>} hardcodedPaths
  * @property {Array<{label:string, samples:string[]}>} externalCommands
  * @property {string[]} warnings
+ * @property {boolean} ok          false when frontmatter could not be parsed
+ * @property {string}  [err]       parse error message when ok === false
  */
 
 // ---------- Constrained YAML parser ----------
 
 const KEY_LINE_RE = /^(\s*)([A-Za-z0-9_.\-]+)\s*:\s*(.*?)\s*$/;
+const LIST_ITEM_RE = /^(\s*)- (.*?)\s*$/;
 
 /**
  * Parse a constrained YAML block. Supports:
@@ -59,6 +62,8 @@ const KEY_LINE_RE = /^(\s*)([A-Za-z0-9_.\-]+)\s*:\s*(.*?)\s*$/;
  *   - `key: "..."` / `key: '...'`  (quoted string)
  *   - `key: |` / `key: >`   (block scalar, indented body)
  *   - `key:` (followed by indented sub-keys) -> nested object
+ *   - `key:` (followed by `  - item`) -> list of scalars / objects
+ *   - `key: [a, b, c]`     -> flow-style list of scalars
  *
  * Throws on unsupported constructs.
  *
@@ -68,14 +73,43 @@ const KEY_LINE_RE = /^(\s*)([A-Za-z0-9_.\-]+)\s*:\s*(.*?)\s*$/;
 export function parseYamlBlock(text) {
   const lines = text.split(/\r?\n/);
   const root = {};
-  // Stack of frames: each holds the current container and its indent
-  // level. We start at indent -2 so that the first top-level key (indent 0)
-  // satisfies `indent === top.indent + 2` without special-casing.
-  const stack = [{ indent: -2, container: root }];
+  // Stack of frames: each holds the current container (object or array)
+  // and its indent level. We start at indent -2 so that the first
+  // top-level key (indent 0) satisfies `indent === top.indent + 2`
+  // without special-casing.
+  const stack = [{ indent: -2, container: root, kind: 'object' }];
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
     if (line.trim() === '') { i++; continue; }
+
+    // 1) Detect a list-item line: "  - foo" or "  - name: bar".
+    //    The dash must be at the *current* container indent + 2.
+    const lm = line.match(LIST_ITEM_RE);
+    if (lm) {
+      const [, ws, raw] = lm;
+      const indent = ws.length;
+      // Pop frames until we find a list frame at the right indent.
+      while (stack.length > 1 && stack[stack.length - 1].indent >= indent) {
+        stack.pop();
+      }
+      const top = stack[stack.length - 1];
+      if (top.kind !== 'list') {
+        throw new Error(`list item at ${JSON.stringify(line)} but parent is not a list`);
+      }
+      if (indent !== top.indent + 2) {
+        throw new Error(`bad list-item indent at ${JSON.stringify(line)}`);
+      }
+      // The item is either a scalar (raw coerced) or an inline object
+      // starting with a key: value on the same line. The rest of the
+      // object (if any) lives on subsequent lines at indent + 2.
+      const sub = parseListItem(raw, lines, indent, i);
+      top.container.push(sub.value);
+      i = sub.nextIndex;
+      continue;
+    }
+
+    // 2) Otherwise, a normal `key: value` line.
     const m = line.match(KEY_LINE_RE);
     if (!m) {
       throw new Error(`cannot parse line: ${JSON.stringify(line)}`);
@@ -87,10 +121,14 @@ export function parseYamlBlock(text) {
       stack.pop();
     }
     const top = stack[stack.length - 1];
+    if (top.kind !== 'object') {
+      throw new Error(`mapping at ${JSON.stringify(line)} but parent is a list`);
+    }
     // The current line's indent must be exactly top.indent + 2.
     if (indent !== top.indent + 2) {
       throw new Error(`bad indent at line: ${JSON.stringify(line)}`);
     }
+
     if (rawValue === '' || rawValue === '|' || rawValue === '>') {
       if (rawValue === '|' || rawValue === '>') {
         const blockIndent = indent + 2;
@@ -105,18 +143,81 @@ export function parseYamlBlock(text) {
           i++;
         }
         top.container[key] = blockLines.join('\n').replace(/\n+$/, '');
+      } else if (peekIsList(lines, i + 1, indent + 2)) {
+        // Nested list. Allocate an array, push it as the value, and
+        // open a new list frame at the right indent so subsequent
+        // `- item` lines are appended here.
+        const arr = [];
+        top.container[key] = arr;
+        stack.push({ indent, container: arr, kind: 'list' });
+        i++;
+        // Do NOT consume a line; the list-item line will be picked up
+        // by the LIST_ITEM_RE branch on the next iteration.
       } else {
         // nested object
         const obj = {};
         top.container[key] = obj;
-        stack.push({ indent, container: obj });
+        stack.push({ indent, container: obj, kind: 'object' });
+        i++;
       }
+    } else if (rawValue.startsWith('[') && rawValue.endsWith(']')) {
+      // Flow-style list: `key: [a, b, c]`. We support scalar items only.
+      const inner = rawValue.slice(1, -1);
+      const items = inner.length === 0 ? [] : inner.split(',').map((s) => coerceScalar(s.trim()));
+      top.container[key] = items;
+      i++;
     } else {
       top.container[key] = coerceScalar(rawValue);
+      i++;
     }
-    i++;
   }
   return root;
+}
+
+function peekIsList(lines, start, expectedIndent) {
+  // True if the next non-blank line at exactly expectedIndent is a
+  // list item belonging to the current key.
+  for (let k = start; k < lines.length; k++) {
+    const ln = lines[k];
+    if (ln.trim() === '') continue;
+    const m = ln.match(/^(\s*)- /);
+    if (!m) return false;
+    return m[1].length === expectedIndent;
+  }
+  return false;
+}
+
+function parseListItem(raw, lines, itemIndent, startIndex) {
+  // raw is the text after "- ". Two shapes:
+  //   - scalar (no colon): return the coerced value, advance one line.
+  //   - inline object: first line is "key: value", further lines at
+  //     itemIndent + 2 are more `key: value` pairs. We do NOT recurse
+  //     into parseYamlBlock here because re-indenting a synthetic block
+  //     for nested arrays / deeper objects is brittle. Instead, scan
+  //     continuation lines directly and build a flat object — one
+  //     level of nested mapping is all the v0.2 skill-bridge emits.
+  if (!raw.includes(':')) {
+    return { value: coerceScalar(raw), nextIndex: startIndex + 1 };
+  }
+  const obj = {};
+  const first = raw.match(/^([A-Za-z0-9_.\-]+)\s*:\s*(.*?)\s*$/);
+  if (!first) {
+    return { value: coerceScalar(raw), nextIndex: startIndex + 1 };
+  }
+  obj[first[1]] = coerceScalar(first[2]);
+  const contIndent = itemIndent + 2;
+  let k = startIndex + 1;
+  while (k < lines.length) {
+    const ln = lines[k];
+    if (ln.trim() === '') { k++; continue; }
+    const ind = ln.match(/^(\s*)/)[1].length;
+    if (ind < contIndent) break;
+    const cm = ln.match(/^(\s*)([A-Za-z0-9_.\-]+)\s*:\s*(.*?)\s*$/);
+    if (!cm) break;
+    obj[cm[2]] = coerceScalar(cm[3]);
+    k++;
+  }
+  return { value: obj, nextIndex: k };
 }
 
 function coerceScalar(v) {
@@ -197,6 +298,10 @@ export async function analyzeSkillFile(filePath) {
   const text = det.text;
   const { frontmatter, body, ok, err } = parseFrontmatter(text);
 
+  // Fail closed: if the frontmatter is not parseable, do NOT silently
+  // continue with an empty frontmatter (which would discard the
+  // original metadata in the output). The caller is expected to check
+  // `report.ok` and refuse to convert in that case.
   const fullText = ok ? reconstructText(frontmatter, body) : text;
 
   const warnings = [];
@@ -214,6 +319,8 @@ export async function analyzeSkillFile(filePath) {
     hardcodedPaths: scanPatterns(fullText, PATH_PATTERNS),
     externalCommands: scanPatterns(fullText, EXTERNAL_COMMAND_PATTERNS),
     warnings,
+    ok,
+    ...(ok ? {} : { err }),
   };
 }
 
@@ -250,12 +357,22 @@ export function dumpYamlBlock(obj, indent = 0) {
         if (item === null) {
           lines.push(`${pad}  - null`);
         } else if (typeof item === 'object' && !Array.isArray(item)) {
-          const childPad = `${pad}  `;
-          const dumped = dumpYamlBlock(item, indent + 1);
-          // Indent the first line with the dash, subsequent lines stay aligned.
-          const [first, ...rest] = dumped.split('\n');
-          lines.push(`${childPad}- ${first.trimStart()}`);
-          for (const r of rest) lines.push(r);
+          // List item that is itself a mapping. The first key shares
+          // the line with the "- " marker; subsequent keys must be
+          // indented one more level than the marker (item.content_indent
+          // = item.indent + 2). The recursive dump uses indent + 2 so
+          // its pad is two more spaces than the outer pad, which is
+          // exactly what we want for the "role: maintainer" continuation.
+          const innerDump = dumpYamlBlock(item, indent + 2);
+          const itemLines = innerDump.split('\n').filter((l) => l.length > 0);
+          if (itemLines.length === 0) {
+            lines.push(`${pad}  - {}`);
+          } else {
+            lines.push(`${pad}  - ${itemLines[0].trimStart()}`);
+            for (let i = 1; i < itemLines.length; i++) {
+              lines.push(itemLines[i]);
+            }
+          }
         } else {
           lines.push(`${pad}  - ${scalarToYaml(item)}`);
         }

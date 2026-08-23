@@ -169,6 +169,18 @@ async function invokeTool(name, args) {
       const force = Boolean(args.force);
       const runLint = args.run_lint !== false;
       const report = await analyzeSkillFile(source);
+      // Fail closed: if the frontmatter parser rejected the input, do
+      // NOT proceed to transformSkill. v0.2 used to fall through with
+      // an empty frontmatter, which silently dropped the original
+      // metadata and embedded the raw frontmatter into the body.
+      if (report.ok === false) {
+        return toolResultText({
+          ok: false,
+          reason: 'frontmatter parse failed',
+          err: report.err,
+          warnings: report.warnings,
+        });
+      }
       const result = classify(report);
       if (result.tier === 'abandon') {
         return toolResultText({ ok: false, tier: 'abandon', reason: result.reason });
