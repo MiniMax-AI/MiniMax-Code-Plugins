@@ -164,6 +164,16 @@ if (-not (Test-Path $mcodeActiveDir)) {
 $script:lastDetectedState = ''
 $script:lastMsgsSnapshot  = @{ mtime = ''; lastInferred = $null }
 
+# 5s 缓存：mcode 进程 PID + 最新 session log 路径
+# 避免每秒调 Get-McodePid / Get-LatestSessionFile（每次都涉及 Get-ChildItem
+# 之类的 cmdlet，PS 5.1 hidden window 下会累积 Runspace 线程，9 小时后
+# 池子被占满 → poll 不再前进 → widget 卡死）。
+$CACHE_TTL = [TimeSpan]::FromSeconds(5)
+$script:lastMcodePid     = $null
+$script:lastMcodePidAt   = [DateTime]::MinValue
+$script:lastLatestFile   = $null
+$script:lastLatestFileAt = [DateTime]::MinValue
+
 function Log-Line($msg) {
   $ts = (Get-Date).ToString('HH:mm:ss')
   $line = "[$ts] [detect] $msg"
@@ -173,48 +183,74 @@ function Log-Line($msg) {
 
 function Get-McodePid {
   if (-not (Test-Path $mcodeActiveDir)) { return $null }
-  $candidates = Get-ChildItem -Path $mcodeActiveDir -Filter '*.json' -ErrorAction SilentlyContinue
-  foreach ($f in $candidates) {
+  # Use [System.IO.Directory]::EnumerateFiles instead of Get-ChildItem + foreach
+  # to avoid the PS 5.1 pipeline-thread leak that built up over multi-hour
+  # runs and eventually stalled the detector. See: ~30k leaked threads
+  # observed after 9h of polling.
+  $bestPid = $null
+  $bestMtime = [DateTime]::MinValue
+  foreach ($f in [System.IO.Directory]::EnumerateFiles($mcodeActiveDir, '*.json')) {
     try {
-      $j = Get-Content $f.FullName -Raw | ConvertFrom-Json
+      $raw = [System.IO.File]::ReadAllText($f)
+      $j = $raw | ConvertFrom-Json
       $targetPid = [int]$j.pid
-      $proc = Get-Process -Id $targetPid -ErrorAction SilentlyContinue
-      if ($proc -and -not $proc.HasExited) { return $targetPid }
+      $proc = [System.Diagnostics.Process]::GetProcessById($targetPid)
+      if ($proc -and -not $proc.HasExited) {
+        # .mcode-active dir is tiny (one or two .json files); prefer the most
+        # recently started one if multiple happen to exist.
+        $mtime = [System.IO.File]::GetLastWriteTime($f)
+        if ($mtime -gt $bestMtime) {
+          $bestMtime = $mtime
+          $bestPid = $targetPid
+        }
+      }
     } catch {}
   }
-  return $null
+  return $bestPid
 }
 
 function Get-LatestSessionFile {
   if (-not $sessionsRoot -or -not (Test-Path $sessionsRoot)) { return $null }
-  $all = Get-ChildItem -Path $sessionsRoot -Recurse -ErrorAction SilentlyContinue |
-    Where-Object { $_.PSIsContainer -eq $false -and ($_.Name -eq $FNAME_LEDGER -or $_.Name -eq $FNAME_MESSAGES) }
-  if (-not $all) { return $null }
-  # mcode v0.2.x writes messages.jsonl live; ledger.jsonl is best-effort and may
-  # be left behind by an old session. Always pick whichever file is most
-  # recently touched, otherwise a stale ledger would dominate and the
-  # 60s-idle fallback would fire against ancient timestamps.
-  $ledger = $all | Where-Object { $_.Name -eq $FNAME_LEDGER } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-  $msgs   = $all | Where-Object { $_.Name -eq $FNAME_MESSAGES } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-  if ($ledger -and $msgs) {
-    if ($ledger.LastWriteTime -ge $msgs.LastWriteTime) { return $ledger }
-    return $msgs
+  # Replace Get-ChildItem -Recurse | Where-Object | Sort-Object | Select-Object
+  # (a 4-stage pipeline) with a single .NET enumeration + manual mtime scan.
+  # Same reason as Get-McodePid: avoid the PS 5.1 pipeline-thread leak.
+  $best = $null
+  $bestMtime = [DateTime]::MinValue
+  $bestIsLedger = $false
+  foreach ($f in [System.IO.Directory]::EnumerateFiles($sessionsRoot, '*.jsonl', 'AllDirectories')) {
+    $name = [System.IO.Path]::GetFileName($f)
+    $isLedger = ($name -eq $FNAME_LEDGER)
+    $isMsgs   = ($name -eq $FNAME_MESSAGES)
+    if (-not $isLedger -and -not $isMsgs) { continue }
+    try {
+      $mtime = [System.IO.File]::GetLastWriteTime($f)
+    } catch {
+      continue
+    }
+    # mcode v0.2.x writes messages.jsonl live; ledger.jsonl is best-effort
+    # and may be left behind by an old session. Always pick whichever file
+    # is most recently touched, otherwise a stale ledger would dominate
+    # and the 60s-idle fallback would fire against ancient timestamps.
+    if ($mtime -gt $bestMtime) {
+      $bestMtime = $mtime
+      $best = $f
+      $bestIsLedger = $isLedger
+    }
   }
-  if ($ledger) { return $ledger }
-  if ($msgs) { return $msgs }
-  return $null
+  return $best
 }
 
 function Read-LastMessage($file) {
+  if (-not $file) { return $null }
   try {
-    $st = Get-Item $file -ErrorAction Stop
-    $mtime = $st.LastWriteTime.ToString($FMT_O_FULL)
+    $fi = [System.IO.FileInfo]::new($file)
+    $mtime = $fi.LastWriteTime.ToString($FMT_O_FULL)
     if ($script:lastMsgsSnapshot.mtime -eq $mtime) {
       # mtime 没变：返回上次推断结果（保持 idle 兜底可达）
       return $script:lastMsgsSnapshot.lastInferred
     }
     $script:lastMsgsSnapshot.mtime = $mtime
-    $fs = [System.IO.File]::Open($file, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    $fs = [System.IO.File]::Open($fi.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
     try {
       $len = $fs.Length
       if ($len -eq 0) { return $null }
@@ -227,6 +263,8 @@ function Read-LastMessage($file) {
       for ($i = $parts.Length - 1; $i -ge 0; $i--) {
         $line = $parts[$i].TrimEnd("`r")
         if ($line -and $line.Length -gt 10) {
+          # ConvertFrom-Json is gated by the mtime cache above, so this
+          # pipeline only fires when the file actually grew. Acceptable.
           $msg = ($line | ConvertFrom-Json)
           $script:lastMsgsSnapshot.lastInferred = $msg
           return $msg
@@ -267,14 +305,26 @@ function Infer-State($msg) {
   if ($role -eq $S_USER) { return @{ state=$S_IDLE; message=$MSG_USER_WAIT } }
 
   if ($role -eq $S_ASSISTANT) {
-    $hasTool   = @($m.content | Where-Object { $_.type -eq $S_TOOLCALL  }) | Select-Object -First 1
-    $hasThink  = @($m.content | Where-Object { $_.type -eq $S_THINK_BLK }) | Select-Object -First 1
-    $hasText   = @($m.content | Where-Object { $_.type -eq $S_TEXT      }) | Select-Object -First 1
+    # Use .Where({}) method on the collection instead of | Where-Object ...
+    # | Select-Object pipelines: each pipeline is a thread-pool hop on
+    # PS 5.1 and the completed tasks accumulate over hours-long runs.
+    $hasTool  = $null
+    $hasThink = $null
+    $hasText  = $null
+    if ($m.content) {
+      foreach ($c in @($m.content)) {
+        if     ($hasTool  -eq $null -and $c.type -eq $S_TOOLCALL)  { $hasTool  = $c }
+        elseif ($hasThink -eq $null -and $c.type -eq $S_THINK_BLK) { $hasThink = $c }
+        elseif ($hasText  -eq $null -and $c.type -eq $S_TEXT)      { $hasText  = $c }
+        if ($hasTool) { break }   # toolCall wins; we can stop scanning
+      }
+    }
 
     if ($hasTool) {
       $tool  = $hasTool.name
       $args  = $hasTool.arguments
       if ($args) {
+        # ConvertTo-Json is a single .NET call; keep it (no pipeline leak).
         $argsJson = $args | ConvertTo-Json -Compress -Depth 2 -WarningAction SilentlyContinue
         if ($argsJson.Length -gt 60) { $argsJson = $argsJson.Substring(0, 57) + $DOTS }
       } else { $argsJson = '' }
@@ -312,7 +362,7 @@ function Write-Status($state, $message) {
 
 function Read-StatusObj {
   if (!(Test-Path $statusFile)) { return $null }
-  try { return (Get-Content $statusFile -Raw | ConvertFrom-Json) } catch { return $null }
+  try { return ([System.IO.File]::ReadAllText($statusFile) | ConvertFrom-Json) } catch { return $null }
 }
 
 # === 主循环 ===
@@ -327,15 +377,27 @@ try {
     $inferred = $null
     $latestFile = $null
 
-    # 1) mcode 进程健康：每次都查
-    $mcodePid = Get-McodePid
+    # 1) mcode 进程健康：5s 缓存（避免每秒 Get-ChildItem + Get-Process）
+    if (($now - $script:lastMcodePidAt) -lt $CACHE_TTL) {
+      $mcodePid = $script:lastMcodePid
+    } else {
+      $mcodePid = Get-McodePid
+      $script:lastMcodePid = $mcodePid
+      $script:lastMcodePidAt = $now
+    }
     if (-not $mcodePid) {
       $inferred = @{ state=$S_ERROR; message=$MSG_MCODE_EXIT }
     } else {
-      # 2) 读 session log 推断
-      $latestFile = Get-LatestSessionFile
+      # 2) 最新 session log：5s 缓存（避免每秒 EnumerateFiles 几千个 .jsonl）
+      if (($now - $script:lastLatestFileAt) -lt $CACHE_TTL) {
+        $latestFile = $script:lastLatestFile
+      } else {
+        $latestFile = Get-LatestSessionFile
+        $script:lastLatestFile = $latestFile
+        $script:lastLatestFileAt = $now
+      }
       if ($latestFile) {
-        $msg = Read-LastMessage $latestFile.FullName
+        $msg = Read-LastMessage $latestFile
         if ($msg) {
           $inferred = Infer-State $msg
         }
@@ -347,7 +409,7 @@ try {
       $curState = [string]$inferred.state
       $isSettled = ($curState -eq $S_IDLE) -or ($curState -eq $S_ERROR)
       if (-not $isSettled) {
-        $age = ($now - $latestFile.LastWriteTime).TotalSeconds
+        $age = ($now - [System.IO.File]::GetLastWriteTime($latestFile)).TotalSeconds
         if ($age -gt 60) {
           $inferred = @{ state=$S_IDLE; message=($MSG_IDLE_FMT -f [int]$age) }
         }
