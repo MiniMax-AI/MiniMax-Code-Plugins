@@ -8,7 +8,52 @@ original goal, paying main-model prices for cheap-model work, losing track of wh
 sub-agent is doing what, failing on transient errors without a budget, reading streaming
 output without filling context, or losing work at session end.
 
-## v0.7.1 changelog (this release)
+## v0.7.2 changelog (this release)
+
+> **类型**:patch · **Skill 主体不变** · 研究状态更新(阶段 2 周 6)
+
+### Added
+
+- 4 篇新知识笔记(对 `codex-rs/tools/` 25+ 文件深读):
+  - `P-107-108-tool-discovery-search.md`(5KB)— DiscoverableTool 二维分类 + `defer_loading` 搜索结果
+  - `P-109-111-dynamic-mcp-tool.md`(6KB)— 简单 vs 复杂适配器 + OpenAI 协议补全
+  - `P-112-113-plugin-install-responses-api.md`(5KB)— Tool suggestion 审批 + Responses API 5 个类型
+  - `P-114-116-json-schema-image-response-history.md`(5KB)— 7 type subset + BTreeMap 稳定输出
+- CATALOG 状态变更:`P-107/108/109/110/111/112/113/114` 🟡→🟢(8 个)
+- **🟢 首次突破 100 个已掌握模式**
+
+### Key insight
+
+**Tool 运行时全栈**:
+- **Discovery** — DiscoverableTool(Connector/Plugin × Install/Enable 二维)
+- **Search** — `defer_loading` 模式(搜索结果只含 name+description,schema 延迟加载)
+- **Dynamic vs MCP** — 简单透传 vs 复杂 schema 补全(`properties` 必填兜底)
+- **Install** — `request_plugin_install` 走 `tool_suggestion` 审批类型
+- **JSON Schema** — OpenAI Structured Outputs 子集(7 type + 3 composition)
+- **Responses API** — 5 个类型(Function / Custom / Namespace + 嵌套)
+
+**Plugin 不直接涉及 tool**,但**借鉴模式**:
+- "简单 vs 复杂适配器" — Plugin manifest 也是
+- "defer loading" — Skill description 应当简洁
+- "OpenAI 协议补全" — 跟 3rd-party 兼容
+- "Tool suggestion 审批" — 任何"加新能力"都该走审批
+
+### Not changed
+
+- 18 skill 主体(版本号全部不变)
+- 18 skill frontmatter
+
+### Roadmap progress
+
+| 阶段 | 状态 | 覆盖率 |
+|---|---|---|
+| 0 · 错判修正 | ✅ v0.6.2 | 60%→62% |
+| 1 · 5 大核心 | ✅ v0.7.0 | 62%→78% |
+| 2 · 周 5 agent + session | ✅ v0.7.1 | 78%→80% |
+| **2 · 周 6 tools/** | ✅ **v0.7.2** | **80%→83%** |
+| 2 · 周 7 rollout/ + models-manager/ | ⏳ 下一步 | — |
+
+## v0.7.1 changelog (previous)
 
 > **类型**:patch · **Skill 主体不变** · 研究状态更新(阶段 2 周 5)
 
