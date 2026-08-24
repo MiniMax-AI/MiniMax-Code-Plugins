@@ -8,7 +8,47 @@ original goal, paying main-model prices for cheap-model work, losing track of wh
 sub-agent is doing what, failing on transient errors without a budget, reading streaming
 output without filling context, or losing work at session end.
 
-## v0.6.4 changelog (this release)
+## v0.6.5 changelog (this release)
+
+> **类型**:patch · **Skill 主体不变**(18 个 0.x.y 版本号不变) · 研究状态更新(阶段 1 周 3 完成)
+
+### Added
+
+- 6 篇新知识笔记(对 `codex-rs/thread-store/` 40+ 文件深读 — **完整 session 持久化层**):
+  - `P-67-thread-sections.md`(4KB)— section 管理 + operation-tagged state access
+  - `P-68-thread-projects.md`(4KB)— projects + `Option<Option<T>>` 三态 + idempotency key
+  - `P-69-70-queue-search.md`(5KB)— queue change-based polling + search snippet
+  - `P-71-72-migration-lineage.md`(6KB)— Legacy→Paginated migration + bounded subagent replay
+  - `P-76-model-context-reconstruction.md`(4KB)— ReverseJsonlScanner + bounded replay
+  - `P-77-thread-history-segmentation.md`(5KB)— 跨 segment 双向 cursor + 防溢出
+- CATALOG 状态变更:`P-67 / P-68 / P-69 / P-70 / P-71 / P-72 / P-76 / P-77` 全部从 🟡→🟢
+- **CATALOG 状态首次全清零**:`🟡 1→0` —— 所有 🟡 模式都进入 🟢
+
+### Key insight
+
+`thread-store/` 是 Codex session 持久化的**完整基础设施**:
+- Sections / Projects / Queue / Search 提供**管理面**
+- Rollout Lineage / Migration / ModelContext reconstruction 提供**历史面**
+- ThreadStore trait + `LocalThreadStore` + `InMemoryThreadStore` 提供**抽象层**
+
+新 skill `session-branch-fork`(阶段 4)的核心参考全部在这里。
+
+### Not changed
+
+- 18 skill 主体(版本号全部不变)
+- 18 skill frontmatter
+
+### Roadmap progress
+
+| 阶段 | 状态 | 覆盖率 |
+|---|---|---|
+| 0 · 错判修正 | ✅ v0.6.2 | 60%→62% |
+| 1 · 周 1 memories/ | ✅ v0.6.3 | 62%→64% |
+| 1 · 周 2 skills/ | ✅ v0.6.4 | 64%→66% |
+| **1 · 周 3 thread-store/** | ✅ **v0.6.5** | **66%→72%** |
+| 1 · 周 4 core-plugins/ + prompts/ | ⏳ 下一步 | — |
+
+## v0.6.4 changelog (previous)
 
 > **类型**:patch · **Skill 主体不变**(18 个 0.x.y 版本号不变) · 研究状态更新(阶段 1 周 2 完成)
 
