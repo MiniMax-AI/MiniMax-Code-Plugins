@@ -8,7 +8,29 @@ original goal, paying main-model prices for cheap-model work, losing track of wh
 sub-agent is doing what, failing on transient errors without a budget, reading streaming
 output without filling context, or losing work at session end.
 
-## v0.7.4 changelog (this release)
+## v0.7.5 changelog (this release)
+
+> **类型**:patch · **Skill 主体不变** · 研究状态更新(阶段 3 边角 crate 收口)
+
+### Added
+
+- 1 篇新知识笔记(对 `apply-patch` / `context-fragments` / `mcp-server` / `app-server-daemon`):
+  - `P-148-156-edge-crates.md`(5KB)— Apply Patch Lark grammar + Context Fragments + MCP Server + App Server Daemon
+- CATALOG 状态:🟢 108→112 / 🟡 3→3
+
+### Key insight
+
+**Codex 边角能力**:
+- **Apply Patch** — 自有 Lark grammar,lenient 解析
+- **Context Fragments** — 带 metadata 的 context 片段(`AnnotatedContent`)
+- **MCP Server** — Codex 自身可作为 MCP tool(`codex_tool_runner`)
+- **App Server Daemon** — 自我管理 binary + SHA256 + self-update loop
+
+### Not changed
+
+- 18 skill 主体(版本号全部不变)
+
+## v0.7.4 changelog (previous)
 
 > **类型**:patch · **Skill 主体不变** · 研究状态更新(阶段 2 周 8)
 
