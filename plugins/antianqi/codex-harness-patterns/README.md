@@ -8,7 +8,27 @@ original goal, paying main-model prices for cheap-model work, losing track of wh
 sub-agent is doing what, failing on transient errors without a budget, reading streaming
 output without filling context, or losing work at session end.
 
-## v0.7.3 changelog (this release)
+## v0.7.4 changelog (this release)
+
+> **类型**:patch · **Skill 主体不变** · 研究状态更新(阶段 2 周 8)
+
+### Added
+
+- 1 篇新知识笔记(对 `codex-rs/protocol/src/` 关键未读模块):
+  - `P-128-protocol-capabilities-user-input.md`(7KB)— Capabilities + UserInput + OpenAI Models + Config Types + Permission Intersection
+- CATALOG 状态:🟢 100→108 / 🟡 3→3
+
+### Key insight
+
+**Codex 协议层模式**:
+- **跨 4 边界共享**(core / TUI / app-server / SDK) — 字段默认必须保留
+- **TS + JsonSchema 双重 derive** — 自动生成 TypeScript + JSON Schema
+- **`ts(export_to = "v2/")` 版本化** — 协议分版本
+- **Two-stage Parse** — API 变化时自动 fallback
+- **Intersection<T>** — 权限 / 配置用集合论组合
+- **deprecated 但保留** — 向后兼容
+
+## v0.7.3 changelog (previous)
 
 > **类型**:patch · **Skill 主体不变** · 研究状态更新(阶段 2 周 7)
 
