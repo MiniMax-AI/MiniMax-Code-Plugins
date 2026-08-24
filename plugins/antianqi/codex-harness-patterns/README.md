@@ -8,7 +8,41 @@ original goal, paying main-model prices for cheap-model work, losing track of wh
 sub-agent is doing what, failing on transient errors without a budget, reading streaming
 output without filling context, or losing work at session end.
 
-## v0.6.3 changelog (this release)
+## v0.6.4 changelog (this release)
+
+> **类型**:patch · **Skill 主体不变**(18 个 0.x.y 版本号不变) · 研究状态更新(阶段 1 周 2 完成)
+
+### Added
+
+- 6 篇新知识笔记(对 `codex-rs/skills/` 10+ 文件深读 — **Plugin 直接对应物**):
+  - `P-85-skill-selection-algorithm.md`(6KB)— 显式 + 隐式 selection,`O(T + (N_s + N_t) * S)` 复杂度,三层匹配
+  - `P-86-skill-loading.md`(6KB)— 加载抽象 + 缓存 + system skills 嵌入式分发
+  - `P-87-skill-frontmatter-parser.md`(6KB)— frontmatter 解析 + `repair_frontmatter_scalar_fields` 容错
+  - `P-88-skill-mention-extractor.md`(5KB)— `$skill-name` + `[$name](path)` 链接语法
+  - `P-89-implicit-skill-invocation.md`(5KB)— shell 命令隐式调用检测 + 平台感知分词
+  - `P-92-skill-metadata-model.md`(6KB)— 完整 11 字段 metadata + 双形态抽象
+- CATALOG 状态变更:`P-85 / P-86 / P-87 / P-88 / P-89 / P-92` 全部从 🟡→🟢
+
+### Key insight
+
+Codex skills 系统的 selection/loading/parser/mentions/model 5 个核心模块**直接对应我们 Plugin 的结构**。
+Plugin 当前的"skill 选取"能力**远弱于** Codex skills/ — 这是新 skill `skill-auto-select` 的来源(阶段 4 计划)。
+
+### Not changed
+
+- 18 skill 主体(版本号全部不变)
+- 18 skill frontmatter
+
+### Roadmap progress
+
+| 阶段 | 状态 | 覆盖率 |
+|---|---|---|
+| 0 · 错判修正 | ✅ v0.6.2 | 60%→62% |
+| 1 · 周 1 memories/ | ✅ v0.6.3 | 62%→64% |
+| **1 · 周 2 skills/** | ✅ **v0.6.4** | **64%→66%** |
+| 1 · 周 3 thread-store/ | ⏳ 下一步 | — |
+
+## v0.6.3 changelog (previous)
 
 > **类型**:patch · **Skill 主体不变**(18 个 0.x.y 版本号不变) · 研究状态更新(阶段 1 周 1 完成)
 
