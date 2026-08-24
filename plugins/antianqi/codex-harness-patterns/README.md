@@ -8,7 +8,44 @@ original goal, paying main-model prices for cheap-model work, losing track of wh
 sub-agent is doing what, failing on transient errors without a budget, reading streaming
 output without filling context, or losing work at session end.
 
-## v0.7.0 changelog (this release)
+## v0.7.1 changelog (this release)
+
+> **类型**:patch · **Skill 主体不变** · 研究状态更新(阶段 2 周 5)
+
+### Added
+
+- 4 篇新知识笔记(对 `codex-rs/core/src/agent/` + `codex-rs/core/src/{session,context_manager}/` 关键未读模块深读):
+  - `P-134-138-agent-registry.md`(7KB)— AgentRegistry + Mutex/Atomic 双层 + "Customize OR reduce, never REPLACE" 角色覆盖
+  - `P-140-142-context-manager.md`(5KB)— ContextManager `Arc<Vec>` CoW + history_version + reference snapshot diff
+  - `P-158-turn-suspension.md`(6KB)— 完整 9 步 suspend 流程 + 7 大设计原则
+  - `P-157-162-session-infrastructure.md`(5KB)— Rollout budget / MCP refresh / Input queue / Elicitation / Time reminder
+- CATALOG 状态变更:`P-134 / P-137 / P-138 / P-140-142 / P-157-160` 🟡→🟢(10 个)
+
+### Key insight
+
+**Codex session 中断的完整生命周期** = `Op::SuspendTurnAndShutdown` → 9 步 suspend 流程 → `Op::RecoverTurn` 恢复。
+关键设计:
+- Snapshot vs Seal(descendants 检查接受 best-effort)
+- Flush Before Cancel(持久化失败就让原 turn 继续)
+- No Terminal Event(故意给 RecoverTurn 留恢复口)
+- Event After Writer Closed(防并发写顺序)
+- Handoff Drops State(pending input 不持久化)
+
+### Not changed
+
+- 18 skill 主体(版本号全部不变)
+- 18 skill frontmatter
+
+### Roadmap progress
+
+| 阶段 | 状态 | 覆盖率 |
+|---|---|---|
+| 0 · 错判修正 | ✅ v0.6.2 | 60%→62% |
+| 1 · 5 大核心 | ✅ v0.7.0 | 62%→78% |
+| **2 · 周 5 agent + session** | ✅ **v0.7.1** | **78%→80%** |
+| 2 · 周 6 tools/ | ⏳ 下一步 | — |
+
+## v0.7.0 changelog (previous)
 
 > **类型**:**minor** · **Plugin 里程碑** · 阶段 1(5 大核心 crate)整圈收口 · **Skill 主体不变**
 
