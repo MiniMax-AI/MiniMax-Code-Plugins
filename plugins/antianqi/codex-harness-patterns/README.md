@@ -8,7 +8,35 @@ original goal, paying main-model prices for cheap-model work, losing track of wh
 sub-agent is doing what, failing on transient errors without a budget, reading streaming
 output without filling context, or losing work at session end.
 
-## v0.6.2 changelog (this release)
+## v0.6.3 changelog (this release)
+
+> **类型**:patch · **Skill 主体不变**(18 个 0.x.y 版本号不变) · 研究状态更新(阶段 1 周 1 完成)
+
+### Added
+
+- 4 篇新知识笔记(对 `codex-rs/memories/` 21 文件深读):
+  - `P-78-memory-phase1.md`(6KB)— Memory Phase 1:per-rollout extraction,JSON schema 强制 + `buffer_unordered` 并发 + 4 类高信噪比判定
+  - `P-79-memory-phase2.md`(8KB)— Memory Phase 2:global consolidation,10 步线性流程 + 全局单 lock + 内部 consolidation agent 锁死配置
+  - `P-80-memory-citation.md`(4KB)— MemoryCitation 协议 + `<citation_entries>` / `<rollout_ids>` 解析
+  - `P-84-memory-workspace-git.md`(8KB)— Memory workspace + git baseline 模式
+- CATALOG 状态变更:`P-78 / P-79 / P-80 / P-84` 全部从 🟡→🟢
+- CATALOG §9.2 memory 系统状态列加上"状态"字段
+
+### Not changed
+
+- 18 skill 主体(版本号全部不变)
+- 18 skill frontmatter
+- Plugin 主合约 / 触发条件 / 输出契约
+
+### Roadmap progress
+
+| 阶段 | 状态 | 覆盖率 |
+|---|---|---|
+| 0 · 错判修正 | ✅ v0.6.2 完成 | 60%→62% |
+| 1 · 5 大核心 crate | 🟢 周 1 完成 | 62%→64% |
+| 1 · 周 2 skills/ | ⏳ 下一步 | — |
+
+## v0.6.2 changelog (previous)
 
 > **类型**:patch · **Skill 主体不变**(18 个 0.x.y 版本号不变) · **元数据 + 文档更新**
 
