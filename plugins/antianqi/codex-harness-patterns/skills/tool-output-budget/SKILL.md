@@ -1,11 +1,15 @@
 ---
 name: tool-output-budget
-description: "Truncate oversized tool output (large logs, JSON arrays, fetched HTML, minified code, noisy `cat` results) so it does not blow the agent's context window. Use when a tool returns more than ~3000 tokens, or contains any line longer than ~500 characters, or returns structured data the agent will only sample. Mirrors codex-rs/utils/output-truncation."
+description: |
+  Truncate oversized tool output so it does not blow the agent's context window.
+  USE WHEN: tool output > 3000 tokens, line > 500 chars, large log, JSON array, minified code, fetched HTML, verbose npm/cargo/test output, `cat` of a big file, "truncated" / "output cut off" / "use offset to read more" message.
+  TRIGGER PHRASES: "输出太长", "context 满了", "log 太大", "截断", "truncate", "output cut off", "读不完", "太大了", "context 撑爆", "too long".
+  SKIP WHEN: output is small (<100 lines), output is the user-facing final answer, output is structured and needs full parse (read once with a guard).
 license: Apache-2.0
 compatibility: Requires MiniMax Code with Agent Plugins 1.0 support.
 metadata:
   author: antianqi
-  version: "0.1.0"
+  version: "0.1.1"
   inspired-by: https://github.com/openai/codex/tree/main/codex-rs/utils/output-truncation
 ---
 

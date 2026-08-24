@@ -1,11 +1,15 @@
 ---
 name: session-handoff
-description: "At the end of a session, write a state file that lets the next session pick up exactly where this one left off. Use when a session is ending (user says 'done for today' / context is about to compact / time is up) and there is non-trivial work in progress. Mirrors codex-rs `state/migrations/0047_rollout_migration_state.sql` (explicit migration state) and the `state/runtime/recovery.rs` pattern (DB-backed resume on crash)."
+description: |
+  At session end, write a structured handoff file so next session can pick up in 30 seconds.
+  USE WHEN: user says "今天先到这" / "done for today" / "see you tomorrow" / "we'll continue later" / "下次再继续" / "end session" / "收尾", context about to compact, long task in progress, natural pause approaching (end of work day, end of milestone), sub-task in flight that outlives this session.
+  TRIGGER PHRASES: "今天先到这", "done for today", "see you tomorrow", "we'll continue later", "下次再继续", "先到这", "end session", "session 结束", "收尾", "写到 handoff file", "wrap up", "session handoff", "session 接力".
+  SKIP WHEN: session just started (no in-progress work to hand off), work is fully complete and verified (completion-audit passed), user said "throw it all away, start fresh next time" / "全部扔掉".
 license: Apache-2.0
 compatibility: Requires MiniMax Code with Agent Plugins 1.0 support.
 metadata:
   author: antianqi
-  version: "0.1.0"
+  version: "0.1.1"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/state/src/runtime/recovery.rs and state/migrations/0047_rollout_migration_state.sql
 ---
 

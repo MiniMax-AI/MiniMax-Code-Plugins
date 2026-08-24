@@ -1,11 +1,15 @@
 ---
 name: streaming-output-reader
-description: "Read long streaming responses (SSE / WebSocket chunks / `tail -f` / long-running commands) in a way that does not block, does not buffer the whole thing in context, and does not miss output. Use whenever a tool returns a stream that is too long for a single read, or whenever a single read would force the agent to wait instead of doing other work. Mirrors the `WebsocketSession.last_request` incremental pattern in codex-rs/core/src/client.rs and the `unified_exec` background-command pattern in codex-rs/core/src/unified_exec/."
+description: |
+  Read long streaming responses in bounded chunks with cumulative summary, max 3 reads, never loop.
+  USE WHEN: tool returns long stream (SSE / WebSocket / `tail -f` / large log), output might be > 3000 tokens, file size unknown, previous read returned "truncated" / "use offset to read more" / "output cut off", `tail` of a growing log, "流式" / "实时" / "incremental" / "read in chunks".
+  TRIGGER PHRASES: "流式", "streaming", "实时", "tail -f", "real-time", "一边跑一边看", "log 在长", "output cut off", "读到一半卡了", "incremental", "stream-read", "read in chunks", "流式读取".
+  SKIP WHEN: output is small (<100 lines), output is structured and needs whole parse, polling for specific event (different pattern).
 license: Apache-2.0
 compatibility: Requires MiniMax Code with Agent Plugins 1.0 support.
 metadata:
   author: antianqi
-  version: "0.1.0"
+  version: "0.1.1"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/core/src/client.rs and core/src/unified_exec/
 ---
 

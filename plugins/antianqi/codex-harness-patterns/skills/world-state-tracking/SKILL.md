@@ -1,11 +1,15 @@
 ---
 name: world-state-tracking
-description: "Track the running state of a long task (goal, decisions, blockers, next step, key paths) in a single dedicated file that survives context compaction. Use when the task is long enough that `todowrite` alone is too thin, when the user keeps referring to 'where we are', when the agent has lost the thread, or at every `context-pressure-compact` boundary. Mirrors codex-rs `WorldState` struct in core/src/context/world_state.rs."
+description: |
+  Track running state of long task in a single dedicated file that survives compaction.
+  USE WHEN: task is long, agent has lost thread, user asks "where are we" / "到哪了" / "我们到哪了", before `context-pressure-compact`, `todowrite` alone is too thin, agent has done > 10 tool calls, "lost the thread" / "继续" / "忘了".
+  TRIGGER PHRASES: "where are we", "到哪了", "我们到哪了", "继续", "lost thread", "忘了", "lost the thread", "我们刚才说到哪了", "走神了", "回到主线".
+  SKIP WHEN: short task (<5 tool calls), single one-shot question, "do X" with X being small.
 license: Apache-2.0
 compatibility: Requires MiniMax Code with Agent Plugins 1.0 support.
 metadata:
   author: antianqi
-  version: "0.1.0"
+  version: "0.1.1"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/core/src/context/world_state.rs
 ---
 

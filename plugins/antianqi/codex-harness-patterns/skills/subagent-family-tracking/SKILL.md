@@ -1,11 +1,15 @@
 ---
 name: subagent-family-tracking
-description: "Track the parent/child thread tree of sub-agents you have spawned, so you know who is alive, who has finished, and which siblings share context. Use every time you spawn a sub-agent and the task may fan out (multiple children) or chain (a child spawning its own children). Mirrors codex-rs `agent-graph-store` (parent→child edges with Open/Closed status) plus the `SessionSource::SubAgent(SubAgentSource::ThreadSpawn)` marker."
+description: |
+  Track parent/child thread tree of spawned sub-agents with Open/Closed status.
+  USE WHEN: spawned one or more sub-agents, task description suggests a tree (sub-tasks, "for each of A/B/C", "5 stages"), user asks "what's your sub-agent doing right now" / "子 agent 都在干嘛", sub-agent may fan out, want to know "还在跑吗" / "还有几个没关", before declaring fan-out done (all children closed check).
+  TRIGGER PHRASES: "子 agent 都在干嘛", "sub-agent", "子任务", "family tree", "who is running", "还在跑吗", "还有几个没关", "what's your sub-agent doing", "subagent family", "subagent tree", "all children closed".
+  SKIP WHEN: sub-task is so cheap you'd just inline it, harness already exposes live sub-agent dashboard, you are the child not the parent.
 license: Apache-2.0
 compatibility: Requires MiniMax Code with Agent Plugins 1.0 support.
 metadata:
   author: antianqi
-  version: "0.1.0"
+  version: "0.1.1"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/agent-graph-store/
 ---
 

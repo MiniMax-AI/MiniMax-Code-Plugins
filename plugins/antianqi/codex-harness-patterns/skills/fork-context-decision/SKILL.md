@@ -1,11 +1,15 @@
 ---
 name: fork-context-decision
-description: "When spawning a sub-agent, decide how much parent context to give it via the `fork_turns` parameter. Use every time you call `task` (or equivalent) to hand off work — the choice between `all` / `none` / a positive integer is one of the largest cost levers in multi-agent work. Mirrors the `fork_turns` semantics in codex-rs/ext/goal/src/multi_agents.rs (V2 multi-agent protocol)."
+description: |
+  Pick `fork_turns` = all / N / none for sub-agent context size.
+  USE WHEN: about to call `task()` to hand off work, designing a multi-agent flow, sub-agent failed and debugging whether cause was over- or under-forking, user said "give it the full history" / "传 history" / "just the brief" / "fork 0" / "fork all" / "不用 fork" / "不要带 context".
+  TRIGGER PHRASES: "fork 多少", "give it the full history", "不用 fork", "传 history", "just the brief", "不要带 context", "fork 0", "fork all", "传全部对话", "不带 context".
+  SKIP WHEN: sub-agent tool does not support `fork_turns`, already decided `none` (no decision to make).
 license: Apache-2.0
 compatibility: Requires MiniMax Code with Agent Plugins 1.0 support.
 metadata:
   author: antianqi
-  version: "0.1.0"
+  version: "0.1.1"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/core/src/session/multi_agents.rs
 ---
 

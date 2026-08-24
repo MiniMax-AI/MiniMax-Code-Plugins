@@ -1,11 +1,15 @@
 ---
 name: retry-with-backoff
-description: "When a `transient` error has been classified (see `error-recovery-strategy`), execute the retry with explicit backoff policy: max attempts, base delay, exponential growth, jitter, and a hard ceiling on total time. Use every time you decide to retry. Mirrors the policy choices implicit in codex-rs `code-mode/src/grpc_session/reconnect.rs::get_or_open_binding` (no delay between generations, but bounded by `Semaphore(1)` concurrency) and the W3C retry semantics."
+description: |
+  Execute explicit retry policy: max 3, base 2s, max 30s, full jitter, 60s total budget, respects `Retry-After`.
+  USE WHEN: `error-recovery-strategy` classified error as `transient` and chose `retry`, HTTP 429 with `Retry-After` header, network timeout/refused/reset, queue/lock/eventually-consistent read returned stale, user said "重试" / "retry" / "再试" / "等一下" / "等几秒" / "backoff" / "exponential" / "rate limit" / "429" / "限流".
+  TRIGGER PHRASES: "重试", "retry", "再试", "等一下", "等几秒", "backoff", "exponential", "rate limit", "429", "Retry-After", "throttled", "限流", "busy", "服务忙".
+  SKIP WHEN: error is `deterministic` (won't change on retry), error is `unknown` (escalate to ask-user), work is time-sensitive and 30s backoff is too late.
 license: Apache-2.0
 compatibility: Requires MiniMax Code with Agent Plugins 1.0 support.
 metadata:
   author: antianqi
-  version: "0.1.0"
+  version: "0.1.1"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/code-mode/src/grpc_session/reconnect.rs
 ---
 

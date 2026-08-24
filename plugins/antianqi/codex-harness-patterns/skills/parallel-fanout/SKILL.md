@@ -1,11 +1,15 @@
 ---
 name: parallel-fanout
-description: "Decompose a clearly independent task into 2+ parallel sub-tasks and dispatch them with `task` in one round trip, then aggregate. Use when the user task can be split along a clean boundary (independent files, independent probes, independent analyses) and serial execution would take materially longer. Mirrors the `spawn_agent` tool in codex-rs's V2 multi-agent protocol, where the spawn is **explicit and opt-in** (not auto)."
+description: |
+  Dispatch 2+ independent sub-tasks in parallel via `task` and aggregate.
+  USE WHEN: 2+ independent sub-tasks, each bounded and well-defined, serial would take 2x longer than longest sub-task, user said "并行" / "parallel" / "fan out" / "spawn agents", multiple independent files/probes/analyses, "for each of A/B/C" / "分头做" / "拆开".
+  TRIGGER PHRASES: "并行", "parallel", "fan out", "spawn agents", "分头做", "一起做", "for each", "分别", "拆开并行", "一起跑".
+  SKIP WHEN: sub-tasks share state, sub-tasks depend on each other's output, total work is tiny (< 3 edits), user said "one by one" / "step by step" / "sequentially" / "一个一个来".
 license: Apache-2.0
 compatibility: Requires MiniMax Code with Agent Plugins 1.0 support.
 metadata:
   author: antianqi
-  version: "1.0.0"
+  version: "1.0.1"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/core/src/session/multi_agents.rs and core/src/thread_manager.rs
   changes-from-v0.1.0: "Added explicit-spawn principle (P-20: spawn is opt-in, not auto); added `max_concurrency` awareness; cross-referenced `fork-context-decision` for per-sub-task cost control; cross-referenced `delegate-with-context` for the brief."
 ---

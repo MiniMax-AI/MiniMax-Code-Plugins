@@ -1,11 +1,15 @@
 ---
 name: completion-audit
-description: "Before marking a non-trivial task complete (or telling the user it's done), treat completion as unproven and verify it against the actual current state. Derive requirements from the objective, identify the authoritative evidence for each, inspect that evidence, and only declare done when every requirement is satisfied. Use whenever the agent is about to say 'done' / 'complete' / 'ship it' / 'I finished' on a non-trivial task, especially when there is an active thread goal. Mirrors the completion audit section of the Codex goal continuation template (ext/goal/templates/goals/continuation.md)."
+description: |
+  Before saying "done", derive requirements, find authoritative evidence, verify each is ✅.
+  USE WHEN: about to say "done" / "complete" / "ship it" / "I finished" / "做完了" on non-trivial task, about to mark `todowrite` step done, about to update goal to `complete`, user has been waiting for "done" for several turns, "looks good" / "should be fine" / "应该好了" / "我试过没报错" / "我跑了测试都过了" / "I tested it" / "trust me" / "should work".
+  TRIGGER PHRASES: "做完了", "done", "complete", "ship it", "好了", "完成", "搞定", "I think we're done", "应该好了", "looks good", "我试过没报错", "我跑了测试都过了", "I tested it", "trust me", "should work".
+  SKIP WHEN: one-line edit, user can see result in chat immediately, user explicitly said "ship it" / "no more review" in this turn.
 license: Apache-2.0
 compatibility: Requires MiniMax Code with Agent Plugins 1.0 support.
 metadata:
   author: antianqi
-  version: "0.1.0"
+  version: "0.1.1"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/ext/goal/templates/goals/continuation.md
 ---
 

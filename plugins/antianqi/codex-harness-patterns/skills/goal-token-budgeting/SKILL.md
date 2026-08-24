@@ -1,11 +1,15 @@
 ---
 name: goal-token-budgeting
-description: "When the user sets an explicit token budget on a goal, track the running usage and report it on completion. Use whenever `goal-persistence` is active and the user provided a `token_budget` (either initially or via `Op::SetThreadMemoryMode`). Mirrors codex-rs `ext/goal/src/accounting.rs` (GoalAccountingState) and the 'Tokens used / Token budget / Tokens remaining' section of the goal continuation template."
+description: |
+  Track running token usage against goal's `token_budget`, surface at 50/80/100% thresholds, stop at 100%.
+  USE WHEN: `goal-persistence` active AND user provided `token_budget`, user said "do X within Y tokens" / "用 Y token 完成" / "不要超预算" / "stayed within budget" / "超出预算" / "用了多少 token", about to start sub-task and need to know remaining budget, at every compact / turn boundary.
+  TRIGGER PHRASES: "token budget", "预算", "Y tokens", "不要超过", "stayed within budget", "超出预算", "用完没", "用了多少 token", "预算跟踪", "50% / 80% / 100%", "token 预算".
+  SKIP WHEN: goal has no budget (user did not set one), user explicitly said "no budget tracking for this one".
 license: Apache-2.0
 compatibility: Requires MiniMax Code with Agent Plugins 1.0 support.
 metadata:
   author: antianqi
-  version: "0.1.0"
+  version: "0.1.1"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/ext/goal/src/accounting.rs and ext/goal/templates/goals/continuation.md
 ---
 

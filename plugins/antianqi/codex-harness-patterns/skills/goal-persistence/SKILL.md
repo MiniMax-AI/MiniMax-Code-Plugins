@@ -1,11 +1,15 @@
 ---
 name: goal-persistence
-description: "Maintain an explicit north-star goal for the whole thread that survives compactions and detects drift. Use at the start of any non-trivial task (one-time set), after every user redirection (one-time update), and at every `context-pressure-compact` boundary (one-line alignment check). Before declaring done, run a completion audit (see also `completion-audit` Skill). Mirrors codex-rs `Op::SetThreadMemoryMode` + `EventMsg::ThreadGoalUpdated` in protocol/src/protocol.rs and the continuation template in ext/goal/templates/goals/continuation.md."
+description: |
+  Maintain explicit north-star goal for the whole thread that survives compactions and detects drift.
+  USE WHEN: non-trivial task stated, user redirected mid-task ("actually do X instead" / "wait scrap that" / "现在改成"), before `context-pressure-compact`, about to mark done, user said "我们的目标是" / "we're trying to" / "我想要的" / "what I want is" / "目标是", agent drifting (tool call no longer serves original ask).
+  TRIGGER PHRASES: "我们的目标", "目标是", "我想要", "we're trying to", "what I want is", "drift", "走偏了", "focus on", "stay focused", "on track", "actually do X instead", "wait scrap that", "现在改成".
+  SKIP WHEN: trivial one-shot task, exploration without commitment, goal hasn't changed in many turns.
 license: Apache-2.0
 compatibility: Requires MiniMax Code with Agent Plugins 1.0 support.
 metadata:
   author: antianqi
-  version: "1.0.0"
+  version: "1.0.1"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/protocol/src/protocol.rs (SetThreadMemoryMode, ThreadGoalUpdatedEvent) and ext/goal/templates/goals/continuation.md
   changes-from-v0.1.0: "Added completion-audit and blocked-audit sections from the Codex continuation template; added token-budget reporting rule; aligned language with the canonical 'treat completion as unproven' principle."
 ---

@@ -1,11 +1,15 @@
 ---
 name: delegate-with-context
-description: "When delegating a sub-task to another agent (via `task`), prepare a minimal-context brief instead of dumping the full conversation history. Use when handing off a sub-task boundary, when a sub-agent needs the user's goal + the specific boundary + the pass condition + the minimal inputs, and when the conversation history is large enough that forwarding it all would waste tokens. Mirrors codex-rs InterAgentCommunication in Op / CollabAgentSpawnBegin, plus the explicit 'Message Type / Task name / Sender / Payload' message envelope from V2 multi-agent protocol."
+description: |
+  Write a minimal-context brief for `task()` instead of dumping full history.
+  USE WHEN: about to call `task()` to hand off sub-task, full conversation history > 30 turns, sub-task has clear boundary, find yourself wanting to write "see above" / "上面对话", sub-task is non-trivial, user said "派个子 agent" / "spawn agent" / "delegate" / "fork 出去" / "sub-agent 干".
+  TRIGGER PHRASES: "派个子 agent", "spawn agent", "让子 agent 干", "delegate", "sub-agent", "把任务交出去", "fork 出去", "background task", "派发", "子 agent 干", "子任务".
+  SKIP WHEN: sub-agent needs verbatim context (rare; usually `read` / `grep` is faster), sub-task boundary is fuzzy (decompose first via `plan-stream-emit`), work is so small brief would be longer than the work itself.
 license: Apache-2.0
 compatibility: Requires MiniMax Code with Agent Plugins 1.0 support.
 metadata:
   author: antianqi
-  version: "1.0.0"
+  version: "1.0.1"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/protocol/src/protocol.rs (Op::InterAgentCommunication, CollabAgentSpawnBegin) and core/src/session/multi_agents.rs
   changes-from-v0.2.0: "Added the message envelope format (Message Type / Task name / Sender / Payload) from P-20 V2; added explicit 'this is the sub-agent return path' section; cross-referenced fork-context-decision for fork_turns choice."
 ---

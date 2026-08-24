@@ -1,11 +1,15 @@
 ---
 name: context-pressure-compact
-description: "Compress a long-running multi-step task into a structured state summary before continuing, so the agent can keep going without losing track of the original goal. Use when the active `todowrite` exceeds 5 items, after ~20 tool calls, when the user says 'compact' / 'summarize so far' / 'we need to refocus', or when context usage is visibly heavy. Mirrors codex-rs/core/src/compact.rs::run_pre_sampling_compact and the v2 64K retention budget (RETAINED_MESSAGE_TOKEN_BUDGET)."
+description: |
+  Compress a long-running multi-step task into a structured snapshot before continuing.
+  USE WHEN: `todowrite` > 5 items, after ~20 tool calls, context getting full, agent has lost track of goal, user said "compact" / "summarize" / "refocus" / "压缩" / "总结" / "到哪了", before context window fills (>80%), before `context-pressure-compact` boundary.
+  TRIGGER PHRASES: "compact", "summarize", "refocus", "压缩", "总结", "到哪了", "context 满了", "忘了目标", "we're getting lost", "compress", "snapshot".
+  SKIP WHEN: short task (<5 tool calls), user in middle of dictating a request, user said "do not summarize" / "keep everything".
 license: Apache-2.0
 compatibility: Requires MiniMax Code with Agent Plugins 1.0 support.
 metadata:
   author: antianqi
-  version: "1.0.0"
+  version: "1.0.1"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/core/src/compact.rs and core/src/compact_remote_v2.rs
   changes-from-v0.1.0: "Added the 64K retention budget concept (P-10 v2); added 'discarded N tool calls and M lines' reporting rule; cross-referenced world-state-tracking and goal-persistence so compaction is the single coordination point."
 ---

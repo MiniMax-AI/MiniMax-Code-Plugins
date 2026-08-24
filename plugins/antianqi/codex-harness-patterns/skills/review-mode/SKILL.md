@@ -1,11 +1,15 @@
 ---
 name: review-mode
-description: "After completing a non-trivial chunk of work (a function, a file, a feature, a config change), switch to a critical-reviewer mode and verify the work before declaring it done. Use when a sub-task boundary is reached, when the user says 'review this' / 'double-check' / 'is this right', or before reporting 'done' on anything the user will rely on. Mirrors codex-rs EnteredReviewMode / ExitedReviewMode events in protocol/src/protocol.rs."
+description: |
+  Switch to critic mode after finishing a chunk, produce PASS / FIX / REDO verdict.
+  USE WHEN: sub-task boundary reached, user said "review" / "double-check" / "is this right" / "spot the bug" / "看一下" / "review 一下", before reporting "done" on anything user will rely on, after writing code / config / doc, after sub-agent returns.
+  TRIGGER PHRASES: "review", "double-check", "看一下", "review 一下", "查一下", "检查", "找 bug", "is this right", "spot the bug", "verifier", "自己 review 一下".
+  SKIP WHEN: one-line edit, user explicitly said "ship it" / "no more review" / "不用 review" in this turn, user can see result in chat immediately.
 license: Apache-2.0
 compatibility: Requires MiniMax Code with Agent Plugins 1.0 support.
 metadata:
   author: antianqi
-  version: "0.1.0"
+  version: "0.1.1"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/protocol/src/protocol.rs (EnteredReviewModeEvent / ExitedReviewModeEvent)
 ---
 

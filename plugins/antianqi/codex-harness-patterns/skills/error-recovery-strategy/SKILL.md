@@ -1,11 +1,15 @@
 ---
 name: error-recovery-strategy
-description: "When a tool call, sub-agent task, or external operation fails, decide between retry / switch / fallback / ask-user / skip. Use whenever a tool returns a non-success result, a sub-agent reports failure, or an exception escapes from a call. The decision must be explicit, not reflexive. Mirrors the resilience patterns in codex-rs `code-mode/src/grpc_session/reconnect.rs` (binding-replacement over re-retry) and the `MultiAgentMode::ExplicitRequestOnly` philosophy (don't auto-recover without user signal)."
+description: |
+  Classify error into 4 buckets (transient / deterministic / stale / unknown) and pick one of 5 actions (retry / switch / fallback / refresh-then-retry / ask-user / skip).
+  USE WHEN: tool returns non-success, sub-agent `status: closed-failed`, exception escapes, timeout fires, weird partial-success result, ECONNREFUSED / 5xx / 429 / timeout / permission denied / "command not found" / "fail" / "error" / "出错了" / "挂" / "失败".
+  TRIGGER PHRASES: "出错了", "failed", "挂", "error", "失败", "fail", "permission denied", "command not found", "ECONNREFUSED", "timeout", "挂了", "再试一次", "retry", "这不行", "没用", "fallback", "退路", "不行", "跑不通", "broken".
+  SKIP WHEN: operation succeeded, error is in user input (clarification case), error is part of expected flow (grep 0 matches).
 license: Apache-2.0
 compatibility: Requires MiniMax Code with Agent Plugins 1.0 support.
 metadata:
   author: antianqi
-  version: "0.1.0"
+  version: "0.1.1"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/code-mode/src/grpc_session/reconnect.rs and core/src/session/multi_agents.rs
 ---
 

@@ -1,11 +1,15 @@
 ---
 name: plan-stream-emit
-description: "Before touching files on a non-trivial task, emit a structured plan as `todowrite` items and surface the plan to the user for early course-correction. Use when the user request is multi-step, has any ambiguity, or would take more than 3 tool calls to complete. Mirrors codex-rs `PlanUpdate` / `PlanDelta` events and the Op::PlanUpdate wire event."
+description: |
+  Before touching files on a non-trivial task, emit a structured plan and surface to the user for early course-correction.
+  USE WHEN: non-trivial task, multi-step task, ambiguous requirement, would take > 3 tool calls, user has not approved an approach yet, user said "plan first" / "before you start" / "let me see your approach" / "先出计划" / "出方案", crossing trust boundary (production, public repo, irreversible action).
+  TRIGGER PHRASES: "plan first", "先出计划", "let me see", "出方案", "确认一下", "先别动手", "想清楚再开始", "before you start", "我看看方案", "出 plan", "出计划".
+  SKIP WHEN: single one-shot question, user already gave numbered list of steps, trivially reversible, "do X" with X being one line.
 license: Apache-2.0
 compatibility: Requires MiniMax Code with Agent Plugins 1.0 support.
 metadata:
   author: antianqi
-  version: "0.1.0"
+  version: "0.1.1"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/protocol/src/protocol.rs (PlanUpdate / PlanDelta)
 ---
 

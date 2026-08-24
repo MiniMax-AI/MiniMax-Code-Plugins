@@ -1,11 +1,15 @@
 ---
 name: background-task
-description: "Run a long-running command (dev server, build, watcher, test loop, file sync) as a background task that the agent can poll, steer, and shut down, instead of blocking the conversation on it. Use when a command is expected to take > 30 seconds, when the user wants to keep talking while it runs, when you need to start something and then check on it later in the same session, or when an earlier foreground call already failed with a timeout. Mirrors codex-rs CleanBackgroundTerminals and unified_exec in core/src/unified_exec/."
+description: |
+  Run long-running command as background task instead of blocking conversation.
+  USE WHEN: command expected > 30s, dev server / build / watcher / test loop / `tail -f` / long npm/cargo/make output, user said "in the background" / "don't block" / "后台" / "并行跑" / "kick off", earlier foreground call timed out, want to keep talking while command runs, file sync / `fswatch` / live-reload.
+  TRIGGER PHRASES: "后台", "background", "in the background", "并行跑", "don't block", "继续做别的事", "kick off the build", "start the server", "跑着不用等", "background task", "起个 server", "watch 一下".
+  SKIP WHEN: command is short (<30s), output is the deliverable (read in one shot), destructive command needing exit code.
 license: Apache-2.0
 compatibility: Requires MiniMax Code with Agent Plugins 1.0 support.
 metadata:
   author: antianqi
-  version: "0.1.0"
+  version: "0.1.1"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/core/src/unified_exec/
 ---
 

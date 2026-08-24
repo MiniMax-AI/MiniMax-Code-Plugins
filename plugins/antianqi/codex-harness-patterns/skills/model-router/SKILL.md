@@ -1,11 +1,15 @@
 ---
 name: model-router
-description: "Before delegating a sub-task (via `task`), assess the sub-task's complexity and pick the model config that matches it: cheap model for routine lookups, main model for complex work. Use every time you call `task` and the sub-task is non-trivial, and any time you are about to spend the main model on work a cheap model could do. Mirrors codex-rs `model-provider-info` + `models-manager` + the routing layer that lets sub-agents run on cheaper models."
+description: |
+  Classify sub-task complexity (cheap / medium / main) and pick matching `model_config_id`.
+  USE WHEN: about to call `task()` for non-trivial sub-task, about to spend main model on work cheap model could do, "do this with the cheap model" / "用便宜模型" / "不要用主模型" / "sub-task 不重" / "small task", sub-task is routine lookup / reformat / list / reformat-only, "this is just a grep" / "this is just a reformat" / "小任务".
+  TRIGGER PHRASES: "用便宜模型", "cheap model", "use the cheap model", "小任务用便宜模型", "不要用主模型", "用本地模型", "sub-task 不重", "小任务", "this is just a", "小 case 用便宜".
+  SKIP WHEN: sub-task IS the main task (no delegation), sub-agent tool does not support `model_config_id`, sub-task is genuinely synthesis / design / cross-file reasoning.
 license: Apache-2.0
 compatibility: Requires MiniMax Code with Agent Plugins 1.0 support.
 metadata:
   author: antianqi
-  version: "0.1.0"
+  version: "0.1.1"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/model-provider-info/ and codex-rs/models-manager/
 ---
 
