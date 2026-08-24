@@ -8,7 +8,23 @@ original goal, paying main-model prices for cheap-model work, losing track of wh
 sub-agent is doing what, failing on transient errors without a budget, reading streaming
 output without filling context, or losing work at session end.
 
-## v1.0.0 changelog (this release) 🎉
+## v1.0.1 changelog (this release)
+
+> **类型**:patch · **Skill 主体不变** · 文档收尾(OVERVIEW.md / STATUS.md 全面刷新 + PR #18 title 更新)
+
+### Added
+
+- `OVERVIEW.md` 全面刷新 — 23 Skills 按生命周期分组 + 完整生命周期图
+- `PR-STATUS.md` 同步到 v1.0.0 状态
+- PR #18 title 更新为 "v1.0.0 — 23 Skills covering complete agent lifecycle"
+- PR #18 body 全面重写 — 23 Skills 表格 + v0.1.0 - v1.0.0 完整 changelog
+
+### Not changed
+
+- 23 skills 主体(版本号全部不变)
+- 23 skills frontmatter
+
+## v1.0.0 changelog (previous) 🎉
 
 > **类型**:**MAJOR** · **Plugin 1.0 里程碑** · 5 个新 skill + 完整生命周期覆盖
 

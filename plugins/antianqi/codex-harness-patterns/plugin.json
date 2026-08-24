@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "codex-harness-patterns",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Long-running task patterns distilled from OpenAI Codex harness v0.149.0 — tool output budgeting, context pressure compaction, parallel sub-agent fan-out, structured plan streaming, self-review, sub-agent delegation, world-state tracking, background task management, thread-level goal persistence, per-sub-task model routing, completion auditing, fork-context decision, sub-agent family tracking, goal token budgeting, error recovery strategy, retry with backoff, streaming output reader, session handoff, long-term memory, skill auto-selection, plugin authoring helper, tool discovery pattern, and session branch/fork. 23 Skills total covering the complete agent lifecycle: planning → decomposition → sub-agent parallelism → execution → state tracking → tool discovery → skill/plugin authoring → memory persistence → session branching. Activates when an agent must manage token budget, decompose work, sustain multi-step tasks without losing focus, coordinate sub-agents, pick the right model for the job, prove that a non-trivial task is actually done, stay within an explicit goal token budget, recover from transient failures, read streaming output without filling context, hand off a session cleanly, persist memory across sessions, write a discoverable skill, design a discoverable tool, author a marketplace plugin, or branch / fork / revert a session.",
   "author": {
     "name": "antianqi",
