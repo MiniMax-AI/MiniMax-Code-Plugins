@@ -8,7 +8,30 @@ original goal, paying main-model prices for cheap-model work, losing track of wh
 sub-agent is doing what, failing on transient errors without a budget, reading streaming
 output without filling context, or losing work at session end.
 
-## v0.7.2 changelog (this release)
+## v0.7.3 changelog (this release)
+
+> **类型**:patch · **Skill 主体不变** · 研究状态更新(阶段 2 周 7)
+
+### Added
+
+- 2 篇新知识笔记(对 `codex-rs/rollout/` + `codex-rs/models-manager/` 深读):
+  - `P-117-127-rollout-persistence.md`(4KB)— zstd 压缩 + ReverseJsonlScanner + RolloutReferenceIndex
+  - `P-128-133-models-manager.md`(5KB)— ModelsEndpointClient trait + 5min 文件 cache + 1177 行 models.json
+- CATALOG 状态变更:`P-117/118/119/120 + P-128/129/130/132` 🟡→🟢(8 个)
+
+### Key insight
+
+- **zstd + 反向扫描** — 冷 rollout 自动压缩,反向读只取末段
+- **RolloutReferenceIndex** — 不读文件就能回答"谁引用了我"
+- **models.json 1177 行** — 完整 capability matrix(input_modalities/truncation_policy/prefer_websockets/...)
+- **ModelsEndpointClient trait** — 多 provider 抽象
+
+### Not changed
+
+- 18 skill 主体(版本号全部不变)
+- 18 skill frontmatter
+
+## v0.7.2 changelog (previous)
 
 > **类型**:patch · **Skill 主体不变** · 研究状态更新(阶段 2 周 6)
 
