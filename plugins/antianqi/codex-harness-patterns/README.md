@@ -8,7 +8,44 @@ original goal, paying main-model prices for cheap-model work, losing track of wh
 sub-agent is doing what, failing on transient errors without a budget, reading streaming
 output without filling context, or losing work at session end.
 
-## v0.7.5 changelog (this release)
+## v1.0.0 changelog (this release) 🎉
+
+> **类型**:**MAJOR** · **Plugin 1.0 里程碑** · 5 个新 skill + 完整生命周期覆盖
+
+### 🎉 v1.0 里程碑
+
+Plugin 现在覆盖 Codex agent 的**完整生命周期**:
+```
+planning → decomposition → sub-agent parallelism → execution →
+state tracking → tool discovery → skill/plugin authoring →
+memory persistence → session branching
+```
+
+**23 个 Skill**(从 18 增加到 23),Plugin 覆盖率 **~90%+**。
+
+### Added — 5 个新 Skill
+
+| # | Skill | 用途 | 灵感来源 |
+|---|---|---|---|
+| 19 | `long-term-memory` | 跨 session 长期记忆设计(Phase 1/2 提取 + 合并 + citation) | `codex-rs/memories/` |
+| 20 | `skill-auto-select` | 设计可被 LLM 可靠选择的 skill(三层匹配 + mention 语法) | `codex-rs/skills/` |
+| 21 | `plugin-author-helper` | 写 marketplace Plugin(manifest 格式 + 3-layer sync + idempotency) | `codex-rs/core-plugins/` |
+| 22 | `tool-discovery-pattern` | 设计可被 agent 发现的 tool(defer_loading + 7-type schema) | `codex-rs/tools/` |
+| 23 | `session-branch-fork` | session 分支 / 回滚 / 恢复(paginated + lineage + ModelContext) | `codex-rs/thread-store/` |
+
+### Coverage journey
+
+- **v0.6.2 (开始)**:60% 覆盖
+- **v0.7.0 (阶段 1 完成)**:78%
+- **v0.7.5 (阶段 3 完成)**:88%
+- **v1.0.0 (阶段 4 完成)**:~90%+
+
+### Not changed
+
+- 18 个原有 skill 主体不变,版本号不变
+- 原有 18 skill 的 frontmatter / 触发条件不变
+
+## v0.7.5 changelog (previous)
 
 > **类型**:patch · **Skill 主体不变** · 研究状态更新(阶段 3 边角 crate 收口)
 
