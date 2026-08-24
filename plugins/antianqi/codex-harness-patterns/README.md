@@ -8,7 +8,40 @@ original goal, paying main-model prices for cheap-model work, losing track of wh
 sub-agent is doing what, failing on transient errors without a budget, reading streaming
 output without filling context, or losing work at session end.
 
-## v0.6.1 changelog (this release)
+## v0.6.2 changelog (this release)
+
+> **类型**:patch · **Skill 主体不变**(18 个 0.x.y 版本号不变) · **元数据 + 文档更新**
+
+### Added
+
+- **CATALOG §7 修正**:把之前标 ⛔"范围外"的 4 个 session/thread 模式(`P-49 Fork` / `P-50 Rollback` /
+  `P-51 Recover` / `P-52 History Mode`)重新归类为 🟡"待深读" — 它们的真实实现位置是
+  `codex-rs/thread-store/`(40+ 文件,完整 fork/revert/recover/segmentation 实现),不是"范围外"。
+- **CATALOG §8 修正**:把 `P-63 Skills runtime` 和 `P-64 Memory system` 从 ❌"不在 4 个重点"
+  改为 🟡"待深读" — 它们是 Codex 跨 session 长期记忆和 skill runtime 的核心实现,**直接对应
+  我们 Plugin 自身结构**(`codex-rs/skills/` + `codex-rs/memories/`)。
+- **CATALOG §9 新增**:2026-08-24 复盘发现 ~100 个未研究模式草案,挑选 50+ 高价值列入。最高价值:
+  - ⭐⭐⭐⭐⭐ `memories/` Phase 1/2(per-rollout extraction + global consolidation)
+  - ⭐⭐⭐⭐⭐ `skills/` 完整 runtime(selection / loading / parser / mentions)
+  - ⭐⭐⭐⭐ `core-plugins/` marketplace 运行时
+  - ⭐⭐⭐⭐ `tools/` discovery / search / dynamic tool
+  - ⭐⭐⭐⭐ `prompts/` 完整 4 套 prompt 模板
+
+### Documentation
+
+- 新增 `research-log/2026-08-24-resurvey-findings.md`(25KB) — 完整复盘报告
+- 新增 `RESEARCH-ROADMAP.md`(12KB) — 2-3 月系统性补完计划(阶段 0-4)
+- 新增 6 篇纠错笔记(`knowledge/P-{49,50,51,52,63,64}-*.md`)— 详述错判反思 + 实际代码位置
+
+### Honest acknowledgment
+
+这次复盘揭示了 Plugin 实际**只覆盖了 Codex 模式库的 ~60%**。18 skill 跟现有 66-pattern
+CATALOG 是一对一覆盖(每个 skill 对应 1 个或几个 P-XX),看起来很整齐,但底层有 6 个错判
+没真正读代码就标了 — 意味着对 Codex 怎么管 session/thread/memory 这块没真正搞懂。
+
+`v0.6.2` 不解决覆盖率问题,只**诚实记录**。系统性补完由 v0.7.0 起按周推进。
+
+## v0.6.1 changelog (previous)
 
 ### Changed
 
