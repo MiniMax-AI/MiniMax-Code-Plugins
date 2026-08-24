@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "codex-harness-patterns",
-  "version": "0.5.0",
-  "description": "Long-running task patterns distilled from OpenAI Codex harness v0.149.0 — tool output budgeting, context pressure compaction, parallel sub-agent fan-out, structured plan streaming, self-review, sub-agent delegation, world-state tracking, background task management, thread-level goal persistence, per-sub-task model routing, completion auditing, fork-context decision, sub-agent family tracking, and goal token budgeting. Activates when an agent must manage token budget, decompose work, sustain multi-step tasks without losing focus, coordinate sub-agents, pick the right model for the job, prove that a non-trivial task is actually done, or stay within an explicit goal token budget. Inspired by codex-rs/core/src/compact.rs, run_turn, Op/EventMsg protocol, InterAgentCommunication, WorldState, ext/goal continuation template + accounting, model-provider-info, models-manager, agent-graph-store, and the V2 multi-agent protocol.",
+  "version": "0.6.0",
+  "description": "Long-running task patterns distilled from OpenAI Codex harness v0.149.0 — tool output budgeting, context pressure compaction, parallel sub-agent fan-out, structured plan streaming, self-review, sub-agent delegation, world-state tracking, background task management, thread-level goal persistence, per-sub-task model routing, completion auditing, fork-context decision, sub-agent family tracking, goal token budgeting, error recovery strategy, retry with backoff, streaming output reader, and session handoff. Activates when an agent must manage token budget, decompose work, sustain multi-step tasks without losing focus, coordinate sub-agents, pick the right model for the job, prove that a non-trivial task is actually done, stay within an explicit goal token budget, recover from transient failures, read streaming output without filling context, or hand off a session cleanly.",
   "author": {
     "name": "antianqi",
     "url": "https://github.com/antianqi"
@@ -27,6 +27,10 @@
     "completion-audit",
     "fork-context",
     "family-tracking",
-    "token-accounting"
+    "token-accounting",
+    "error-recovery",
+    "retry",
+    "streaming",
+    "session-handoff"
   ]
 }
