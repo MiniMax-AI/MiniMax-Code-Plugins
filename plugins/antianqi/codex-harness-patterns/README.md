@@ -8,7 +8,50 @@ original goal, paying main-model prices for cheap-model work, losing track of wh
 sub-agent is doing what, failing on transient errors without a budget, reading streaming
 output without filling context, or losing work at session end.
 
-## v0.6.5 changelog (this release)
+## v0.7.0 changelog (this release)
+
+> **类型**:**minor** · **Plugin 里程碑** · 阶段 1(5 大核心 crate)整圈收口 · **Skill 主体不变**
+
+### Added
+
+- 4 篇新知识笔记:
+  - `P-93-95-plugin-loader-marketplace-manifest.md`(7KB)— Plugin 运行时 + marketplace + manifest 三件套
+  - `P-99-plugin-startup-sync.md`(4KB)— 3 层 fallback + lock file + SHA 缓存
+  - `P-164-prompts-compact.md`(3KB)— compact 5 个 must-have
+  - `P-165-prompts-goals.md`(5KB)— 4 大设计原则(防 prompt injection / 防偷工减料)
+  - `P-166-168-prompts-permissions-realtime-review.md`(8KB)— 3 套 permissions + 3 套 realtime + 3 套 review
+- CATALOG 状态变更:`P-93/94/95/99 + P-164/165/166/167/168` 全部 🟡→🟢
+
+### 阶段 1 整圈收口
+
+| 周 | crate | 状态 | 发布 |
+|---|---|---|---|
+| 1 | `codex-rs/memories/` 21 文件 | ✅ | v0.6.3 |
+| 2 | `codex-rs/skills/` 10+ 文件 | ✅ | v0.6.4 |
+| 3 | `codex-rs/thread-store/` 40+ 文件 | ✅ | v0.6.5 |
+| 4 | `codex-rs/core-plugins/` 60+ 文件 + `codex-rs/prompts/` 4 套 | ✅ | **v0.7.0** |
+
+**5 大核心 crate 全部完成**:
+- ✅ memories (跨 session 长期记忆)
+- ✅ skills (Plugin 直接对应物)
+- ✅ thread-store (完整 session 持久化)
+- ✅ core-plugins (Plugin 运行时)
+- ✅ prompts (4 套 prompt 模板)
+
+**Plugin 覆盖率**:**72% → 78%**(+6%,阶段 1 净增 16%)
+
+### Not changed
+
+- 18 skill 主体(版本号全部不变)
+- 18 skill frontmatter
+
+### Next
+
+- 阶段 2(周 5-8):core/agent/ + core/session/ + tools/ + rollout/ + models-manager/ + protocol/
+- 阶段 3(周 9-10):边角 crate 收口
+- 阶段 4(周 11-12):5 个新 skill + Plugin v1.0
+
+## v0.6.5 changelog (previous)
 
 > **类型**:patch · **Skill 主体不变**(18 个 0.x.y 版本号不变) · 研究状态更新(阶段 1 周 3 完成)
 
