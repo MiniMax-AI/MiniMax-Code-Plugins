@@ -35,6 +35,25 @@ Activate when:
 - Pure MCP server (no Skill bundle) → use the `mcp-server` crate's own conventions.
 - One-off tool scripts → don't package.
 
+## Host runtime requirements
+
+This Skill describes **how to design** a Plugin (manifest, idempotency, scope).
+It does **not** cause the agent to install, modify, or publish anything on its own.
+Specifically, the agent MUST NOT, on the strength of this Skill alone:
+
+- Run `npm install` / `npm link` / any package manager command for the user.
+- Write or overwrite files in `~/.minimax/.../plugins/`, `~/.codex/.../`,
+  `~/.config/`, or any other user-level config directory.
+- Hit a marketplace endpoint (download, install, upgrade) on the user's behalf.
+- Trigger a plugin sync that reaches the network (3-layer fallback in Codex is a
+  Codex-runtime concept; MiniMax Code may or may not have an equivalent).
+
+All of the above require **explicit user confirmation** in the host's normal
+permission flow (`approval_policy`, `ask` mode, or whatever the host uses).
+This Skill is for **designing** the manifest / sync flow, not for **executing** it.
+The agent that *runs* the install / sync must follow the host's user-confirmation
+policy, **not** the patterns in this Skill.
+
 ## Process
 
 ### 1. Pick the manifest format

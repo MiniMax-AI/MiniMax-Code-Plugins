@@ -34,6 +34,29 @@ Activate when designing any of:
 - Real-time voice / streaming → out of scope.
 - Forgetting-on-purpose privacy filters → out of scope.
 
+## Host runtime requirements
+
+This Skill describes **how to design** a cross-session memory system (Phase 1
+extraction, Phase 2 consolidation, citation format, git baseline, watermark).
+It does **not** cause the agent to install, modify, or write to persistent
+storage on its own. Specifically, the agent MUST NOT, on the strength of this
+Skill alone:
+
+- Read or write files in `~/.codex/memories/`, `~/.minimax/memory/`, or any other
+  per-host memory workspace. **No memory directory is implicitly writable by
+  the agent.**
+- Spawn sub-agents or background tasks to perform extraction / consolidation.
+- Trigger a Phase 1 / Phase 2 schedule on session start (the host decides when
+  memory runs; this Skill does not).
+- Call `redact_secrets` or any other exfiltration-mitigation step without the
+  host's normal user-confirmation policy.
+
+All of the above require **explicit user confirmation** in the host's normal
+permission flow (`approval_policy`, `ask` mode, or whatever the host uses).
+This Skill is for **designing** the pipeline, not for **executing** it. The
+agent that runs Phase 1 / Phase 2 must follow the host's user-confirmation
+policy, **not** the patterns in this Skill.
+
 ## Process
 
 A long-term memory system is built from four pieces. Build them in this order.
