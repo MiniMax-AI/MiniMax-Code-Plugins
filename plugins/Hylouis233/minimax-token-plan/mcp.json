@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "minimax-token-plan": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["./server.mjs"],
+      "cwd": "${PLUGIN_ROOT}"
+    }
+  }
+}
