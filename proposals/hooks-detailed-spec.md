@@ -41,21 +41,33 @@ constrains and extends them.
 
 The following event keys are present in the 0.2.4 `cli.js` bundle. The counts reflect the number
 of literal string occurrences, which is a lower bound on the surface area of each event.
+The **0.2.4 confirmed?** column records whether the literal is referenced from the Runtime's
+agent-event allowlist (the empirical `Wso` set plus the `hook-config-parser` dispatch path).
+Events marked `forward` are observed in `cli.js` only as string literals; their wire contract
+is reserved by the spec but their Runtime allowlist membership is still in flight.
 
-| Event | `cli.js` count | Default dispatch | Decision-bearing | Native client bridge |
-| --- | --- | --- | --- | --- |
-| `PreToolUse` | 35 | per tool call | yes | CLAUDE, CODEX |
-| `PostToolUse` | 37 | per tool call | no | CLAUDE, CODEX |
-| `SessionStart` | 46 | per session resume | no | CLAUDE, CODEX |
-| `SessionEnd` | 98 | per session terminate | no | CLAUDE, CODEX |
-| `Stop` | 97 | per turn / agent stop | no | CLAUDE, CODEX |
-| `UserPromptSubmit` | 18 | per user turn | no | CLAUDE, CODEX |
-| `PreCompact` | 12 | before context compaction | no | CLAUDE, CODEX |
-| `Notification` | 66 | per system notification | no | CLAUDE, CODEX |
-| `SubagentStart` | 15 | per subagent start | no | CODEX |
-| `SubagentStop` | 13 | per subagent stop | no | CODEX |
-| `PermissionRequest` | 40 | before a permission decision | yes | CLAUDE, CODEX |
-| `PermissionDenied` | 3 | after a denied permission | no | CLAUDE, CODEX |
+| Event | `cli.js` count | Default dispatch | Decision-bearing | Native client bridge | 0.2.4 confirmed? |
+| --- | --- | --- | --- | --- | --- |
+| `PreToolUse` | 35 | per tool call | yes | CLAUDE, CODEX | yes |
+| `PostToolUse` | 37 | per tool call | no | CLAUDE, CODEX | yes |
+| `SessionStart` | 46 | per session resume | no | CLAUDE, CODEX | yes |
+| `SessionEnd` | 98 | per session terminate | no | CLAUDE, CODEX | yes |
+| `UserPromptSubmit` | 18 | per user turn | no | CLAUDE, CODEX | yes |
+| `Stop` | 97 | per turn / agent stop | no | CLAUDE, CODEX | forward |
+| `PreCompact` | 12 | before context compaction | no | CLAUDE, CODEX | forward |
+| `Notification` | 66 | per system notification | no | CLAUDE, CODEX | forward |
+| `SubagentStart` | 15 | per subagent start | no | CODEX | forward |
+| `SubagentStop` | 13 | per subagent stop | no | CODEX | forward |
+| `PermissionRequest` | 40 | before a permission decision | yes | CLAUDE, CODEX | forward |
+| `PermissionDenied` | 3 | after a denied permission | no | CLAUDE, CODEX | forward |
+
+The five `yes` events are the same five observed in the 0.2.4 `Wso` allowlist scraped from
+`cli.js`. The seven `forward` events are the portable spec's reserved surface area; they
+are wired into `cli.js` as string literals (e.g. decision-field handling, notification
+routing) but their full agent-event dispatch path is expected to land alongside the
+validator acceptance in the next Runtime release. A Plugin that needs `forward` events
+should declare them anyway; if the 0.2.4 Runtime does not honor the event, the validator
+and the portable spec are still authoritative.
 
 Two design consequences follow directly from the empirical surface:
 
@@ -89,19 +101,39 @@ For `PreToolUse` the runtime recognizes at least the following response shapes, 
   0.2.4 is for `PreToolUse` and contains a modified tool input. The exact field set is
   MiniMax-defined and outside the portable floor.
 
-For `PermissionRequest` the recognized shapes are the same, with `allow` / `deny` mapped to the
-runtime's permission owner (`Permission Core` in 0.2.4). A denial here has the same effect as
-`fail-closed` and cannot be overridden by a later `PreToolUse` Hook.
+For `PermissionRequest` the recognized shapes are:
 
-Two invariants apply to all decision-bearing events:
+- `{ "decision": "allow", "reason": "..." }` — permit the tool call without a TUI prompt.
+- `{ "decision": "deny", "reason": "..." }` — reject the tool call (fail-closed equivalent).
+- `{ "decision": "ask", "reason": "..." }` — **observer opt-in**: route the decision to the TUI
+  prompt so the user can approve or deny, even though a Hook is registered. This value is
+  added by this companion because the 0.2.4 Runtime default for `PermissionRequest` is
+  fail-closed (`deny`), which makes a pure observer Hook indistinguishable from a denial and
+  breaks the portable promise of "observe-only." With `ask`, an observer Hook can surface
+  state (e.g. publish a `waiting` pill) without short-circuiting the user's decision.
+
+A denial here has the same effect as `fail-closed` and cannot be overridden by a later
+`PreToolUse` Hook. The portable default for `PermissionRequest` is therefore:
+
+- If a Hook returns `allow`, `deny`, or `ask`, that decision wins.
+- If a Hook is registered but does not return a `decision`, the runtime must still prompt the
+  user (treat the absence of a decision as `ask`, not `deny`). The portable proposal's
+  "Observe-only runtime semantics" floor is preserved: registering a Hook on
+  `PermissionRequest` does not change the user-facing permission flow.
+
+Three invariants apply to all decision-bearing events:
 
 - Decisions are evaluated in declaration order within a Plugin. Earlier Handlers may constrain
   what later Handlers can decide. Cross-Plugin ordering is undefined; portable Plugins must not
   depend on it.
 - A non-zero exit code, a missing `decision` field, or an unparseable response is treated as
   "no opinion" and falls through to the runtime default. The runtime default for `PreToolUse`
-  is to allow; for `PermissionRequest` it is to deny. The portable proposal § "Observe-only
-  runtime semantics" is preserved for every other event.
+  is to allow; for `PermissionRequest` it is to ask the user (not deny) when any Hook is
+  registered, and to fall back to the runtime's own permission owner otherwise. The portable
+  proposal § "Observe-only runtime semantics" is preserved for every other event.
+- An observer Hook on `PermissionRequest` MUST return `ask` (or no decision at all) and MUST
+  NOT return `allow` or `deny` unless the Plugin is genuinely the permission owner. Returning
+  `allow` from a status-publication Hook is a UX bug, not a feature.
 
 ## Dual-client bridging
 
@@ -152,6 +184,16 @@ not part of the portable extension.
 
 ## Document shape
 
+The Runtime locates the hooks document at a fixed path inside the Plugin root:
+
+```
+${PLUGIN_ROOT}/io.minimax.mcode/hooks/hooks.json
+```
+
+`PLUGIN_ROOT` is the Runtime-reserved env var (see Field vocabulary below). Marketplace-installed
+Plugins and locally-installed Plugins read from the same path inside their own root. There is
+no separate per-plugin data path for the hooks document; the Runtime does not write to it.
+
 The `hooks.json` document must satisfy:
 
 ```json
@@ -165,14 +207,15 @@ The `hooks.json` document must satisfy:
 }
 ```
 
-The schema URL is illustrative. It must be owned by MiniMax, versioned, and immutable once a
-client implements against it. The companion requires the same reverse-domain namespace
-`io.minimax.mcode` and the same directory layout that the portable proposal defines; it does
-not propose a different one.
+The `$schema` URL is **reserved** by this proposal but is not yet published. Plugins SHOULD
+include the value shown above as a forward contract; the URL will be activated by MiniMax
+before any client implementation is accepted. The companion requires the same reverse-domain
+namespace `io.minimax.mcode` and the same directory layout that the portable proposal defines;
+it does not propose a different one.
 
 ## Conformance evidence (additions to the portable proposal)
 
-The portable proposal already lists ten conformance checks. This companion adds three more,
+The portable proposal already lists ten conformance checks. This companion adds four,
 all required for the runtime side:
 
 - The full twelve-event catalog is delivered exactly once per matching lifecycle occurrence
@@ -182,10 +225,49 @@ all required for the runtime side:
 - A `PermissionRequest` Handler returning `{"decision":"deny","reason":"..."}` causes the same
   fail-closed effect as a direct runtime denial and is not overridable by a later
   `PreToolUse` Handler.
+- A `PermissionRequest` Handler that returns NO `decision` (or `{"decision":"ask",...}`) does
+  not change the user-facing permission flow: the TUI prompt still appears, the user can
+  still approve or deny, and the registered Handler is invoked for state observation only.
+  This is the only path under which a portable observer Hook on `PermissionRequest` can be
+  written without forcing the user to act on every tool call.
 
-These three checks are observed-in-runtime evidence. They are not portable; the portable
+These four checks are observed-in-runtime evidence. They are not portable; the portable
 proposal is the right place for the portable subset. The companion only records what the 0.2.4
 runtime already does so that future portability work has a concrete target.
+
+### End-to-end smoke (mcode-island v0.3.0, 2026-08-26)
+
+The companion was exercised by the `mcode-island` Plugin on Windows 11 24H2 with
+`@minimax-ai/code@0.2.4`. Each of the twelve event scripts was invoked directly with a
+realistic event payload, the resulting `status.json` was read back, and the multi-writer
+semantics with the Runtime's own status detector were observed:
+
+```
+step=SessionStart           got=idle       src=agent      expect=idle       OK
+step=UserPromptSubmit       got=thinking   src=agent      expect=thinking   OK
+step=PreToolUse-Bash        got=working    src=agent      expect=working    OK
+step=PostToolUse-Bash       got=done       src=agent      expect=done       OK
+step=PreToolUse-Read        got=working    src=agent      expect=working    OK
+step=PostToolUse-Read       got=done       src=agent      expect=done       OK
+step=PreCompact             got=thinking   src=agent      expect=thinking   OK
+step=Stop                   got=done       src=agent      expect=done       OK
+step=SubagentStart          got=working    src=agent      expect=working    OK
+step=SubagentStop           got=done       src=agent      expect=done       OK
+step=PermissionRequest      got=waiting    src=agent      expect=waiting    OK
+step=PermissionDenied       got=error      src=agent      expect=error      OK
+step=PreToolUse-self-push   got=error      src=agent      expect=error      OK   (no change, filter applied)
+step=Notification           got=idle       src=agent      expect=idle       OK
+step=SessionEnd             got=idle       src=agent      expect=idle       OK
+----
+summary: 15 pass, 0 fail
+```
+
+The `PreToolUse-self-push` case is the only one that intentionally does NOT change state: it
+is a `Bash` invocation whose command contains `notify-island.ps1`, so the Hook filters the
+self-push to avoid recursive state churn. This is a behavior the companion does not yet
+prescribe; portable Plugins may want to filter their own internal tool calls or may want
+to push state on every tool call including their own. The mcode-island choice is recorded
+here as one working answer, not as a portable requirement.
 
 ## Out of scope (still)
 
