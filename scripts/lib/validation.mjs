@@ -123,6 +123,109 @@ function isSafeRemoteUrl(value) {
   }
 }
 
+export const CLIENT_EXTENSION_NAMESPACES = Object.freeze(['io.minimax.mcode']);
+const KNOWN_HOOK_EVENTS = new Set([
+  'PreToolUse',
+  'PostToolUse',
+  'SessionStart',
+  'SessionEnd',
+  'Stop',
+  'UserPromptSubmit',
+  'PreCompact',
+  'Notification',
+  'SubagentStart',
+  'SubagentStop',
+  'PermissionRequest',
+  'PermissionDenied',
+]);
+const HOOK_RESERVED_FIELDS = new Set([
+  'type',
+  'shell',
+  'prompt',
+  'http',
+  'agent',
+  'script',
+  'function',
+]);
+const HOOK_TIMEOUT_DEFAULT = 30000;
+const HOOK_TIMEOUT_MIN = 100;
+const HOOK_TIMEOUT_MAX = 600000;
+
+export function validateHookEntry(value, label) {
+  assert(isRecord(value), `${label}: hook entry must be an object`);
+  assert(typeof value.command === 'string' && value.command.length > 0, `${label}: command is required`);
+  assert(
+    isBareCommand(value.command) || isContainedRelativePath(value.command),
+    `${label}: command must be a bare executable or a contained ./ path`,
+  );
+  for (const key of Object.keys(value)) {
+    assert(!HOOK_RESERVED_FIELDS.has(key), `${label}: ${key} is a reserved internal discriminator and is not allowed in a portable Hook entry`);
+  }
+  if (value.args !== undefined) {
+    assert(Array.isArray(value.args) && value.args.every((item) => typeof item === 'string' && item.length > 0), `${label}: args must be an array of non-empty strings`);
+  }
+  if (value.env !== undefined) {
+    assert(isRecord(value.env), `${label}: env must be an object`);
+    for (const [envKey, envValue] of Object.entries(value.env)) {
+      assert(!['PLUGIN_ROOT', 'PLUGIN_DATA'].includes(envKey), `${label}: env.${envKey} is reserved`);
+      assert(typeof envValue === 'string', `${label}: env.${envKey} must be a string`);
+    }
+  }
+  if (value.cwd !== undefined) {
+    assert(
+      typeof value.cwd === 'string'
+        && /^(?:\.\/|\$\{PLUGIN_ROOT\}(?:\/|$)|\$\{PLUGIN_DATA\}(?:\/|$))/u.test(value.cwd),
+      `${label}: cwd must be a contained ./ path or resolve under PLUGIN_ROOT or PLUGIN_DATA`,
+    );
+  }
+  if (value.matcher !== undefined && value.pattern !== undefined) {
+    assert(value.matcher === value.pattern, `${label}: matcher and pattern must agree when both are set`);
+  }
+  if (value.timeout !== undefined) {
+    assert(Number.isInteger(value.timeout) && value.timeout >= HOOK_TIMEOUT_MIN && value.timeout <= HOOK_TIMEOUT_MAX, `${label}: timeout must be an integer between ${HOOK_TIMEOUT_MIN} and ${HOOK_TIMEOUT_MAX} ms`);
+  }
+  if (value.timeoutMs !== undefined) {
+    assert(Number.isInteger(value.timeoutMs) && value.timeoutMs >= HOOK_TIMEOUT_MIN && value.timeoutMs <= HOOK_TIMEOUT_MAX, `${label}: timeoutMs must be an integer between ${HOOK_TIMEOUT_MIN} and ${HOOK_TIMEOUT_MAX} ms`);
+  }
+  if (value.once !== undefined) {
+    assert(typeof value.once === 'boolean', `${label}: once must be a boolean`);
+  }
+  return value;
+}
+
+export function validateHooksDocument(value, label) {
+  assert(isRecord(value), `${label}: root must be an object`);
+  assert(typeof value.$schema === 'string' && value.$schema.length > 0, `${label}: $schema is required`);
+  assert(isRecord(value.hooks), `${label}: hooks must be an object`);
+  const events = [];
+  for (const [eventName, entries] of Object.entries(value.hooks)) {
+    assert(KNOWN_HOOK_EVENTS.has(eventName), `${label}: ${eventName} is not a recognized event; expected one of ${[...KNOWN_HOOK_EVENTS].sort().join(', ')}`);
+    assert(Array.isArray(entries) && entries.length > 0, `${label}: ${eventName} must be a non-empty array`);
+    for (let i = 0; i < entries.length; i += 1) {
+      validateHookEntry(entries[i], `${label}: ${eventName}[${i}]`);
+    }
+    events.push(eventName);
+  }
+  return events.sort();
+}
+
+export async function validateClientExtensions(root) {
+  const found = [];
+  for (const namespace of CLIENT_EXTENSION_NAMESPACES) {
+    const hooksPath = path.join(root, namespace, 'hooks', 'hooks.json');
+    let text;
+    try {
+      text = await readFile(hooksPath, 'utf8');
+    } catch (error) {
+      if (error.code === 'ENOENT') continue;
+      throw error;
+    }
+    const events = validateHooksDocument(parseJson(text, hooksPath), hooksPath);
+    found.push({ namespace, events });
+  }
+  return found;
+}
+
 export async function validatePluginDirectory(root) {
   const manifestPath = path.join(root, 'plugin.json');
   const manifest = validatePluginManifest(parseJson(await readFile(manifestPath, 'utf8'), manifestPath), manifestPath);
@@ -147,8 +250,9 @@ export async function validatePluginDirectory(root) {
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
+  const clientExtensions = await validateClientExtensions(root);
   assert(skills.length + mcpServers.length > 0, `${root}: plugin must expose at least one Skill or MCP server`);
-  return { manifest, skills: skills.sort(), mcpServers };
+  return { manifest, skills: skills.sort(), mcpServers, clientExtensions };
 }
 
 export async function validateHostedPluginDirectory(root, { owner, pluginName }) {
