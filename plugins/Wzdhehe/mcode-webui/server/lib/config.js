@@ -47,6 +47,11 @@ export const MCODE_CMD = (() => {
 export const PORT = Number(process.env.PORT) || 8080;
 // v0.5.ao: web UI 默认监听所有网卡（不限制本机）— 用户在浏览器/手机/局域网访问是主场景
 export const HOST = process.env.HOST || "0.0.0.0";
+// v1.0.1: optional auth token for non-local requests. When set, all
+// /api/* and SSE requests must carry either `?token=<value>` or
+// `Authorization: Bearer <value>`. Local requests always bypass. See
+// plugins/Wzdhehe/mcode-webui/references/SECURITY-NOTES.md §2.
+export const TOKEN = process.env.TOKEN || "";
 export const DEFAULT_MODEL =
   process.env.MCODE_MODEL || "minimax_api/MiniMax-M3";
 export const DEFAULT_TIMEOUT = process.env.MCODE_TIMEOUT || "120s";

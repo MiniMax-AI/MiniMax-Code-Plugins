@@ -39,6 +39,14 @@
         <span>🟢</span>
         <span id="chip-online-text">1 台</span>
       </span>
+      <!-- v1.0.1: 只读模式指示 — server readOnly=true 时所有 client 顶部都显示
+           醒目的双语 chip ("只读" + "READ ONLY"), 让远程 client 一眼就看出
+           当前 webui 处于只读模式 (POST / DELETE 会被 server 拒) -->
+      <span class="chip chip-readonly" id="chip-readonly" hidden data-i18n-title="topbar_readonly_title" title="webui 当前处于只读模式 / webui is in read-only mode">
+        <span data-i18n="topbar_readonly_zh">只读</span>
+        <span class="chip-readonly-sep">/</span>
+        <span data-i18n="topbar_readonly_en">READ ONLY</span>
+      </span>
       <!-- v0.5.bp: 局域网访问链接 — LAN on 时显示当前 IP，点复制完整 URL（URL 来自 server 的 detectLanIp()，非硬编码） -->
       <a class="chip chip-lan-link" id="chip-lan-link" hidden data-lan-url="" data-i18n-title="lan_link_title" title="点击复制局域网访问 URL">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -132,6 +140,60 @@
           <span class="btn-value" id="chip-lan-value" data-i18n="lan_on">开</span>
           <svg class="icon btn-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
         </button>
+        <!-- v1.0.1: 二级 LAN 卡片 (sub-card) — 点开 chip-lan 后弹出，含只读/Token/接口 -->
+        <div class="lan-card" id="lan-card" hidden>
+          <div class="lan-card-title" data-i18n="lan_card_title">局域网安全设置</div>
+
+          <div class="lan-card-row">
+            <label class="lan-card-row-label">
+              <span data-i18n="lan_access">局域网访问</span>
+            </label>
+            <label class="lan-card-toggle">
+              <input type="checkbox" id="lan-card-broadcast" />
+              <span class="lan-card-toggle-slider"></span>
+            </label>
+          </div>
+
+          <div class="lan-card-row">
+            <label class="lan-card-row-label">
+              <span data-i18n="lan_card_readonly">只读模式</span>
+              <span class="lan-card-row-help" data-i18n="lan_card_readonly_help" title="远程客户端只能读取，不能发送消息/删除会话">远程客户端只能读取，不能发送消息/删除会话</span>
+            </label>
+            <label class="lan-card-toggle">
+              <input type="checkbox" id="lan-card-readonly" />
+              <span class="lan-card-toggle-slider"></span>
+            </label>
+          </div>
+
+          <div class="lan-card-row">
+            <label class="lan-card-row-label">
+              <span data-i18n="lan_card_token_auth">Token 鉴权</span>
+              <span class="lan-card-row-help" data-i18n="lan_card_token_auth_help" title="需要 ?token= 或 Authorization header；本机不受限">需要 ?token= 或 Authorization header；本机不受限</span>
+            </label>
+            <label class="lan-card-toggle">
+              <input type="checkbox" id="lan-card-token-auth" />
+              <span class="lan-card-toggle-slider"></span>
+            </label>
+          </div>
+
+          <div class="lan-card-section">
+            <div class="lan-card-section-label" data-i18n="lan_card_token_value">当前 token</div>
+            <div class="lan-card-token-row" id="lan-card-token-row">
+              <span class="lan-card-token-mask" id="lan-card-token-mask">••••••••••••••••••••••••••••••••</span>
+              <span class="lan-card-token-value" id="lan-card-token-value" hidden></span>
+              <button class="lan-card-btn" id="lan-card-token-toggle" data-i18n="lan_card_token_show">显示</button>
+              <button class="lan-card-btn" id="lan-card-token-copy" data-i18n="lan_card_token_copy">复制</button>
+            </div>
+            <div class="lan-card-warning" id="lan-card-token-warning" hidden>
+              <span data-i18n="lan_card_token_new_warning">新的 token — 请在另一台设备用上面的 URL 打开</span>
+            </div>
+            <div class="lan-card-actions">
+              <button class="lan-card-btn lan-card-btn-danger" id="lan-card-token-reset" data-i18n="lan_card_reset_token">重置 token</button>
+              <button class="lan-card-btn lan-card-btn-primary" id="lan-card-token-ack" data-i18n="lan_card_token_ack" hidden>我已保存</button>
+            </div>
+            <div class="lan-card-help" data-i18n="lan_card_token_ack_help" title="保存后 token 不会再次显示；下次需要查看可点'重置'">保存后 token 不会再次显示；下次需要查看可点"重置"</div>
+          </div>
+        </div>
 
         <!-- v0.5.ak: 改为 GitHub 链接（指向 Wzdhehe 的开源仓库） -->
         <a class="user-footer github-link" id="user-footer" href="https://github.com/Wzdhehe/mcode-webui" target="_blank" rel="noopener noreferrer" title="mcode-webui on GitHub">

@@ -31,6 +31,19 @@
 - **工作区切换** —— 目录树浏览器（Windows 各盘符、Linux `/`）
 - **Token 鉴权的局域网共享** —— `0.0.0.0` 绑定，`?token=` 或
   `Authorization: Bearer` 两种方式，运行时可开关（关时返回 403 友好页）
+- **Token 鉴权：默认开启 (v1.0.1)** —— 首次启动未设置 `TOKEN` 环境变量时，
+  服务器自动生成一个 32 hex token，持久化到
+  `~/.mcode-webui/settings.json`，并在标准输出打印一次。配置卡片
+  展示 token 直到你点击 "我已保存" —— 之后再也不会从
+  `/api/settings` 响应里下发。设 `TOKEN` 环境变量可覆盖。
+- **Token 鉴权：重置 + 实时广播 (v1.0.1)** —— "重置 token" 按钮生成
+  新的 token，持久化，并通过 SSE 广播 `auth.token_rotated` 事件。
+  所有已连接的客户端自动更新 localStorage + `Authorization` 头
+  —— 无需重新加载。不在线的客户端下次访问会得到新的 URL。
+- **Token 鉴权：已确认状态 (v1.0.1)** —— 确认后，服务器不再在
+  `/api/settings` 响应里包含 `currentToken` 字段。UI 显示
+  "已保存" 占位文字。如要重新查看 token，必须点击 "重置 token"
+  （会生成新值）。状态跨重启持久化。
 - **移动端响应** —— `<900px` 抽屉式布局，`<600px` 单列
 - **双语界面** —— 英文 / 简体中文，即时切换
 - **单色主题** —— "Ink & Paper" 暗 / 亮双主题，跟随系统
@@ -58,7 +71,8 @@ TOKEN=$(openssl rand -hex 16) node server.js
 |------|------|------|
 | `PORT` | `8080` | HTTP 端口（v1.0 之前是 `7890`） |
 | `HOST` | `0.0.0.0` | 绑定地址（`127.0.0.1` = 仅本机） |
-| `TOKEN` | （空） | 非本机请求必带的 token |
+| `TOKEN` | （空） | 非本机请求必带的 token。**v1.0.1**：不设的话，server 首次启动会自动生成 32 hex token（见下面的"Token 鉴权"段） |
+| `MCODE_WEBUI_SETTINGS_PATH` | `~/.mcode-webui/settings.json` | **v1.0.1**：覆盖 settings 文件位置（测试、非默认安装） |
 | `MCODE_MODEL` | `minimax_api/MiniMax-M3` | 默认模型 |
 | `MCODE_CMD` | 自动探测 | `mcode` / `mcode.cmd` 路径 |
 | `MCODE_WEBUI_UPLOAD_DIR` | 自动 | 附件目录 |

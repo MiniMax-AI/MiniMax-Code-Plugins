@@ -139,3 +139,137 @@ describe("handlePostSettings — /api/settings POST", () => {
     assert.equal(typeof body.mcodeVersion, "string");
   });
 });
+
+// =====================================================================
+// v1.0.1 — new fields
+// =====================================================================
+
+describe("handlePostSettings — v1.0.1 new fields", () => {
+  beforeEach(() => {
+    settingsLib.setLanBroadcast(true);
+    settingsLib.setReadOnly(false);
+    settingsLib.setTokenEnabled(true);
+    settingsLib.setTokenAcknowledged(false);
+  });
+
+  test("readOnly:true sets changed:true + persists", async () => {
+    const res = fakeRes();
+    await settingsRoute.handlePostSettings(fakeReq({ readOnly: true }), res, {});
+    const body = JSON.parse(res._body);
+    assert.equal(body.changed, true);
+    assert.equal(body.readOnly, true);
+    assert.equal(settingsLib.getReadOnly(), true);
+  });
+
+  test("readOnly:false after true sets changed:true", async () => {
+    settingsLib.setReadOnly(true);
+    const res = fakeRes();
+    await settingsRoute.handlePostSettings(fakeReq({ readOnly: false }), res, {});
+    const body = JSON.parse(res._body);
+    assert.equal(body.changed, true);
+    assert.equal(body.readOnly, false);
+    assert.equal(settingsLib.getReadOnly(), false);
+  });
+
+  test("readOnly same value: changed:false", async () => {
+    const res = fakeRes();
+    await settingsRoute.handlePostSettings(fakeReq({ readOnly: false }), res, {});
+    const body = JSON.parse(res._body);
+    assert.equal(body.changed, false);
+  });
+
+  test("tokenEnabled:false sets changed:true", async () => {
+    const res = fakeRes();
+    await settingsRoute.handlePostSettings(fakeReq({ tokenEnabled: false }), res, {});
+    const body = JSON.parse(res._body);
+    assert.equal(body.changed, true);
+    assert.equal(body.tokenEnabled, false);
+    assert.equal(settingsLib.getTokenEnabled(), false);
+  });
+
+  test("acknowledgeToken:true sets changed:true + persists", async () => {
+    const res = fakeRes();
+    await settingsRoute.handlePostSettings(fakeReq({ acknowledgeToken: true }), res, {});
+    const body = JSON.parse(res._body);
+    assert.equal(body.changed, true);
+    assert.equal(body.tokenAcknowledged, true);
+    assert.equal(settingsLib.getTokenAcknowledged(), true);
+  });
+
+  test("acknowledgeToken same value: changed:false", async () => {
+    const res = fakeRes();
+    await settingsRoute.handlePostSettings(fakeReq({ acknowledgeToken: false }), res, {});
+    const body = JSON.parse(res._body);
+    assert.equal(body.changed, false);
+  });
+
+  test("unknown fields are ignored (no error)", async () => {
+    const res = fakeRes();
+    await settingsRoute.handlePostSettings(
+      fakeReq({ unknownField: "haha", anotherOne: 123 }),
+      res,
+      {},
+    );
+    const body = JSON.parse(res._body);
+    assert.equal(body.ok, true);
+    assert.equal(body.changed, false);
+  });
+
+  test("multiple field changes batch into one response", async () => {
+    const res = fakeRes();
+    await settingsRoute.handlePostSettings(
+      fakeReq({ readOnly: true, tokenEnabled: false }),
+      res,
+      {},
+    );
+    const body = JSON.parse(res._body);
+    assert.equal(body.changed, true);
+    assert.equal(body.readOnly, true);
+    assert.equal(body.tokenEnabled, false);
+  });
+
+  test("malformed JSON body is treated as empty payload (no crash)", async () => {
+    // Use a fakeReq with non-JSON bytes
+    const { Readable } = await import("node:stream");
+    const req = Readable.from([Buffer.from("this is not json", "utf8")]);
+    const res = fakeRes();
+    await settingsRoute.handlePostSettings(req, res, {});
+    const body = JSON.parse(res._body);
+    assert.equal(body.ok, true);
+    assert.equal(body.changed, false);
+  });
+});
+
+describe("handlePostSettings — resetToken", () => {
+  beforeEach(() => {
+    settingsLib.setTokenAcknowledged(false);
+  });
+
+  test("resetToken:true triggers rotation + returns new token", async () => {
+    // Set an initial token
+    const initial = settingsLib.rotateToken();
+    settingsLib.setTokenAcknowledged(true);
+    const res = fakeRes();
+    await settingsRoute.handlePostSettings(fakeReq({ resetToken: true }), res, {});
+    const body = JSON.parse(res._body);
+    assert.equal(body.ok, true);
+    assert.equal(body.tokenRotated, true);
+    assert.notEqual(body.currentToken, initial);
+    assert.equal(typeof body.currentToken, "string");
+    assert.ok(body.currentToken.length > 0);
+    assert.equal(body.tokenAcknowledged, false);
+    // In-memory state is updated
+    assert.equal(settingsLib.getCurrentToken(), body.currentToken);
+  });
+
+  test("resetToken:false or non-true is ignored (no rotation)", async () => {
+    const initial = settingsLib.getCurrentToken();
+    const res = fakeRes();
+    await settingsRoute.handlePostSettings(fakeReq({ resetToken: false }), res, {});
+    // Response should be the normal snapshot, no rotation flag
+    const body = JSON.parse(res._body);
+    assert.notEqual(body.tokenRotated, true);
+    // Token should not have changed
+    assert.equal(settingsLib.getCurrentToken(), initial);
+  });
+});
