@@ -278,7 +278,7 @@ export async function handleRequest(req, res) {
   // CORS headers (all paths)
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
   const pathname = (req.url || "/").split("?")[0];
   const cid = getCidFromReq(req);
@@ -292,14 +292,19 @@ export async function handleRequest(req, res) {
   // Gate 3: token auth (v1.0.1).
   //   - Local request: always allowed.
   //   - /api/* routes (incl. SSE /api/events): gated when TOKEN auth enabled.
-  //   - Static files (HTML/CSS/JS/images) and OPTIONS: always public so
-  //     the SPA can bootstrap (load index.html, fetch app/main.js) and so
-  //     EventSource preflight / static asset CORS works.
+  //   - OPTIONS preflight: always allowed (browsers cannot attach
+  //     Authorization to a preflight; CORS spec says server must respond
+  //     to OPTIONS with the negotiated CORS headers, not 401).
+  //     The OPTIONS short-circuit further down returns 204 with the
+  //     CORS headers set here in Gate 1.
+  //   - Static files (HTML/CSS/JS/images): always public so the SPA can
+  //     bootstrap (load index.html, fetch app/main.js).
   //   - The SPA reads ?token= from the URL (browser) and stores it in
   //     localStorage; subsequent fetch + EventSource attach it as
   //     Authorization: Bearer / ?token=.
   if (
     pathname.startsWith("/api/") &&
+    req.method !== "OPTIONS" &&
     !isRequestAuthorized(req) &&
     writeAuthRequired(res)
   ) {
