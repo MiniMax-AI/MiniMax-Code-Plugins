@@ -1,26 +1,31 @@
 ---
 name: fork-context-decision
 description: |
-  Pick `fork_turns` = all / N / none for sub-agent context size.
-  USE WHEN: about to call `task()` to hand off work, designing a multi-agent flow, sub-agent failed and debugging whether cause was over- or under-forking, user said "give it the full history" / "传 history" / "just the brief" / "fork 0" / "fork all" / "不用 fork" / "不要带 context".
+  Decide how much parent context to pass to a sub-agent before spawning it. Pick "all / N turns / brief only" explicitly, not by accident.
+  USE WHEN: about to call `task()` to hand off work, designing a multi-agent flow, sub-agent failed and debugging whether cause was over- or under-forking, user said "give it the full history" / "传 history" / "just the brief" / "don't carry context" / "不用 fork" / "不要带 context".
   TRIGGER PHRASES: "fork 多少", "give it the full history", "不用 fork", "传 history", "just the brief", "不要带 context", "fork 0", "fork all", "传全部对话", "不带 context".
-  SKIP WHEN: sub-agent tool does not support `fork_turns`, already decided `none` (no decision to make).
+  SKIP WHEN: sub-task is trivial (one-line read), you have already decided "no context" (no decision to make).
 license: Apache-2.0
-compatibility: Requires MiniMax Code with Agent Plugins 1.0 support.
+compatibility: Requires MiniMax Code with Agent Plugins 1.0 support. The example calls in this Skill are written in Codex-harness style (pseudocode); MiniMax Code's `task` tool may use a different parameter name for the same concept (e.g. `brief` vs `fork_turns`) — adapt the call to the actual host API, do NOT blindly use the parameter names below.
 metadata:
   author: antianqi
-  version: "0.1.1"
-  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/core/src/session/multi_agents.rs
+  version: "0.1.2"
+  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/core/src/session/multi_agents.rs (design principle only; the example parameter names are Codex-specific)
+  changes-from-v0.1.1: "Rewritten to be host-agnostic. The example calls are now pseudocode (Codex-style) with an explicit mcode adaptation note. The Skill teaches the decision, not the parameter spelling."
 ---
 
 # Fork Context Decision
 
-`fork_turns` is the **single largest cost lever** in multi-agent work. `all` doubles your
-context, `none` forces the sub-agent to re-derive from a brief, and the integer in between
-is a precision knob. Pick wrong and you either pay main-model prices for routine work, or
-you spawn a sub-agent that cannot do its job because it cannot see what came before.
+How much parent context to pass to a sub-agent is the **single largest cost lever** in
+multi-agent work. Too much and you double the model's context; too little and the
+sub-agent cannot do its job because it cannot see what came before. Pick wrong either
+way, the work slows down or silently fails.
 
-This Skill codifies the decision so you make it explicitly, not by accident.
+This Skill codifies the decision so the agent makes it explicitly, not by accident.
+
+> **mcode 适配**:本 Skill 的 example 调用用 Codex-harness 风格(`fork_turns=N`)作为
+> **伪代码**。MiniMax Code 的 `task` 工具可能用不同参数名表达同一概念(如 `brief`
+> vs `fork_turns`)。请**根据实际 host API 改写参数名**,不要盲抄。
 
 ## When to use
 
@@ -34,111 +39,90 @@ Activate when **any** of these is true:
 
 ## When NOT to use
 
-- The sub-agent tool does not support a fork / context parameter (this Skill is then
-  irrelevant; skip).
-- The sub-task is so trivial that the cost difference is noise (a one-line `grep`).
-- You have already decided `fork_turns=0` or `none` (i.e. you have already chosen "no
-  context") and there is no decision to make.
+- The sub-agent tool does not accept any context / fork parameter (then the decision
+  is forced; skip).
+- The sub-task is so trivial that the cost difference is noise (a one-line `read`).
+- You have already decided "no context" (no decision to make).
 
-## The 3 fork modes
+## The decision
 
-| Mode | What the sub-agent sees | Cost | When to use |
+Three choices, ordered by cost:
+
+| Choice | What the sub-agent sees | Use when |
+|---|---|---|
+| **all** | The full parent conversation history. | Sub-agent must reason about a prior decision, debug an earlier failure, or reuse a result the parent has already computed. |
+| **N** (integer) | The last N turns. | Sub-agent needs recent context but not the full history. |
+| **none** (or `0` / `brief`) | Only the brief you write inline. | Sub-task is self-contained; the brief is enough. |
+
+### Pseudo-cost table
+
+| Choice | Token cost | Sub-agent accuracy on context-dependent tasks | Sub-agent accuracy on self-contained tasks |
 |---|---|---|---|
-| **`all`** (default if omitted) | All of parent's history | **High** — sub-agent pays for every turn you took | Sub-agent needs the *exact* reasoning that led to the current state. Rare. |
-| **`N`** (positive integer) | Last N turns of parent | **Medium** — proportional to N | Sub-agent needs the *recent* context (the last few tool calls / decisions) but not the full history. Most common. |
-| **`none`** (or `0`) | Nothing — pure brief | **Low** — only the brief | Sub-agent can do its job from a well-written brief alone. The default for `parallel-fanout`. |
-
-## Decision framework
-
-Before every `task` call, ask:
-
-1. **Can the sub-agent do the job from the brief alone?**
-   - **Yes** → `none`
-   - **No** → continue
-
-2. **Does it need recent decisions / tool outputs to do the job?**
-   - "Recent" = the last 3-10 turns
-   - **Yes** → `N` where N ≈ the number of turns that contain the needed context
-   - **No** → continue
-
-3. **Does it need the full reasoning that led here?**
-   - This is rare. Most sub-tasks do not.
-   - **Yes** → `all` (and consider whether the sub-agent should be a continuation of the
-     main agent instead of a fresh sub-agent)
-
-4. **Will the cost of `all` be acceptable?**
-   - If `all` would push the sub-agent over its own budget, choose `N` or `none`.
-   - If the sub-task is cheap and the cost of failure is high, `all` may be worth it.
-
-## Output contract
-
-Every time you call `task`, the user sees:
-
-- The chosen mode (`all` / `N` / `none`) in the brief or in a one-line preamble.
-- A one-sentence reason: "fork=N because the brief alone misses the X decision made 3
-  turns ago."
+| `all` | 100% | high | low (distracted by noise) |
+| `N` | moderate | high (if N is enough) | high |
+| `none` | minimal | low | high (focused) |
 
 ## Process
 
-1. **State the chosen mode** in the brief, before writing the rest of it. This forces an
-   explicit decision.
-2. **For `N`**, name the specific turns / events the sub-agent needs to see. Do not just
-   write `N=5`; write `N=5 because the last 5 turns contain the X decision`.
-3. **For `none`**, the brief must be self-contained. If the brief references "the
-   conversation above" or "what we just decided," you have made a mistake — `none` requires
-   a complete brief.
-4. **For `all`**, explicitly justify why the sub-agent needs the full history. Default
-   suspicion: you do not need `all`; you need `N`.
+1. **Classify the sub-task**. Does it need to see any prior turn?
+   - If **yes**: choose `all` or `N`.
+   - If **no**: choose `none` and write a self-contained brief.
+2. **If you chose `N`**: pick the smallest N that still works.
+   - Start at 3. If the sub-agent asks for more context, bump to 5, then 10, then `all`.
+3. **Document the choice in the brief**:
+   - `Context: last 3 turns (decided N=3 because the sub-task needs the prior tool output).`
+4. **If the sub-agent fails**, retry with the next higher N before changing anything
+   else.
 
-## Example
+## Output contract
 
-```text
-> task(subagent=explore, run_in_background=true,
-       fork_turns=0,
-       prompt="<self-contained brief, see below>")
-launched explore (id: 5a3f); fork=none because the brief is self-contained
-```
+After activating this Skill, the next `task` call MUST include the chosen context level,
+either as a parameter or in the brief header:
 
 ```text
-> task(subagent=explore, run_in_background=true,
-       fork_turns=3,
-       prompt="The last 3 turns contain the design decision; resume from there.
-               <rest of brief>")
-launched explore (id: 6b2c); fork=3 because the sub-task picks up after the auth redesign
-decision
-```
-
-```text
-> task(subagent=explore, run_in_background=true,
-       fork_turns=all,  // rare
-       prompt="<brief>")
-launched explore (id: 7c1a); fork=all because this sub-agent IS the continuation of the
-debugging session
+# Sub-task brief
+Context level: <all | N | none>
+Reason: <one sentence>
+<the actual brief>
 ```
 
 ## Common pitfalls
 
-- **Do not default to `all`.** It is the most expensive answer. The Skill exists to move
-  work *off* `all`, not to confirm the obvious.
-- **Do not default to `none` if the brief is incomplete.** An under-forked sub-agent will
-  fail silently. It is better to over-fork than under-fork on the first attempt; downgrade
-  on retry.
-- **Do not pick `N` without naming the turns.** "N=5" is not a decision; "N=5 because the
-  last 5 turns contain the X decision" is.
-- **Do not pick `all` "to be safe."** It is not safer; it is expensive. Safety comes from
-  a well-scoped brief + an explicit decision, not from dumping history.
-- **Do not change the fork mode mid-stream.** If you started with `none` and the
-  sub-agent comes back saying "I need more context," do not re-spawn with `all`; instead,
-  send a follow-up `send_message` (or equivalent) with the specific context it needs.
-  Re-spawning wastes the work it already did.
+- **Defaulting to `all` "to be safe"** — costs you every turn, and dilutes the
+  sub-agent's focus. Only use `all` if you have a concrete reason.
+- **Defaulting to `none` "to save cost"** — the sub-agent re-derives from the brief,
+  and the brief is often wrong. The cost saved is the cost of the bug.
+- **Not documenting the choice** — a future reviewer (or you, tomorrow) cannot tell
+  why `N=3` was chosen. Document or it didn't happen.
+- **Changing the brief without changing `N`** — if the brief is wrong, more context
+  doesn't help. Fix the brief first.
+
+## Example
+
+The example below is **Codex-harness style pseudocode** for clarity. On MiniMax Code,
+the `task` tool's parameter name for "how much parent context to share" may be
+`brief` (a string) rather than `fork_turns` (an integer). **Adapt the call shape to
+the actual host tool, do not copy this verbatim**:
+
+```text
+# Codex-harness style (pseudocode for design clarity):
+> task(
+    subagent=explore,
+    fork_turns=3,                 # ← replace with the actual mcode param
+    brief="Investigate why test_lint.py flakes on Windows. ..."
+  )
+
+# MiniMax Code style (actual API, fill in the real param name):
+> task(agent_type="explore", brief="...")   # if mcode uses a `brief` field
+> task(subagent="explore", history="last-3")  # if mcode uses a `history` field
+```
+
+The **decision** (3 turns) is the same; the **spelling** depends on the host.
 
 ## Verification checklist
 
-- [ ] Did you choose `all` / `N` / `none` explicitly, not by leaving the default?
-- [ ] Is the chosen mode justified in the brief or in a one-line preamble?
-- [ ] For `N`: did you name the specific turns the sub-agent needs?
-- [ ] For `none`: is the brief self-contained (no references to "above" or "earlier")?
-- [ ] For `all`: did you explicitly justify why the full history is needed?
-- [ ] Is the cost of the chosen mode acceptable (no surprise over-budget)?
-- [ ] If a sub-agent came back saying "I need more context," did you send a follow-up
-      message rather than re-spawning with `all`?
+- [ ] Did you classify the sub-task before choosing?
+- [ ] Did you pick the smallest N that works (not jumping straight to `all`)?
+- [ ] Did you document the choice in the brief header?
+- [ ] If the sub-agent failed, did you bump N before changing the brief?
+- [ ] Did you adapt the example parameter names to the actual host `task` API?

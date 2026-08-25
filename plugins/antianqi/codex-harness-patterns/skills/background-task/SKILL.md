@@ -1,121 +1,129 @@
 ---
 name: background-task
 description: |
-  Run long-running command as background task instead of blocking conversation.
-  USE WHEN: command expected > 30s, dev server / build / watcher / test loop / `tail -f` / long npm/cargo/make output, user said "in the background" / "don't block" / "后台" / "并行跑" / "kick off", earlier foreground call timed out, want to keep talking while command runs, file sync / `fswatch` / live-reload.
-  TRIGGER PHRASES: "后台", "background", "in the background", "并行跑", "don't block", "继续做别的事", "kick off the build", "start the server", "跑着不用等", "background task", "起个 server", "watch 一下".
-  SKIP WHEN: command is short (<30s), output is the deliverable (read in one shot), destructive command needing exit code.
+  Decide when to put a long-running shell command in the background and how to refer to it later.
+  USE WHEN: a command is expected to take > 30 seconds, the user wants a long-running process to coexist with ongoing work, you are about to block the conversation for an unbounded time, user said "background it" / "后台" / "don't block" / "non-blocking" / "run in background".
+  TRIGGER PHRASES: "background", "background it", "后台", "don't block", "non-blocking", "in the background", "run async", "long-running", "put it in the background".
+  SKIP WHEN: the command finishes in <5 seconds, the user explicitly wants to wait for output, the command is interactive (REPL, vim, ssh).
 license: Apache-2.0
-compatibility: Requires MiniMax Code with Agent Plugins 1.0 support.
+compatibility: Requires MiniMax Code with Agent Plugins 1.0 support. The example calls in this Skill are written in Codex-harness style (pseudocode) using `bash(task_name=..., run_in_background=true)`; MiniMax Code's tool surface may not expose these exact parameter names — adapt the call to the actual host API.
 metadata:
   author: antianqi
-  version: "0.1.1"
-  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/core/src/unified_exec/
+  version: "0.1.2"
+  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/core/src/unified_exec/ and protocol::Op::CleanBackgroundTerminals (design principle only; the example parameter names are Codex-specific)
+  changes-from-v0.1.1: "Rewritten to be host-agnostic. The example calls are now pseudocode with an explicit mcode adaptation note. Removed `bash(action=\"kill\")` (mcode has no such sub-action); replaced with a generic 'stop it via the host's job-control API'."
 ---
 
 # Background Task
 
-Run a long-running command as a background task and return control to the agent immediately.
-Poll, steer, or kill it on later turns. Do not block the conversation on a 10-minute build.
+When a shell command is expected to take more than ~30 seconds, the agent has two choices:
+
+1. **Block**: wait for the command to finish, holding the conversation hostage.
+2. **Background**: launch it, get a handle, continue working, and check on it later.
+
+This Skill is about **knowing when to choose (2)** and **how to record the handle** so
+the agent (or the user) can check on it later.
+
+> **mcode 适配**:本 Skill 的 example 调用用 Codex-harness 风格(`bash(task_name=...,
+> run_in_background=true, action="kill")`)作为**伪代码**。MiniMax Code 当前
+> host 工具的 `bash` 调用**不暴露** `task_name` / `run_in_background` /
+> `action="kill"` 这些 sub-action 参数。请**根据实际 host 工具改写**(例如:
+> 用 `Start-Process` / `nohup` / 系统的 job control 启动,然后在另一个 turn 重新
+> 调 `bash` 探查)。**不要把伪代码当真实调用复制**。
 
 ## When to use
 
 Activate when **any** of these is true:
 
-- The command is expected to take > 30 seconds (a full `cargo test`, a `vite dev` server, a
-  `webpack --watch`).
-- The user has said "start the dev server in the background" / "kick off the build" / "let
-  me know when it's done".
-- You need to run multiple long commands and want them to overlap.
-- A previous foreground call already hit a timeout.
-- The command is meant to run indefinitely (`watch`, `serve`, `tail -f`) and you only need
-  to read its output on demand.
+- A command is expected to take > 30 seconds (`cargo test`, `npm install`, `docker build`,
+  a long-running dev server, a large data download).
+- The user explicitly says "background" / "后台" / "non-blocking" / "in the background".
+- You need a long-running process to coexist with ongoing work (a dev server, a watch
+  script, a streaming pipeline).
+- You would otherwise block the conversation on a result the user can come back to
+  later.
 
 ## When NOT to use
 
-- The command is short (< 30 seconds). Just run it in the foreground.
-- The command's output is the entire point (a `curl` whose body you must inspect). Read it
-  in one shot, not as a stream.
-- The command is destructive and you need to see the result before continuing (e.g.
-  `rm -rf`). Run it foreground, see the exit code, then decide.
+- The command finishes in <5 seconds.
+- The user explicitly wants the output now (interactive REPL, vim, ssh, a build
+  whose output the next step depends on).
+- The command is interactive (it expects a TTY or human input).
 
 ## Process
 
-1. **State the start plan** in one line before launching: "Starting `npm run dev` in the
-   background (expected ~5s to be ready, polling every 10s)."
-2. **Launch with `run_in_background: true`** (or your harness's equivalent). Pick a
-   descriptive `task_name` so the user can recognise it: `dev-server`, `cargo-test`,
-   `vite-watch`. Not `task1`.
-3. **On launch, do not block.** Return immediately to whatever the user asked next. Do
-   not poll in the same turn unless the user explicitly asked you to wait.
-4. **On a later turn (or when the user asks "is it ready?"):**
-   - `read` the output buffer (or `tail` the log file if you wrote one).
-   - If still running, report progress and continue.
-   - If exited, report the exit code and a one-line summary of the last output.
-5. **On user request to stop** (or when the task is no longer needed): kill the background
-   task. Confirm with the user before killing anything they explicitly started.
-6. **At end of session / on `context-pressure-compact`:** list the running background tasks
-   in the state file so they survive the compaction.
+1. **Estimate the duration**. If unsure, assume the worst case (> 30s). If a 2-second
+   result is fine, just run it blocking.
+2. **Choose a descriptive handle**. The agent (and the user) will need to recognise
+   it later in the conversation. `dev-server` is good. `task1` is bad.
+3. **Launch the background process using the host's job-control mechanism**:
+   - Codex-harness style (pseudocode, adapt to your host):
+     `bash(task_name="dev-server", run_in_background=true, command="npm run dev")`
+   - MiniMax Code style (use whatever the host actually supports; e.g. `Start-Process`
+     on Windows, `nohup` or `&` + `disown` on POSIX, or simply record the PID and
+     re-`bash` against it on a later turn).
+4. **Record the handle**. In a multi-step task, store the handle (PID, name, log
+   path) somewhere persistent — in a `world-state-tracking` file, a `session-handoff`
+   note, or in the running brief.
+5. **Continue working**. The conversation does not block on the background process.
+6. **When the result matters**, check on the process. Read its log, poll its status,
+   or kill it if it is no longer needed (using the host's stop API, **not** a
+   `bash(action="kill")` that does not exist on MiniMax Code).
 
 ## Output contract
 
-The user sees, in this order:
+After activating this Skill, the agent's next message MUST include:
 
-- One-line "starting X in background" plan.
-- The launch invocation (one line, with the `task_name`).
-- A short status line on every later turn that touches the task: "X: running, 3124 lines
-  of output so far" / "X: exited 0, last line '...'" / "X: still running, no output yet".
-- A clean "stopped X" when killed.
-
-## Example
-
-```text
-> bash(task_name="cargo-test", run_in_background=true,
-       prompt="cd /repo && cargo test --workspace 2>&1 | tee /tmp/cargo-test.log")
-launched cargo-test (id: bt-7a3f); returning to user
-
-[user asks "how's the test run?" two minutes later]
-
-> read offset=0 limit=200 /tmp/cargo-test.log
-cargo-test: running, 1234 lines of output so far
-  ✓ 23 passed in 0.4s
-  ✓ 7 passed in 0.2s
-  …
-  running 12 of 240 tests (auth::session::rotate)
-  no failures yet
-```
-
-```text
-[user asks "stop the test run, I want to fix the failing one manually"]
-
-> bash(task_name="cargo-test", action="kill")
-stopped cargo-test; last output preserved at /tmp/cargo-test.log
-```
+- The chosen **task name / handle**.
+- The **expected duration estimate**.
+- The **log or status path** so a later turn can check on it.
+- Whether the agent is **continuing** or **blocking** on the result.
 
 ## Common pitfalls
 
-- **Do not launch with `run_in_background: true` and then immediately poll in the same
-  turn.** That defeats the purpose. Launch and return; poll on a later turn or when the
-  user asks.
-- **Do not use generic `task_name` values.** `dev-server` is good, `task1` is bad — the
-  user will not know which task is which after the second background task.
-- **Do not buffer the entire output in the context.** If the task writes to a log file,
-  `read` with `offset` + `limit` or `tail`. Do not `cat` the whole thing.
-- **Do not assume the task is healthy just because it is running.** A 5-minute `cargo test`
-  with no new output is hung, not progressing. Check the log.
-- **Do not forget to kill.** Background tasks that the user no longer needs are silent
-  resource leaks. List them in the state file and clean up on session end.
-- **Do not start a background task that writes to stdout the agent must read in real time.**
-  Use a log file. Stdout from a backgrounded process is awkward to recover reliably.
-- **Do not block the conversation on the task's first output.** The first output is often
-  not informative (build setup, server starting, test warming up).
+- **Launching and forgetting the handle** — the user comes back in an hour, the
+  agent has no idea which process was which. Always record the handle.
+- **Re-using a generic name** — `task1` collides; `cargo-test` does not.
+- **Polling too eagerly** — a 5-minute build polled every 5 seconds wastes context.
+  Poll on a sensible cadence (every minute for builds, every 5 minutes for downloads).
+- **Killing without saving output** — read the log first, then kill, otherwise the
+  result is lost.
+- **Assuming the host supports `task_name` / `run_in_background` / `action="kill"`** —
+  those are Codex-specific parameter names. MiniMax Code's `bash` tool may not
+  expose them. Use the host's actual job-control mechanism.
+
+## Example
+
+The example below is **Codex-harness style pseudocode** for clarity. On MiniMax Code,
+the `bash` tool's parameter names for background execution are **not exposed**;
+adapt the call to whatever the host actually supports (e.g. `Start-Process`,
+`nohup &`, PID polling, etc.).
+
+```text
+# Codex-harness style (pseudocode for design clarity):
+> bash(
+    task_name="dev-server",
+    run_in_background=true,
+    command="npm run dev"
+  )
+
+# MiniMax Code style (fill in the real host API):
+# Option A: launch detached, then poll
+$proc = Start-Process -FilePath "npm" -ArgumentList "run","dev" -PassThru -NoNewWindow
+# record $proc.Id somewhere
+# later: Get-Process -Id $proc.Id | ...
+
+# Option B: simply run blocking, then do the next thing in the SAME turn
+# (the agent's host runs them sequentially anyway)
+```
+
+The **decision** (background, with a recorded handle) is the same; the **execution
+mechanism** depends on the host.
 
 ## Verification checklist
 
-- [ ] Did you state the start plan in one line?
-- [ ] Did you use `run_in_background: true` (or equivalent) and a descriptive `task_name`?
-- [ ] Did you return to the user immediately, not block on the first output?
-- [ ] Is the task's output going to a log file (so polling is cheap)?
-- [ ] On later turns, is the status report one line with exit code + last line of output?
-- [ ] On stop, did you confirm with the user before killing?
-- [ ] Are running background tasks listed in the state file for compaction survival?
+- [ ] Did you estimate the duration before choosing background vs blocking?
+- [ ] Did you choose a **descriptive** name (not `task1`)?
+- [ ] Did you record the handle (PID / log path) in a persistent place?
+- [ ] Did you tell the user "I launched X in the background, here's the log path"?
+- [ ] Did you avoid using Codex-only `bash` parameter names verbatim?

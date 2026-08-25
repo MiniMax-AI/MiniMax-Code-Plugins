@@ -4,13 +4,14 @@ description: |
   Classify sub-task complexity (cheap / medium / main) and pick matching `model_config_id`.
   USE WHEN: about to call `task()` for non-trivial sub-task, about to spend main model on work cheap model could do, "do this with the cheap model" / "用便宜模型" / "不要用主模型" / "sub-task 不重" / "small task", sub-task is routine lookup / reformat / list / reformat-only, "this is just a grep" / "this is just a reformat" / "小任务".
   TRIGGER PHRASES: "用便宜模型", "cheap model", "use the cheap model", "小任务用便宜模型", "不要用主模型", "用本地模型", "sub-task 不重", "小任务", "this is just a", "小 case 用便宜".
-  SKIP WHEN: sub-task IS the main task (no delegation), sub-agent tool does not support `model_config_id`, sub-task is genuinely synthesis / design / cross-file reasoning.
+  SKIP WHEN: sub-task IS the main task (no delegation), sub-agent tool does not support a model / tier parameter, sub-task is genuinely synthesis / design / cross-file reasoning.
 license: Apache-2.0
-compatibility: Requires MiniMax Code with Agent Plugins 1.0 support.
+compatibility: Requires MiniMax Code with Agent Plugins 1.0 support. The example calls in this Skill reference `model_config_id` and `reasoning_effort` as Codex-harness style pseudocode; MiniMax Code's actual model-routing API may differ. Adapt the call to the real host API — do not copy the parameter names verbatim.
 metadata:
   author: antianqi
-  version: "0.1.1"
-  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/model-provider-info/ and codex-rs/models-manager/
+  version: "0.3.2"
+  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/model-provider-info/ and codex-rs/models-manager/ (design principle only; example model names are Codex-specific)
+  changes-from-v0.1.1: "Removed hard-coded `model_config_id: anthropic-sonnet-4 with reasoning_effort=high` example. Replaced with a portable 3-tier decision rubric and an explicit mcode 适配 note."
 ---
 
 # Model Router
@@ -20,9 +21,15 @@ The main model is expensive and slow. Most sub-tasks a long agent spawns are not
 Codex harness routes those to cheaper models and reserves the main model for synthesis and
 hard reasoning.
 
+> **mcode 适配**:本 Skill 提到 `model_config_id` 和 `reasoning_effort` 是 Codex-harness
+> 风格的**伪代码**。MiniMax Code 当前的 model 路由有自己的命名约定,可能通过
+> `llm-call` skill 或 host 设置暴露。请**根据实际 host 模型名替换**。Skill 的
+> **设计原则**(3-tier / 不要默认 main / cheap 默认)是 portable 的,model 名字是
+> host-specific 的。
+
 This Skill codifies that routing: before every `task` call, classify the sub-task and pick
-the right `model_config_id`. The savings are not theoretical — the same model router that
-gave Codex a 6× token reduction on context compaction works the same way on delegation.
+the right tier. The savings are not theoretical — the same model router that gave
+Codex a 6× token reduction on context compaction works the same way on delegation.
 
 ## When to use
 

@@ -1,229 +1,135 @@
 ---
 name: delegate-with-context
 description: |
-  Write a minimal-context brief for `task()` instead of dumping full history.
-  USE WHEN: about to call `task()` to hand off sub-task, full conversation history > 30 turns, sub-task has clear boundary, find yourself wanting to write "see above" / "上面对话", sub-task is non-trivial, user said "派个子 agent" / "spawn agent" / "delegate" / "fork 出去" / "sub-agent 干".
-  TRIGGER PHRASES: "派个子 agent", "spawn agent", "让子 agent 干", "delegate", "sub-agent", "把任务交出去", "fork 出去", "background task", "派发", "子 agent 干", "子任务".
-  SKIP WHEN: sub-agent needs verbatim context (rare; usually `read` / `grep` is faster), sub-task boundary is fuzzy (decompose first via `plan-stream-emit`), work is so small brief would be longer than the work itself.
+  Hand off a sub-task to a sub-agent with a tight, complete brief — not the full conversation history. Apply the 4-part message envelope (Task name / Sender / Task / Payload + return path).
+  USE WHEN: about to call `task()` to hand off a sub-task, the full conversation history is too large to forward, a minimal-context brief would do, the previous sub-agent failed because the brief was incomplete.
+  TRIGGER PHRASES: "delegate", "hand off", "sub-agent", "delegate this", "delegate to", "派给", "委派", "让 sub-agent 干", "把 ... 交给 ...".
+  SKIP WHEN: the sub-task is so trivial a `read` will do, you are about to do the work yourself, the user explicitly wants you (not a sub-agent) to do it.
 license: Apache-2.0
-compatibility: Requires MiniMax Code with Agent Plugins 1.0 support.
+compatibility: Requires MiniMax Code with Agent Plugins 1.0 support. The example calls in this Skill are written in Codex-harness style (pseudocode) using `subagent=...` and `task_name=...`; MiniMax Code's `task` tool may use different parameter names. Adapt the call shape to the actual host API.
 metadata:
   author: antianqi
-  version: "1.0.1"
-  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/protocol/src/protocol.rs (Op::InterAgentCommunication, CollabAgentSpawnBegin) and core/src/session/multi_agents.rs
-  changes-from-v0.2.0: "Added the message envelope format (Message Type / Task name / Sender / Payload) from P-20 V2; added explicit 'this is the sub-agent return path' section; cross-referenced fork-context-decision for fork_turns choice."
+  version: "1.0.2"
+  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/protocol/src/protocol.rs (InterAgentCommunication) and core/src/session/multi_agents.rs (CollabAgentSpawn)
+  changes-from-v1.0.1: "Rewritten to be host-agnostic. The 4-part envelope design is preserved (it is the portable part); example calls are now pseudocode with an explicit mcode adaptation note. Removed hard-coded `subagent=explore` and `task_name=...` examples."
 ---
 
-# Delegate With Context
+# Delegate with Context
 
-When you spawn a sub-agent (`task` or equivalent), the brief you pass is the only thing
-it sees. A bad brief makes the sub-agent re-derive the whole conversation; a good brief
-gives it exactly what it needs to do its job and nothing more.
+When handing off work to a sub-agent, the agent has two extremes:
 
-This Skill is the inverse of "pass the full history" — the full history is the most
-expensive context you can give a sub-agent, and it is rarely what the sub-agent needs.
+1. **Forward everything**: the sub-agent sees the full parent history. Costs
+   tokens, dilutes focus, may leak irrelevant detail.
+2. **Forward nothing**: the sub-agent gets a one-line "go do X". The brief is
+   almost always incomplete, and the sub-agent re-derives incorrectly.
 
-**v1.0 update**: now includes the message envelope format used by Codex's V2 multi-agent
-protocol, and a clear "this is the return path" section so the sub-agent knows how to
-deliver its result.
+This Skill is about the **middle ground**: a tight, complete, structured brief that
+gives the sub-agent everything it needs and nothing it does not.
+
+> **mcode 适配**:本 Skill 的 example 调用用 Codex-harness 风格(`task(subagent=explore,
+> task_name=..., brief=...)`)作为**伪代码**。MiniMax Code 的 `task` 工具可能用不同参数名
+> (`agent_type=...` / `name=...` / `brief=...`)。请**根据实际 host API 改写参数名**。
 
 ## When to use
 
 Activate when **any** of these is true:
 
-- You are about to call `task` (or any sub-agent spawn) to hand off a sub-task.
-- The full conversation history is > 30 turns or contains large tool outputs the sub-agent
-  does not need.
-- The sub-task has a clear boundary (file, function, doc, test) that can be described in one
-  sentence.
-- You find yourself wanting to write "see the conversation above" — that is the trigger to
-  stop and write an actual brief.
+- You are about to call `task` to hand off a sub-task.
+- The full conversation history is too large to forward (cost / focus).
+- A previous sub-agent failed because the brief was incomplete.
+- You want the sub-agent's work to be auditable against a written contract.
 
 ## When NOT to use
 
-- The sub-agent is a simple one-shot lookup that needs verbatim context (rare; usually a
-  `read` or `grep` is faster than a sub-agent).
-- The sub-task boundary is fuzzy. If you cannot name the boundary, you cannot brief it —
-  decompose first, then delegate.
-- The work is so small that the brief would be longer than just doing it.
+- The sub-task is so trivial a single `read` will do (no sub-agent needed).
+- You are about to do the work yourself.
+- The user explicitly wants you (not a sub-agent) to do it.
 
 ## Process
 
-1. **Write the brief as a fenced block** in this exact shape, **before** calling `task`:
+1. **Classify the sub-task** (see `fork-context-decision`):
+   - Self-contained: `none` (just the brief).
+   - Needs prior context: `N` or `all`.
+2. **Decide the sub-agent type** (explore / worker / verifier / etc.) based on what
+   the sub-task needs.
+3. **Write the 4-part envelope** below. The envelope is the **portable** part of
+   the brief — host `task` tools all accept a brief string.
+4. **Choose context level** (see `fork-context-decision`).
+5. **Document the return path** — how the sub-agent should hand the result back.
 
-   ```markdown
-   ## Sub-task brief
+## The 4-part envelope
 
-   **Goal** (one sentence, in the user's own words if possible):
-   <...>
-
-   **Boundary** (what is in scope, what is out of scope):
-   - In: <...>
-   - Out: <...>
-
-   **Inputs** (only what the sub-agent needs to read; absolute paths):
-   - /path/to/file.rs (function `foo`)
-   - /path/to/spec.md (section 3.2 only)
-   - <or "none — start from the public API contract">
-
-   **Pass condition** (one checkable sentence):
-   <...>
-
-   **Output shape** (what the sub-agent should return):
-   - A patch, a report, a single sentence, a JSON object — be specific.
-   - If returning code, name the file path the patch should land in.
-
-   **Constraints** (what NOT to do, to save round trips):
-   - Do not refactor adjacent code.
-   - Do not change the public API.
-   - Do not introduce new dependencies.
-   - <or "none">
-
-   **Return path** (how the sub-agent reports back; see v1 message envelope below):
-   - Reply on the analysis channel with this exact envelope:
-     ```
-     Message Type: FINAL_ANSWER
-     Task name: <your task_name>
-     Sender: <your sub-agent id>
-     Payload:
-     <your one-paragraph answer>
-     ```
-   - Keep the payload under ~10 lines unless the task is "produce a long report."
-
-   **Model tier** (cheap / medium / main; see `model-router` Skill):
-   - <tier> — <one-line reason>
-   ```
-
-2. **Choose `fork_turns`** explicitly (see `fork-context-decision` Skill):
-   - Self-contained sub-task → `none`
-   - Needs recent context → small `N`
-   - Continuation of same debugging session → `all` (rare)
-
-3. **Call `task`** with the brief as the prompt. The full conversation history is *not*
-   in the prompt; the brief is.
-
-4. **Verify the brief round-tripped.** Read the sub-agent's first response. If it is solving
-   the wrong problem, your brief failed — do not let it finish. Stop and re-brief.
-
-5. **Receive the result** in the message envelope format. The sub-agent's reply should
-   match the envelope; if it doesn't, treat the reply as unverified raw output and re-parse.
-
-6. **If the sub-agent needs more context mid-task**, send a follow-up brief in the same
-   shape, not the original full history.
-
-7. **On return, validate against the pass condition.** If unmet, re-dispatch with a tighter
-   brief; do not patch the result yourself unless the fix is trivial.
-
-8. **Record in the family file** (see `subagent-family-tracking` Skill) so the tree stays
-   up to date.
-
-## Message envelope (V2 protocol)
-
-Codex's V2 multi-agent protocol uses a structured envelope for sub-agent replies:
+Every sub-agent brief MUST have these 4 parts, in order:
 
 ```text
-Message Type: <MESSAGE | FINAL_ANSWER | NEW_TASK>
-Task name: <recipient identifier>
-Sender: <author identifier>
-Payload:
-<payload text>
+Task name: <one short line, e.g. "investigate-lint-flake">
+Sender:    <who is asking, e.g. "main agent (you)">
+Task:     <one sentence: what the sub-agent must do>
+Payload:  <the actual context, links, file paths, prior results>
+Return:   <where the result goes, in what format>
 ```
 
-When your sub-agent replies, **expect this envelope** and parse it accordingly. If the
-reply is plain prose with no envelope, treat it as `MESSAGE` (an interim update, not the
-final answer) and either wait for the `FINAL_ANSWER` or re-brief to clarify.
+Each part is mandatory. Skipping any one is the difference between a working
+sub-task and a confused one.
 
-## Output contract
+### Field-by-field
 
-The user sees, in this order:
-
-- The Sub-task brief block (before the `task` call), including the chosen `fork_turns`.
-- The `task` invocation (one line, with the `task_name`).
-- The sub-agent's reply, parsed (envelope + payload).
-- (If failed) the re-brief, not a silent retry.
-
-## Example
-
-```markdown
-## Sub-task brief
-
-**Goal**: Add a single function `format_currency(amount: f64, currency: &str) -> String` to
-`src/money.rs` that formats USD with two decimals, EUR with symbol suffix, JPY with no decimals.
-
-**Boundary**:
-- In: one new function + 4 unit tests
-- Out: refactoring `money.rs`, changing existing callers, adding a new file
-
-**Inputs**:
-- /repo/src/money.rs (read top of file to see the existing style)
-
-**Pass condition**:
-- `cargo test money::` green
-- `format_currency(1234.5, "USD") == "$1,234.50"`
-- `format_currency(1234.5, "EUR") == "1,234.50 €"`
-- `format_currency(1234.0, "JPY") == "¥1,234"`
-
-**Output shape**: a unified diff against `/repo/src/money.rs`.
-
-**Constraints**:
-- No new dependencies (no `rust_decimal`, `num-format`, etc.)
-- Match the existing function signature style in `money.rs`
-
-**Return path**: reply on the analysis channel with `Message Type: FINAL_ANSWER, Sender:
-<your sub-agent id>, Payload: <one-line summary + diff or pointer to the file>`
-
-**Model tier**: cheap — single-function reformat, no judgement needed
-```
-
-Then:
-
-```text
-> task(subagent=explore, run_in_background=true, fork_turns=0,
-       prompt="<the brief above, verbatim>")
-launched explore (id: 5a3f); fork=none, tier=cheap
-```
-
-Sub-agent reply (parsed):
-
-```text
-Message Type: FINAL_ANSWER
-Task name: money-format
-Sender: explore-5a3f
-Payload:
-Added `format_currency` to src/money.rs:42-58, plus 4 unit tests at lines 78-110. All
-pass. Diff at /tmp/money-diff.patch.
-```
+| Field | Purpose | Bad | Good |
+|---|---|---|---|
+| Task name | The handle you'll refer to later. | `task1` | `investigate-lint-flake` |
+| Sender | Who is asking, so the sub-agent knows the audience. | _(omitted)_ | `main agent` |
+| Task | One-sentence scope. | `fix the tests` | `Investigate why test_lint.py flakes on Windows but not Linux. Produce a 1-paragraph root-cause analysis.` |
+| Payload | The actual content the sub-agent needs. | `see above` | Links to the file, the prior turn's tool output, the user's exact request. |
+| Return | Where the result goes, in what format. | _(omitted)_ | `Append a section to /notes/lint.md titled "## Windows flake root cause" with 1 paragraph.` |
 
 ## Common pitfalls
 
-- **Do not pass the full conversation history as context.** That is the failure mode this
-  Skill exists to prevent. Pass the brief.
-- **Do not write a brief that says "see above".** The sub-agent does not have "above".
-- **Do not omit the pass condition.** Without it, the sub-agent picks its own definition
-  of done, which is rarely yours.
-- **Do not omit the constraints.** "Don't refactor adjacent code" saves a 3-message
-  ping-pong.
-- **Do not over-brief.** A 200-line brief for a one-function change is itself a token
-  waste.
-- **Do not under-brief.** "Look at the auth code" is a wish, not a brief.
-- **Do not brief a sub-task boundary that is fuzzy.** Decompose first
-  (`plan-stream-emit`), then brief the resulting steps.
-- **Do not expect prose replies.** If the reply is not in the envelope format, treat it
-  as unverified and re-brief the sub-agent to use the envelope.
-- **Do not forget to record in the family file.** If you do not, the next turn does not
-  know which sub-agent did what.
+- **Omitting the return path** — the sub-agent finishes and has no idea what
+  to do with the result. Always specify.
+- **Putting the brief in `Task` and the question in `Payload`** — the sub-agent
+  sees both, but the wrong field is the "one-sentence scope". Keep `Task`
+  short.
+- **Forwarding the full history when `none` would do** — costs tokens and
+  dilutes focus. Decide first.
+- **Using Codex-only `subagent=...` / `task_name=...` parameter names** —
+  Codex-harness style. Adapt to the actual host API.
+
+## Example
+
+The example below is **Codex-harness style pseudocode** for clarity. On MiniMax
+Code, the `task` tool's parameter names are **not exposed** as shown; adapt to
+the actual host API.
+
+```text
+# Codex-harness style (pseudocode for design clarity):
+> task(
+    subagent=explore,                  # ← replace with mcode's actual param
+    task_name="investigate-lint-flake",  # ← ditto
+    fork_turns=0,                        # ← ditto
+    brief="""
+      Task name: investigate-lint-flake
+      Sender:    main agent
+      Task:     Investigate why test_lint.py flakes on Windows but not Linux.
+                Produce a 1-paragraph root-cause analysis.
+      Payload:  /home/user/proj/tests/test_lint.py (line 47 is the failure);
+                prior turn tool output: <paste here if relevant>
+      Return:   Append a section to /notes/lint.md titled
+                "## Windows flake root cause" with 1 paragraph.
+    """
+  )
+
+# MiniMax Code style (fill in the real host API):
+# Replace subagent=, task_name=, fork_turns= with whatever mcode's
+# task tool actually accepts. The 4-part envelope inside `brief=`
+# is the portable part and should be preserved as-is.
+```
+
+The **envelope** is the design; the **call shape** is host-specific.
 
 ## Verification checklist
 
-- [ ] Did you write the Sub-task brief block before calling `task`?
-- [ ] Is the goal one sentence in the user's voice?
-- [ ] Is the boundary explicit (in / out)?
-- [ ] Are the inputs absolute paths, not "look around the repo"?
-- [ ] Is the pass condition one checkable sentence?
-- [ ] Is the output shape specific (patch / report / JSON)?
-- [ ] Did you list the constraints to head off re-work?
-- [ ] Did you specify the return-path envelope?
-- [ ] Did you choose `fork_turns` explicitly (`fork-context-decision`)?
-- [ ] Did you choose the model tier (`model-router`)?
-- [ ] Did the sub-agent's first response show it understood the brief?
-- [ ] Did you record the spawn in the family file (`subagent-family-tracking`)?
+- [ ] Did you classify the sub-task (self-contained vs context-dependent)?
+- [ ] Did you write all 4 envelope parts (Task name / Sender / Task / Payload / Return)?
+- [ ] Did you specify the **return path** (where the result goes)?
+- [ ] Did you choose the right context level (via `fork-context-decision`)?
+- [ ] Did you adapt Codex-only parameter names to the actual host `task` API?
