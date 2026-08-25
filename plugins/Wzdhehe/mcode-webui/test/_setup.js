@@ -62,6 +62,11 @@ let _saveImpl = (arr) => {
 };
 
 let _lanBroadcast = false;
+let _readOnly = false;
+let _tokenEnabled = true;
+let _currentToken = "";
+let _tokenRotatedAt = 0;
+let _tokenAcknowledged = false;
 
 // Per-test direct handles (for tests that need to read state after the SUT)
 export const acpMock = _acpMock;
@@ -82,6 +87,11 @@ export const _persist = (arr) => _saveImpl(arr);
 export function setLanBroadcast(v) {
   _lanBroadcast = !!v;
 }
+export function setReadOnly(v) { _readOnly = !!v }
+export function setTokenEnabled(v) { _tokenEnabled = !!v }
+export function setCurrentToken(v) { _currentToken = String(v || "") }
+export function setTokenRotatedAt(v) { _tokenRotatedAt = Number(v) || 0 }
+export function setTokenAcknowledged(v) { _tokenAcknowledged = !!v }
 
 /**
  * Register all built-in + webui module mocks on the test context.
@@ -174,8 +184,51 @@ export async function setupMocks(t, overrides = {}) {
   // 5. webui/lib/settings.js
   if (overrides.lanBroadcast !== undefined)
     _lanBroadcast = !!overrides.lanBroadcast;
+  if (overrides.readOnly !== undefined) _readOnly = !!overrides.readOnly;
+  if (overrides.tokenEnabled !== undefined) _tokenEnabled = !!overrides.tokenEnabled;
+  if (overrides.currentToken !== undefined) _currentToken = String(overrides.currentToken || "");
+  if (overrides.tokenRotatedAt !== undefined) _tokenRotatedAt = Number(overrides.tokenRotatedAt) || 0;
+  if (overrides.tokenAcknowledged !== undefined) _tokenAcknowledged = !!overrides.tokenAcknowledged;
   t.mock.module(absPath("lib/settings.js"), {
-    namedExports: { getLanBroadcast: () => _lanBroadcast },
+    namedExports: {
+      getLanBroadcast: () => _lanBroadcast,
+      getReadOnly: () => _readOnly,
+      getTokenEnabled: () => _tokenEnabled,
+      getCurrentToken: () => _currentToken,
+      getTokenRotatedAt: () => _tokenRotatedAt,
+      getTokenAcknowledged: () => _tokenAcknowledged,
+      getAllowedInterfaces: () => [], // stub — feature removed in v1.0.1 cleanup
+      // no-op setters (tests should use the imperative setters above)
+      setLanBroadcast: (v) => { _lanBroadcast = !!v },
+      setReadOnly: (v) => { _readOnly = !!v },
+      setTokenEnabled: (v) => { _tokenEnabled = !!v },
+      setTokenAcknowledged: (v) => { _tokenAcknowledged = !!v },
+      setAllowedInterfaces: (_v) => { /* no-op — feature removed */ },
+      rotateToken: () => {
+        const t = "testtoken" + Math.random().toString(16).slice(2, 30);
+        _currentToken = t;
+        _tokenRotatedAt = Date.now();
+        _tokenAcknowledged = false;
+        return t;
+      },
+      init: () => {},
+      generateToken: () => "testtoken" + Math.random().toString(16).slice(2, 30),
+      getPersistPath: () => "/tmp/.mcode-webui/settings.json",
+      getSettingsSnapshot: () => ({
+        ok: true,
+        lanBroadcast: _lanBroadcast,
+        readOnly: _readOnly,
+        tokenEnabled: _tokenEnabled,
+        tokenAcknowledged: _tokenAcknowledged,
+        currentToken: _tokenAcknowledged ? "" : _currentToken,
+        tokenRotatedAt: _tokenRotatedAt,
+        port: 8080, host: "0.0.0.0", lanIp: "127.0.0.1",
+        lanUrl: "http://127.0.0.1:8080", localUrl: "http://127.0.0.1:8080",
+        mcodeCmd: "mcode", mcodeVersion: "0.1.2",
+        defaultWorkspace: "/tmp", defaultModel: "x",
+      }),
+      rejectLan: () => false,
+    },
   });
 
   // 6. webui/lib/mavis-usage.js (heavy: spawns sqlite3)

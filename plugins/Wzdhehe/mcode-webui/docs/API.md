@@ -84,7 +84,7 @@ the webui handles reconnection with exponential backoff.
 
 ### `POST /api/send`
 
-Send a user message. Spawns (or reuses) the Mcode subprocess for this CID
+Send a user message. Spawns (or reuses) the mcode subprocess for this CID
 and streams the result via SSE.
 
 **Request**
@@ -124,7 +124,7 @@ Cancel the current run. Best-effort: tries `session/cancel` via acp
 ### `POST /api/cmd`
 
 Send a raw slash command (e.g. `/compact`, `/clear`). The server sends
-the command to Mcode and streams the result.
+the command to mcode and streams the result.
 
 **Request**
 ```json
@@ -166,7 +166,7 @@ Create a new webui session. Optionally tied to a workspace.
 ### `POST /api/sessions/switch`
 
 Switch to an existing session. Loads its chat history and (if linked)
-re-attaches to the Mcode session.
+re-attaches to the mcode session.
 
 **Request**
 ```json
@@ -277,9 +277,10 @@ When `path` is omitted:
 
 Returns the full settings snapshot. **This endpoint is exempt from
 the LAN guard** — it's how a remote user toggles LAN back on after
-locking themselves out.
+locking themselves out. The same snapshot is also pushed via SSE on
+state changes (see [ARCHITECTURE.md §5 SSE state push](./ARCHITECTURE.md#5-sse-state-push)).
 
-**Response 200**
+**Response 200** (v1.0.1, fields added in v1.0.1 marked with 🆕)
 ```json
 {
   "ok": true,
@@ -288,24 +289,53 @@ locking themselves out.
   "host": "0.0.0.0",
   "lanIp": "192.168.1.50",
   "lanUrl": "http://192.168.1.50:8080",
+  "lanUrlWithToken": "http://192.168.1.50:8080/?token=…",  // 🆕 v1.0.1 — full URL with token, for clipboard sharing
   "localUrl": "http://127.0.0.1:8080",
   "mcodeCmd": "C:\\…\\mcode.cmd",
   "mcodeVersion": "0.1.2",
   "defaultWorkspace": "C:\\…",
-  "defaultModel": "minimax_api/MiniMax-M3"
+  "defaultModel": "minimax_api/MiniMax-M3",
+  "readOnly": false,                // 🆕 v1.0.1 — read-only mode toggle
+  "tokenEnabled": true,             // 🆕 v1.0.1 — token auth master switch (default true)
+  "currentToken": "…",              // 🆕 v1.0.1 — auto-generated 32-hex token; "" after tokenAcknowledged=true
+  "tokenAcknowledged": false,       // 🆕 v1.0.1 — operator has confirmed they saved the token
+  "tokenRotatedAt": 1724259600000,  // 🆕 v1.0.1 — ms-since-epoch of the last rotation
+  "availableInterfaces": [          // 🆕 v1.0.1 — for client UI display (interface filter was removed in v1.0.1 cleanup)
+    { "name": "WLAN", "address": "192.168.1.50", "family": "IPv4" }
+  ]
 }
 ```
 
+Fields `currentToken` and `tokenAcknowledged` are persisted to
+`~/.mcode-webui/settings.json` (mode `0600` on Unix). `currentToken`
+is **omitted after `tokenAcknowledged=true`** — the server only ships
+the token while the operator still has a copy of it in the UI.
+`MCODE_WEBUI_SETTINGS_PATH` env overrides the file location.
+
 ### `POST /api/settings`
 
-Update one or more settings. Only `lanBroadcast` is currently settable.
+Update one or more settings. v1.0.1 expanded the payload — any
+combination of the fields below is settable in one request.
+**Always exempt from the LAN guard AND the read-only gate** (so the
+admin can always toggle things remotely, even in read-only mode).
 
-**Request**
+**v1.0.1 request — all settable fields**
 ```json
-{ "lanBroadcast": false }
+{
+  "lanBroadcast": true,            // (existing) LAN on/off
+  "readOnly": true,                // 🆕 v1.0.1 — toggle read-only mode
+  "tokenEnabled": false,           // 🆕 v1.0.1 — toggle token auth master switch
+  "resetToken": true,              // 🆕 v1.0.1 — generate new token + broadcast auth.token_rotated SSE
+  "acknowledgeToken": true         // 🆕 v1.0.1 — operator confirms they saved the token; server stops sending it
+}
 ```
 
-**Response 200** `{ok: true, lanBroadcast: false, …}`
+**Responses**
+
+- `200 {"ok":true, "changed":true, …}` — at least one field was updated
+- `200 {"ok":true, "tokenRotated":true, "currentToken":"…", "tokenAcknowledged":false, "tokenRotatedAt":…}` — special response for `resetToken:true` (returns the new value so the caller can update its localStorage)
+- `200 {"ok":true, "changed":false}` — no field actually changed
+- `500 {"ok":false, "error":"…"}` — only on `rotateToken` disk write failure (rare)
 
 ---
 
@@ -349,7 +379,7 @@ Returns the builtin + currently-configured model list.
 ```
 
 If the list is empty, the response includes a `hint` field pointing
-the user at the Mcode TUI for model configuration.
+the user at the mcode TUI for model configuration.
 
 ### `POST /api/set-model`
 
@@ -512,7 +542,7 @@ enable.
 ### `POST /api/debug/inject`
 
 Inject a fake event into the SSE channel for a CID. Used for testing
-the UI without a real Mcode subprocess.
+the UI without a real mcode subprocess.
 
 **Request**
 ```json

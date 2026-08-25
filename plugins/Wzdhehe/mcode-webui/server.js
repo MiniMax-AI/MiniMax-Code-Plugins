@@ -4,6 +4,7 @@
 // This file only wires up:
 //   - installGlobalErrorHandlers (uncaughtException / unhandledRejection)
 //   - preflight checks (mcode.cmd exists, upload dir)
+//   - initSettings() — load persistent settings, generate default token if needed
 //   - http.createServer(handleRequest) + listen
 //   - SIGINT / SIGTERM cleanup (close ACP singleton, close server)
 //
@@ -22,6 +23,8 @@ import { LAN_IP } from './server/lib/lan.js'
 import { handleRequest } from './server/router.js'
 import { runStartupCleanup } from './server/cleanup.js'
 import { shutdownMcodeAcpSingleton } from './server/lib/acp-client.js'
+import { init as initSettings, getPersistPath, getTokenEnabled } from './server/lib/settings.js'
+import { setTokenAuthEnabled as setAuthTokenEnabled } from './server/lib/auth.js'
 
 installGlobalErrorHandlers()
 
@@ -35,6 +38,38 @@ mkdirSync(UPLOAD_DIR, { recursive: true })
 
 runStartupCleanup()
 
+// v1.0.1: 初始化 settings (load from disk, generate default token if needed,
+//   sync auth module). The printToken callback fires ONLY on first-ever
+//   startup (when the token didn't exist on disk). After that, the token
+//   value lives only in the settings file; if the operator rotates via
+//   the settings card, the new value is broadcast over SSE and shown in
+//   the settings card until acknowledged.
+let _printedFirstToken = false
+initSettings({
+  printToken: (token) => {
+    if (_printedFirstToken) return
+    _printedFirstToken = true
+    // Print to stdout, NOT to .server.log — operators running interactively
+    // can copy/paste; headless / service-mode users can `cat` the settings
+    // file at the path printed below.
+    const url = `http://${LAN_IP}:${PORT}/?token=${token}`
+    console.log('')
+    console.log('==============================================================')
+    console.log('  webui 首次启动 — 已生成新的鉴权 token')
+    console.log('==============================================================')
+    console.log(`  token:   ${token}`)
+    console.log(`  远程 URL: ${url}`)
+    console.log('')
+    console.log(`  提示: token 已持久化到 ${getPersistPath()}`)
+    console.log('         远程设备必须通过该 URL (含 ?token=) 访问')
+    console.log('         本机访问 (127.0.0.1) 无需 token')
+    console.log('==============================================================')
+    console.log('')
+  },
+})
+// Sync tokenAuth master switch from settings → auth module
+setAuthTokenEnabled(getTokenEnabled())
+
 const server = http.createServer(handleRequest)
 server.listen(PORT, HOST, () => {
   console.log(`[webui] listening on http://${HOST}:${PORT}`)
@@ -44,6 +79,7 @@ server.listen(PORT, HOST, () => {
   console.log(`[webui] default workspace: ${DEFAULT_WORKSPACE}`)
   console.log(`[webui] uploads: ${UPLOAD_DIR}`)
   console.log(`[webui] sessions: ${SESSIONS_DB}`)
+  console.log(`[webui] settings: ${getPersistPath()}`)
 })
 
 process.on('SIGINT', () => {

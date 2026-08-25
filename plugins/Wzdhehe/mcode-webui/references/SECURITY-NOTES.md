@@ -199,13 +199,110 @@ log + a disabled feature) — it does not crash.
 ## 7. Testing & reproducibility
 
 - `npm test` runs `node --experimental-test-module-mocks --test test/*.test.js`.
-  261 passing tests, 1 skipped, 0 failing on a clean checkout.
+  371 passing tests, 1 skipped, 0 failing on a clean checkout.
 - `npm run lint` — ESLint flat config, 0 warnings on a clean checkout.
 - All tests use **temp file fixtures** (`mkdtempSync`). No test writes
-  to the user's real `~/.minimax/` directory unless `MCODE_RUNTIME_DB`
-  env is explicitly overridden.
+  to the user's real `~/.minimax/` or `~/.mcode-webui/` directory unless
+  `MCODE_RUNTIME_DB` / `MCODE_WEBUI_SETTINGS_PATH` env is explicitly
+  overridden.
 - Cross-platform: tests pass on Windows + Linux + macOS (CI matrix
   Node 22 + 24).
+
+---
+
+## 9. v1.0.1 — LAN sub-card: read-only / token auth
+
+v1.0.1 adds a secondary card under the `LAN access` chip in the bottom-left
+panel. It centralizes the three most-relevant security / access controls:
+
+| Control | What it does | Where the state lives |
+|---|---|---|
+| **LAN access** (toggle) | On/off for the 403 gate on non-local requests (unchanged from v0.5.ap) | In-memory only; resets to `true` on restart (intentional — admins shouldn't get locked out) |
+| **Read-only mode** (toggle) | When on, non-local `POST` / `DELETE` to `/api/*` return 403 `{error: "read-only mode"}`. `GET`, `HEAD`, `OPTIONS` are exempt. Local requests are always exempt. `/api/settings` is exempt (escape hatch) | Persisted to `~/.mcode-webui/settings.json` |
+| **Token auth** (toggle) | When on, non-local requests must carry `?token=` or `Authorization: Bearer`. When off, the gate is bypassed even if a token is set (LAN-only deployment mode) | Persisted |
+| **Token value + reset** | First-run: server generates a 32-hex-char token (`crypto.randomBytes(16).toString('hex')`) and writes it to `~/.mcode-webui/settings.json`. The token is **printed to stdout exactly once at first start** (not to `.server.log`). The settings card shows the token until the operator clicks "我已保存" (acknowledge). After acknowledgment, the server stops sending the token in `GET /api/settings` responses — only already-connected clients keep it. `Reset token` generates a new value, persists, broadcasts an `auth.token_rotated` SSE event so other connected clients update their `localStorage` + `Authorization` header live, and resets `tokenAcknowledged` to `false` (the new token is shown again). | Persisted to `~/.mcode-webui/settings.json` (mode 0600, atomic write via `.tmp` + rename) |
+
+### 9.1 Token resolution priority (per request)
+
+1. `process.env.TOKEN` (highest — escape hatch for `docker run -e TOKEN=...` deploys)
+2. In-memory `expectedToken` synced from `settings.js` after `init()` / `rotateToken()`
+3. Static `TOKEN` from `config.js` (fallback for tests)
+
+If all three are empty, the token-auth gate is **fail-open** (back-compat with
+the v1.0.1 "loopback-only / trusted LAN" deployment). To force-fail-secure
+on first run, set `TOKEN=<value>` in the environment.
+
+### 9.2 Token storage
+
+- `~/.mcode-webui/settings.json` (mode 0600 on Unix; best-effort on Windows).
+- File is **excluded from the webui process's standard logs** — `console.log`
+  on first start is the only place the token is printed.
+- Backup-on-corruption: if the file fails JSON.parse, the server renames it
+  to `settings.json.bak` and starts with defaults (logs a warning).
+- Override path for tests / non-default installs:
+  `MCODE_WEBUI_SETTINGS_PATH=/some/other/settings.json`.
+
+### 9.3 Token rotation — SSE `auth.token_rotated`
+
+When the operator hits "Reset token" in the UI:
+
+1. `POST /api/settings {resetToken: true}` (must already be authenticated)
+2. Server generates new 32-hex token, writes to disk
+3. Server broadcasts `event: auth.token_rotated\ndata: <new-token>\n\n` to
+   every connected SSE client (the connection is already authenticated,
+   so the token in cleartext over SSE is no worse than the periodic state
+   push that also includes `currentToken` for the same window).
+4. Server also broadcasts a regular state push (`currentToken` will be in
+   the JSON body until the operator clicks "我已保存").
+5. Clients that receive the SSE event update their `localStorage` and the
+   live `HEADERS.Authorization` object in place — subsequent `fetch` calls
+   automatically use the new token.
+6. Clients on the old token that didn't get the SSE event (offline, etc.)
+   will see 401 on their next request and need to manually re-open with
+   the new token URL.
+
+### 9.4 `currentToken` in `/api/settings` responses
+
+- Returned **only when `tokenAcknowledged === false`**.
+- After the operator clicks "我已保存", the server omits the token from
+  subsequent responses. This is a deliberate trade-off: clients that lost
+  their `localStorage` (e.g. cleared browser data) will need to either
+  trigger a rotation (operator-visible) or look up the token in
+  `~/.mcode-webui/settings.json`.
+- A programmatic / CI caller that needs the token should call
+  `POST /api/settings {resetToken: true}` to force a rotation and then
+  read the response's `currentToken`.
+
+### 9.5 Files added / modified in v1.0.1
+
+- **NEW** `server/lib/settings.js` (substantially rewritten) — owns
+  persistent settings + token generation + interface lookup.
+- **NEW** `server/lib/auth.js` — adds `setExpectedToken`,
+  `setTokenAuthEnabled`. Per-request token check still happens here.
+- `server/lib/lan.js` — no change in v1.0.1 (kept the existing
+  `detectLanIp` / `isLocalRequest` / `LAN_IP`).
+- `server/router.js` — adds read-only gate (in addition to the existing
+  LAN and token gates). Interface-allowlist gate was prototyped in
+  v1.0.1 but removed before release per PR #16 reviewer scope.
+- `server/routes/settings.js` — accepts new fields, handles rotation.
+- `server/lib/state-bus.js` — adds `broadcastTokenRotated`; SSE state
+  push now includes `readOnly`, `tokenEnabled`, `currentToken` (when
+  not acknowledged), `tokenAcknowledged`, `tokenRotatedAt`.
+- `public/app/state.js` — `HEADERS` is now a live-mutable object;
+  new `setToken()` + SSE `auth.token_rotated` handler.
+- `public/app/render.js` — `renderLanCardContent(settings)` exported.
+- `public/app/events.js` — `#chip-lan` click toggles the sub-card
+  (was: directly toggled `lanBroadcast`); new handlers for each control
+  inside the card.
+- `public/index.html` — `<div id="lan-card" hidden>` markup; CSS in
+  `public/styles/main.css`.
+- `public/app/i18n.js` — 22 new keys (`lan_card_*`).
+- **NEW** `test/lib-settings.test.js` — persistence + new setters.
+- **NEW** `test/router-readonly.test.js` — read-only gate logic.
+- Extended `test/lib-auth.test.js` (`setExpectedToken`,
+  `setTokenAuthEnabled`), `test/routes-settings.test.js` (new fields,
+  `resetToken`, `acknowledgeToken`), `test/_setup.js` (mock shape).
+
 
 ---
 

@@ -292,6 +292,26 @@ a.chip-lan-link .icon {
 .chip-workspace:hover { background: var(--bg-hover, rgba(0,0,0,0.04)); border-color: var(--accent); }
 .chip-workspace:active { background: var(--bg-active, rgba(0,0,0,0.08)); }
 .chip-workspace-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* v1.0.1: 只读模式 chip — 红色背景 + 白字, 双语 ("只读 / READ ONLY")
+   醒目的视觉提示, 让任何 client (本机 / 远程) 都能一眼看到当前
+   webui 处于只读模式. */
+.chip-readonly {
+  background: var(--danger);
+  color: #fff;
+  border: 1px solid var(--danger);
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  animation: pulse-readonly 2.4s ease-in-out infinite;
+}
+.chip-readonly-sep {
+  opacity: 0.6;
+  font-weight: 400;
+  margin: 0 -2px;
+}
+@keyframes pulse-readonly {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(var(--danger-rgb, 192, 57, 43), 0.4); }
+  50%      { box-shadow: 0 0 0 6px rgba(var(--danger-rgb, 192, 57, 43), 0); }
+}
 
 /* v0.5.al: workspace picker popover（fixed 定位，跟随 chip-workspace） */
 .workspace-picker {
@@ -2509,6 +2529,9 @@ body.is-remote .btn-lan-toggle { display: none; }
   .chat-area { width: 100%; }
   .btn-mobile-toggle { display: inline-flex !important; }
   .topbar-status { display: none; }
+  /* v1.0.1: 移动端也必须显示只读 chip (read-only 是关键安全提示, 不能因为
+     viewport 小就藏起来让用户漏掉) */
+  .topbar-status .chip-readonly { display: inline-flex; }
 }
 @media (max-width: 600px) {
   .chat-inner { padding: 0 12px; }
@@ -2864,3 +2887,208 @@ body.is-remote .btn-lan-toggle { display: none; }
   content: '⚡';
   margin-right: 4px;
 }
+
+/* ============================================================
+   v1.0.1: LAN sub-card (二级卡片)
+   点开 #chip-lan 后展开；含只读/Token 鉴权/接口过滤等
+   ============================================================ */
+.lan-card {
+  /* v1.0.1: popover 模式 — 浮在 sidebar 右边, 不挤压下方 GitHub 链接 */
+  position: fixed;
+  left: 248px;  /* left-panel 宽度 (240) + 8px gap */
+  bottom: 70px; /* 离底部 GitHub 链接留点空间 */
+  width: 320px;
+  max-height: calc(100vh - 100px);
+  overflow-y: auto;
+  padding: 12px 14px 14px 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+  font-size: 12.5px;
+  color: var(--text);
+  z-index: 100;
+}
+/* v1.0.1: 移动端 sidebar 折叠时, sub-card 不能还按 248px 左边距定位 (会跑出屏幕)
+   fallback: 占满 viewport, 留 16px 边距 */
+@media (max-width: 600px) {
+  .lan-card {
+    left: 16px;
+    right: 16px;
+    width: auto;
+    bottom: 60px;
+    max-height: calc(100vh - 80px);
+  }
+  /* 折叠的 sidebar 状态下, 卡片不显示指向 sidebar 的三角箭头 (没意义) */
+  .lan-card::before { display: none; }
+}
+/* 小三角箭头指向 chip-lan (在卡片左下) */
+.lan-card::before {
+  content: "";
+  position: absolute;
+  left: -7px;
+  bottom: 24px;
+  width: 12px;
+  height: 12px;
+  background: var(--bg-elevated);
+  border-left: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  transform: rotate(45deg);
+}
+.lan-card[hidden] { display: none; }
+.lan-card-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 10px;
+}
+.lan-card-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-light);
+}
+.lan-card-row:last-of-type { border-bottom: none; }
+.lan-card-row-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+.lan-card-row-label > span:first-child {
+  font-weight: 500;
+  color: var(--text);
+}
+.lan-card-row-help {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  line-height: 1.4;
+}
+.lan-card-toggle {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.lan-card-toggle input { opacity: 0; width: 0; height: 0; }
+.lan-card-toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--border);
+  border-radius: 20px;
+  transition: background 0.2s;
+}
+.lan-card-toggle-slider::before {
+  content: "";
+  position: absolute;
+  height: 14px; width: 14px;
+  left: 3px; bottom: 3px;
+  background: var(--bg-elevated);
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+.lan-card-toggle input:checked + .lan-card-toggle-slider { background: var(--status-on); }
+.lan-card-toggle input:checked + .lan-card-toggle-slider::before { transform: translateX(16px); }
+.lan-card-toggle input:focus + .lan-card-toggle-slider { box-shadow: 0 0 0 2px var(--accent-bg); }
+.lan-card-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-light);
+}
+.lan-card-section-label {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+.lan-card-token-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.lan-card-token-mask,
+.lan-card-token-value {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border-light);
+  word-break: break-all;
+  flex: 1;
+  min-width: 0;
+}
+.lan-card-token-value {
+  color: var(--text);
+}
+.lan-card-token-placeholder {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 4px 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  flex: 1;
+  text-align: left;
+}
+.lan-card-btn {
+  font-size: 11.5px;
+  padding: 4px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.lan-card-btn:hover { background: var(--bg-hover); border-color: var(--border); }
+.lan-card-btn-primary {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+.lan-card-btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.lan-card-btn-danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.lan-card-btn-danger:hover { background: var(--danger); color: var(--on-accent); }
+.lan-card-warning {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: var(--accent-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11.5px;
+  color: var(--text);
+  line-height: 1.5;
+}
+.lan-card-warning::before {
+  content: '⚠ ';
+  margin-right: 2px;
+}
+.lan-card-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.lan-card-help {
+  margin-top: 6px;
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  line-height: 1.4;
+}
+/* chip-lan 展开态 — chevron 旋转提示 */
+.btn-lan-toggle[aria-expanded="true"] .btn-chevron { transform: rotate(90deg); }
+.btn-lan-toggle .btn-chevron { transition: transform 0.2s; }

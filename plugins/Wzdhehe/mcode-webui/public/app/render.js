@@ -48,6 +48,16 @@ export function render() {
     console.warn('[lan] render: chip-lan-link element NOT found in DOM')
   }
 
+  // v1.0.1: 同步 sub-card 内容 (即使卡片是 hidden 状态, 也更新 input value
+  // 这样打开时是新鲜的)
+  renderLanCardContent({
+    lanBroadcast,
+    readOnly: state.readOnly === true,
+    tokenEnabled: state.tokenEnabled !== false,
+    tokenAcknowledged: state.tokenAcknowledged === true,
+    currentToken: state.currentToken || '',
+  })
+
   // v0.5.aa: TPS 还在用
   const tpsEl = document.getElementById('chip-tps')
 
@@ -63,6 +73,13 @@ export function render() {
   if (chipOnline) {
     chipOnline.querySelector('span:first-child').textContent = onlineDot
     chipOnline.querySelector('#chip-online-text').textContent = onlineText
+  }
+
+  // v1.0.1: 只读模式 top-bar chip — 醒目的红色双语 chip, server readOnly=true
+  // 时所有 client (包括本机) 都看得到, 远程 client 一眼就知道现在不能 send / delete
+  const chipReadonly = document.getElementById('chip-readonly')
+  if (chipReadonly) {
+    chipReadonly.hidden = !(state && state.readOnly === true)
   }
 
   // v0.5.aa: chat 底部思考中指示器 + send 按钮 → stop 按钮
@@ -331,6 +348,70 @@ export function renderTodo() {
 export let collapsedWorkspaces = (() => {
   try { return new Set(JSON.parse(localStorage.getItem('webui_ws_collapsed_v1') || '[]')) } catch { return new Set() }
 })()
+
+// v1.0.1: 渲染 LAN sub-card (#lan-card) 的内容. 接收 settings 对象
+// (从 SSE push 或 fetch /api/settings) 并更新各 input / token value /
+// 接口 checklist. 即使卡片 hidden 也调用 — 这样打开时已经是最新值.
+//
+// 注意: token 渲染走 textContent 不用 innerHTML 防 XSS (SECURITY-NOTES.md §2).
+export function renderLanCardContent(s) {
+  if (!s) return
+  const lanCard = document.getElementById('lan-card')
+  if (!lanCard) return  // DOM 还没准备好 (在 app 启动前调用)
+  const lanCardBroadcast = document.getElementById('lan-card-broadcast')
+  const lanCardReadonly = document.getElementById('lan-card-readonly')
+  const lanCardTokenAuth = document.getElementById('lan-card-token-auth')
+  const lanCardTokenMask = document.getElementById('lan-card-token-mask')
+  const lanCardTokenValue = document.getElementById('lan-card-token-value')
+  const lanCardTokenWarning = document.getElementById('lan-card-token-warning')
+  const lanCardTokenAck = document.getElementById('lan-card-token-ack')
+
+  if (lanCardBroadcast) lanCardBroadcast.checked = s.lanBroadcast !== false
+  if (lanCardReadonly) lanCardReadonly.checked = s.readOnly === true
+  if (lanCardTokenAuth) lanCardTokenAuth.checked = s.tokenEnabled !== false
+
+  // Token area: three states
+  //  (a) token available (currentToken non-empty, !acknowledged) — value
+  //      visible (or mask visible, depending on toggle), show/copy buttons
+  //  (b) token not available (currentToken empty, e.g. after acknowledge)
+  //      — show a "saved" placeholder, hide the show/copy buttons
+  //  (c) token enabled is off — show "(disabled)" placeholder
+  const lanCardTokenToggle = document.getElementById('lan-card-token-toggle')
+  const lanCardTokenCopy = document.getElementById('lan-card-token-copy')
+  const lanCardTokenRow = document.getElementById('lan-card-token-row')
+  const tokenEnabled = s.tokenEnabled !== false
+  const hasToken = typeof s.currentToken === 'string' && s.currentToken.length > 0
+
+  if (lanCardTokenValue) lanCardTokenValue.textContent = s.currentToken || ''
+
+  if (!tokenEnabled) {
+    // (c) Token auth disabled — don't show token or toggle
+    if (lanCardTokenRow) {
+      lanCardTokenRow.innerHTML = `<span class="lan-card-token-placeholder">— ${escapeHtml(t('lan_card_token_disabled') || 'Token 鉴权已关闭')}</span>`
+    }
+  } else if (!hasToken) {
+    // (b) After acknowledge (or no token on server) — show placeholder
+    if (lanCardTokenRow) {
+      lanCardTokenRow.innerHTML = `<span class="lan-card-token-placeholder">✓ ${escapeHtml(t('lan_card_token_saved') || '已保存')}</span>`
+    }
+  } else {
+    // (a) Token available — make sure mask+value+buttons are rendered
+    // If the row was rewritten above (case b/c), restore the original DOM
+    if (lanCardTokenRow && !lanCardTokenRow.querySelector('#lan-card-token-mask')) {
+      lanCardTokenRow.innerHTML =
+        `<span class="lan-card-token-mask" id="lan-card-token-mask">••••••••••••••••••••••••••••••••</span>` +
+        `<span class="lan-card-token-value" id="lan-card-token-value" hidden></span>` +
+        `<button class="lan-card-btn" id="lan-card-token-toggle" data-i18n="lan_card_token_show">${escapeHtml(t('lan_card_token_show'))}</button>` +
+        `<button class="lan-card-btn" id="lan-card-token-copy" data-i18n="lan_card_token_copy">${escapeHtml(t('lan_card_token_copy'))}</button>`
+      // Click handlers are event-delegated on the row (see events.js),
+      // so the new buttons pick them up automatically — no re-bind needed.
+    }
+  }
+
+  // acknowledged 提示
+  if (lanCardTokenWarning) lanCardTokenWarning.hidden = s.tokenAcknowledged !== false
+  if (lanCardTokenAck) lanCardTokenAck.hidden = s.tokenAcknowledged !== false
+}
 
 // v0.5.bx-31: sidebar 首次 SSE 推 mcodeSessions 之前显示 skeleton, 避免点删除/切时 race
 //   mcode acp singleton 启动要 1-3s, 期间 state.mcodeSessions=[] → render 显示空

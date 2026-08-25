@@ -146,7 +146,7 @@ The `state` payload is documented in § 5 below. The `clientState.state`
 object is the **only** thing the rest of the codebase reads from.
 
 ### `acp-client.js`
-Wraps Mcode's JSON-RPC-over-stdio protocol. Exports:
+Wraps mcode's JSON-RPC-over-stdio protocol. Exports:
 
 - `McodeAcpClient` class — `start()`, `request(method, params)`,
   `notify(method, params)`, `stop()`, `events` EventEmitter.
@@ -177,7 +177,7 @@ on the client.
 
 ### `mcode-acp.js` vs `mcode-exec.js`
 Two transports with a shared shape. The transport layer is selected
-by `mcode-rpc.js` based on `Mcode version >= 0.1.4` and the per-request
+by `mcode-rpc.js` based on `mcode version >= 0.1.4` and the per-request
 `/exec` opt-in.
 
 Both expose:
@@ -210,7 +210,7 @@ it 1:1 into the `state` JS variable.
   model: { name: string,            // e.g. "minimax_api/MiniMax-M3"
            ctx: string,            // e.g. "512k"
            thinking: 'On'|'Off'|string },
-  permissions: string,             // Mcode-side: 'ask'|'auto'|'full'|'plan'|...
+  permissions: string,             // mcode-side: 'ask'|'auto'|'full'|'plan'|...
   commands: Array<{                // mcode slash commands
     cmd: string, zh: string, en: string,
     description_zh?: string, description_en?: string,
@@ -223,7 +223,7 @@ it 1:1 into the `state` JS variable.
     workspace: string,
     mcodeSessionId?: string,        // linked mcode session id
     updatedAt: number }>,
-  mcodeSessions: Array<{            // Mcode-side session list (raw)
+  mcodeSessions: Array<{            // mcode-side session list (raw)
     sessionId: string,
     title: string,
     cwd: string,
@@ -251,7 +251,14 @@ it 1:1 into the `state` JS variable.
            duration?: number },
   todo?: Array<{ content: string, status: 'pending'|'in_progress'|'done' }>,
   lanBroadcast: boolean,           // mirrors /api/settings
-  onlineCount: number               // from pushOnlineCount
+  onlineCount: number,              // from pushOnlineCount
+  // 🆕 v1.0.1 — settings surface pushed over SSE state updates
+  readOnly: boolean,                // read-only mode (server gate blocks remote POST/DELETE on /api/*)
+  tokenEnabled: boolean,            // token auth master switch (default true)
+  currentToken: string,             // 32-hex auto-generated token; "" after tokenAcknowledged=true
+  tokenAcknowledged: boolean,       // operator confirmed they saved the token
+  tokenRotatedAt: number,           // ms-since-epoch of last rotation
+  availableInterfaces: Array<{name, address, family}>  // for client UI display
 }
 ```
 
@@ -260,6 +267,10 @@ panel that needs data reads it from `state` and reacts to `state`
 changes via `render()`.
 
 ## 5. SSE event schema
+
+Two event types — `state` (the standard state push) and a 🆕
+v1.0.1 named event `auth.token_rotated` that fires only when the
+token changes.
 
 ```
 event: state
@@ -292,6 +303,26 @@ data: {"remaining":N,"resetAt":N,…}
 event: online
 data: {"count":N,"lanBroadcast":true}
 ```
+
+🆕 **v1.0.1** — a separate named event for live token rotation:
+
+```
+event: auth.token_rotated
+data: <new-32-hex-token>     // raw string, NOT JSON-wrapped
+```
+
+Fires when the operator hits "重置 token" in the settings card (or
+any future trigger that rotates the token). Each connected client
+that receives the event updates its `localStorage` (`webui_token` key)
+and the live `HEADERS.Authorization` object **in place** — subsequent
+`fetch()` calls use the new token automatically, no reload required.
+Clients that were offline when the event fired will get `401` on
+their next request; they need to be re-sent the new URL manually.
+
+The body is **raw text**, not JSON-encoded — it's obvious in devtools
+that this is sensitive material, and `JSON.stringify` would not add
+any value (and would obscure the token when copy-pasted from
+network logs).
 
 The webui treats each event as an idempotent update; replaying the
 same event is safe. The server uses an at-most-once delivery model
