@@ -8,7 +8,34 @@ original goal, paying main-model prices for cheap-model work, losing track of wh
 sub-agent is doing what, failing on transient errors without a budget, reading streaming
 output without filling context, or losing work at session end.
 
-## v1.0.1 changelog (this release)
+## v1.0.2 changelog (this release)
+
+> **类型**:patch · **Skill 主体不变** · README 加 4 段独立披露(满足 mcode plugin 提交规范)
+
+### Added
+
+- README 新增 `Disclosure (per mcode plugin convention)` 一节,4 段独立披露:
+  - **No credentials** — 不读 / 存 / 传 / 请求任何凭据
+  - **No network** — 任何出站调用 / socket / 自动更新
+  - **No telemetry** — 任何自身指标 / trace / event / log
+  - **No third-party services** — 不绑 MCP / npm / 原生 binary / 外部 runtime
+- PR #18 body 改为 `Design compliance / Validation / Test evidence` 三段式
+
+### Compliance
+
+- mcode `~/.minimax/memory/user.md` 第 36-42 行规定的 4 段披露格式 — 现在 README 显式列出
+- 跨平台 path 解析 — 已验证无硬编码 `C:\` / `D:\` / `/Users/` / `/home/`
+- Skill-only plugin (无 `mcp.json` / 无 `package.json` / 0 npm 依赖) — 已声明
+- 一个 commit 一个 plugin 范围 — 此次只改 README
+
+### Not changed
+
+- 23 skill 主体(版本号不变)
+- 23 skill frontmatter
+- plugin.json 其他字段
+- License
+
+## v1.0.1 changelog (previous)
 
 > **类型**:patch · **Skill 主体不变** · 文档收尾(OVERVIEW.md / STATUS.md 全面刷新 + PR #18 title 更新)
 
@@ -476,6 +503,43 @@ Eighteen Skills, all Skill-only (no MCP server, no network access):
 | 16 | `retry-with-backoff` | About to retry a `transient` error. State the policy first: max attempts, base delay, max delay, jitter, total time budget. | v0.6.0 → 0.6.1 |
 | 17 | `streaming-output-reader` | A tool returns a long stream (SSE / WebSocket / `tail -f` / large log). Read in bounded chunks, synthesize, never loop. | v0.6.0 → 0.6.1 |
 | 18 | `session-handoff` | The session is ending (user stepping away, time up, about to compact). Write a handoff file so next session can pick up in 30 seconds. | v0.6.0 → 0.6.1 |
+
+## Disclosure (per mcode plugin convention)
+
+The four sections below are explicit, independent disclosures as required by the mcode
+plugin submission convention. They are the single source of truth for this Plugin's
+runtime surface area; if any of them is false for a future change, update them in the
+same commit.
+
+### No credentials
+
+The Plugin does not read, store, transmit, or request any credential. It does not declare
+an OAuth flow, does not require environment variables, does not embed tokens, and does not
+have a service account. The 23 Skills are pure Markdown instructions; activating a Skill
+does not require or produce any secret material.
+
+### No network
+
+The Plugin makes no outbound network call. It does not bundle a fetch / download /
+auto-update step; it does not register a webhook or a long-poll; it does not open a socket
+of any kind. Skill contents are read from the local `skills/` directory only, and the
+agent's existing tool surface (`bash`, `read`, `write`, `edit`, `grep`, `glob`, `task`)
+is the only thing the Skills can ask the agent to do.
+
+### No telemetry
+
+The Plugin does not emit events, metrics, traces, or logs of its own. It does not register
+a counter, does not tag rollouts, and does not write a heartbeat. Any observability the
+Plugin produces is the same observability the agent would produce if a human typed the
+same instructions by hand.
+
+### No third-party services
+
+The Plugin does not depend on any external service. It does not bundle a native binary,
+does not call an MCP server, does not `npm install` anything at install time, and does
+not require Python, Node, or any runtime besides the host agent. The 23 Skills are
+self-contained Markdown; the `plugin.json` declares no `mcp.json` and no
+`package.json`.
 
 ## Requirements
 
