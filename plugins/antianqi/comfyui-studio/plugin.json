@@ -1,0 +1,21 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "comfyui-studio",
+  "version": "0.2.0-beta.1",
+  "description": "Generic toolkit for driving a local ComfyUI 8188 server: workflow submission, queue monitoring, image download, and reproducible generation patterns. Includes a dependency-free stdio MCP server and four Skills (comfyui-studio + comfyui-workflow + comfyui-character + comfyui-drama) covering 6 preset scenarios (生图 / 模仿 / 改图 / 融合 / 首帧 / 出片).",
+  "author": {
+    "name": "antianqi",
+    "url": "https://github.com/antianqi"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "minimax-code",
+    "plugin",
+    "comfyui",
+    "stable-diffusion",
+    "image-generation",
+    "mcp",
+    "workflow",
+    "local-inference"
+  ]
+}

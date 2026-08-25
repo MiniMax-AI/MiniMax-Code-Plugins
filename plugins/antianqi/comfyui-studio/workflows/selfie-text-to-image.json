@@ -1,0 +1,75 @@
+{
+  "3": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "Z-Image-Base-8steps-豹豹喵呜の白玉v2White_Marble-AIO_v2-bf16.safetensors"
+    }
+  },
+  "10": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": ["3", 0],
+      "lora_name": "your_face_lora.safetensors",
+      "strength_model": 1.0
+    }
+  },
+  "20": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": ["10", 0],
+      "lora_name": "your_style_lora.safetensors",
+      "strength_model": 1.0
+    }
+  },
+  "30": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "__PROMPT__",
+      "clip": ["3", 1]
+    }
+  },
+  "31": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "deformed, bad anatomy, extra fingers, blurry, low quality, watermark, different character, identity drift, multiple people, two people, group",
+      "clip": ["3", 1]
+    }
+  },
+  "50": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 1008,
+      "height": 1792,
+      "batch_size": 1
+    }
+  },
+  "60": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["20", 0],
+      "positive": ["30", 0],
+      "negative": ["31", 0],
+      "latent_image": ["50", 0],
+      "seed": 72125,
+      "steps": 8,
+      "cfg": 1.5,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0
+    }
+  },
+  "70": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["60", 0],
+      "vae": ["3", 2]
+    }
+  },
+  "80": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["70", 0],
+      "filename_prefix": "zib_selfie"
+    }
+  }
+}
