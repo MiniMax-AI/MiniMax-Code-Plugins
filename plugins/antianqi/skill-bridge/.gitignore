@@ -1,0 +1,7 @@
+# Local probe / debug files
+probe-*.mjs
+# Backup dirs that the transformer may leave if it crashes mid-swap.
+# (The transformer cleans these up on its own, but a crash before the
+# cleanup leaves the dir around and we do not want to commit it.)
+*.bak-*
+*.staging-*
