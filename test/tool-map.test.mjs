@@ -211,6 +211,171 @@ test('atomicWriteBundle is idempotent on the happy path (no residue, all 3 prese
   }
 });
 
+test('atomicWriteBundle rolls back when a backup-phase rename fails (early name)', async () => {
+  // Phase 1 (backup) failure on the very first name. `backups` is still
+  // empty, so the only thing the rollback must do is clean up the empty
+  // staging and backup dirs and leave the targets untouched. This is the
+  // simplest backup-phase case: no previous files have been moved yet.
+  const work = mkdtempSync(join(tmpdir(), 'tool-map-bkp-early-'));
+  try {
+    writeFileSync(join(work, 'tools.md'), 'PRE-MD');
+    writeFileSync(join(work, 'tools.json'), 'PRE-JSON');
+    // No tools.summary.md - target was absent before this call.
+
+    const helperPath = join(REPO_ROOT, 'test-fixtures', 'drive-bundle-failure.mjs');
+    const r = spawnSync(process.execPath, [helperPath, work], {
+      encoding: 'utf8',
+      timeout: 15_000,
+      env: { ...process.env, TOOL_MAP_FAIL_AT_RENAME: '1' },
+    });
+    assert.notEqual(r.status, 0, `helper should exit non-zero when the hook fires: stdout=${r.stdout}\nstderr=${r.stderr}`);
+
+    // Previous targets are intact.
+    assert.equal(readFileSync(join(work, 'tools.md'), 'utf8'), 'PRE-MD');
+    assert.equal(readFileSync(join(work, 'tools.json'), 'utf8'), 'PRE-JSON');
+    // The previously-absent target is still absent.
+    assert.ok(!existsSync(join(work, 'tools.summary.md')), 'tools.summary.md was created on rollback');
+    // No residue.
+    const residue = readdirSync(work).filter((e) =>
+      e.includes('.staging-') || e.includes('.bundle.staging-') || e.includes('.bundle.backup-'),
+    );
+    assert.equal(residue.length, 0, `staging/backup residue after Phase-1 rollback: ${residue.join(', ')}`);
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+
+test('atomicWriteBundle rolls back when a backup-phase rename fails (later name)', async () => {
+  // Phase 1 (backup) failure on the SECOND name. tools.md has already
+  // been moved to the backup dir; a naive implementation would leave it
+  // stranded there. The rollback must move it back to its target.
+  const work = mkdtempSync(join(tmpdir(), 'tool-map-bkp-late-'));
+  try {
+    writeFileSync(join(work, 'tools.md'), 'PRE-MD');
+    writeFileSync(join(work, 'tools.json'), 'PRE-JSON');
+    writeFileSync(join(work, 'tools.summary.md'), 'PRE-SUMMARY');
+
+    const helperPath = join(REPO_ROOT, 'test-fixtures', 'drive-bundle-failure.mjs');
+    const r = spawnSync(process.execPath, [helperPath, work], {
+      encoding: 'utf8',
+      timeout: 15_000,
+      env: { ...process.env, TOOL_MAP_FAIL_AT_RENAME: '2' },
+    });
+    assert.notEqual(r.status, 0, `helper should exit non-zero when the hook fires: stdout=${r.stdout}\nstderr=${r.stderr}`);
+
+    // Every previous target is back in place, byte-for-byte.
+    assert.equal(readFileSync(join(work, 'tools.md'), 'utf8'), 'PRE-MD',
+      'tools.md was stranded in backup dir instead of restored to target');
+    assert.equal(readFileSync(join(work, 'tools.json'), 'utf8'), 'PRE-JSON');
+    assert.equal(readFileSync(join(work, 'tools.summary.md'), 'utf8'), 'PRE-SUMMARY');
+    // No residue.
+    const residue = readdirSync(work).filter((e) =>
+      e.includes('.staging-') || e.includes('.bundle.staging-') || e.includes('.bundle.backup-'),
+    );
+    assert.equal(residue.length, 0, `staging/backup residue after Phase-1 rollback: ${residue.join(', ')}`);
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+
+test('atomicWriteBundle rolls back brand-new files that were partially installed', async () => {
+  // Phase 3 (install) failure on the LAST name after a brand-new file
+  // (one that did NOT exist before this call) was successfully installed.
+  // The rollback must delete the partially-installed new file so the
+  // directory looks like it did before the call.
+  //
+  // Renames: #1=md-backup, #2=json-backup, #3=summary-backup
+  //          (no backup for tools.new1)
+  //          #4=md-install, #5=json-install, #6=summary-install,
+  //          #7=new1-install, #8=new2-install
+  // Trigger at #8 so the failure happens after the brand-new tools.new1
+  // has already been renamed onto its target. `installed['tools.new1']`
+  // is true and `backups['tools.new1']` is null.
+  const work = mkdtempSync(join(tmpdir(), 'tool-map-new-partial-'));
+  try {
+    writeFileSync(join(work, 'tools.md'), 'PRE-MD');
+    writeFileSync(join(work, 'tools.json'), 'PRE-JSON');
+    writeFileSync(join(work, 'tools.summary.md'), 'PRE-SUMMARY');
+    // tools.new1 and tools.new2 do NOT exist before the call.
+
+    const helperUrl = pathToFileURL(join(REPO_ROOT, 'test-fixtures', 'drive-bundle-failure-5.mjs')).href;
+    const r = spawnSync(process.execPath, [helperUrl, work], {
+      encoding: 'utf8',
+      timeout: 15_000,
+      env: { ...process.env, TOOL_MAP_FAIL_AT_RENAME: '8' },
+    });
+    assert.notEqual(r.status, 0, `helper should exit non-zero when the hook fires: stdout=${r.stdout}\nstderr=${r.stderr}`);
+
+    // Previously-existing targets are restored.
+    assert.equal(readFileSync(join(work, 'tools.md'), 'utf8'), 'PRE-MD');
+    assert.equal(readFileSync(join(work, 'tools.json'), 'utf8'), 'PRE-JSON');
+    assert.equal(readFileSync(join(work, 'tools.summary.md'), 'utf8'), 'PRE-SUMMARY');
+    // Brand-new targets are still absent (no residue from partial install).
+    assert.ok(!existsSync(join(work, 'tools.new1')), 'brand-new tools.new1 leaked after rollback');
+    assert.ok(!existsSync(join(work, 'tools.new2')), 'brand-new tools.new2 leaked after rollback');
+    // No residue.
+    const residue = readdirSync(work).filter((e) =>
+      e.includes('.staging-') || e.includes('.bundle.staging-') || e.includes('.bundle.backup-'),
+    );
+    assert.equal(residue.length, 0, `staging/backup residue after Phase-3 rollback: ${residue.join(', ')}`);
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+
+test('atomicWriteBundle happy path: previously-absent targets are created, no residue', async () => {
+  // When the target dir starts empty, every name in the bundle is a
+  // brand-new file. The happy path must still leave exactly the three
+  // target files behind and nothing else.
+  const scanUrl = pathToFileURL(SCAN).href;
+  const { atomicWriteBundle } = await import(scanUrl);
+  const work = mkdtempSync(join(tmpdir(), 'tool-map-fresh-'));
+  try {
+    atomicWriteBundle(work, {
+      'tools.md': 'NEW-MD',
+      'tools.json': 'NEW-JSON',
+      'tools.summary.md': 'NEW-SUMMARY',
+    });
+    assert.equal(readFileSync(join(work, 'tools.md'), 'utf8'), 'NEW-MD');
+    assert.equal(readFileSync(join(work, 'tools.json'), 'utf8'), 'NEW-JSON');
+    assert.equal(readFileSync(join(work, 'tools.summary.md'), 'utf8'), 'NEW-SUMMARY');
+    const entries = readdirSync(work).sort();
+    assert.deepEqual(entries, ['tools.json', 'tools.md', 'tools.summary.md'],
+      `unexpected files in fresh output dir: ${entries.join(', ')}`);
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+
+test('atomicWriteBundle happy path: mix of existing and absent targets', async () => {
+  // Verify the happy path still works when only SOME of the targets
+  // pre-existed. The existing ones get overwritten, the absent ones get
+  // created, no residue anywhere.
+  const scanUrl = pathToFileURL(SCAN).href;
+  const { atomicWriteBundle } = await import(scanUrl);
+  const work = mkdtempSync(join(tmpdir(), 'tool-map-mixed-'));
+  try {
+    writeFileSync(join(work, 'tools.md'), 'OLD-MD');
+    writeFileSync(join(work, 'tools.json'), 'OLD-JSON');
+    // tools.summary.md is absent.
+
+    atomicWriteBundle(work, {
+      'tools.md': 'NEW-MD',
+      'tools.json': 'NEW-JSON',
+      'tools.summary.md': 'NEW-SUMMARY',
+    });
+    assert.equal(readFileSync(join(work, 'tools.md'), 'utf8'), 'NEW-MD');
+    assert.equal(readFileSync(join(work, 'tools.json'), 'utf8'), 'NEW-JSON');
+    assert.equal(readFileSync(join(work, 'tools.summary.md'), 'utf8'), 'NEW-SUMMARY');
+    const residue = readdirSync(work).filter((e) =>
+      e.includes('.staging-') || e.includes('.bundle.staging-') || e.includes('.bundle.backup-'),
+    );
+    assert.equal(residue.length, 0, `staging/backup residue on happy path: ${residue.join(', ')}`);
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+
 test('ALLOWED_PROBE_NAMES is exactly the 15 declared names', async () => {
   const scanUrl = pathToFileURL(SCAN).href;
   const { ALLOWED_PROBE_NAMES, VERSION_PROBES } = await import(scanUrl);

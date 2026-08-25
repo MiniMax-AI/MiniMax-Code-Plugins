@@ -68,9 +68,12 @@ const outSummary = outMd.replace(/\.md$/, '') + '.summary.md';
 // Two-phase commit: every existing target file is first moved to a private
 // backup directory, then the new contents are written into a staging
 // directory, then each staging file is renamed onto its target. If any
-// rename fails, the backups are restored and the staging dir is removed.
-// Net effect: the previous catalog is left completely untouched unless
-// every file in the bundle renames successfully.
+// step fails, the previous bundle is restored exactly: names that had a
+// target get their old contents back, and names that did NOT have a
+// target are left absent (any partially-installed new content is removed).
+// Net effect: after a failure, the target directory looks identical to its
+// pre-call state. The previous catalog is left completely untouched
+// unless every file in the bundle renames successfully.
 //
 // On POSIX `rename(2)` is atomic. On Windows `fs.renameSync` calls
 // `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`; same-volume moves are
@@ -88,54 +91,85 @@ function atomicWriteBundle(targetDir, files) {
   mkdirSync(stagingDir, { recursive: true });
   mkdirSync(backupDir, { recursive: true });
 
-  // Phase 1: back up any existing target files. Track which names had a
-  // previous version so we know whether to remove the backup or restore it.
-  const backups = {}; // name -> backup path (or null if target didn't exist)
-  for (const name of Object.keys(files)) {
-    const targetPath = join(targetDir, name);
-    if (existsSync(targetPath)) {
-      const backupPath = join(backupDir, name);
-      renameSync(targetPath, backupPath);
-      backups[name] = backupPath;
-    } else {
-      backups[name] = null;
-    }
-  }
+  // Per-name state tracked across the three phases. Both start empty.
+  //   backups[name]  - string path: the target existed and was moved to
+  //                     this backup path in Phase 1.
+  //                   - null: the target did NOT exist before Phase 1.
+  //   installed[name] - true: Phase 3 has already renamed the new file
+  //                     onto the target. Used to know whether a brand-new
+  //                     file needs to be deleted on rollback.
+  const backups = {};
+  const installed = {};
 
-  try {
-    // Phase 2: write all new content into the staging dir.
-    for (const [name, contents] of Object.entries(files)) {
-      writeFileSync(join(stagingDir, name), contents, 'utf8');
-    }
-
-    // Phase 3: rename each staging file onto its target. If any rename
-    // fails, restore the previous targets from backup before throwing.
-    try {
-      for (const name of Object.keys(files)) {
-        renameSync(join(stagingDir, name), join(targetDir, name));
-      }
-    } catch (renameErr) {
-      // Restore backups (target paths are now empty or partially written)
-      for (const [name, backupPath] of Object.entries(backups)) {
+  // Inverse of Phases 1+3: put every name back into the state it was in
+  // before this call. Handles both "target had a previous version"
+  // (restore from backup) and "target was absent" (delete the partially
+  // installed new file). Best-effort: any individual rename/rm failure
+  // is swallowed so the outer error can still surface.
+  const restore = () => {
+    for (const [name, backupPath] of Object.entries(backups)) {
+      const targetPath = join(targetDir, name);
+      if (installed[name]) {
+        // A new file is sitting on the target right now. Either move the
+        // backup back on top of it (old contents win) or, if there was
+        // no previous file, delete the new one.
         if (backupPath) {
-          try { renameSync(backupPath, join(targetDir, name)); } catch { /* best effort */ }
+          try { renameSync(backupPath, targetPath); } catch { /* best effort */ }
+        } else {
+          try { rmSync(targetPath, { force: true }); } catch { /* best effort */ }
         }
+      } else if (backupPath) {
+        // Phase 1 moved the old file to backup but Phase 3 hasn't run for
+        // this name yet (or, for failure during Phase 1 itself, the loop
+        // broke before reaching this name). Move the old file back.
+        try { renameSync(backupPath, targetPath); } catch { /* best effort */ }
       }
-      // Re-throw after restoring
-      throw renameErr;
+      // else: target was absent and is still absent - nothing to do.
     }
+  };
 
-    // Phase 4: success. Remove the backup and staging directories.
-    try { rmSync(backupDir, { recursive: true, force: true }); } catch { /* swallow */ }
-    try { rmSync(stagingDir, { recursive: true, force: true }); } catch { /* swallow */ }
+  // Phase 1: back up any existing target files. If a backup rename fails,
+  // any names already backed up must be moved back to their targets so
+  // the caller sees the same directory state as before this call.
+  try {
+    for (const name of Object.keys(files)) {
+      const targetPath = join(targetDir, name);
+      if (existsSync(targetPath)) {
+        const backupPath = join(backupDir, name);
+        renameSync(targetPath, backupPath);
+        backups[name] = backupPath;
+      } else {
+        backups[name] = null;
+      }
+    }
   } catch (err) {
-    // Any failure inside Phase 2 (write) or 3 (rename): also restore backups
-    // and clean up both staging and backup dirs. Phase 3 already restores
-    // backups in its catch above, so we only need to clean up here.
+    restore();
     try { rmSync(backupDir, { recursive: true, force: true }); } catch { /* swallow */ }
     try { rmSync(stagingDir, { recursive: true, force: true }); } catch { /* swallow */ }
     throw err;
   }
+
+  // Phase 2 + 3: write all new content into the staging dir, then rename
+  // each onto its target. Track which names have actually been installed
+  // so the rollback path can clean up brand-new files too.
+  try {
+    for (const [name, contents] of Object.entries(files)) {
+      writeFileSync(join(stagingDir, name), contents, 'utf8');
+    }
+    for (const name of Object.keys(files)) {
+      renameSync(join(stagingDir, name), join(targetDir, name));
+      installed[name] = true;
+    }
+  } catch (err) {
+    restore();
+    try { rmSync(backupDir, { recursive: true, force: true }); } catch { /* swallow */ }
+    try { rmSync(stagingDir, { recursive: true, force: true }); } catch { /* swallow */ }
+    throw err;
+  }
+
+  // Phase 4: success. Remove the backup and staging directories.
+  try { rmSync(backupDir, { recursive: true, force: true }); } catch { /* swallow */ }
+  try { rmSync(stagingDir, { recursive: true, force: true }); } catch { /* swallow */ }
 }
 
 // --- Scan config ---
