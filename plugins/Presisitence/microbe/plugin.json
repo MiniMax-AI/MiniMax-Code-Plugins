@@ -1,0 +1,22 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "microbe",
+  "version": "0.1.0",
+  "description": "16S/ITS downstream microbiome analysis via local Rscript (alpha/beta diversity, composition, differential abundance, co-occurrence, random forest).",
+  "author": {
+    "name": "Presisitence",
+    "url": "https://github.com/Presisitence"
+  },
+  "homepage": "https://github.com/Presisitence/microbe-mcp",
+  "repository": "https://github.com/Presisitence/microbe-mcp",
+  "license": "MIT",
+  "keywords": [
+    "minimax-code",
+    "plugin",
+    "mcp",
+    "16s",
+    "its",
+    "microbiome",
+    "vegan"
+  ]
+}
