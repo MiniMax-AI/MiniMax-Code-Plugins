@@ -6,6 +6,10 @@ name: openclaw-acp-bridge smoke
 # degrade to "skipped" rather than fail when no ACP server is
 # reachable in CI. To run against a real server, set ACP_HOME and
 # ACP_TOKEN on the workflow run.
+#
+# The SDK at $ACP_HOME/openclaw-skill/ is fetched from a pinned commit
+# of antianqi/openclaw-mcode-acp so that Check 1-3 (SDK present and
+# importable) actually exercise the contract declared in the README.
 
 on:
   push:
@@ -20,22 +24,49 @@ on:
 permissions:
   contents: read
 
+# Pinned upstream SDK revision. The Plugin README promises the
+# "v7-bidir" line of antianqi/openclaw-mcode-acp; update this in lock
+# step with the README's "Pinned SDK revision" section. Bumping this
+# without re-running the smoke test against the new revision is a
+# contract break.
+env:
+  ACP_SDK_REPO: antianqi/openclaw-mcode-acp
+  ACP_SDK_REF: 0641f5c
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b18 # v7.0.1
 
+      - name: Check out pinned upstream SDK
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b18 # v7.0.1
+        with:
+          repository: ${{ env.ACP_SDK_REPO }}
+          ref: ${{ env.ACP_SDK_REF }}
+          path: __acp_sdk__
+          # Avoid a recursive checkout if the SDK repo ever points back
+          # at this org.
+          show-progress: false
+
       - uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d # v5.3.0
         with:
           python-version: '3.11'
 
-      - name: Run bundled smoke test (offline)
+      - name: Run bundled smoke test (offline, with pinned SDK)
+        env:
+          SMOKE_SKIP_LIVE: '1'
+          ACP_HOME: ${{ github.workspace }}/__acp_sdk__
+        run: |
+          set -euo pipefail
+          python plugins/antianqi/openclaw-acp-bridge/scripts/smoke.py
+
+      - name: Run no-redirect regression test
         env:
           SMOKE_SKIP_LIVE: '1'
         run: |
           set -euo pipefail
-          python plugins/antianqi/openclaw-acp-bridge/scripts/smoke.py
+          python plugins/antianqi/openclaw-acp-bridge/scripts/test_no_redirect.py
 
       - name: Validate plugin manifest
         run: |

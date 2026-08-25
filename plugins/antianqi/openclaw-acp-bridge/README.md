@@ -127,6 +127,22 @@ The smoke test (no MiniMax Code required) validates:
 
 Exits 0 on full pass, 1 on any failure. CI-friendly (exits non-zero on any failed assertion).
 
+A second test, `scripts/test_no_redirect.py`, is a regression test for the
+**no-redirect policy** on token-bearing requests. It stands up two local
+HTTP servers (a redirector and a capture endpoint) and proves that
+`$ACP_TOKEN` never reaches the capture server even when the first
+server responds with 302. Run it the same way:
+
+```bash
+python plugins/antianqi/openclaw-acp-bridge/scripts/test_no_redirect.py
+```
+
+This is what protects `$ACP_TOKEN` from being exfiltrated by a hostile
+or misconfigured loopback server that responds with 3xx to a different
+local origin. The default `urllib.request.urlopen` would follow such a
+redirect while keeping the `Authorization` header attached; the smoke
+test's opener refuses every 3xx outright.
+
 ## Data and network
 
 - Calls `http://localhost:9999` (HTTP loopback only; no remote endpoints)
@@ -139,6 +155,7 @@ Exits 0 on full pass, 1 on any failure. CI-friendly (exits non-zero on any faile
 Validated on 2026-08-15 against OpenClaw-mcode-ACP v7-bidir:
 
 - Plugin-bundled `scripts/smoke.py`: 5/5 checks pass (verified in this PR — see CI workflow run linked below)
+- No-redirect regression test `scripts/test_no_redirect.py`: 3/3 assertions pass (302 refused, capture clean)
 - InboxStore self-test: 6/6 assertions pass
 - All 5 HTTP inbox endpoint tests pass (`/acp/inbox/write`, `/read`, `/ask`, `/answer`, `/sessions`)
 - SDK sync smoke test passes (full write/read/ask/answer flow)
@@ -146,7 +163,7 @@ Validated on 2026-08-15 against OpenClaw-mcode-ACP v7-bidir:
 
 ### CI
 
-A GitHub Actions workflow at `.github/workflows/openclaw-acp-bridge-smoke.yml` runs `scripts/smoke.py` on every push and PR targeting `main`. The workflow installs the SDK from a pinned commit of `antianqi/openclaw-mcode-acp` (matching the `v7-bidir+` contract above), sets up Python 3.11, exports `ACP_HOME`, and exits non-zero on any failed assertion. The latest run output is the source of truth for whether the Plugin works against the pinned server revision.
+A GitHub Actions workflow at `.github/workflows/openclaw-acp-bridge-smoke.yml` runs `scripts/smoke.py` and `scripts/test_no_redirect.py` on every push and PR targeting `main`. The workflow checks out the SDK from a pinned commit of `antianqi/openclaw-mcode-acp` (matching the `v7-bidir+` contract above), sets up Python 3.11, exports `ACP_HOME`, and exits non-zero on any failed assertion. The latest run output is the source of truth for whether the Plugin works against the pinned server revision.
 
 ## Limitations
 
