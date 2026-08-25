@@ -6,12 +6,12 @@ description: |
   TRIGGER PHRASES: "fork 多少", "give it the full history", "不用 fork", "传 history", "just the brief", "不要带 context", "fork 0", "fork all", "传全部对话", "不带 context".
   SKIP WHEN: sub-task is trivial (one-line read), you have already decided "no context" (no decision to make).
 license: Apache-2.0
-compatibility: Requires MiniMax Code with Agent Plugins 1.0 support. The example calls in this Skill are written in Codex-harness style (pseudocode); MiniMax Code's `task` tool may use a different parameter name for the same concept (e.g. `brief` vs `fork_turns`) — adapt the call to the actual host API, do NOT blindly use the parameter names below.
+compatibility: Requires MiniMax Code with Agent Plugins 1.0 support. The example calls use MiniMax Code's `task(agent_name=...)` syntax with the four built-in agents. The context-sharing parameter name (here shown as `history=`) is a placeholder — adapt to whatever the actual `task` tool exposes.
 metadata:
   author: antianqi
-  version: "0.1.2"
-  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/core/src/session/multi_agents.rs (design principle only; the example parameter names are Codex-specific)
-  changes-from-v0.1.1: "Rewritten to be host-agnostic. The example calls are now pseudocode (Codex-style) with an explicit mcode adaptation note. The Skill teaches the decision, not the parameter spelling."
+  version: "0.2.0"
+  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/core/src/session/multi_agents.rs (design principle; the 3 fork modes are portable; the parameter naming follows the actual mcode `task` tool schema)
+  changes-from-v0.1.2: "Examples now use MiniMax Code's `task(agent_name=...)` syntax with the four built-in agents. Replaces the Codex-only `task(subagent=..., fork_turns=...)` form. The 3 fork modes (all / N / none) and the decision framework are unchanged."
 ---
 
 # Fork Context Decision
@@ -23,9 +23,15 @@ way, the work slows down or silently fails.
 
 This Skill codifies the decision so the agent makes it explicitly, not by accident.
 
-> **mcode 适配**:本 Skill 的 example 调用用 Codex-harness 风格(`fork_turns=N`)作为
-> **伪代码**。MiniMax Code 的 `task` 工具可能用不同参数名表达同一概念(如 `brief`
-> vs `fork_turns`)。请**根据实际 host API 改写参数名**,不要盲抄。
+> **mcode 适配**:本 Skill 的 example 用 MiniMax Code `task(agent_name=..., brief=...)` 语法。
+> `agent_name` 从 mcode 内置 4 agent 选:
+> - `explore` — 只读(纯调查)
+> - `worker` — 可改可写(实际干活)
+> - `verifier` — 有 bash 不能 write(可验证)
+> - `mavis` — root,full tool set
+>
+> `history` 参数名是**占位符**——实际 host `task` 工具可能用不同名字(如 `context_size` / `forks`)。
+> **如果 host 不支持 `history` 参数**,降级为 `none`(只传 brief)。
 
 ## When to use
 
@@ -99,22 +105,24 @@ Reason: <one sentence>
 
 ## Example
 
-The example below is **Codex-harness style pseudocode** for clarity. On MiniMax Code,
-the `task` tool's parameter name for "how much parent context to share" may be
-`brief` (a string) rather than `fork_turns` (an integer). **Adapt the call shape to
-the actual host tool, do not copy this verbatim**:
+The example below uses **MiniMax Code `task` tool syntax** with the four built-in
+agents. If your host uses a different parameter name for context-sharing, adapt
+the call shape but preserve the decision (3 turns).
 
 ```text
-# Codex-harness style (pseudocode for design clarity):
+# MiniMax Code style (current `task` tool schema):
 > task(
-    subagent=explore,
-    fork_turns=3,                 # ← replace with the actual mcode param
+    agent_name="explore",          # or "worker" / "verifier" / "mavis"
+    history=3,                      # ← PLACEHOLDER: host param name may differ
     brief="Investigate why test_lint.py flakes on Windows. ..."
   )
 
-# MiniMax Code style (actual API, fill in the real param name):
-> task(agent_type="explore", brief="...")   # if mcode uses a `brief` field
-> task(subagent="explore", history="last-3")  # if mcode uses a `history` field
+# Codex-harness style (for reference only — adapt the param name):
+> task(
+    subagent=explore,
+    fork_turns=3,
+    brief="..."
+  )
 ```
 
 The **decision** (3 turns) is the same; the **spelling** depends on the host.

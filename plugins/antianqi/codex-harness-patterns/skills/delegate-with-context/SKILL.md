@@ -6,12 +6,12 @@ description: |
   TRIGGER PHRASES: "delegate", "hand off", "sub-agent", "delegate this", "delegate to", "派给", "委派", "让 sub-agent 干", "把 ... 交给 ...".
   SKIP WHEN: the sub-task is so trivial a `read` will do, you are about to do the work yourself, the user explicitly wants you (not a sub-agent) to do it.
 license: Apache-2.0
-compatibility: Requires MiniMax Code with Agent Plugins 1.0 support. The example calls in this Skill are written in Codex-harness style (pseudocode) using `subagent=...` and `task_name=...`; MiniMax Code's `task` tool may use different parameter names. Adapt the call shape to the actual host API.
+compatibility: Requires MiniMax Code with Agent Plugins 1.0 support. The example calls use MiniMax Code's `task(agent_name=..., brief=...)` syntax with the four built-in agents.
 metadata:
   author: antianqi
-  version: "1.0.2"
-  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/protocol/src/protocol.rs (InterAgentCommunication) and core/src/session/multi_agents.rs (CollabAgentSpawn)
-  changes-from-v1.0.1: "Rewritten to be host-agnostic. The 4-part envelope design is preserved (it is the portable part); example calls are now pseudocode with an explicit mcode adaptation note. Removed hard-coded `subagent=explore` and `task_name=...` examples."
+  version: "1.1.0"
+  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/protocol/src/protocol.rs (InterAgentCommunication) and core/src/session/multi_agents.rs (CollabAgentSpawn); the 4-part envelope is the portable design; the agent_name spelling follows the actual mcode `task` tool schema
+  changes-from-v1.0.2: "Examples now use MiniMax Code's `task(agent_name=...)` syntax with the four built-in agents (`explore` / `worker` / `verifier` / `mavis`). The 4-part envelope design is unchanged. Codex-harness `subagent=...` / `task_name=...` form removed. The tool-set claim (`yaml 写死`) was removed because the on-disk agent profile layout is host implementation detail, not a Skill-level contract."
 ---
 
 # Delegate with Context
@@ -26,9 +26,14 @@ When handing off work to a sub-agent, the agent has two extremes:
 This Skill is about the **middle ground**: a tight, complete, structured brief that
 gives the sub-agent everything it needs and nothing it does not.
 
-> **mcode 适配**:本 Skill 的 example 调用用 Codex-harness 风格(`task(subagent=explore,
-> task_name=..., brief=...)`)作为**伪代码**。MiniMax Code 的 `task` 工具可能用不同参数名
-> (`agent_type=...` / `name=...` / `brief=...`)。请**根据实际 host API 改写参数名**。
+> **mcode 适配**:本 Skill 的 example 用 MiniMax Code `task(agent_name=..., brief=...)` 语法。
+> `agent_name` 从 mcode 内置 4 agent 选:
+> - `explore` — 只读(纯调查)
+> - `worker` — 可改可写(实际干活)
+> - `verifier` — 有 bash 不能 write(可验证)
+> - `mavis` — root,full tool set
+>
+> `agent_name` 决定了子 agent 的工具范围(由 host 路由),不靠 brief 约束。
 
 ## When to use
 
@@ -50,7 +55,7 @@ Activate when **any** of these is true:
 1. **Classify the sub-task** (see `fork-context-decision`):
    - Self-contained: `none` (just the brief).
    - Needs prior context: `N` or `all`.
-2. **Decide the sub-agent type** (explore / worker / verifier / etc.) based on what
+2. **Decide the sub-agent type** (explore / worker / verifier / mavis) based on what
    the sub-task needs.
 3. **Write the 4-part envelope** below. The envelope is the **portable** part of
    the brief — host `task` tools all accept a brief string.
@@ -118,10 +123,20 @@ the actual host API.
     """
   )
 
-# MiniMax Code style (fill in the real host API):
-# Replace subagent=, task_name=, fork_turns= with whatever mcode's
-# task tool actually accepts. The 4-part envelope inside `brief=`
-# is the portable part and should be preserved as-is.
+# MiniMax Code style (current `task` tool schema):
+> task(
+    agent_name="explore",
+    brief="""
+      Task name: investigate-lint-flake
+      Sender:    main agent
+      Task:     Investigate why test_lint.py flakes on Windows but not Linux.
+                Produce a 1-paragraph root-cause analysis.
+      Payload:  /home/user/proj/tests/test_lint.py (line 47 is the failure);
+                prior turn tool output: <paste here if relevant>
+      Return:   Append a section to /notes/lint.md titled
+                "## Windows flake root cause" with 1 paragraph.
+    """
+  )
 ```
 
 The **envelope** is the design; the **call shape** is host-specific.

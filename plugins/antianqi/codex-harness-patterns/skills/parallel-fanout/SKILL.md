@@ -6,12 +6,12 @@ description: |
   TRIGGER PHRASES: "in parallel", "parallel", "fan out", "spawn agents", "并行", "同时", "concurrent", "subagents", "multi-agent", "同时跑几个".
   SKIP WHEN: sub-tasks have a hard data dependency (output of A is input of B), the user explicitly said "sequential" / "one at a time", there is only one sub-task.
 license: Apache-2.0
-compatibility: Requires MiniMax Code with Agent Plugins 1.0 support. The example calls in this Skill are written in Codex-harness style (pseudocode) using `subagent=...` and `fork_turns=...`; MiniMax Code's `task` tool may use different parameter names. Adapt the call shape to the actual host API.
+compatibility: Requires MiniMax Code with Agent Plugins 1.0 support. The example calls use MiniMax Code's `task(agent_name=...)` syntax with the four built-in agents (`explore` / `worker` / `verifier` / `mavis`).
 metadata:
   author: antianqi
-  version: "1.0.2"
-  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/core/src/thread_manager.rs (design principle; example parameter names are Codex-specific)
-  changes-from-v1.0.1: "Rewritten to be host-agnostic. Example calls are now pseudocode with an explicit mcode adaptation note. The Skill teaches the fan-out decision, not the parameter spelling."
+  version: "1.1.0"
+  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/core/src/thread_manager.rs (design principle); the fan-out decision and wait-for-all aggregation are portable; agent_name values follow the actual mcode `task` tool schema
+  changes-from-v1.0.2: "Examples now use MiniMax Code's `task(agent_name=...)` syntax. Codex-harness `subagent=...` form removed. The earlier 'reads each agent's tool whitelist from mcode assets/agents/<name>/agent.md' claim was dropped because the on-disk agent profile path is host implementation detail, not a Skill-level contract."
 ---
 
 # Parallel Fanout
@@ -25,10 +25,14 @@ agent has two choices:
 This Skill is about **knowing when to choose (2)** and **how to dispatch + aggregate
 cleanly** so the user gets the parallel speedup without losing correctness.
 
-> **mcode 适配**:本 Skill 的 example 调用用 Codex-harness 风格(`task(subagent=...,
-> fork_turns=...)`)作为**伪代码**。MiniMax Code 的 `task` 工具可能用不同参数名
-> (`agent_type` / `brief` / `history` 等)。请**根据实际 host API 改写参数名**,
-> 不要盲抄。
+> **mcode 适配**:本 Skill 的 example 用 MiniMax Code `task(agent_name=...)` 语法。
+> `agent_name` 从 mcode 内置 4 agent 选:
+> - `explore` — 只读(只能 read/grep/glob/web_fetch),适合纯调查
+> - `worker` — 可改(read/write/edit/bash/todowrite),适合实施
+> - `verifier` — 有 bash 但**不能 write**,适合验证
+> - `mavis` — root,full tool set,适合跨 session 综合判断
+>
+> `agent_name` 决定了子 agent 的工具范围(由 host 路由),不靠 brief 约束。
 
 ## When to use
 
@@ -89,29 +93,26 @@ After activating this Skill, the agent's next message MUST include:
 
 ## Example
 
-The example below is **Codex-harness style pseudocode** for clarity. On MiniMax Code,
-the `task` tool's parameter names are **not exposed** as shown; adapt to the
-actual host API.
+The example below uses **MiniMax Code `task` tool syntax** with the four built-in
+agents. If your host uses different parameter names, adapt the call shape but
+preserve the fan-out decision (3 sub-tasks, `none` context, wait-for-all).
 
 ```text
-# Codex-harness style (pseudocode for design clarity):
+# MiniMax Code style (current `task` tool schema):
 Sub-tasks: A, B, C
 Concurrency cap: 8 (from host config)
 
-> task(subagent=explore, fork_turns=0,
-       brief="A: look up X in repo 1")
-> task(subagent=explore, fork_turns=0,
-       brief="B: look up Y in repo 2")
-> task(subagent=explore, fork_turns=0,
-       brief="C: look up Z in repo 3")
+> task(agent_name="explore", brief="A: look up X in repo 1")
+> task(agent_name="explore", brief="B: look up Y in repo 2")
+> task(agent_name="explore", brief="C: look up Z in repo 3")
 
 # (Agent waits for all three.)
 # Aggregator reads each output, audits per `completion-audit`.
 
-# MiniMax Code style (fill in the real host API):
-# Replace subagent=... with whatever mcode's task tool uses
-# (e.g. agent_type="explore"), and fork_turns=0 with the actual
-# context-sharing parameter or remove it.
+# Codex-harness style (for reference only — adapt the param names):
+> task(subagent=explore, fork_turns=0, brief="A: look up X in repo 1")
+> task(subagent=explore, fork_turns=0, brief="B: look up Y in repo 2")
+> task(subagent=explore, fork_turns=0, brief="C: look up Z in repo 3")
 ```
 
 The **decision** (3 sub-tasks, `none` context, wait-for-all) is the same; the

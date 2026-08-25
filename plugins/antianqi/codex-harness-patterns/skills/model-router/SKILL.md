@@ -6,12 +6,12 @@ description: |
   TRIGGER PHRASES: "用便宜模型", "cheap model", "use the cheap model", "小任务用便宜模型", "不要用主模型", "用本地模型", "sub-task 不重", "小任务", "this is just a", "小 case 用便宜".
   SKIP WHEN: sub-task IS the main task (no delegation), sub-agent tool does not support a model / tier parameter, sub-task is genuinely synthesis / design / cross-file reasoning.
 license: Apache-2.0
-compatibility: Requires MiniMax Code with Agent Plugins 1.0 support. The example calls in this Skill reference `model_config_id` and `reasoning_effort` as Codex-harness style pseudocode; MiniMax Code's actual model-routing API may differ. Adapt the call to the real host API — do not copy the parameter names verbatim.
+compatibility: Requires MiniMax Code with Agent Plugins 1.0 support. The example calls reference `model_config_id` as the host's model-routing parameter. MiniMax Code's `task` tool accepts `model_config_id` directly; for fine-grained per-tier routing, read the actual `task` tool schema in your host. `reasoning_effort` is a Codex-harness concept and is not exposed by mcode today.
 metadata:
   author: antianqi
-  version: "0.3.2"
+  version: "0.3.3"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/model-provider-info/ and codex-rs/models-manager/ (design principle only; example model names are Codex-specific)
-  changes-from-v0.1.1: "Removed hard-coded `model_config_id: anthropic-sonnet-4 with reasoning_effort=high` example. Replaced with a portable 3-tier decision rubric and an explicit mcode 适配 note."
+  changes-from-v0.3.2: "Replaced the v0.3.2 'mcode 适配' block that claimed an agent-type parameter already implied a model tier — that claim was unverified and depended on a (now-dropped) host-internal config path. Restored the portable 3-tier rubric and the explicit `model_config_id` advice. The model-name to tier mapping is host-specific; pick the cheapest that can succeed in the actual mcode model list."
 ---
 
 # Model Router
@@ -21,11 +21,10 @@ The main model is expensive and slow. Most sub-tasks a long agent spawns are not
 Codex harness routes those to cheaper models and reserves the main model for synthesis and
 hard reasoning.
 
-> **mcode 适配**:本 Skill 提到 `model_config_id` 和 `reasoning_effort` 是 Codex-harness
-> 风格的**伪代码**。MiniMax Code 当前的 model 路由有自己的命名约定,可能通过
-> `llm-call` skill 或 host 设置暴露。请**根据实际 host 模型名替换**。Skill 的
-> **设计原则**(3-tier / 不要默认 main / cheap 默认)是 portable 的,model 名字是
-> host-specific 的。
+> **mcode 适配**:本 Skill 提到 `model_config_id` 是 host 暴露的 model-routing 参数(MiniMax Code
+> `task` 工具实际支持)。请根据当前 mcode 模型列表替换具体 model 名字;`reasoning_effort` 是
+> Codex-harness 概念,mcode 当前不暴露,不要再用。Skill 的**设计原则**(3-tier / 不要默认 main /
+> cheap 默认)是 portable 的,model 名字是 host-specific 的。
 
 This Skill codifies that routing: before every `task` call, classify the sub-task and pick
 the right tier. The savings are not theoretical — the same model router that gave
@@ -112,12 +111,12 @@ The user sees, in this order:
 
 [execution] 1 medium call: refactor auth/callback.rs to extract the SAML response parser.
             — tier: medium (multi-step refactor, brief is the spec)
-            — model_config_id: anthropic-sonnet-4 with reasoning_effort=low
+            — model_config_id: anthropic-sonnet-4
 
 [execution] 1 main call: design the OidcProvider trait given the existing IdP interface
             and the OIDC spec. Resolve the "extend IdP vs new sibling" question.
             — tier: main (synthesis + cross-source judgement)
-            — model_config_id: anthropic-sonnet-4 with reasoning_effort=high
+            — model_config_id: anthropic-sonnet-4
 
 [aggregation] spend summary: 1 cheap / 1 medium / 1 main. 78% of the work was on the
             main call; the other two ran in <2s.
