@@ -69,15 +69,23 @@ npm run check
 通过 `stdio`、`streamable-http` 或 `sse` 连接本地工具和远程服务。依赖、账号、网络目标和数据处理必须
 在安装前说清楚。
 
-### Skill + MCP
+### Hooks
 
-Skill 教会 Agent 怎么做，MCP 给它真正的工具。可移植包结构保持简单：
+通过分阶段、版本化的 [`io.minimax.mcode` Hooks 0.1 客户端扩展](docs/hooks.md)，声明 MiniMax Code
+六个生命周期点的只观察命令。仓库会校验 command、args 和披露内容；在链接兼容的 MiniMax Code 构建及
+端到端证据前，不把运行时执行宣传为已公开可用能力。
+
+### 组合使用
+
+Skill 教会 Agent 怎么做，MCP 提供工具，Hook 负责有边界的生命周期副作用：
 
 ```text
 plugin-root/
 ├── plugin.json
 ├── mcp.json                  # 可选
-└── skills/                   # 可选
+├── skills/                   # 可选
+└── io.minimax.mcode/         # 可选的 MiniMax Code 扩展
+    └── hooks/hooks.json
 ```
 
 这个仓库只承接 **Agent 能力**。TUI Extension 是另一套独立扩展体系，不使用这里的包格式和加载流程。
@@ -88,7 +96,7 @@ plugin-root/
 
 - 位于 `plugins/<GitHub 用户名>/<Plugin 名>`；
 - 包含 `plugin.json`、`README.md` 和 `LICENSE`；
-- 至少提供一个有效的 Skill 或 MCP Server；
+- 至少提供一个有效的 Skill、MCP Server 或 MiniMax Code Hook；
 - 写清示例、依赖、网络访问和数据用途；
 - 不包含密钥、私有地址、隐藏遥测、原生二进制或 symlink；
 - 通过 `npm run check` 和人工 Review。
@@ -101,15 +109,18 @@ plugin-root/
 - [`plugins/`](plugins/)：社区 Plugin 源码
 - [`examples/hello-mcode`](examples/hello-mcode/)：最小 Skill Plugin
 - [`examples/hello-mcode-mcp`](examples/hello-mcode-mcp/)：零依赖 stdio MCP
+- [`examples/hello-mcode-hooks`](examples/hello-mcode-hooks/)：最小 Hook-only Plugin
 - [`docs/plugin-compatibility.md`](docs/plugin-compatibility.md)：当前支持的精确契约
+- [`docs/hooks.md`](docs/hooks.md)：MiniMax Code Hooks 0.1 作者与运行时契约
 - [`docs/security-model.md`](docs/security-model.md)：校验与信任模型
 - [`docs/architecture.md`](docs/architecture.md)：中央托管架构
 - [`GOVERNANCE.md`](GOVERNANCE.md)：决策与维护者职责
 
 ## Community Preview
 
-MiniMax Code 的公开 Plugin 能力仍在稳定中，所以首版契约刻意保持克制。Hooks、自定义 Agent、Commands、
-LSP、Apps、通用 OAuth 和 TUI Extension 暂不作为当前 Agent Plugin 能力宣传。
+MiniMax Code 的公开 Plugin 能力仍在稳定中，所以契约刻意保持克制。仓库接受 Hooks 0.1 的分阶段声明，
+但尚未认证并链接可以执行它的运行时构建。自定义 Agent、Commands、LSP、Apps、通用 OAuth、阻断型
+Hooks 和 TUI Extension 暂不作为当前 Agent Plugin 能力宣传。
 
 带来一个真的有用的能力，给出一个无法误解的示例，然后用一个 PR 把它发布出来。
 

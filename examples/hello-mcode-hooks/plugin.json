@@ -1,0 +1,7 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "hello-mcode-hooks",
+  "version": "0.1.0",
+  "description": "Record MiniMax Code Hook event names locally without retaining event payloads.",
+  "license": "Apache-2.0"
+}

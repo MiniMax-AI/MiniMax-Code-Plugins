@@ -1,0 +1,23 @@
+{
+  "$schema": "https://raw.githubusercontent.com/MiniMax-AI/MiniMax-Code-Plugins/main/schemas/io.minimax.mcode/hooks/0.1.0.schema.json",
+  "hooks": {
+    "pre-tool-use": [
+      {
+        "command": "node",
+        "args": [
+          "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/record.mjs",
+          "pre-tool-use"
+        ]
+      }
+    ],
+    "post-tool-use": [
+      {
+        "command": "node",
+        "args": [
+          "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/record.mjs",
+          "post-tool-use"
+        ]
+      }
+    ]
+  }
+}

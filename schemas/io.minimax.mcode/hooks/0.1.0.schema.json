@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/MiniMax-AI/MiniMax-Code-Plugins/main/schemas/io.minimax.mcode/hooks/0.1.0.schema.json",
+  "title": "MiniMax Code Hooks client extension 0.1.0",
+  "description": "Observe-only lifecycle Hook declarations for the io.minimax.mcode Agent Plugins client extension.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "hooks"],
+  "properties": {
+    "$schema": {
+      "const": "https://raw.githubusercontent.com/MiniMax-AI/MiniMax-Code-Plugins/main/schemas/io.minimax.mcode/hooks/0.1.0.schema.json"
+    },
+    "hooks": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "$comment": "JSON Schema cannot express the cross-property sum. The community registry validator additionally limits the combined total to 32 handlers per plugin.",
+      "properties": {
+        "session-start": { "$ref": "#/$defs/handlers" },
+        "turn-start": { "$ref": "#/$defs/handlers" },
+        "pre-tool-use": { "$ref": "#/$defs/handlers" },
+        "post-tool-use": { "$ref": "#/$defs/handlers" },
+        "turn-end": { "$ref": "#/$defs/handlers" },
+        "session-end": { "$ref": "#/$defs/handlers" }
+      }
+    }
+  },
+  "$defs": {
+    "handlers": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": { "$ref": "#/$defs/handler" }
+    },
+    "handler": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command"],
+      "properties": {
+        "command": {
+          "type": "string",
+          "anyOf": [
+            {
+              "description": "A single bare executable token.",
+              "pattern": "^[^\\s/\\\\\\u0000]+$"
+            },
+            {
+              "description": "A contained plugin-relative executable path.",
+              "pattern": "^\\./(?!(?:\\.\\.(?:/|$)|.*\\/\\.\\.(?:/|$)))[^\\\\\\u0000]+$"
+            }
+          ]
+        },
+        "args": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "type": "string", "pattern": "^[^\\u0000]*$" }
+        },
+        "env": {
+          "type": "object",
+          "maxProperties": 64,
+          "propertyNames": {
+            "allOf": [
+              { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+              {
+                "not": {
+                  "pattern": "^(?:[Pp][Ll][Uu][Gg][Ii][Nn]_[Rr][Oo][Oo][Tt]|[Pp][Ll][Uu][Gg][Ii][Nn]_[Dd][Aa][Tt][Aa])$"
+                }
+              }
+            ]
+          },
+          "additionalProperties": { "type": "string", "pattern": "^[^\\u0000]*$" },
+          "$comment": "PLUGIN_ROOT and PLUGIN_DATA are reserved case-insensitively."
+        },
+        "cwd": {
+          "type": "string",
+          "anyOf": [
+            {
+              "pattern": "^\\./(?!(?:\\.\\.(?:/|$)|.*\\/\\.\\.(?:/|$)))[^\\\\\\u0000]*$"
+            },
+            {
+              "pattern": "^\\$\\{PLUGIN_(?:ROOT|DATA)\\}(?:/(?!(?:\\.\\.(?:/|$)|.*\\/\\.\\.(?:/|$)))[^\\\\\\u0000]*)?$"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

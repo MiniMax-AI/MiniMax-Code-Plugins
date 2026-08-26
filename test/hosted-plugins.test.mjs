@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { validateHostedPluginDirectory } from '../scripts/lib/validation.mjs';
+import { HOOKS_SCHEMA, validateHostedPluginDirectory } from '../scripts/lib/validation.mjs';
 
 const execFileAsync = promisify(execFile);
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -67,6 +67,102 @@ test('hosted Plugin is valid when its package and contribution docs are complete
 
   assert.equal(result.id, 'alice/hello-world');
   assert.deepEqual(result.skills, ['hello-world']);
+});
+
+test('hosted Plugin is valid with only a MiniMax Code Hook', async (context) => {
+  const workspace = await mkdtemp(path.join(os.tmpdir(), 'minimax-code-hooks-validation-'));
+  context.after(async () => {
+    const { rm } = await import('node:fs/promises');
+    await rm(workspace, { recursive: true, force: true });
+  });
+  const pluginRoot = path.join(workspace, 'plugins', 'alice', 'event-recorder');
+  const hooksRoot = path.join(pluginRoot, 'io.minimax.mcode', 'hooks');
+  await mkdir(hooksRoot, { recursive: true });
+  await Promise.all([
+    writeFile(path.join(pluginRoot, 'plugin.json'), `${JSON.stringify({
+      $schema: 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
+      name: 'event-recorder',
+      version: '1.0.0',
+      description: 'Records bounded MiniMax Code lifecycle events locally.',
+      license: 'Apache-2.0',
+    })}\n`),
+    writeFile(path.join(pluginRoot, 'README.md'), '# Event Recorder\n\nRecords lifecycle event names locally.\n'),
+    writeFile(path.join(pluginRoot, 'LICENSE'), 'Apache License\nVersion 2.0\n'),
+    writeFile(path.join(hooksRoot, 'hooks.json'), `${JSON.stringify({
+      $schema: HOOKS_SCHEMA,
+      hooks: {
+        'session-start': [{
+          command: 'node',
+          args: ['${PLUGIN_ROOT}/io.minimax.mcode/hooks/record.mjs'],
+        }],
+      },
+    })}\n`),
+  ]);
+
+  const result = await validateHostedPluginDirectory(pluginRoot, {
+    owner: 'alice',
+    pluginName: 'event-recorder',
+  });
+
+  assert.deepEqual(result.hookEvents, ['session-start']);
+  assert.equal(result.hookHandlers, 1);
+  assert.deepEqual(result.skills, []);
+  assert.deepEqual(result.mcpServers, []);
+});
+
+test('hosted Plugin rejects a root hooks.json instead of silently ignoring it', async (context) => {
+  const workspace = await mkdtemp(path.join(os.tmpdir(), 'minimax-code-root-hooks-'));
+  context.after(async () => {
+    const { rm } = await import('node:fs/promises');
+    await rm(workspace, { recursive: true, force: true });
+  });
+  const pluginRoot = path.join(workspace, 'plugins', 'alice', 'wrong-hooks-path');
+  await mkdir(path.join(pluginRoot, 'skills', 'hello'), { recursive: true });
+  await Promise.all([
+    writeFile(path.join(pluginRoot, 'plugin.json'), `${JSON.stringify({
+      $schema: 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
+      name: 'wrong-hooks-path',
+      license: 'Apache-2.0',
+    })}\n`),
+    writeFile(path.join(pluginRoot, 'README.md'), '# Wrong Hooks Path\n'),
+    writeFile(path.join(pluginRoot, 'LICENSE'), 'Apache License\nVersion 2.0\n'),
+    writeFile(path.join(pluginRoot, 'hooks.json'), '{}\n'),
+    writeFile(path.join(pluginRoot, 'skills', 'hello', 'SKILL.md'), '---\nname: hello\ndescription: Explain the wrong Hooks path when asked.\n---\n\nExplain the package.\n'),
+  ]);
+
+  await assert.rejects(
+    validateHostedPluginDirectory(pluginRoot, { owner: 'alice', pluginName: 'wrong-hooks-path' }),
+    /Hooks must use io\.minimax\.mcode\/hooks\/hooks\.json/u,
+  );
+});
+
+test('hosted Plugin rejects unfinished placeholders in hooks.json', async (context) => {
+  const workspace = await mkdtemp(path.join(os.tmpdir(), 'minimax-code-hooks-todo-'));
+  context.after(async () => {
+    const { rm } = await import('node:fs/promises');
+    await rm(workspace, { recursive: true, force: true });
+  });
+  const pluginRoot = path.join(workspace, 'plugins', 'alice', 'unfinished-hook');
+  const hooksRoot = path.join(pluginRoot, 'io.minimax.mcode', 'hooks');
+  await mkdir(hooksRoot, { recursive: true });
+  await Promise.all([
+    writeFile(path.join(pluginRoot, 'plugin.json'), `${JSON.stringify({
+      $schema: 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
+      name: 'unfinished-hook',
+      license: 'Apache-2.0',
+    })}\n`),
+    writeFile(path.join(pluginRoot, 'README.md'), '# Unfinished Hook\n'),
+    writeFile(path.join(pluginRoot, 'LICENSE'), 'Apache License\nVersion 2.0\n'),
+    writeFile(path.join(hooksRoot, 'hooks.json'), `${JSON.stringify({
+      $schema: HOOKS_SCHEMA,
+      hooks: { 'turn-end': [{ command: 'node', args: ['TODO'] }] },
+    })}\n`),
+  ]);
+
+  await assert.rejects(
+    validateHostedPluginDirectory(pluginRoot, { owner: 'alice', pluginName: 'unfinished-hook' }),
+    /replace every TODO/u,
+  );
 });
 
 test('scaffold stays review-incomplete until contributor replaces every TODO', async (context) => {

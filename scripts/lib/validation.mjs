@@ -3,10 +3,23 @@ import path from 'node:path';
 
 export const PLUGIN_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json';
 export const MCP_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json';
+export const HOOKS_NAMESPACE = 'io.minimax.mcode';
+export const HOOKS_SCHEMA = 'https://raw.githubusercontent.com/MiniMax-AI/MiniMax-Code-Plugins/main/schemas/io.minimax.mcode/hooks/0.1.0.schema.json';
+export const HOOK_EVENTS = Object.freeze([
+  'session-start',
+  'turn-start',
+  'pre-tool-use',
+  'post-tool-use',
+  'turn-end',
+  'session-end',
+]);
 
 const PLUGIN_NAME = /^(?!.*(?:--|\.\.))[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u;
 const OWNER_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/u;
 const SKILL_NAME = /^(?!.*--)[a-z0-9]+(?:-[a-z0-9]+)*$/u;
+const HOOK_EVENT_SET = new Set(HOOK_EVENTS);
+const HOOK_HANDLER_FIELDS = new Set(['command', 'args', 'env', 'cwd']);
+const RESERVED_PLUGIN_ENV = new Set(['PLUGIN_ROOT', 'PLUGIN_DATA']);
 const PLUGIN_FIELDS = new Set([
   '$schema',
   'name',
@@ -102,12 +115,93 @@ export function validateMcp(value, label = 'mcp.json') {
   return entries.map(([name]) => name).sort();
 }
 
+export function validateHooks(value, label = 'hooks.json') {
+  assert(isRecord(value), `${label}: root must be an object`);
+  assert(value.$schema === HOOKS_SCHEMA, `${label}: unsupported $schema`);
+  assert(Object.keys(value).every((key) => ['$schema', 'hooks'].includes(key)), `${label}: unknown root field`);
+  assert(isRecord(value.hooks), `${label}: hooks must be an object`);
+
+  const events = Object.keys(value.hooks);
+  assert(events.length > 0, `${label}: hooks must contain at least one event`);
+  let handlerCount = 0;
+  for (const event of events) {
+    assert(HOOK_EVENT_SET.has(event), `${label}: unsupported event ${event}`);
+    const handlers = value.hooks[event];
+    assert(Array.isArray(handlers) && handlers.length > 0, `${label}: ${event} must contain at least one handler`);
+    assert(handlers.length <= 8, `${label}: ${event} supports at most 8 handlers`);
+    handlerCount += handlers.length;
+    for (const [index, handler] of handlers.entries()) {
+      const handlerLabel = `${event}[${index}]`;
+      assert(isRecord(handler), `${label}: ${handlerLabel} must be an object`);
+      assert(Object.keys(handler).every((key) => HOOK_HANDLER_FIELDS.has(key)), `${label}: ${handlerLabel} has unsupported fields`);
+      assert(
+        typeof handler.command === 'string'
+          && (isBareExecutable(handler.command) || isContainedRelativeExecutable(handler.command)),
+        `${label}: ${handlerLabel}.command must be a single bare executable or contained ./ path`,
+      );
+      assert(
+        handler.args === undefined
+          || (Array.isArray(handler.args)
+            && handler.args.length <= 64
+            && handler.args.every((item) => typeof item === 'string' && !item.includes('\0'))),
+        `${label}: ${handlerLabel}.args must be strings with at most 64 entries`,
+      );
+      assert(
+        handler.env === undefined
+          || (isRecord(handler.env)
+            && Object.keys(handler.env).length <= 64
+            && Object.entries(handler.env).every(([key, item]) => (
+              /^[A-Za-z_][A-Za-z0-9_]*$/u.test(key)
+              && !RESERVED_PLUGIN_ENV.has(key.toUpperCase())
+              && typeof item === 'string'
+              && !item.includes('\0')
+            ))),
+        `${label}: ${handlerLabel}.env is invalid`,
+      );
+      assert(
+        handler.cwd === undefined || (typeof handler.cwd === 'string' && isContainedWorkingDirectory(handler.cwd)),
+        `${label}: ${handlerLabel}.cwd is invalid`,
+      );
+    }
+  }
+  assert(handlerCount <= 32, `${label}: MiniMax Code supports at most 32 handlers per plugin`);
+  return {
+    events: HOOK_EVENTS.filter((event) => Object.hasOwn(value.hooks, event)),
+    handlerCount,
+  };
+}
+
 function isBareCommand(value) {
   return !/[\\/]/u.test(value);
 }
 
+function isBareExecutable(value) {
+  return value.length > 0 && !value.includes('\0') && !/[\s\\/]/u.test(value);
+}
+
 function isContainedRelativePath(value) {
   return value.startsWith('./') && !value.split('/').includes('..') && !value.includes('\\');
+}
+
+function isContainedRelativeExecutable(value) {
+  return value.startsWith('./') && isContainedPathSuffix(value.slice(2));
+}
+
+function isContainedWorkingDirectory(value) {
+  if (value === './') return true;
+  if (value.startsWith('./')) return isContainedPathSuffix(value.slice(2));
+  for (const placeholder of ['${PLUGIN_ROOT}', '${PLUGIN_DATA}']) {
+    if (value === placeholder) return true;
+    if (value.startsWith(`${placeholder}/`)) {
+      const suffix = value.slice(placeholder.length + 1);
+      return suffix.length === 0 || isContainedPathSuffix(suffix);
+    }
+  }
+  return false;
+}
+
+function isContainedPathSuffix(value) {
+  return value.length > 0 && !value.includes('\0') && !value.includes('\\') && !value.split('/').includes('..');
 }
 
 function isSafeRemoteUrl(value) {
@@ -126,6 +220,13 @@ function isSafeRemoteUrl(value) {
 export async function validatePluginDirectory(root) {
   const manifestPath = path.join(root, 'plugin.json');
   const manifest = validatePluginManifest(parseJson(await readFile(manifestPath, 'utf8'), manifestPath), manifestPath);
+  const unsupportedRootHooksPath = path.join(root, 'hooks.json');
+  try {
+    await readFile(unsupportedRootHooksPath, 'utf8');
+    throw new Error(`${unsupportedRootHooksPath}: MiniMax Code Hooks must use ${HOOKS_NAMESPACE}/hooks/hooks.json`);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
   const skills = [];
   const skillsRoot = path.join(root, 'skills');
   let children = [];
@@ -147,8 +248,21 @@ export async function validatePluginDirectory(root) {
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
-  assert(skills.length + mcpServers.length > 0, `${root}: plugin must expose at least one Skill or MCP server`);
-  return { manifest, skills: skills.sort(), mcpServers };
+  let hookEvents = [];
+  let hookHandlers = 0;
+  const hooksPath = path.join(root, HOOKS_NAMESPACE, 'hooks', 'hooks.json');
+  try {
+    const hooks = validateHooks(parseJson(await readFile(hooksPath, 'utf8'), hooksPath), hooksPath);
+    hookEvents = hooks.events;
+    hookHandlers = hooks.handlerCount;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  assert(
+    skills.length + mcpServers.length + hookHandlers > 0,
+    `${root}: plugin must expose at least one Skill, MCP server, or MiniMax Code Hook`,
+  );
+  return { manifest, skills: skills.sort(), mcpServers, hookEvents, hookHandlers };
 }
 
 export async function validateHostedPluginDirectory(root, { owner, pluginName }) {
@@ -182,7 +296,7 @@ async function listTextContractFiles(root) {
   for (const child of await readdir(root, { withFileTypes: true })) {
     const file = path.join(root, child.name);
     if (child.isDirectory()) files.push(...await listTextContractFiles(file));
-    else if (child.isFile() && (child.name.endsWith('.md') || ['plugin.json', 'mcp.json'].includes(child.name))) files.push(file);
+    else if (child.isFile() && (child.name.endsWith('.md') || ['plugin.json', 'mcp.json', 'hooks.json'].includes(child.name))) files.push(file);
   }
   return files;
 }

@@ -13,5 +13,8 @@
     "test": "node --test",
     "validate": "node scripts/validate.mjs"
   },
+  "devDependencies": {
+    "ajv": "^8.17.1"
+  },
   "license": "Apache-2.0"
 }

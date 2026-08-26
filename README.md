@@ -18,9 +18,9 @@
 
 ## One folder is the release
 
-MiniMax Code Plugins is the community home for Agent Plugins that run in MiniMax Code. Put a
-portable Plugin under `plugins/<github-owner>/<plugin-name>`, open a pull request, and let CI check
-the package users will actually install.
+MiniMax Code Plugins is the community home for Agent Plugins that run in MiniMax Code. Put a Plugin
+under `plugins/<github-owner>/<plugin-name>`, open a pull request, and let CI check the package users
+will actually install.
 
 ```text
 fork  →  create  →  build  →  check  →  pull request  →  discover
@@ -71,15 +71,24 @@ good prompt pattern to a capability anyone can install.
 Connect MiniMax Code to local tools or remote services with `stdio`, `streamable-http`, or `sse`.
 Dependencies, accounts, network destinations, and data handling must be visible before install.
 
-### Both
+### Hooks
 
-Use a Skill to teach the workflow and MCP to provide the tools. The portable package stays small:
+Declare observe-only commands for six MiniMax Code lifecycle points with the staged, versioned
+[`io.minimax.mcode` Hooks 0.1 client extension](docs/hooks.md). The registry validates explicit
+commands, arguments, and disclosures. Runtime execution remains unavailable as a documented public
+capability until a compatible MiniMax Code build and end-to-end evidence are linked.
+
+### Combine them
+
+Use Skills to teach the workflow, MCP to provide tools, and Hooks for bounded lifecycle side effects:
 
 ```text
 plugin-root/
 ├── plugin.json
 ├── mcp.json                  # optional
-└── skills/                   # optional
+├── skills/                   # optional
+└── io.minimax.mcode/         # optional MiniMax Code extension
+    └── hooks/hooks.json
 ```
 
 This repository is for **Agent capabilities**. TUI Extensions are a separate system and are not
@@ -91,7 +100,7 @@ A contribution must:
 
 - live at `plugins/<github-owner>/<plugin-name>`;
 - include `plugin.json`, `README.md`, and `LICENSE`;
-- expose at least one valid Skill or MCP server;
+- expose at least one valid Skill, MCP server, or MiniMax Code Hook;
 - document a copyable example, requirements, network access, and data use;
 - contain no secrets, private endpoints, hidden telemetry, native binaries, or symlinks;
 - pass `npm run check` and human review.
@@ -104,16 +113,19 @@ or a complete security audit. Read the source and requested capabilities before 
 - [`plugins/`](plugins/) — community Plugin source
 - [`examples/hello-mcode`](examples/hello-mcode/) — smallest Skill Plugin
 - [`examples/hello-mcode-mcp`](examples/hello-mcode-mcp/) — dependency-free stdio MCP
+- [`examples/hello-mcode-hooks`](examples/hello-mcode-hooks/) — smallest Hook-only Plugin
 - [`docs/plugin-compatibility.md`](docs/plugin-compatibility.md) — exact supported contract
+- [`docs/hooks.md`](docs/hooks.md) — MiniMax Code Hooks 0.1 author and runtime contract
 - [`docs/security-model.md`](docs/security-model.md) — validation and trust model
 - [`docs/architecture.md`](docs/architecture.md) — hosted contribution architecture
 - [`GOVERNANCE.md`](GOVERNANCE.md) — decisions and maintainer responsibilities
 
 ## Community preview
 
-The contract is intentionally narrow while MiniMax Code's public Plugin surface stabilizes. Hooks,
-custom Agents, Commands, LSP, Apps, generic OAuth, and TUI Extensions are not advertised as current
-Agent Plugin capabilities.
+The contract is intentionally narrow while MiniMax Code's public Plugin surface stabilizes. Hooks
+0.1 is accepted as a staged registry declaration; this repository does not yet certify a runtime
+build that executes it. Custom Agents, Commands, LSP, Apps, generic OAuth, blocking Hooks, and TUI
+Extensions are not advertised as current Agent Plugin capabilities.
 
 Bring one useful capability. Make the example undeniable. Ship it in one pull request.
 
