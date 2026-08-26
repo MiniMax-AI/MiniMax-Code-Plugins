@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
+import { MCODE_CMD } from "./config.js";
 
 const _webuiRequire = createRequire(import.meta.url);
 
@@ -13,31 +14,63 @@ const _webuiRequire = createRequire(import.meta.url);
 //   mcode 0.1.4 acp `session/delete` 返回 "Method not found" (协议层注册但没实现)
 //   真删 mcode session 只能 SQL 删 local_runtime_sessions 等关联表
 //   lazy init — 只在第一次调用时 require
+// v1.0.1 round 4: try multiple candidate paths so we work in non-canonical
+//   install layouts (registry install, npm-global mcode, etc.). The hard-coded
+//   `__dirname/../../../node_modules/...` path only works in the dev layout
+//   where webui lives at `<mcode-root>/webui/`.
 let _McodeBetterSqlite3 = null;
 let _McodeBetterSqlite3Failed = false;
+
+// Resolution priority for better-sqlite3:
+//   1. $MCODE_BETTER_SQLITE3 (explicit env override — user-controllable)
+//   2. <MCODE_CMD>/../../node_modules/@minimax-ai/code/node_modules/better-sqlite3
+//      (mcode binary → its bundled deps — works in any install layout)
+//   3. <__dirname>/../../../node_modules/@minimax-ai/code/node_modules/better-sqlite3
+//      (dev layout fallback — webui source tree under canonical .minimax-code/webui/)
+//
+// Exported (underscore prefix = test-only) so install-layout tests can
+// assert the candidate list without actually loading better-sqlite3.
+export function _getBetterSqlite3Candidates() {
+  const candidates = [];
+  if (process.env.MCODE_BETTER_SQLITE3) {
+    candidates.push(process.env.MCODE_BETTER_SQLITE3);
+  }
+  if (MCODE_CMD && MCODE_CMD !== "mcode") {
+    candidates.push(
+      join(
+        MCODE_CMD,
+        "..", "..",
+        "node_modules", "@minimax-ai", "code", "node_modules",
+        "better-sqlite3",
+      ),
+    );
+  }
+  // Dev layout fallback — webui source tree at <mcode-root>/webui/server/lib/
+  candidates.push(
+    join(
+      dirname(fileURLToPath(import.meta.url)),
+      "..", "..", "..",
+      "node_modules", "@minimax-ai", "code", "node_modules",
+      "better-sqlite3",
+    ),
+  );
+  return candidates;
+}
 
 export function getMcodeBetterSqlite3({ MCODE_RUNTIME_DB: _ignored } = {}) {
   if (_McodeBetterSqlite3) return _McodeBetterSqlite3;
   if (_McodeBetterSqlite3Failed) return null;
-  try {
-    const __dirname = dirname(fileURLToPath(import.meta.url));
-    const __cfg = join(__dirname, "..", "..", ".."); // webui/server/lib → ../.. → .minimax-code
-    _McodeBetterSqlite3 = _webuiRequire(
-      join(
-        __cfg,
-        "node_modules",
-        "@minimax-ai",
-        "code",
-        "node_modules",
-        "better-sqlite3",
-      ),
-    );
-    return _McodeBetterSqlite3;
-  } catch (e) {
-    console.warn("[webui] cannot load better-sqlite3 from mcode:", e.message);
-    _McodeBetterSqlite3Failed = true;
-    return null;
+  for (const c of _getBetterSqlite3Candidates()) {
+    try {
+      _McodeBetterSqlite3 = _webuiRequire(c);
+      return _McodeBetterSqlite3;
+    } catch {
+      // try next candidate
+    }
   }
+  console.warn("[webui] cannot load better-sqlite3 from any known location");
+  _McodeBetterSqlite3Failed = true;
+  return null;
 }
 
 // 删 mcode session 涉及的所有关联表 (含 FTS5 external content + 各种 state 表)
