@@ -206,6 +206,13 @@ log + a disabled feature) — it does not crash.
   to the user's real `~/.minimax/` or `~/.mcode-webui/` directory unless
   `MCODE_RUNTIME_DB` / `MCODE_WEBUI_SETTINGS_PATH` env is explicitly
   overridden.
+- v1.0.1 round 4: `MCODE_BETTER_SQLITE3` env override added to
+  `server/lib/db.js::getMcodeBetterSqlite3()`. The hard-coded path to
+  mcode's bundled `better-sqlite3` only works in the canonical
+  dev layout (`<mcode-root>/webui/`); the env override lets users on
+  registry-installed or non-canonical layouts point at the right
+  binary explicitly. Resolution priority: env override > `$MCODE_CMD`
+  derived > dev layout fallback.
 - Cross-platform: tests pass on Windows + Linux + macOS (CI matrix
   Node 22 + 24).
 
