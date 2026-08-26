@@ -26,7 +26,12 @@ if (Test-Path $pidFile) {
   }
 }
 
-$args = @('-NoProfile', '-STA', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', "`"$detectScript`"")
-$proc = Start-Process powershell.exe -ArgumentList $args -PassThru
+# 同 start-island.ps1：CreateNoWindow 避免控制台窗口冒进任务栏
+$psi = New-Object System.Diagnostics.ProcessStartInfo
+$psi.FileName = 'powershell.exe'
+$psi.Arguments = "-NoProfile -STA -ExecutionPolicy Bypass -File `"$detectScript`""
+$psi.UseShellExecute = $false
+$psi.CreateNoWindow = $true
+$proc = [System.Diagnostics.Process]::Start($psi)
 Set-Content -Path $pidFile -Value $proc.Id -Encoding ASCII
 Write-Output ("detector started (PID " + $proc.Id + ")")

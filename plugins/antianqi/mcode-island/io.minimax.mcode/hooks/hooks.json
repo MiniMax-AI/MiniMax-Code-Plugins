@@ -1,0 +1,164 @@
+{
+  "$schema": "https://minimax.io/schemas/mcode-hooks/0.1.0/hooks.schema.json",
+  "_comment": "Conforms to the io.minimax.mcode Hooks spec proposed in MiniMax-Code-Plugins PR #20. Field vocabulary: command/args/env/cwd/matcher/pattern/regex/glob/timeout/timeoutMs/once. Reserved fields rejected by the portable spec: type, shell, prompt, http, agent, script, function. PLUGIN_ROOT and PLUGIN_DATA are reserved env names. mcode 0.2.4 ships runtime support for these events; the proposal is still pending merge in MiniMax-Code-Plugins, so this file is forward-compatible: when the registry validator accepts it, no changes are needed.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "command": "powershell",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/session-start.ps1"
+        ],
+        "timeout": 5000
+      }
+    ],
+    "SessionEnd": [
+      {
+        "command": "powershell",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/session-end.ps1"
+        ],
+        "timeout": 5000
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "command": "powershell",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/user-prompt-submit.ps1"
+        ],
+        "timeout": 5000
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "command": "powershell",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/pre-tool-use.ps1"
+        ],
+        "timeout": 5000
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "command": "powershell",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/post-tool-use.ps1"
+        ],
+        "timeout": 5000
+      }
+    ],
+    "Stop": [
+      {
+        "command": "powershell",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/stop.ps1"
+        ],
+        "timeout": 5000
+      }
+    ],
+    "PreCompact": [
+      {
+        "command": "powershell",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/pre-compact.ps1"
+        ],
+        "timeout": 5000
+      }
+    ],
+    "Notification": [
+      {
+        "command": "powershell",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/notification.ps1"
+        ],
+        "timeout": 5000
+      }
+    ],
+    "SubagentStart": [
+      {
+        "command": "powershell",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/subagent-start.ps1"
+        ],
+        "timeout": 5000
+      }
+    ],
+    "SubagentStop": [
+      {
+        "command": "powershell",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/subagent-stop.ps1"
+        ],
+        "timeout": 5000
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "command": "powershell",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/permission-request.ps1"
+        ],
+        "timeout": 5000
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "command": "powershell",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/permission-denied.ps1"
+        ],
+        "timeout": 5000
+      }
+    ]
+  }
+}
