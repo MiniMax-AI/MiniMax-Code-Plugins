@@ -213,12 +213,19 @@ test('no SKILL.md contains a duplicate `author:` or `version:` key anywhere', ()
 // Skills that touch the `task` tool. The 5 Skills rewritten in this PR plus
 // any future Skill that calls `task(` must use the canonical parameter
 // names from `cli.js:B6c`: description, prompt, subagent_type, run_in_background.
+// The audit sweep after v1.0.4 also caught `error-recovery-strategy` which
+// had a `task(subagent=...)` shape in its Example block; that fix is
+// recorded as v0.1.2 of that Skill. The test below covers all Skills whose
+// body contains a `task(` call in a code block — adding a new Skill that
+// touches the `task` tool (or a new `task(` call in an existing Skill)
+// will be caught by this test automatically.
 const TASK_SKILLS = [
   'fork-context-decision',
   'delegate-with-context',
   'parallel-fanout',
   'model-router',
   'background-task',
+  'error-recovery-strategy',
 ];
 
 test('TASK_SKILLS use canonical mcode 0.2.4 `task` parameter names (no `agent_name=`, no `brief=`, no `history=`, no `model_config_id=`)', () => {
@@ -243,6 +250,24 @@ test('TASK_SKILLS use canonical mcode 0.2.4 `task` parameter names (no `agent_na
         `${name}: task(...) example uses "model_config_id="; mcode 0.2.4 task tool does not expose a per-call model field (model selection is session-level)`);
     }
   }
+});
+
+// Catch-all: any Skill whose code block contains a `task(` call but is
+// not in the TASK_SKILLS allow-list must be added to the list (or the
+// call removed). Without this, a future contributor could drop a
+// `task(subagent=...)` shape into e.g. `plan-stream-emit` and slip
+// past the static check.
+test('every Skill with a `task(` call in a code block is in the TASK_SKILLS allow-list', () => {
+  const allow = new Set(TASK_SKILLS);
+  const offenders = [];
+  for (const { name, path } of listSkillFiles()) {
+    const text = readFileSync(path, 'utf8');
+    const blocks = findInCodeFences(text, /task\s*\(/u);
+    if (blocks.length === 0) continue;
+    if (!allow.has(name)) offenders.push(name);
+  }
+  assert.deepEqual(offenders, [],
+    `Skills with a task(...) call but not in the static-check allow-list: ${offenders.join(', ')}. Either add them to TASK_SKILLS (and pin their parameter names) or remove the task(...) call.`);
 });
 
 test('background-task uses `task(run_in_background: true)` + `task_query` / `task_output` / `task_stop` (no `bash(task_name=...)`, no `bash(action="kill")`)', () => {

@@ -9,8 +9,9 @@ license: Apache-2.0
 compatibility: Requires MiniMax Code with Agent Plugins 1.0 support.
 metadata:
   author: antianqi
-  version: "0.1.1"
+  version: "0.1.2"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/code-mode/src/grpc_session/reconnect.rs and core/src/session/multi_agents.rs
+  changes-from-v0.1.1: "Audit gap: the sub-agent invocation example in '## Example' (line 115) used the Codex-style `task(subagent=...)` shape; switched to the canonical mcode 0.2.4 `task(subagent_type=..., prompt=...)` shape (mcode accepts `agent_name=` as a runtime alias but `subagent_type=` is the strict-validator form per `cli.js:B6c`). The round-1 72952c9 amend touched 4 Skills (fork-context-decision / delegate-with-context / parallel-fanout / model-router) and missed this 5th; the v1.0.4 round-2 close-out also missed it. Caught by the v1.0.4 audit sweep across all 23 Skills' code blocks. The rest of the Skill body is unchanged."
 ---
 
 # Error Recovery Strategy
@@ -112,7 +113,7 @@ Reason: bucket=transient (network refused); will retry 3 times with 2s/4s/8s bac
 ```
 
 ```text
-> task(subagent=explore, prompt="...")
+> task(subagent_type="explore", prompt="...")
 
 Status: closed-failed. Sub-agent error: "context window exceeded".
 Recovery decision: ask-user
