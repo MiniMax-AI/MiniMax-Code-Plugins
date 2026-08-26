@@ -1,6 +1,6 @@
 # codex-harness-patterns — Plugin 总览
 
-> 最后更新:2026-08-25 · **v1.0.0** · **23 Skills**
+> 最后更新:2026-08-26 · **v1.0.3** · **23 Skills**
 > Plugin 覆盖率 ~90%+
 
 ## 一句话

@@ -8,7 +8,32 @@ original goal, paying main-model prices for cheap-model work, losing track of wh
 sub-agent is doing what, failing on transient errors without a budget, reading streaming
 output without filling context, or losing work at session end.
 
-## v1.0.2 changelog (this release)
+## v1.0.3 changelog (this release)
+
+> **类型**:patch · **Skill 主体修正** · 4 个 Skill 的 mcode 适配注释从"伪代码"升级到 mcode 实际 `task(agent_name=...)` 语法;修复 v1.0.3.1 草稿的 frontmatter 结构损坏
+
+### Fixed
+
+- `fork-context-decision` `0.1.2 → 0.2.0`:example 调用从 "Codex-style `task(subagent=..., fork_turns=...)` 伪代码" 改为 mcode 实际 `task(agent_name=..., brief=..., history=...)` 语法;清掉 v1.0.3.1 草稿的重复 `metadata:` 块、孤立 YAML、body 中重复 `# Fork Context Decision` 标题、stray `---` 分隔符(YAML 解析拿到错的 version 字段)
+- `delegate-with-context` `1.0.2 → 1.1.0`:同上,example 改用 `agent_name="explore"`;删除"工具集是 yaml 写死"这种 host 内部实现细节的断言
+- `parallel-fanout` `1.0.2 → 1.1.0`:同上;删除"Reads each agent's tool whitelist from mcode assets/agents/&lt;name&gt;/agent.md"这种引用不存在路径的断言
+- `model-router` `0.3.2 → 0.3.3`:恢复 portable 3-tier rubric;删除"agent_type 已经隐含 tier"这种依赖不存在 yaml 配置的强断言;`reasoning_effort` 显式标注为 Codex-only、mcode 不暴露
+
+### Compliance
+
+- 4 段独立披露(no credentials / no network / no telemetry / no third-party services)— v1.0.2 已加,本版本未改
+- 跨平台 path 解析 — `assets/agents/<name>/agent.md` 这种相对路径断言已删除
+- Skill-only plugin(无 `mcp.json` / 无 `package.json` / 0 npm 依赖)— 不变
+- 一个 commit 一个 fix — 本次 amend 把 4 个 Skill 的修复合到同一个 v1.0.3 commit,因为它们都是 reviewer issue 2 的同一根因(Codex-style 参数名 → mcode-actual 参数名)
+
+### Not changed
+
+- 23 skill 整体布局与触发条件
+- 4 段独立披露格式
+- License
+- README 的其他部分
+
+## v1.0.2 changelog (previous)
 
 > **类型**:patch · **Skill 主体不变** · README 加 4 段独立披露(满足 mcode plugin 提交规范)
 
