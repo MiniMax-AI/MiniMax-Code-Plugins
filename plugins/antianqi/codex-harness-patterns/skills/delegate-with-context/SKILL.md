@@ -116,7 +116,7 @@ the actual host API.
       Sender:    main agent
       Task:     Investigate why test_lint.py flakes on Windows but not Linux.
                 Produce a 1-paragraph root-cause analysis.
-      Payload:  /home/user/proj/tests/test_lint.py (line 47 is the failure);
+      Payload:  <project>/tests/test_lint.py (line 47 is the failure);
                 prior turn tool output: <paste here if relevant>
       Return:   Append a section to /notes/lint.md titled
                 "## Windows flake root cause" with 1 paragraph.
@@ -131,7 +131,7 @@ the actual host API.
       Sender:    main agent
       Task:     Investigate why test_lint.py flakes on Windows but not Linux.
                 Produce a 1-paragraph root-cause analysis.
-      Payload:  /home/user/proj/tests/test_lint.py (line 47 is the failure);
+      Payload:  <project>/tests/test_lint.py (line 47 is the failure);
                 prior turn tool output: <paste here if relevant>
       Return:   Append a section to /notes/lint.md titled
                 "## Windows flake root cause" with 1 paragraph.

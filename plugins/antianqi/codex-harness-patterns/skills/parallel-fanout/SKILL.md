@@ -11,7 +11,7 @@ metadata:
   author: antianqi
   version: "1.1.0"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/core/src/thread_manager.rs (design principle); the fan-out decision and wait-for-all aggregation are portable; agent_name values follow the actual mcode `task` tool schema
-  changes-from-v1.0.2: "Examples now use MiniMax Code's `task(agent_name=...)` syntax. Codex-harness `subagent=...` form removed. The earlier 'reads each agent's tool whitelist from mcode assets/agents/<name>/agent.md' claim was dropped because the on-disk agent profile path is host implementation detail, not a Skill-level contract."
+  changes-from-v1.0.2: "Examples now use MiniMax Code's `task(agent_name=...)` syntax. Codex-harness `subagent=...` form removed. The earlier 'reads each agent's tool whitelist from a mcode host-internal config file' claim was dropped because the on-disk agent profile path is host implementation detail, not a Skill-level contract."
 ---
 
 # Parallel Fanout
