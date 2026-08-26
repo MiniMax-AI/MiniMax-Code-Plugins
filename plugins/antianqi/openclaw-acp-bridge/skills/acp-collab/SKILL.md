@@ -6,7 +6,7 @@ compatibility: Requires MiniMax Code with Agent Plugins 1.0 support and an OpenC
 metadata:
   author: 安天齐 (antianqi)
   homepage: https://github.com/antianqi/openclaw-mcode-acp
-  version: "0.1.0"
+  version: "0.2.0"
 ---
 
 # ACP Peer Collaboration
@@ -25,30 +25,35 @@ Activate this Skill whenever any of the following is true:
 
 ## Setup
 
-The ACP server is at `http://localhost:9999`. Your `session_id` is given in the task prompt as `session_id: <id>`. The Python SDK lives at `<ACP_HOME>/openclaw-skill/acp_tools.py` — `ACP_HOME` is required (see Requirements).
+The ACP server is at `http://localhost:9999`. Your `session_id` is given in the task prompt as `session_id: <id>`.
+
+The Plugin ships its own HTTP client. There is **no `ACP_HOME` to set**, no external Python SDK to install, and no `sys.path` to mutate. The client lives at `<plugin_root>/client/_acp_client.py` and is resolved through the `ACP_PLUGIN_ROOT` environment variable (set automatically by the Plugin runtime) with a `__file__`-based fallback for ad-hoc invocations.
 
 ### Authentication
 
-The SDK (not this Plugin) reads the bearer token from one of:
+The bundled client reads the bearer token from one of (first hit wins):
 
-- `$ACP_TOKEN` environment variable (recommended for CI and shells)
-- The first line of `<ACP_HOME>/.acp_token` (user-mode convenience)
+1. `$ACP_TOKEN` (recommended for CI and shells)
+2. `~/.acp_token` (one line, no trailing newline)
+3. `<plugin_root>/.acp_token` (one line; co-located fallback for fresh installs)
 
-The SDK attaches `Authorization: Bearer <token>` to every request to `http://127.0.0.1:9999/acp/*`. Do not read, print, or pass the token yourself; the SDK handles it.
+The client attaches `Authorization: Bearer <token>` to every request to `http://127.0.0.1:9999/acp/*`. **Do not read, print, or pass the token yourself.** The client also refuses to follow HTTP redirects (a hostile loopback server cannot exfiltrate the token via a 302) and refuses to talk to anything other than the loopback allow-list.
 
-To use the SDK from a shell:
+If the token cannot be located, the client raises `ACPTokenMissing`. Tell the user to set `$ACP_TOKEN` (or write one of the fallback files) and stop; do not retry.
+
+To call the client from a shell:
 
 ```python
 import os, sys
-_acr_root = os.environ.get('ACP_HOME')
-if not _acr_root:
-    raise RuntimeError(
-        'ACP_HOME env var is not set. Install OpenClaw-mcode-ACP and set '
-        'ACP_HOME to its install path (PowerShell: $env:ACP_HOME = "<path>"). '
-        'See https://github.com/antianqi/openclaw-mcode-acp for setup.'
-    )
-sys.path.insert(0, os.path.join(_acr_root, 'openclaw-skill'))
-from acp_tools import (
+# ACP_PLUGIN_ROOT is the directory that contains this Plugin's `client/`.
+# It is set automatically when the Skill is loaded by the Plugin runtime;
+# the `__file__` fallback keeps the snippet working when it is pasted
+# into an ad-hoc Python session.
+_plugin_root = os.environ.get('ACP_PLUGIN_ROOT') or os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))
+)
+sys.path.insert(0, os.path.join(_plugin_root, 'client'))
+from _acp_client import (
     inbox_read, inbox_write, inbox_ask, inbox_answer,
     inbox_sessions, peer_session_id, peer_greet,
 )

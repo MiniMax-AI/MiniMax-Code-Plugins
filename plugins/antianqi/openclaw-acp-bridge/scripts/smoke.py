@@ -4,23 +4,45 @@
 Validates that this Plugin can talk to an OpenClaw-mcode-ACP server.
 Does NOT require MiniMax Code or mcode itself. Runs in <10s.
 
+v0.2.0 change: the smoke test now exercises the **bundled** client
+(`client/_acp_client.py`) instead of an external SDK. The "no-redirect
+policy is real because the test shares an opener with the Skills"
+property the v0.1.3 review called for is now structural: there is only
+one client module, and the smoke test imports it the same way the
+Skills do.
+
 Checks:
-  1. $ACP_HOME env var is set and points to an OpenClaw-mcode-ACP checkout.
-  2. SDK is importable from $ACP_HOME/openclaw-skill/.
-  3. acp_paths resolves cross-platform (no hardcoded D:\\ paths).
-  4. /acp/health returns 200 (no auth required for health).
-  5. /acp/inbox/write + /acp/inbox/read roundtrip works (requires $ACP_TOKEN).
-  6. Plugin SKILL.md files reference ACP_HOME (not hardcoded D:/openclaw-acp).
+  1. `client/_acp_client.py` parses and imports cleanly.
+  2. `_resolve_token()` raises `ACPTokenMissing` when no token is set.
+  3. `_check_loopback()` accepts the loopback allow-list and refuses
+     everything else (including `https://127.0.0.1:9999`).
+  4. The server's `/acp/health` returns HTTP 200 within 5 seconds
+     (no auth required; the bundled client is not used for this — the
+     health endpoint is anonymous).
+  5. An inbox write/read roundtrip works through the **bundled** client.
+     This is the path Skills take at runtime; the smoke test is now
+     exercising the same code.
+  6. The bundled no-redirect opener is in fact the opener the Skills
+     will use at runtime. (Verified by reading `_acp_client._OPENER`'s
+     handler chain; there is no separate "smoke test opener" anymore.)
+  7. Plugin SKILL.md files resolve the plugin root through
+     `ACP_PLUGIN_ROOT` (or a `__file__` fallback). No hardcoded
+     `D:/openclaw-acp` or similar absolute paths.
 
 Usage:
-    export ACP_HOME=/path/to/openclaw-mcode-acp      # POSIX
-    $env:ACP_HOME = 'D:\\path\\to\\openclaw-mcode-acp'   # PowerShell
+    # Against a real server:
     export ACP_TOKEN=<server token>
-    python scripts/smoke.py
+    python plugins/antianqi/openclaw-acp-bridge/scripts/smoke.py
+
+    # Against the bundled CI stub (recommended for offline runs):
+    python plugins/antianqi/openclaw-acp-bridge/scripts/stub_server.py &
+    ACP_TOKEN=ci-test-token-xyzzy ACP_BASE_URL=http://127.0.0.1:19999 \
+        python plugins/antianqi/openclaw-acp-bridge/scripts/smoke.py
 
 Exit code: 0 on full pass, 1 on any failure.
 """
 from __future__ import annotations
+
 import json
 import os
 import re
@@ -28,16 +50,18 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
-from urllib.parse import urlparse
 
-from smoke_helpers import build_no_redirect_opener  # noqa: E402
+# Make the bundled client importable. The script lives in `<plugin>/scripts/`
+# so the client is one directory up and over.
+HERE = Path(__file__).resolve().parent
+PLUGIN_ROOT = HERE.parent
+CLIENT_DIR = PLUGIN_ROOT / 'client'
+sys.path.insert(0, str(CLIENT_DIR))
+
+import _acp_client  # noqa: E402
 
 _failures: list[str] = []
 _passes: list[str] = []
-
-
-def check(cond: bool, msg: str) -> None:
-    (record_pass if cond else record_fail)(msg)
 
 
 def record_pass(msg: str) -> None:
@@ -50,183 +74,157 @@ def record_fail(msg: str) -> None:
     print(f'  [FAIL] {msg}')
 
 
+def check(cond: bool, msg: str) -> None:
+    (record_pass if cond else record_fail)(msg)
+
+
 def main() -> int:
-    """Run the smoke test and return the process exit code.
+    base_url = os.environ.get('ACP_BASE_URL', 'http://127.0.0.1:9999').rstrip('/')
+    token = os.environ.get('ACP_TOKEN', '').strip()
 
-    Wrapped in a function so the regression test (test_no_redirect.py)
-    can `import smoke_helpers` without triggering the full check
-    sequence on import. (sys.exit at module top-level would terminate
-    the importing test before it could run.)
-    """
-
-    # --- 1. ACP_HOME is set and usable ------------------------------------
-    print('\n[Check 1] $ACP_HOME environment variable')
-    acp_home = os.environ.get('ACP_HOME')
-    skip_live = bool(os.environ.get('SMOKE_SKIP_LIVE'))
-    if not acp_home:
-        msg = ('ACP_HOME is not set; install OpenClaw-mcode-ACP and '
-               'export ACP_HOME=<path> (see Plugin README)')
-        if skip_live:
-            record_pass(f'{msg} (skipped: SMOKE_SKIP_LIVE=1)')
+    # --- 1. Client parses and imports -----------------------------------
+    print('\n[Check 1] Bundled client imports cleanly')
+    try:
+        # Re-import (already done at module top) and verify the public API
+        # surface matches what the Skills depend on. Adding a function to
+        # the client without updating this list is a contract break.
+        expected = {
+            'health', 'create_task', 'get_task', 'wait_task', 'cancel_task',
+            'history', 'list_tasks', 'stream_task', 'run_and_stream', 'stats',
+            'inbox_write', 'inbox_read', 'inbox_ask', 'inbox_answer',
+            'inbox_sessions', 'peer_session_id', 'peer_greet',
+            'ACPError', 'ACPTokenMissing',
+        }
+        missing = expected - set(dir(_acp_client))
+        if missing:
+            record_fail(f'bundled client missing public names: {sorted(missing)}')
         else:
-            record_fail(msg)
-    else:
-        acp_home_path = Path(acp_home).expanduser().resolve()
-        check(acp_home_path.is_dir(),
-              f'ACP_HOME points to an existing directory ({acp_home_path})')
-        sdk_dir = acp_home_path / 'openclaw-skill'
-        check(sdk_dir.is_dir(),
-              f'SDK directory exists: {sdk_dir}')
-        check((sdk_dir / 'acp_tools.py').is_file(),
-              f'acp_tools.py present at {sdk_dir / "acp_tools.py"}')
-        check((sdk_dir / 'acp_paths.py').is_file(),
-              f'acp_paths.py present at {sdk_dir / "acp_paths.py"}')
+            record_pass(f'bundled client exposes all {len(expected)} expected names')
+    except Exception as e:
+        record_fail(f'import or attribute lookup failed: {e}')
 
-    # --- 2. SDK is importable ----------------------------------------------
-    print('\n[Check 2] SDK importable from $ACP_HOME/openclaw-skill/')
-    if acp_home:
-        sys.path.insert(0, str(Path(acp_home).expanduser().resolve() / 'openclaw-skill'))
+    # --- 2. Token resolution --------------------------------------------
+    print('\n[Check 2] Token resolver raises ACPTokenMissing when unset')
+    saved_token = os.environ.pop('ACP_TOKEN', None)
+    try:
         try:
-            import acp_paths  # noqa: F401
-            record_pass('acp_paths imports cleanly')
-            import acp_tools  # noqa: F401
-            record_pass('acp_tools imports cleanly')
+            _acp_client._resolve_token()
+            record_fail('_resolve_token did not raise with no token source')
+        except _acp_client.ACPTokenMissing:
+            record_pass('_resolve_token raises ACPTokenMissing with no token source')
         except Exception as e:
-            record_fail(f'SDK import failed: {e}')
-    else:
-        if skip_live:
-            record_pass('skipped (ACP_HOME not set; SMOKE_SKIP_LIVE=1)')
-        else:
-            record_fail('skipped (ACP_HOME not set)')
+            record_fail(f'_resolve_token raised the wrong type: {type(e).__name__}: {e}')
+    finally:
+        if saved_token is not None:
+            os.environ['ACP_TOKEN'] = saved_token
 
-    # --- 3. acp_paths resolves cross-platform ------------------------------
-    print('\n[Check 3] acp_paths resolves cross-platform')
-    if acp_home:
+    # --- 3. Loopback guard ----------------------------------------------
+    print('\n[Check 3] Loopback guard accepts loopback and refuses other origins')
+    for url, want in [
+        ('http://127.0.0.1:9999', True),
+        ('http://127.0.0.1:9999/', True),  # trailing slash is still loopback
+        ('http://localhost:9999', True),
+        ('http://[::1]:9999', True),
+        ('http://example.com', False),
+        ('http://0.0.0.0:9999', False),
+        ('https://127.0.0.1:9999', False),  # https is not allowed (server is http-only)
+    ]:
         try:
-            from acp_paths import resolve_acp_home  # type: ignore
-            resolved = resolve_acp_home()
-            check(isinstance(resolved, Path),
-                  f'resolve_acp_home returns Path ({resolved})')
-            record_pass(f'resolve_acp_home default = {resolved}')
-        except Exception as e:
-            record_fail(f'acp_paths.resolve_acp_home failed: {e}')
+            _acp_client._check_loopback(url)
+            got = True
+        except _acp_client.ACPError:
+            got = False
+        check(got == want, f'_check_loopback({url!r}) allow={got} (want {want})')
 
-    # --- 4. /acp/health returns 200 (no auth) -----------------------------
+    # --- 4. Server /acp/health (no auth) --------------------------------
     print('\n[Check 4] Server /acp/health (no auth required)')
-    base_url = os.environ.get('ACP_BASE_URL', 'http://127.0.0.1:9999')
-    # Refuse to talk to anything but loopback. The token in Check 5 below
-    # would be sent to this base_url, so an attacker-controlled
-    # ACP_BASE_URL would capture the bearer token. This is the v0.1.3
-    # security gap the review called out.
-    parsed_base = urlparse(base_url)
-    ALLOWED_HOSTS = {'127.0.0.1', 'localhost', '::1', '[::1]'}
-    if parsed_base.scheme != 'http' or parsed_base.hostname not in ALLOWED_HOSTS:
-        record_fail(
-            f'ACP_BASE_URL must be a loopback http URL; got {base_url!r}. '
-            'Refusing to send the ACP_TOKEN to a non-loopback host.'
-        )
-        print(f'\n=== Summary ===')
-        print(f'PASSED: {len(_passes)}')
-        print(f'FAILED: {len(_failures)}')
-        return 1
     try:
         with urllib.request.urlopen(f'{base_url}/acp/health', timeout=5) as r:
-            check(r.status == 200, f'GET /acp/health → 200')
+            check(r.status == 200, 'GET /acp/health → 200')
             body = json.loads(r.read().decode('utf-8'))
             check(body.get('status') == 'ok',
                   f'health body has status=ok (version={body.get("version")})')
             check('inbox' in body,
                   'health body advertises inbox (requires v7-bidir+)')
     except urllib.error.URLError as e:
-        # Server not reachable: in CI without a live ACP server we skip
-        # rather than fail. The Plugin README and the CI workflow pin a
-        # specific upstream revision; the actual server interaction is
-        # covered by manual smoke tests against a real installation.
-        record_pass(f'server not reachable at {base_url}: skipped live check ({e.reason})')
+        record_fail(f'server not reachable at {base_url}/acp/health: {e.reason}')
     except Exception as e:
         record_fail(f'/acp/health failed: {e}')
 
-    # --- 5. Inbox write/read roundtrip (requires $ACP_TOKEN) ---------------
-    # Security: every token-bearing request below goes through a no-redirect
-    # opener. A loopback server can still respond with 3xx pointing at another
-    # local endpoint (a sidecar, a port the user accidentally bound, a hostile
-    # container that learned the host name). If we followed that redirect
-    # with the Authorization header attached, the token would leak to
-    # whatever the redirect target is. We refuse redirects outright instead.
-    print('\n[Check 5] Inbox write/read roundtrip (requires $ACP_TOKEN)')
-    token = os.environ.get('ACP_TOKEN')
+    # --- 5. Inbox roundtrip via the bundled client ----------------------
+    print('\n[Check 5] Inbox write/read roundtrip via bundled client')
     if not token:
-        msg = 'ACP_TOKEN not set; skip auth check (set it to test roundtrip)'
-        if skip_live:
-            record_pass(f'{msg} (skipped: SMOKE_SKIP_LIVE=1)')
-        else:
-            record_fail(msg)
+        record_fail(
+            'ACP_TOKEN not set; cannot exercise the bundled client. '
+            'Set $ACP_TOKEN (or run the bundled stub_server.py and pass '
+            'ACP_TOKEN=ci-test-token-xyzzy).'
+        )
     else:
-        no_redirect = build_no_redirect_opener()
+        # The Skills call _acp_client directly; the smoke test does too.
+        # This is the property the v0.1.3 review asked for: the smoke
+        # test exercises the same code the Skills run.
         try:
-            # Write
-            write_body = json.dumps({
-                'session_id': 'plugin-smoke',
-                'sender': 'plugin',
-                'content': 'smoke test from openclaw-acp-bridge',
-            }).encode('utf-8')
-            req = urllib.request.Request(
-                f'{base_url}/acp/inbox/write',
-                data=write_body,
-                headers={
-                    'Authorization': f'Bearer {token}',
-                    'Content-Type': 'application/json',
-                },
-                method='POST',
+            session = f'plugin-smoke-{os.getpid()}'
+            msg_id = _acp_client.inbox_write(
+                session, 'smoke test from openclaw-acp-bridge', sender='plugin',
             )
-            with no_redirect.open(req, timeout=5) as r:
-                wr = json.loads(r.read().decode('utf-8'))
-                check('message_id' in wr,
-                      f'POST /acp/inbox/write returned message_id ({wr.get("message_id")})')
-            # Read
-            read_req = urllib.request.Request(
-                f'{base_url}/acp/inbox/read?session_id=plugin-smoke&since_id=0',
-                headers={'Authorization': f'Bearer {token}'},
-            )
-            with no_redirect.open(read_req, timeout=5) as r:
-                rd = json.loads(r.read().decode('utf-8'))
-                msgs = rd.get('messages', [])
-                check(len(msgs) >= 1,
-                      f'GET /acp/inbox/read returned {len(msgs)} message(s)')
-                check(msgs and msgs[-1].get('sender') == 'plugin',
-                      'latest message has sender=plugin')
-        except urllib.error.HTTPError as e:
-            # A redirect from a hostile loopback server: surface as a fail
-            # so the user can investigate. The opener SHOULD have refused
-            # the redirect; if we landed here on a 3xx, the no-redirect
-            # policy was not applied and that is a regression.
-            if 300 <= e.code < 400:
+            check(isinstance(msg_id, int) and msg_id > 0,
+                  f'inbox_write returned message_id={msg_id}')
+            msgs = _acp_client.inbox_read(session)
+            check(isinstance(msgs, list) and len(msgs) >= 1,
+                  f'inbox_read returned {len(msgs)} message(s)')
+            check(msgs and msgs[-1].get('sender') == 'plugin',
+                  'latest message has sender=plugin')
+        except _acp_client.ACPError as e:
+            # A 3xx surfaced here would be a regression: the bundled
+            # client is supposed to refuse redirects outright.
+            if 300 <= e.status < 400:
                 record_fail(
-                    f'redirect ({e.code}) on token-bearing request: '
-                    f'{e.headers.get("Location", "?") if e.headers else "?"} '
-                    '- no-redirect policy was not applied'
+                    f'redirect ({e.status}) on token-bearing request: '
+                    f'{e.body.get("Location", "?") if isinstance(e.body, dict) else "?"} '
+                    '- bundled client did not apply no-redirect policy'
                 )
             else:
                 record_fail(f'inbox roundtrip failed: {e}')
         except Exception as e:
-            record_fail(f'inbox roundtrip failed: {e}')
+            record_fail(f'inbox roundtrip failed: {type(e).__name__}: {e}')
 
-    # --- 6. Plugin SKILL.md files use ACP_HOME, not hardcoded paths -------
-    print('\n[Check 6] Plugin SKILL.md files reference ACP_HOME')
-    plugin_root = Path(__file__).resolve().parent.parent
-    hardcoded_re = re.compile(r"D:[/\\\\]openclaw-acp")
-    for skill_md in plugin_root.glob('skills/*/SKILL.md'):
+    # --- 6. Bundled opener is the runtime opener ------------------------
+    print('\n[Check 6] Bundled opener is the no-redirect opener')
+    op = _acp_client._OPENER
+    import urllib.request as _ur
+    has_default = any(
+        isinstance(h, _ur.HTTPRedirectHandler) and not isinstance(h, _acp_client._NoRedirectHandler)
+        for h in op.handlers
+    )
+    has_default |= any(
+        isinstance(h, _ur.HTTPRedirectHandler) and not isinstance(h, _acp_client._NoRedirectHandler)
+        for by_code in op.handle_error.values()
+        for lst in by_code.values()
+        for h in lst
+    )
+    has_ours = any(isinstance(h, _acp_client._NoRedirectHandler) for h in op.handlers)
+    check(not has_default, '_OPENER has no default HTTPRedirectHandler')
+    check(has_ours, '_OPENER registers _NoRedirectHandler')
+
+    # --- 7. SKILL.md path resolution ------------------------------------
+    print('\n[Check 7] Plugin SKILL.md files resolve plugin root safely')
+    hardcoded_re = re.compile(
+        r'(?i)D:[/\\]openclaw-acp|/Users/[^/\s"]+/openclaw-acp|/home/[^/\s"]+/openclaw-acp'
+    )
+    for skill_md in PLUGIN_ROOT.glob('skills/*/SKILL.md'):
         text = skill_md.read_text(encoding='utf-8')
+        rel = skill_md.relative_to(PLUGIN_ROOT)
         if hardcoded_re.search(text):
-            record_fail(f'{skill_md.relative_to(plugin_root)}: still contains hardcoded D:/openclaw-acp')
+            record_fail(f'{rel}: still contains a hardcoded absolute path')
         else:
-            record_pass(f'{skill_md.relative_to(plugin_root)}: no hardcoded D:/openclaw-acp')
-        if "ACP_HOME" not in text:
-            record_fail(f'{skill_md.relative_to(plugin_root)}: does not reference ACP_HOME')
+            record_pass(f'{rel}: no hardcoded absolute path')
+        if 'ACP_PLUGIN_ROOT' not in text and '__file__' not in text:
+            record_fail(f'{rel}: does not reference ACP_PLUGIN_ROOT or __file__ fallback')
         else:
-            record_pass(f'{skill_md.relative_to(plugin_root)}: references ACP_HOME')
+            record_pass(f'{rel}: references ACP_PLUGIN_ROOT or __file__ fallback')
 
-    # --- Summary -----------------------------------------------------------
+    # --- Summary ---------------------------------------------------------
     print(f'\n=== Summary ===')
     print(f'PASSED: {len(_passes)}')
     print(f'FAILED: {len(_failures)}')

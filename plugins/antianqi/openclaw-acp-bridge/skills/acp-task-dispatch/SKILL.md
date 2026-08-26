@@ -6,7 +6,7 @@ compatibility: Requires MiniMax Code with Agent Plugins 1.0 support and an OpenC
 metadata:
   author: 安天齐 (antianqi)
   homepage: https://github.com/antianqi/openclaw-mcode-acp
-  version: "0.1.0"
+  version: "0.2.0"
 ---
 
 # ACP Task Dispatch
@@ -20,24 +20,33 @@ Send a discrete, self-contained task to the OpenClaw-mcode-ACP server instead of
 
 ## Setup
 
-Same as `acp-collab`. The SDK lives at `<ACP_HOME>/openclaw-skill/acp_tools.py` — `ACP_HOME` is required.
+The Plugin ships its own HTTP client. There is **no `ACP_HOME` to set**, no external Python SDK to install, and no `sys.path` to mutate. The client lives at `<plugin_root>/client/_acp_client.py` and is resolved through the `ACP_PLUGIN_ROOT` environment variable (set automatically by the Plugin runtime) with a `__file__`-based fallback for ad-hoc invocations.
 
 ### Authentication
 
-The SDK (not this Plugin) reads the bearer token from `$ACP_TOKEN` (or `<ACP_HOME>/.acp_token`) and attaches it to every request as `Authorization: Bearer <token>`. Do not handle the token in this Skill.
+The bundled client reads the bearer token from one of (first hit wins):
+
+1. `$ACP_TOKEN` (recommended for CI and shells)
+2. `~/.acp_token` (one line, no trailing newline)
+3. `<plugin_root>/.acp_token` (one line; co-located fallback for fresh installs)
+
+The client attaches `Authorization: Bearer <token>` to every request to `http://127.0.0.1:9999/acp/*`. **Do not read, print, or pass the token yourself.** The client also refuses to follow HTTP redirects (a hostile loopback server cannot exfiltrate the token via a 302) and refuses to talk to anything other than the loopback allow-list.
+
+If the token cannot be located, the client raises `ACPTokenMissing`. Tell the user to set `$ACP_TOKEN` (or write one of the fallback files) and stop; do not retry.
 
 ## Dispatch a task
 
 ```python
 import os, sys
-_acr_root = os.environ.get('ACP_HOME')
-if not _acr_root:
-    raise RuntimeError(
-        'ACP_HOME env var is not set. Install OpenClaw-mcode-ACP and set '
-        'ACP_HOME to its install path (PowerShell: $env:ACP_HOME = "<path>").'
-    )
-sys.path.insert(0, os.path.join(_acr_root, 'openclaw-skill'))
-from acp_tools import create_task, get_task, history
+# ACP_PLUGIN_ROOT is the directory that contains this Plugin's `client/`.
+# It is set automatically when the Skill is loaded by the Plugin runtime;
+# the `__file__` fallback keeps the snippet working when it is pasted
+# into an ad-hoc Python session.
+_plugin_root = os.environ.get('ACP_PLUGIN_ROOT') or os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))
+)
+sys.path.insert(0, os.path.join(_plugin_root, 'client'))
+from _acp_client import create_task, get_task, history
 
 # create_task returns the task_id as a string directly (not a dict).
 task_id = create_task(
@@ -63,6 +72,8 @@ while True:
 print(state.get("answer", state.get("error")))
 ```
 
+For a blocking wait that returns the final task dict directly, use `wait_task(task_id, timeout=600, poll_interval=2.0)` from the same client.
+
 ## Inspect history
 
 ```python
@@ -71,6 +82,10 @@ print(state.get("answer", state.get("error")))
 for t in history(limit=20):
     print(t["task_id"], t["status"], t.get("duration_ms"))
 ```
+
+## Stream progress (optional)
+
+`stream_task(task_id, on_event=lambda type, data: ...)` consumes the server's SSE stream and yields `{type, data}` dicts. `run_and_stream(prompt, workspace, ...)` is a convenience that creates a task, streams its events, and returns the final task dict.
 
 ## Constraints
 
@@ -81,4 +96,4 @@ for t in history(limit=20):
 
 ## Failure handling
 
-If `create_task` returns a non-2xx response, the server is likely down or rejected the request. Verify the server is reachable and that your environment is configured correctly (the server requires `$ACP_TOKEN` to match; this Plugin does not embed or manage credentials). Stop and surface the error to the user; do not retry in a tight loop.
+If `create_task` raises `ACPError`, the server is likely down or rejected the request. Verify the server is reachable on `http://127.0.0.1:9999/acp/health` and that the token matches. Stop and surface the error to the user; do not retry in a tight loop.
