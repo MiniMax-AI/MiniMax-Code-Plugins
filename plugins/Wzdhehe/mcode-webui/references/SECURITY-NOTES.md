@@ -140,10 +140,11 @@ runtime. No persistent state. Restarting the server reverts to the
 
 ### 3.4 `/api/debug/*` (testing only)
 
-Endpoints under `/api/debug/*` are gated by `DEBUG_INJECT=1`. They
-include `set-headers` (override response headers for testing) and
-`crash-now` (force a server crash). **Never set `DEBUG_INJECT=1` in
-production** — it bypasses the standard error handling.
+Endpoints under `/api/debug/*` are gated by `DEBUG_INJECT=1`. The
+two currently implemented routes are `inject` (force a server-side event
+into the SSE stream for testing) and `state` (return server-internal
+state for debugging). **Never set `DEBUG_INJECT=1` in production** — it
+bypasses the standard error handling.
 
 ### 3.5 mcode acp subprocess cache
 
@@ -199,7 +200,7 @@ log + a disabled feature) — it does not crash.
 ## 7. Testing & reproducibility
 
 - `npm test` runs `node --experimental-test-module-mocks --test test/*.test.js`.
-  371 passing tests, 1 skipped, 0 failing on a clean checkout.
+  382 passing tests, 1 skipped, 0 failing on a clean checkout.
 - `npm run lint` — ESLint flat config, 0 warnings on a clean checkout.
 - All tests use **temp file fixtures** (`mkdtempSync`). No test writes
   to the user's real `~/.minimax/` or `~/.mcode-webui/` directory unless

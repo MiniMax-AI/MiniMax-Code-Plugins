@@ -110,7 +110,7 @@ npm run package:plugin    # dist/Wzdhehe/mcode-webui/ + .zip
 
 ## 贡献
 
-见 [CONTRIBUTING.md](CONTRIBUTING.md)。`npm test`（302 个测试）
+见 [CONTRIBUTING.md](CONTRIBUTING.md)。`npm test`（382 通过 + 1 跳过）
 和 `npm run lint` 必须保持全绿；插件树（`plugins/.../mcode-webui/`）
 的副本与仓库根保持同步。
 

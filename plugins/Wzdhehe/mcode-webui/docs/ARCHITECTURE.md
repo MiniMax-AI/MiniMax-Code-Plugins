@@ -123,9 +123,12 @@ Each `server/lib/*.js` file exports a small set of named functions. No
 file reaches into another's internals. The notable contracts:
 
 ### `config.js`
-- Exports frozen-ish constants: `PORT`, `HOST`, `MCODE_ROOT`, `MCODE_CMD`,
-  `DEFAULT_MODEL`, `DEFAULT_WORKSPACE`, `DEFAULT_TIMEOUT`,
-  `MCODE_RUNTIME_DB`, `MAVIS_DB_PATH`.
+- Exports frozen-ish constants: `MCODE_ROOT`, `MCODE_CMD`, `PORT`, `HOST`,
+  `TOKEN`, `DEFAULT_MODEL`, `DEFAULT_TIMEOUT`, `DEFAULT_MAX_STEPS`,
+  `MAX_CONCURRENT`, `UPLOAD_DIR`, `SESSIONS_DB`, `MCODE_RUNTIME_DB`,
+  `MAVIS_DATA_DIR`, `MAVIS_DB_PATH`, `SQLITE3_BIN`, `DEFAULT_WORKSPACE`.
+- Exports functions: `getPlatformFallbackPaths`, `detectSqlite3Bin`,
+  `detectTuiCwd` (re-export), `installGlobalErrorHandlers`.
 - Reads `process.env.*` exactly once at module load. No per-request
   re-reading.
 - `installGlobalErrorHandlers()` writes uncaught exceptions to
@@ -138,7 +141,6 @@ The chokepoint. Exports:
 |---|---|
 | `getClient(cid)` | Returns the `clientState` object: `state`, `sse`, `activeChild`, `chatHistory`, `requestSeq`. Lazily creates on first call. |
 | `pushStateFor(cid, opts)` | Build a normalized `state` object and write it to `clientState.state`. Broadcasts to the SSE channel unless `opts.silent`. |
-| `pushEvent(cid, event)` | Append an arbitrary event to the SSE channel (`{type, …}`). |
 | `pushOnlineCount(lanBroadcast)` | Count `sseByCid.size` and broadcast to all clients. Called on connect/disconnect. |
 | `SSE_HEADERS` | Standard headers: `Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`, `X-Accel-Buffering: no`. |
 
@@ -153,7 +155,8 @@ Wraps mcode's JSON-RPC-over-stdio protocol. Exports:
 - `getMcodeAcpClient()` — process-wide singleton. Init is
   `pInitPromise` de-duplicated so concurrent `start()` callers share a
   single subprocess.
-- Cache: `mcodeCommandsCache` and `mcodeSessionsCache` avoid
+- Cache: `mcodeSessionsCache` (in `acp-client.js`) and
+  `getCachedMcodeCommands()` (in `state-bus.js`) avoid
   repeated JSON-RPC round-trips for `session/list` and
   `session/commands`.
 
@@ -257,8 +260,7 @@ it 1:1 into the `state` JS variable.
   tokenEnabled: boolean,            // token auth master switch (default true)
   currentToken: string,             // 32-hex auto-generated token; "" after tokenAcknowledged=true
   tokenAcknowledged: boolean,       // operator confirmed they saved the token
-  tokenRotatedAt: number,           // ms-since-epoch of last rotation
-  availableInterfaces: Array<{name, address, family}>  // for client UI display
+  tokenRotatedAt: number            // ms-since-epoch of last rotation
 }
 ```
 
