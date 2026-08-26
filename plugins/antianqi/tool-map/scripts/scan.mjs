@@ -251,6 +251,65 @@ const VERSION_PROBES = [
 
 const ALLOWED_PROBE_NAMES = new Set(VERSION_PROBES.map(([n]) => n));
 
+// --- Per-program shell decision ---
+// On Windows, .cmd and .bat files cannot be spawned via `execFile`
+// without `shell: true` (CVE-2024-27980; Node.js >= 21.7.3). This Plugin
+// requires Node >= 22, so the CVE fix is in force. Native .exe binaries
+// and programs whose resolved extension is anything else are spawned
+// directly with separate argv. POSIX never needs a shell for any of the
+// whitelisted probes.
+//
+// The decision is per-program: it is made by walking $PATH and $PATHEXT
+// to find the actual file the OS will execute when the user types the
+// program name. A same-named wrapper that resolves to an `.exe` is
+// treated as a native binary; a wrapper that resolves to a `.cmd` is
+// treated as a shim and routed through `cmd.exe`.
+//
+// `shellForFile` is the pure decision over a single resolved path.
+// `resolveProgram` walks $PATH/$PATHEXT to find the actual file.
+// `shouldUseShell` composes the two. All three are exported so the
+// regression test can exercise the path-and-extension logic without
+// spawning a subprocess.
+
+function shellForFile(resolvedPath) {
+  if (!IS_WIN) return false;
+  if (!resolvedPath) return false;
+  return /\.(cmd|bat)$/i.test(resolvedPath);
+}
+
+function resolveProgram(name) {
+  const pathDirs = (ENV.PATH || '')
+    .split(delimiter)
+    .map((d) => d.trim())
+    .filter(Boolean);
+  const hasExt = /\.[a-z0-9]+$/i.test(name);
+  let candidates;
+  if (IS_WIN) {
+    if (hasExt) {
+      candidates = [name];
+    } else {
+      const pathext = (ENV.PATHEXT || '.COM;.EXE;.BAT;.CMD;.VBS;.JS;.WSF;.MSC')
+        .split(';')
+        .map((e) => e.trim())
+        .filter(Boolean);
+      candidates = pathext.map((ext) => name + ext);
+    }
+  } else {
+    candidates = [name];
+  }
+  for (const dir of pathDirs) {
+    for (const cand of candidates) {
+      const full = join(dir, cand);
+      if (existsSync(full)) return full;
+    }
+  }
+  return null;
+}
+
+function shouldUseShell(name) {
+  return shellForFile(resolveProgram(name));
+}
+
 async function probeVersion(cmd) {
   // Defence-in-depth: even if a future caller misuses this function, only
   // whitelisted basenames can ever be spawned. fail-closed.
@@ -259,7 +318,7 @@ async function probeVersion(cmd) {
     const { stdout } = await execFileP(cmd[0], cmd.slice(1), {
       timeout: 5000,
       windowsHide: true,
-      shell: IS_WIN,
+      shell: shouldUseShell(cmd[0]),
     });
     const first = (stdout || '').split(/\r?\n/)[0].trim();
     if (first) return first;
@@ -542,6 +601,8 @@ export {
   atomicWriteBundle, ALLOWED_PROBE_NAMES, VERSION_PROBES,
   isToolFile, classify, walk,
   renderMarkdown, renderSummary,
+  resolveProgram, shellForFile, shouldUseShell,
+  probeVersion,
 };
 
 if (isMain) {

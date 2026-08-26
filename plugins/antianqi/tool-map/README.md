@@ -72,9 +72,10 @@ The scanner writes (only):
 The scanner's only side effect beyond the catalog files is **subprocess execution** of 15 well-known CLI programs. This is a deliberate, declared behaviour — the catalog is more useful when the agent can see actual installed versions, not just file existence. To make the policy explicit:
 
 - **Whitelisted names only.** The exact set of programs that may be spawned is hardcoded as `VERSION_PROBES` in `scripts/scan.mjs` and the same set is exposed as `ALLOWED_PROBE_NAMES`. Any future caller that would probe a name not in the whitelist is rejected inside `probeVersion` (fail-closed). Adding a new probe requires editing `VERSION_PROBES`.
-- **Probes are `execFile`, not `shell`.** The scanner passes the program as a separate argv (`execFileP('node', ['node', '--version'], ...)`), so it cannot be tricked into running a different program by a wrapper named `node` that contains shell metacharacters in its path.
+- **Probes are `execFile`, not `shell`, on every platform.** Each probe passes the program as a separate argv (`execFileP(cmd[0], cmd.slice(1), ...)`), so a same-named wrapper on `$PATH` cannot be tricked into running a different program by shell metacharacters in the path.
+- **One Windows-only exception: `.cmd` / `.bat` shims must go through `cmd.exe`.** Since the Node.js 21.7.3 fix for CVE-2024-27980, `execFile` refuses to spawn batch files without `shell: true`; this Plugin requires Node >= 22, so the CVE fix is in force. The shell decision is **per-program**: `probeVersion` walks `$PATH` (and `$PATHEXT` on Windows) to find the actual file the OS will execute, then sets `shell: true` only for programs whose resolved path ends in `.cmd` or `.bat`. Native `.exe` binaries and programs whose resolved path is anything else (including `powershell.exe` with a `-Command` script passed as a separate argv) are spawned directly. POSIX always uses no shell. The full source of `shellForFile`, `resolveProgram`, and `shouldUseShell` is in `scripts/scan.mjs`; the regression test exercises both functions.
 - **5-second timeout, no exceptions.** Every probe runs under a hard 5 s `execFile` timeout and any error (timeout, ENOENT, non-zero exit) is swallowed. A wrapper that hangs longer than 5 s is omitted from the `core` versions table; nothing else is affected.
-- **No arguments beyond `--version`** (or the single read-only `pwsh -NoProfile -Command $PSVersionTable.PSVersion.ToString()` for PowerShell). The scanner never passes user input as a CLI argument.
+- **No arguments beyond `--version`** (or the single read-only `powershell -NoProfile -Command $PSVersionTable.PSVersion.ToString()` for PowerShell). The scanner never passes user input as a CLI argument.
 
 Review your `$PATH` and any same-named wrappers in the well-known roots before installing this Plugin if you consider arbitrary command execution a concern. The full source of `probeVersion` and `VERSION_PROBES` is in `scripts/scan.mjs`.
 
@@ -118,16 +119,27 @@ $ node --test test/tool-map.test.mjs
 > smoke.mjs exits 0 against the plugin source tree (~35ms)
 > atomicWriteBundle rolls back when a mid-bundle rename fails (~10ms)
 > atomicWriteBundle is idempotent on the happy path (no residue, all 3 present) (~5ms)
+> atomicWriteBundle rolls back when a backup-phase rename fails (early name) (~40ms)
+> atomicWriteBundle rolls back when a backup-phase rename fails (later name) (~40ms)
+> atomicWriteBundle rolls back brand-new files that were partially installed (~35ms)
+> atomicWriteBundle happy path: previously-absent targets are created, no residue (~3ms)
+> atomicWriteBundle happy path: mix of existing and absent targets (~3ms)
 > ALLOWED_PROBE_NAMES is exactly the 15 declared names (<1ms)
+> shellForFile is pure: false on POSIX regardless of file type (<1ms)
+> shellForFile classifies Windows paths by extension (<1ms)
+> resolveProgram returns null for unknown names (~6ms)
+> resolveProgram finds node on the current PATH (~3ms)
+> shouldUseShell agrees with shellForFile for every whitelisted probe that is installed (~115ms)
+> probeVersion refuses non-whitelisted names (no shell, no spawn) (<1ms)
 > POSIX: a .sh file without the execute bit is not reported as a tool (<1ms)
 > POSIX: case-distinct tool names on case-sensitive filesystems are kept distinct (<1ms)
 > XDG_DATA_HOME is honoured when PLUGIN_DATA is unset (~700ms)
-tests 12
-pass 12
+tests 23
+pass 23
 fail 0
 ```
 
-`npm run check` runs `npm run validate` (the Plugin shape validator, hardened to the rules proposed in PR #4) and then `npm test` (which discovers `test/tool-map.test.mjs` via the `node --test` runner). The bundled `scripts/smoke.mjs` exits 0 against the Plugin's own source tree, confirming no hardcoded paths, no literal credentials, and no leftover scaffold markers. The 12-case test suite covers the v0.2.0 review blockers end-to-end: bundle-level atomicity (with a deterministic mid-bundle failure path), the 15-name whitelist, `XDG_DATA_HOME` precedence, execute-bit filtering, and case-sensitive dedup.
+`npm run check` runs `npm run validate` (the Plugin shape validator, hardened to the rules proposed in PR #4) and then `npm test` (which discovers `test/tool-map.test.mjs` via the `node --test` runner). The bundled `scripts/smoke.mjs` exits 0 against the Plugin's own source tree, confirming no hardcoded paths, no literal credentials, and no leftover scaffold markers. The 23-case test suite covers the v0.2.0 review blockers end-to-end: bundle-level atomicity (with a deterministic mid-bundle failure path covering Phase 1 early, Phase 1 later, Phase 3 brand-new partial install, and happy paths), the 15-name whitelist, the per-program shell decision (`shellForFile` pure, `resolveProgram` PATH/PATHEXT, `shouldUseShell` integration), `XDG_DATA_HOME` precedence, execute-bit filtering, and case-sensitive dedup.
 
 ## Links
 

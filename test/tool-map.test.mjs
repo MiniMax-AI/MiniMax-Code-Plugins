@@ -389,6 +389,128 @@ test('ALLOWED_PROBE_NAMES is exactly the 15 declared names', async () => {
   assert.ok(!ALLOWED_PROBE_NAMES.has('rm'));
 });
 
+// ---------------------------------------------------------------------------
+// PR #5 review round 3: per-program shell decision
+// The reviewer pointed out that scripts/scan.mjs unconditionally set
+// `shell: IS_WIN` for every probe while README.md and SKILL.md claimed
+// "probes are execFile, not shell" as a security property. The fix is to
+// route only `.cmd` / `.bat` shims through cmd.exe (CVE-2024-27980; Node.js
+// 21.7.3+ refuses to spawn batch files without `shell: true`). The tests
+// below pin that contract: `shellForFile` is pure, `resolveProgram` walks
+// PATH and PATHEXT, and `shouldUseShell` agrees with the resolved file
+// type for every whitelisted name that is actually installed.
+// ---------------------------------------------------------------------------
+
+test('shellForFile is pure: false on POSIX regardless of file type', async () => {
+  const scanUrl = pathToFileURL(SCAN).href;
+  const { shellForFile } = await import(scanUrl);
+  if (process.platform === 'win32') return; // POSIX-only check
+  // On POSIX, the function must never return true: there is no `.cmd` /
+  // `.bat` distinction in the argv, the OS handles shebangs natively, and
+  // all 15 whitelisted probes have safe argv shapes.
+  for (const p of [
+    null, '', '/usr/bin/node', '/usr/local/bin/foo.cmd', '/tmp/x.bat',
+    'C:\\node.exe', 'C:\\foo.cmd', '/bin/sh',
+  ]) {
+    assert.equal(shellForFile(p), false, `shellForFile(${JSON.stringify(p)}) must be false on POSIX`);
+  }
+});
+
+test('shellForFile classifies Windows paths by extension', async () => {
+  const scanUrl = pathToFileURL(SCAN).href;
+  const { shellForFile } = await import(scanUrl);
+  if (process.platform !== 'win32') return; // Windows-only check
+  // null / empty: cannot spawn, fall through to false (let execFile surface ENOENT).
+  assert.equal(shellForFile(null), false);
+  assert.equal(shellForFile(''), false);
+  // Native .exe: spawn directly, no shell.
+  assert.equal(shellForFile('C:\\Program Files\\nodejs\\node.exe'), false);
+  assert.equal(shellForFile('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'), false);
+  // .cmd and .bat: must route through cmd.exe (CVE-2024-27980).
+  assert.equal(shellForFile('C:\\nodejs\\npm.cmd'), true);
+  assert.equal(shellForFile('D:\\openclaw\\npm\\pnpm.cmd'), true);
+  assert.equal(shellForFile('C:\\Tools\\run.bat'), true);
+  // Case-insensitive: NODE.CMD, NPM.BAT, etc.
+  assert.equal(shellForFile('C:\\Tools\\FOO.CMD'), true);
+  assert.equal(shellForFile('C:\\Tools\\FOO.BAT'), true);
+  // .ps1, .vbs, .com: not in the CVE-2024-27980 set, no shell required
+  // (none of the 15 whitelisted probes resolve to one of these, but the
+  // helper must still not classify them as needing a shell).
+  assert.equal(shellForFile('C:\\Tools\\script.ps1'), false);
+  assert.equal(shellForFile('C:\\Tools\\script.vbs'), false);
+  assert.equal(shellForFile('C:\\Tools\\tool.com'), false);
+});
+
+test('resolveProgram returns null for unknown names', async () => {
+  const scanUrl = pathToFileURL(SCAN).href;
+  const { resolveProgram } = await import(scanUrl);
+  // The whitelist is what gates probeVersion; resolveProgram itself just
+  // walks PATH. For a name that is definitely not on PATH (random hex),
+  // it must return null rather than throw.
+  const bogus = `definitely-not-a-real-program-${Math.random().toString(16).slice(2)}`;
+  assert.equal(resolveProgram(bogus), null);
+});
+
+test('resolveProgram finds node on the current PATH', async () => {
+  const scanUrl = pathToFileURL(SCAN).href;
+  const { resolveProgram } = await import(scanUrl);
+  // `node` is the runtime that runs this test, so it is guaranteed to be
+  // on PATH at the time of the test. On Windows it resolves to node.exe;
+  // on POSIX it resolves to the node binary the test runner used.
+  const r = resolveProgram('node');
+  assert.ok(r && typeof r === 'string', `resolveProgram('node') returned ${JSON.stringify(r)}`);
+  if (process.platform === 'win32') {
+    assert.match(r, /node\.exe$/i, `node should resolve to node.exe, got ${r}`);
+  } else {
+    // On POSIX the binary is just `node` in some bin dir.
+    assert.ok(r.endsWith('node') || r.endsWith('node.exe'),
+      `node should resolve to a 'node' path, got ${r}`);
+  }
+});
+
+test('shouldUseShell agrees with shellForFile for every whitelisted probe that is installed', async () => {
+  const scanUrl = pathToFileURL(SCAN).href;
+  const { VERSION_PROBES, resolveProgram, shouldUseShell, shellForFile } = await import(scanUrl);
+  for (const [name] of VERSION_PROBES) {
+    const resolved = resolveProgram(name);
+    if (!resolved) continue; // not installed in this environment; skip
+    // The two helpers must agree exactly for every actually-resolved name.
+    // This is the per-program shell decision the reviewer asked for.
+    assert.equal(
+      shouldUseShell(name), shellForFile(resolved),
+      `shouldUseShell(${name}) disagreed with shellForFile(${resolved}); ` +
+      `got ${shouldUseShell(name)} vs ${shellForFile(resolved)}`,
+    );
+    if (process.platform === 'win32') {
+      const lower = resolved.toLowerCase();
+      if (lower.endsWith('.cmd') || lower.endsWith('.bat')) {
+        assert.equal(shouldUseShell(name), true,
+          `${name} resolves to ${resolved}, a batch file, so shell must be true`);
+      } else {
+        assert.equal(shouldUseShell(name), false,
+          `${name} resolves to ${resolved}, a non-batch file, so shell must be false`);
+      }
+    } else {
+      assert.equal(shouldUseShell(name), false,
+        `${name} on POSIX must never use a shell`);
+    }
+  }
+});
+
+test('probeVersion refuses non-whitelisted names (no shell, no spawn)', async () => {
+  const scanUrl = pathToFileURL(SCAN).href;
+  const { probeVersion, ALLOWED_PROBE_NAMES } = await import(scanUrl);
+  // `probeVersion` is the function the review asked us to harden. Even
+  // when called directly with a name that is on PATH, a non-whitelisted
+  // name must return null without spawning anything. We pick `node`
+  // because it is on PATH in the test env and is NOT in the whitelist
+  // for this assertion (the whitelist is the 15 names; `node` IS one of
+  // them, so the second branch verifies the whitelist short-circuit by
+  // passing a definitely-not-whitelisted name like `__no_such_probe__`).
+  assert.equal(ALLOWED_PROBE_NAMES.has('node'), true, 'node is whitelisted');
+  assert.equal(await probeVersion(['__no_such_probe__', '--version']), null);
+});
+
 test('POSIX: a .sh file without the execute bit is not reported as a tool', () => {
   if (process.platform === 'win32') return; // Windows ignores the execute bit
   const root = mkdtempSync(join(tmpdir(), 'tool-map-xbit-'));
