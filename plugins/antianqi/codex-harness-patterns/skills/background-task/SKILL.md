@@ -1,129 +1,243 @@
 ---
 name: background-task
 description: |
-  Decide when to put a long-running shell command in the background and how to refer to it later.
-  USE WHEN: a command is expected to take > 30 seconds, the user wants a long-running process to coexist with ongoing work, you are about to block the conversation for an unbounded time, user said "background it" / "后台" / "don't block" / "non-blocking" / "run in background".
+  Decide when to launch a long-running task in the background and how to refer to it later. Covers both the `task` tool (sub-agent background via `run_in_background: true`) and the `bash` tool (shell background via `run_in_background: true`).
+  USE WHEN: a sub-agent is expected to take > 1 minute, a shell command is expected to take > 30 seconds, the user wants a long-running process to coexist with ongoing work, you are about to block the conversation for an unbounded time, user said "background it" / "后台" / "don't block" / "non-blocking" / "run in background".
   TRIGGER PHRASES: "background", "background it", "后台", "don't block", "non-blocking", "in the background", "run async", "long-running", "put it in the background".
-  SKIP WHEN: the command finishes in <5 seconds, the user explicitly wants to wait for output, the command is interactive (REPL, vim, ssh).
+  SKIP WHEN: the sub-agent / command finishes in <5 seconds, the user explicitly wants to wait for output, the command is interactive (REPL, vim, ssh).
 license: Apache-2.0
-compatibility: Requires MiniMax Code with Agent Plugins 1.0 support. The example calls in this Skill are written in Codex-harness style (pseudocode) using `bash(task_name=..., run_in_background=true)`; MiniMax Code's tool surface may not expose these exact parameter names — adapt the call to the actual host API.
+compatibility: Targets MiniMax Code 0.2.4. Verified against the bundled `cli.js` schema. `task(...)` accepts `run_in_background: true` and returns a `task_id` for later `task_query` / `task_output` / `task_stop`. `bash(...)` accepts `run_in_background: true` and returns a job handle. The Codex-harness `bash(task_name=..., run_in_background=true, action="kill")` shape is **not** the mcode surface — mcode's `bash` has no `task_name` or `action` field; killing is via `task_stop(task_id=...)` for sub-agents and via the host's job-control API for shell jobs.
 metadata:
   author: antianqi
-  version: "0.1.2"
-  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/core/src/unified_exec/ and protocol::Op::CleanBackgroundTerminals (design principle only; the example parameter names are Codex-specific)
-  changes-from-v0.1.1: "Rewritten to be host-agnostic. The example calls are now pseudocode with an explicit mcode adaptation note. Removed `bash(action=\"kill\")` (mcode has no such sub-action); replaced with a generic 'stop it via the host's job-control API'."
+  version: "0.2.0"
+  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/core/src/unified_exec/ and protocol::Op::CleanBackgroundTerminals (design principle only; the mcode 0.2.4 surface is `task(run_in_background=true)` + `task_query` / `task_output` / `task_stop` for sub-agents, and `bash(run_in_background=true)` for shell jobs)
+  changes-from-v0.1.2: "Replaced the v0.1.2 'Codex-harness pseudocode + adapt the call' block with the actual mcode 0.2.4 surface. mcode `task` and `bash` both accept `run_in_background: true`; for sub-agents the returned handle is a `task_id` queried with `task_query` / `task_output` / `task_stop`. The Codex-harness `bash(task_name=..., action=\"kill\")` shape is removed because mcode's `bash` has neither `task_name` nor an `action` sub-action field (the validator in `cli.js:xza` only allows `command` / `timeout` / `run_in_background`). Killing a sub-agent uses `task_stop(task_id=...)`; killing a shell background job uses the host's own job-control API (the example now shows `Stop-Process -Id` on Windows and `kill -PID` on POSIX, both invoked through a foreground `bash` call rather than a fake `action=\"kill\"` field)."
 ---
 
 # Background Task
 
-When a shell command is expected to take more than ~30 seconds, the agent has two choices:
+When a task (a sub-agent invocation or a shell command) is expected to take
+more than ~30 seconds, the agent has two choices:
 
-1. **Block**: wait for the command to finish, holding the conversation hostage.
+1. **Block**: wait for the task to finish, holding the conversation hostage.
 2. **Background**: launch it, get a handle, continue working, and check on it later.
 
-This Skill is about **knowing when to choose (2)** and **how to record the handle** so
-the agent (or the user) can check on it later.
+This Skill is about **knowing when to choose (2)** and **how to record the
+handle** so the agent (or the user) can check on it later.
 
-> **mcode 适配**:本 Skill 的 example 调用用 Codex-harness 风格(`bash(task_name=...,
-> run_in_background=true, action="kill")`)作为**伪代码**。MiniMax Code 当前
-> host 工具的 `bash` 调用**不暴露** `task_name` / `run_in_background` /
-> `action="kill"` 这些 sub-action 参数。请**根据实际 host 工具改写**(例如:
-> 用 `Start-Process` / `nohup` / 系统的 job control 启动,然后在另一个 turn 重新
-> 调 `bash` 探查)。**不要把伪代码当真实调用复制**。
+## mcode 0.2.4 surface
+
+There are two background-capable tools on mcode 0.2.4, and the right one depends
+on whether the background work is a sub-agent or a shell command.
+
+### Sub-agent background: `task(run_in_background: true)` + `task_query` / `task_output` / `task_stop`
+
+The canonical `task` schema:
+
+```text
+task(
+  description:    string,            // 3-5 word label, required
+  prompt:         string,            // the brief, required
+  subagent_type:  "explore" | "worker" | "verifier",  // required
+  run_in_background?: boolean        // optional; true = async, false = sync (default)
+)
+```
+
+When `run_in_background: true`, mcode returns immediately with a `task_id`.
+The companion tools (also canonical in `cli.js`):
+
+| Tool | Purpose | Required fields |
+|---|---|---|
+| `task_query(task_id?, status?)` | List session tasks (omit `task_id`) or get one. | `task_id` for single fetch; `status` filter optional. |
+| `task_output(task_id, offset?)` | Read a task's output incrementally. | `task_id` (required); `offset` (optional, byte offset for long output). |
+| `task_stop(task_id, reason?)` | Request a background task to stop. | `task_id` (required); `reason` (optional, human-readable). |
+
+`run_in_background: false` (the default) blocks the calling turn until the
+sub-agent finishes and returns its final result.
+
+### Shell background: `bash(run_in_background: true)`
+
+The `bash` tool's canonical schema (from `cli.js:xza`):
+
+```text
+bash(
+  command:         string,    // required
+  timeout?:        number,    // optional, seconds
+  run_in_background?: boolean // optional; true = async, false = sync (default)
+)
+```
+
+When `run_in_background: true`, the `bash` call returns immediately with a
+job handle (mcode exposes a process id or job id that the host's job-control
+API can target). **There is no `task_name=` and no `action="kill"` field.**
+The Codex-harness shape `bash(task_name=..., run_in_background=true,
+action="kill")` is **not** the mcode surface — mcode's `bash` validator
+rejects any key outside `command` / `timeout` / `run_in_background`.
+
+Killing a shell background job: invoke the host's job-control API in a
+**foreground** `bash` call. Windows: `Stop-Process -Id <pid>`. POSIX:
+`kill <pid>`. The Skills do not pretend `bash(action="kill")` exists on
+mcode 0.2.4.
 
 ## When to use
 
 Activate when **any** of these is true:
 
-- A command is expected to take > 30 seconds (`cargo test`, `npm install`, `docker build`,
-  a long-running dev server, a large data download).
+- A sub-agent is expected to take > 1 minute (deep research, multi-file
+  refactor, anything you cannot predict the duration of).
+- A shell command is expected to take > 30 seconds (`cargo test`, `npm install`,
+  `docker build`, a long-running dev server, a large data download).
 - The user explicitly says "background" / "后台" / "non-blocking" / "in the background".
-- You need a long-running process to coexist with ongoing work (a dev server, a watch
-  script, a streaming pipeline).
-- You would otherwise block the conversation on a result the user can come back to
-  later.
+- You need a long-running process to coexist with ongoing work (a dev server, a
+  watch script, a streaming pipeline).
+- You would otherwise block the conversation on a result the user can come back
+  to later.
 
 ## When NOT to use
 
-- The command finishes in <5 seconds.
+- The task / command finishes in <5 seconds.
 - The user explicitly wants the output now (interactive REPL, vim, ssh, a build
   whose output the next step depends on).
 - The command is interactive (it expects a TTY or human input).
 
 ## Process
 
-1. **Estimate the duration**. If unsure, assume the worst case (> 30s). If a 2-second
-   result is fine, just run it blocking.
-2. **Choose a descriptive handle**. The agent (and the user) will need to recognise
-   it later in the conversation. `dev-server` is good. `task1` is bad.
-3. **Launch the background process using the host's job-control mechanism**:
-   - Codex-harness style (pseudocode, adapt to your host):
-     `bash(task_name="dev-server", run_in_background=true, command="npm run dev")`
-   - MiniMax Code style (use whatever the host actually supports; e.g. `Start-Process`
-     on Windows, `nohup` or `&` + `disown` on POSIX, or simply record the PID and
-     re-`bash` against it on a later turn).
-4. **Record the handle**. In a multi-step task, store the handle (PID, name, log
-   path) somewhere persistent — in a `world-state-tracking` file, a `session-handoff`
-   note, or in the running brief.
-5. **Continue working**. The conversation does not block on the background process.
-6. **When the result matters**, check on the process. Read its log, poll its status,
-   or kill it if it is no longer needed (using the host's stop API, **not** a
-   `bash(action="kill")` that does not exist on MiniMax Code).
+1. **Estimate the duration**. If unsure, assume the worst case. The mcode
+   `task` tool description (`run_in_background`) says "Set to true when the
+   sub-task is open-ended or expected to take more than ~1 minute (deep
+   research, multi-step investigation, large refactors, anything you cannot
+   predict the duration of), so you can keep working and the result is
+   reported back automatically when it completes. Leave false (the default)
+   for short, well-scoped sub-tasks whose result you need right now to
+   continue. When in doubt for a long or uncertain task, prefer true."
+2. **Choose a descriptive handle**. The agent (and the user) will need to
+   recognise it later. `dev-server` is good. `task1` is bad.
+3. **Launch in the background using the matching tool**:
+   - Sub-agent: `task(..., run_in_background: true)`; mcode returns a
+     `task_id`. Store it.
+   - Shell: `bash(command: "npm run dev", run_in_background: true)`; mcode
+     returns a job id. Store it.
+4. **Record the handle**. In a multi-step task, store the handle (task_id,
+   job id, log path) somewhere persistent — in a `world-state-tracking` file,
+   a `session-handoff` note, or in the running brief.
+5. **Continue working**. The conversation does not block on the background
+   task.
+6. **When the result matters**:
+   - Sub-agent: `task_query(task_id)` for status, `task_output(task_id)` for
+     output, `task_stop(task_id)` to stop.
+   - Shell: foreground `bash` call against the host's job-control API
+     (`Get-Process -Id <pid>` / `Stop-Process -Id <pid>` on Windows;
+     `ps -p <pid>` / `kill <pid>` on POSIX). Read the log file or stdout
+     from the original launch.
 
 ## Output contract
 
 After activating this Skill, the agent's next message MUST include:
 
-- The chosen **task name / handle**.
+- The chosen **handle** (`task_id` or job id) and the **tool** that produced it
+  (`task` / `bash`).
 - The **expected duration estimate**.
 - The **log or status path** so a later turn can check on it.
 - Whether the agent is **continuing** or **blocking** on the result.
 
 ## Common pitfalls
 
-- **Launching and forgetting the handle** — the user comes back in an hour, the
-  agent has no idea which process was which. Always record the handle.
+- **Launching and forgetting the handle** — the user comes back in an hour,
+  the agent has no idea which process was which. Always record the handle.
 - **Re-using a generic name** — `task1` collides; `cargo-test` does not.
-- **Polling too eagerly** — a 5-minute build polled every 5 seconds wastes context.
-  Poll on a sensible cadence (every minute for builds, every 5 minutes for downloads).
-- **Killing without saving output** — read the log first, then kill, otherwise the
-  result is lost.
-- **Assuming the host supports `task_name` / `run_in_background` / `action="kill"`** —
-  those are Codex-specific parameter names. MiniMax Code's `bash` tool may not
-  expose them. Use the host's actual job-control mechanism.
+- **Polling too eagerly** — a 5-minute build polled every 5 seconds wastes
+  context. Poll on a sensible cadence (every minute for builds, every 5 minutes
+  for downloads).
+- **Killing without saving output** — read the log first, then kill, otherwise
+  the result is lost.
+- **Using Codex-only `bash(task_name=..., action="kill")` syntax** — mcode
+  0.2.4's `bash` does not have those fields. Use `task_stop(task_id=...)` for
+  sub-agents and a foreground `bash` call to the host's job-control API for
+  shell jobs.
+- **Passing `model_config_id` in a background `task()` call** — the `task`
+  tool does not accept it (see `model-router`). The model is the session's
+  current model.
 
 ## Example
 
-The example below is **Codex-harness style pseudocode** for clarity. On MiniMax Code,
-the `bash` tool's parameter names for background execution are **not exposed**;
-adapt the call to whatever the host actually supports (e.g. `Start-Process`,
-`nohup &`, PID polling, etc.).
+The example below is **MiniMax Code 0.2.4 `task` / `bash` tool syntax**. Two
+background launches are demonstrated.
+
+### Sub-agent background
 
 ```text
-# Codex-harness style (pseudocode for design clarity):
-> bash(
-    task_name="dev-server",
+# Launch a long-running research sub-agent in the background.
+# mcode returns a task_id we can later query / read / stop.
+
+> task(
+    description="Research migration paths",
+    subagent_type="explore",
     run_in_background=true,
-    command="npm run dev"
+    prompt="""
+      Investigate migration paths from <lib-A> to <lib-B> in the
+      <repo> codebase. Produce a markdown report at
+      <repo>/notes/migration.md comparing the top 3 candidates
+      with code samples, risk notes, and a recommended path.
+      This may take 10+ minutes; you can take your time.
+    """
   )
+# Returns immediately with:
+#   { task_id: "tsk_01HXYZ...", status: "queued" }
 
-# MiniMax Code style (fill in the real host API):
-# Option A: launch detached, then poll
-$proc = Start-Process -FilePath "npm" -ArgumentList "run","dev" -PassThru -NoNewWindow
-# record $proc.Id somewhere
-# later: Get-Process -Id $proc.Id | ...
+# Later, check status:
+> task_query(task_id="tsk_01HXYZ...")
+#   { task_id: "tsk_01HXYZ...", status: "running", ... }
 
-# Option B: simply run blocking, then do the next thing in the SAME turn
-# (the agent's host runs them sequentially anyway)
+# Read partial output (the report grows as the sub-agent works):
+> task_output(task_id="tsk_01HXYZ...", offset=0)
+#   <partial markdown content>
+#   next_offset: 12345
+
+# Stop it if the user changed their mind:
+> task_stop(task_id="tsk_01HXYZ...", reason="user changed scope")
+#   { task_id: "tsk_01HXYZ...", status: "stopping" }
 ```
 
-The **decision** (background, with a recorded handle) is the same; the **execution
-mechanism** depends on the host.
+### Shell background
+
+```text
+# Launch a long-running dev server in the background.
+# mcode returns a job id we can later target via the host's job-control API.
+
+> bash(
+    command="npm run dev",
+    run_in_background=true
+  )
+# Returns immediately with:
+#   { job_id: "job_01ABC...", pid: 12345, log: "<plugin-data>/logs/job_01ABC.log" }
+
+# Later, check whether it is still alive (foreground bash call):
+> bash(
+    command="Get-Process -Id 12345 | Select-Object Id,ProcessName,StartTime"
+  )
+# (or on POSIX: `ps -p 12345 -o pid,etime,cmd`)
+
+# Stop it when done (foreground bash call to the host's job-control API):
+> bash(
+    command="Stop-Process -Id 12345"
+  )
+# (or on POSIX: `kill 12345`)
+```
+
+The **decision** (background, with a recorded handle) is the same; the
+**execution mechanism** depends on whether the background work is a sub-agent
+(use `task` + `task_query` / `task_output` / `task_stop`) or a shell command
+(use `bash(run_in_background: true)` + the host's job-control API).
 
 ## Verification checklist
 
 - [ ] Did you estimate the duration before choosing background vs blocking?
-- [ ] Did you choose a **descriptive** name (not `task1`)?
-- [ ] Did you record the handle (PID / log path) in a persistent place?
-- [ ] Did you tell the user "I launched X in the background, here's the log path"?
-- [ ] Did you avoid using Codex-only `bash` parameter names verbatim?
+- [ ] Did you choose a **descriptive** handle (not `task1`)?
+- [ ] Did you use the right tool — `task` for sub-agents, `bash` for shell
+      commands?
+- [ ] Did you set `run_in_background: true` (not Codex's `bash(task_name=...)`)?
+- [ ] Did you record the handle (task_id / job id / log path) in a persistent place?
+- [ ] Did you tell the user "I launched X in the background, here's the handle and
+      log path"?
+- [ ] If you stopped it, did you use `task_stop(task_id=...)` (sub-agent) or
+      `Stop-Process` / `kill` via a foreground `bash` call (shell)?

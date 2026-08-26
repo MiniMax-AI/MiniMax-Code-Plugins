@@ -8,9 +8,70 @@ original goal, paying main-model prices for cheap-model work, losing track of wh
 sub-agent is doing what, failing on transient errors without a budget, reading streaming
 output without filling context, or losing work at session end.
 
-## v1.0.3 changelog (this release)
+## v1.0.4 changelog (this release)
 
-> **类型**:patch · **Skill 主体修正** · 4 个 Skill 的 mcode 适配注释从"伪代码"升级到 mcode 实际 `task(agent_name=...)` 语法;修复 v1.0.3.1 草稿的 frontmatter 结构损坏
+> **类型**:patch · **Skill 主体修正 (round 2)** · 5 个 Skill 按 mcode 0.2.4 真实 `task` / `bash` schema 重写;新增 23-Skill frontmatter 静态检查
+
+### Fixed (PR #18 reviewer #2 round 2)
+
+- `fork-context-decision` `0.2.0 → 0.3.0`:reviewer 提出的 6 点全部 close
+  - (1) 重复 frontmatter block(round 1 残留)→ 重新组装为单一 frontmatter
+  - (2) `history=N` PLACEHOLDER 移除 — mcode 0.2.4 `task` 工具**没有** context-sharing 参数;3 fork 模式(`all` / `N` / `none`)现在通过在 `prompt` 字段内联多少 prior turns 来表达
+  - (3) `agent_name=` 换成 canonical `subagent_type=`(`cli.js:B6c` 严格 validator 只接受 `subagent_type`)
+  - (4) `brief=` 换成 canonical `prompt=`
+  - (5) `mavis` 从 subagent 列表移除(它是 root agent,没有 `agent.md` manifest;不能用作 `subagent_type`)
+- `delegate-with-context` `1.1.0 → 1.2.0`:同上 4 个 API 修正;4-part 信封现在写进 `prompt` 字段(不再有 `brief=` 概念)
+- `parallel-fanout` `1.1.0 → 1.2.0`:同上;每个 sub-task 独立 `task()` 调用,host 的 `buffer-unordered` 默认 8
+- `model-router` `0.3.3 → 0.4.0`:**删除** v0.3.3 "MiniMax Code's `task` tool accepts `model_config_id` directly" 错误断言 — mcode 0.2.4 `task` 工具不接受任何 model 字段(`cli.js:B6c` 严格 validator);模型选择是 **session-level**;Skill 重新定位为 cheap/medium/main 思考框架 + spawn gate(不要为 cheap 任务 spawn sub-agent)
+- `background-task` `0.1.2 → 0.2.0`:重新组织为 mcode 0.2.4 的两层后端
+  - sub-agent 后台:`task(..., run_in_background: true)` 返回 `task_id`;管理用 `task_query(task_id)` / `task_output(task_id, offset?)` / `task_stop(task_id, reason?)`(`cli.js` canonical schema)
+  - shell 后台:`bash(command, run_in_background: true)` — mcode `bash` 工具的真实 schema(`cli.js:xza`):`command` / `timeout?` / `run_in_background?`;**没有** `task_name` / `action="kill"`(这俩是 Codex 专属,reviewer 反复要求去掉)
+  - 杀掉 shell 后台任务用 host job-control API(Windows `Stop-Process -Id`,POSIX `kill <pid>`)走**foreground** `bash` 调用,不假装 `bash(action="kill")` 存在
+
+### Added (PR #18 reviewer #2 round 2 point 6)
+
+- **23-Skill frontmatter 静态检查**:`test/codex-harness-patterns.test.mjs`(被 `node --test` 自动发现)
+  - 23 个 `SKILL.md` 全部要求**单一** frontmatter block(开头 `---\n`,闭合 `\n---\n`,中间无 stray `---`)
+  - frontmatter 解析为结构化对象,verify 必填字段:`name`(=目录名)/ `description`(≤1024 字符)/ `license=Apache-2.0` / `metadata.author=antianqi` / `metadata.version` 非空
+  - body 顶层无 `author:` / `version:` 重复(避免 round 1 reviewer 提到的"重复 frontmatter block"再发生)
+  - **mcode 0.2.4 schema pinning**:对 5 个 task-touching Skills,所有 code block 里的 `task(...)` / `bash(...)` 调用**必须**用 canonical 参数(`description` / `prompt` / `subagent_type` / `run_in_background` / `command` / `timeout`),禁止 `agent_name=` / `brief=` / `history=` / `model_config_id=` / `bash(task_name=...)` / `bash(action="kill")`(reviewer 提的全部 6 个 placeholder 都被 fail-closed)
+  - `background-task` 必须显式 demo `task_query` / `task_output` / `task_stop`(不然跑不动 `run_in_background=true` 返回的 task_id)
+  - 跑分:`node --test test/codex-harness-patterns.test.mjs` → **27 pass, 0 fail**
+
+### 验证方法(可复现)
+
+```bash
+# 把 mcode 0.2.4 真实 schema 拿出来对照
+grep -A2 'name:"task",executionMode' \
+  C:/Users/Administrator/.minimax-code/node_modules/@minimax-ai/code/cli.js
+#  → 4 个 param: description / prompt / subagent_type / run_in_background
+
+# 跑 frontmatter + schema pinning 测试
+node --test test/codex-harness-patterns.test.mjs
+#  → 27 pass, 0 fail
+
+# 跑 plugin validator(需要 core.autocrlf=false 才能跑过 Windows CRLF)
+node scripts/validate.mjs
+#  → OK plugin antianqi/codex-harness-patterns
+```
+
+### Compliance
+
+- 4 段独立披露(no credentials / no network / no telemetry / no third-party services)— 不变
+- Skill-only plugin(无 `mcp.json` / 无 `package.json` / 0 npm 依赖)— 不变
+- 跨平台 path 解析 — 不变,这次 review 没有触发新硬编码
+- 23 个 Skill 的 frontmatter 唯一性(无重复 `author:` / `version:` block)— 现在由 `test/codex-harness-patterns.test.mjs` 守门
+
+### Not changed
+
+- 23 skill 整体布局与触发条件
+- 4 段独立披露格式
+- License
+- 19 个非 task-touching Skills 的 body(v1.0.4 没改 `completion-audit` / `context-pressure-compact` / `error-recovery-strategy` / `goal-persistence` / `goal-token-budgeting` / `long-term-memory` / `plan-stream-emit` / `plugin-author-helper` / `retry-with-backoff` / `review-mode` / `session-branch-fork` / `session-handoff` / `skill-auto-select` / `streaming-output-reader` / `subagent-family-tracking` / `tool-discovery-pattern` / `tool-output-budget` / `world-state-tracking`)
+
+## v1.0.3 changelog (previous)
+
+> **类型**:patch · **Skill 主体修正 (round 1)** · 4 个 Skill 的 mcode 适配注释从"伪代码"升级到 mcode 实际 `task(agent_name=...)` 语法;修复 v1.0.3.1 草稿的 frontmatter 结构损坏
 
 ### Fixed
 
@@ -512,16 +573,16 @@ Eighteen Skills, all Skill-only (no MCP server, no network access):
 |---|---|---|---|
 | 1 | `tool-output-budget` | A tool returns output you suspect is too large to keep verbatim (large logs, JSON, fetched HTML, minified files). | v0.1.0 → 0.1.1 |
 | 2 | `context-pressure-compact` | The task is multi-step and long; the running `todowrite` exceeds 5 items, or the agent has been reasoning for many turns. | v0.1.0 → v1.0.1 |
-| 3 | `parallel-fanout` | The user task is clearly decomposable into 2+ independent sub-tasks (independent files, independent probes, independent analyses). | v0.1.0 → v1.1.0 |
+| 3 | `parallel-fanout` | The user task is clearly decomposable into 2+ independent sub-tasks (independent files, independent probes, independent analyses). | v0.1.0 → v1.1.0 → v1.2.0 |
 | 4 | `plan-stream-emit` | The user task is non-trivial and the user has not yet approved a plan; emit a structured plan before touching files. | v0.1.0 → 0.1.1 |
 | 5 | `review-mode` | A non-trivial sub-task has just finished and the work is about to be marked done; the user wants verification before relying on the result. | v0.2.0 → 0.2.1 |
-| 6 | `delegate-with-context` | About to call `task` to hand off a sub-task; the full conversation history is too large to forward and a minimal-context brief would do. | v0.2.0 → v1.1.0 |
+| 6 | `delegate-with-context` | About to call `task` to hand off a sub-task; the full conversation history is too large to forward and a minimal-context brief would do. | v0.2.0 → v1.1.0 → v1.2.0 |
 | 7 | `world-state-tracking` | The task is long enough that the agent has lost the thread at least once, or `context-pressure-compact` is about to be applied. | v0.2.0 → 0.2.1 |
-| 8 | `background-task` | A command is expected to take > 30 seconds, or the user wants a long-running process to coexist with ongoing work. | v0.2.0 → 0.1.1 |
+| 8 | `background-task` | A command is expected to take > 30 seconds, or the user wants a long-running process to coexist with ongoing work. | v0.2.0 → v0.1.2 → v0.2.0 |
 | 9 | `goal-persistence` | A non-trivial task has just been stated (set the goal); the user has redirected (update the goal); or a `context-pressure-compact` is about to be applied (alignment check). | v0.3.0 → v1.0.1 |
-| 10 | `model-router` | About to call `task` for a non-trivial sub-task, or about to spend the main model on work a cheaper model could do. | v0.3.0 → v0.3.3 |
+| 10 | `model-router` | About to call `task` for a non-trivial sub-task, or about to spend the main model on work a cheaper model could do. | v0.3.0 → v0.3.3 → v0.4.0 |
 | 11 | `completion-audit` | About to say "done" / "complete" / "ship it" on a non-trivial task. Derives requirements, identifies authoritative evidence, verifies each. | v0.4.0 → 0.4.1 |
-| 12 | `fork-context-decision` | About to call `task` to hand off a sub-task. Decides how much parent context to give the sub-agent via the `fork_turns` parameter. | v0.4.1 → v0.1.0 → v0.2.0 |
+| 12 | `fork-context-decision` | About to call `task` to hand off a sub-task. Decides how much parent context to give the sub-agent by inlining it into the `prompt`. | v0.4.1 → v0.1.0 → v0.2.0 → v0.3.0 |
 | 13 | `subagent-family-tracking` | Spawned a sub-agent (or have one running). Track the parent/child tree so you do not lose children, duplicate work, or leave anyone running. | v0.5.0 → 0.5.1 |
 | 14 | `goal-token-budgeting` | The user set an explicit `token_budget` on a goal. Track running usage against the budget and report the final number on completion. | v0.5.0 → 0.5.1 |
 | 15 | `error-recovery-strategy` | A tool call, sub-agent task, or external operation failed. Decide between retry / switch / fallback / ask-user / skip. | v0.6.0 → 0.6.1 |

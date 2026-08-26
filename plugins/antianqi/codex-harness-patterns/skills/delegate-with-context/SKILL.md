@@ -1,17 +1,17 @@
 ---
 name: delegate-with-context
 description: |
-  Hand off a sub-task to a sub-agent with a tight, complete brief — not the full conversation history. Apply the 4-part message envelope (Task name / Sender / Task / Payload + return path).
+  Hand off a sub-task to a sub-agent with a tight, complete brief in the `prompt` — not the full conversation history. Apply the 4-part message envelope (Task name / Sender / Task / Payload + return path).
   USE WHEN: about to call `task()` to hand off a sub-task, the full conversation history is too large to forward, a minimal-context brief would do, the previous sub-agent failed because the brief was incomplete.
   TRIGGER PHRASES: "delegate", "hand off", "sub-agent", "delegate this", "delegate to", "派给", "委派", "让 sub-agent 干", "把 ... 交给 ...".
   SKIP WHEN: the sub-task is so trivial a `read` will do, you are about to do the work yourself, the user explicitly wants you (not a sub-agent) to do it.
 license: Apache-2.0
-compatibility: Requires MiniMax Code with Agent Plugins 1.0 support. The example calls use MiniMax Code's `task(agent_name=..., brief=...)` syntax with the four built-in agents.
+compatibility: Targets MiniMax Code 0.2.4 `task` tool. Verified against the bundled `cli.js` schema (`description` / `prompt` / `subagent_type` / `run_in_background`). The 4-part envelope is host-neutral design; on mcode the envelope goes into the `prompt` string. `subagent_type` is the canonical mcode spelling (`explore` / `worker` / `verifier`); `mavis` is the root agent, not a sub-agent.
 metadata:
   author: antianqi
-  version: "1.1.0"
-  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/protocol/src/protocol.rs (InterAgentCommunication) and core/src/session/multi_agents.rs (CollabAgentSpawn); the 4-part envelope is the portable design; the agent_name spelling follows the actual mcode `task` tool schema
-  changes-from-v1.0.2: "Examples now use MiniMax Code's `task(agent_name=...)` syntax with the four built-in agents (`explore` / `worker` / `verifier` / `mavis`). The 4-part envelope design is unchanged. Codex-harness `subagent=...` / `task_name=...` form removed. The tool-set claim (`yaml 写死`) was removed because the on-disk agent profile layout is host implementation detail, not a Skill-level contract."
+  version: "1.2.0"
+  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/protocol/src/protocol.rs (InterAgentCommunication) and core/src/session/multi_agents.rs (CollabAgentSpawn); the 4-part envelope is the portable design; on mcode the envelope fills the `prompt` field
+  changes-from-v1.1.0: "Replaced `agent_name=` with the canonical mcode `subagent_type=`. Replaced `brief=` with `prompt=`. Dropped `mavis` from the sub-agent list (mavis is the root). The 4-part envelope is unchanged but now lives inside the `prompt` string, not in a separate `brief` parameter. The host-pseudocode 'Codex-harness style' block was removed; the mcode 0.2.4 schema is now the only one shown."
 ---
 
 # Delegate with Context
@@ -26,14 +26,25 @@ When handing off work to a sub-agent, the agent has two extremes:
 This Skill is about the **middle ground**: a tight, complete, structured brief that
 gives the sub-agent everything it needs and nothing it does not.
 
-> **mcode 适配**:本 Skill 的 example 用 MiniMax Code `task(agent_name=..., brief=...)` 语法。
-> `agent_name` 从 mcode 内置 4 agent 选:
-> - `explore` — 只读(纯调查)
-> - `worker` — 可改可写(实际干活)
-> - `verifier` — 有 bash 不能 write(可验证)
-> - `mavis` — root,full tool set
->
-> `agent_name` 决定了子 agent 的工具范围(由 host 路由),不靠 brief 约束。
+## mcode 0.2.4 surface
+
+The `task` tool on mcode 0.2.4:
+
+```text
+task(
+  description:    string,        // 3-5 word label, required
+  prompt:         string,        // the brief, required
+  subagent_type:  "explore" | "worker" | "verifier",  // required
+  run_in_background?: boolean    // optional
+)
+```
+
+The 4-part envelope is **the design**; on mcode it goes into the `prompt`
+string verbatim. `subagent_type` is the canonical spelling. `agent_name=` is
+accepted as a runtime alias but the Skills prefer the canonical form.
+
+`mavis` is the root agent (the calling session itself), not a sub-agent. It
+has no `agent.md` manifest and cannot be used as `subagent_type`.
 
 ## When to use
 
@@ -53,18 +64,21 @@ Activate when **any** of these is true:
 ## Process
 
 1. **Classify the sub-task** (see `fork-context-decision`):
-   - Self-contained: `none` (just the brief).
-   - Needs prior context: `N` or `all`.
-2. **Decide the sub-agent type** (explore / worker / verifier / mavis) based on what
-   the sub-task needs.
+   - Self-contained: `none` (just the brief in `prompt`).
+   - Needs prior context: `N` or `all` → inline the prior turns into `prompt` before
+     the brief.
+2. **Pick the sub-agent type** from `{explore, worker, verifier}` based on what
+   the sub-task needs (read / write+run / run-only).
 3. **Write the 4-part envelope** below. The envelope is the **portable** part of
    the brief — host `task` tools all accept a brief string.
-4. **Choose context level** (see `fork-context-decision`).
+4. **Choose context level** (see `fork-context-decision`) and inline the chosen
+   context into `prompt` before the envelope (or skip if `none`).
 5. **Document the return path** — how the sub-agent should hand the result back.
 
 ## The 4-part envelope
 
-Every sub-agent brief MUST have these 4 parts, in order:
+Every sub-agent brief (the body of the `prompt` field) MUST have these 4 parts,
+in order:
 
 ```text
 Task name: <one short line, e.g. "investigate-lint-flake">
@@ -96,55 +110,43 @@ sub-task and a confused one.
   short.
 - **Forwarding the full history when `none` would do** — costs tokens and
   dilutes focus. Decide first.
-- **Using Codex-only `subagent=...` / `task_name=...` parameter names** —
-  Codex-harness style. Adapt to the actual host API.
+- **Using `subagent_type="mavis"`** — mavis is the root agent, not a sub-agent.
+  Use `explore` / `worker` / `verifier`.
+- **Writing the envelope in a separate `brief=` field** — mcode 0.2.4 does not
+  expose a `brief` field. Put it in `prompt`.
 
 ## Example
 
-The example below is **Codex-harness style pseudocode** for clarity. On MiniMax
-Code, the `task` tool's parameter names are **not exposed** as shown; adapt to
-the actual host API.
+The example below is **MiniMax Code 0.2.4 `task` tool syntax**. The envelope
+is the `prompt` body; the call shape is the only one that exists on mcode 0.2.4.
 
 ```text
-# Codex-harness style (pseudocode for design clarity):
 > task(
-    subagent=explore,                  # ← replace with mcode's actual param
-    task_name="investigate-lint-flake",  # ← ditto
-    fork_turns=0,                        # ← ditto
-    brief="""
+    description="Investigate lint flake",
+    subagent_type="worker",   // or "explore" if read-only
+    prompt="""
       Task name: investigate-lint-flake
       Sender:    main agent
-      Task:     Investigate why test_lint.py flakes on Windows but not Linux.
-                Produce a 1-paragraph root-cause analysis.
+      Task:     Investigate why <project>/tests/test_lint.py flakes on
+                Windows but not Linux. Produce a 1-paragraph root-cause
+                analysis.
       Payload:  <project>/tests/test_lint.py (line 47 is the failure);
-                prior turn tool output: <paste here if relevant>
-      Return:   Append a section to /notes/lint.md titled
-                "## Windows flake root cause" with 1 paragraph.
-    """
-  )
-
-# MiniMax Code style (current `task` tool schema):
-> task(
-    agent_name="explore",
-    brief="""
-      Task name: investigate-lint-flake
-      Sender:    main agent
-      Task:     Investigate why test_lint.py flakes on Windows but not Linux.
-                Produce a 1-paragraph root-cause analysis.
-      Payload:  <project>/tests/test_lint.py (line 47 is the failure);
-                prior turn tool output: <paste here if relevant>
-      Return:   Append a section to /notes/lint.md titled
+                prior turn tool output (inlined above this prompt if
+                context level > none).
+      Return:   Append a section to <project>/notes/lint.md titled
                 "## Windows flake root cause" with 1 paragraph.
     """
   )
 ```
 
-The **envelope** is the design; the **call shape** is host-specific.
+The **envelope** is the design; on mcode the envelope fills the `prompt`
+field. There is no separate `brief` parameter.
 
 ## Verification checklist
 
 - [ ] Did you classify the sub-task (self-contained vs context-dependent)?
+- [ ] Did you pick `subagent_type` from `{explore, worker, verifier}`?
 - [ ] Did you write all 4 envelope parts (Task name / Sender / Task / Payload / Return)?
 - [ ] Did you specify the **return path** (where the result goes)?
 - [ ] Did you choose the right context level (via `fork-context-decision`)?
-- [ ] Did you adapt Codex-only parameter names to the actual host `task` API?
+- [ ] Did you put the envelope inside the `prompt` field (not a separate `brief`)?

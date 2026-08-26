@@ -1,6 +1,6 @@
 # codex-harness-patterns — Plugin 总览
 
-> 最后更新:2026-08-26 · **v1.0.3** · **23 Skills**
+> 最后更新:2026-08-26 · **v1.0.4** · **23 Skills**
 > Plugin 覆盖率 ~90%+
 
 ## 一句话
@@ -16,11 +16,11 @@
 | 1 | `plan-stream-emit` | 复杂任务 | 先出 `todowrite` 计划,等 ack 再动 |
 | 2 | `parallel-fanout` | 任务可拆 2+ 独立子任务 | 显式 spawn,opt-in,fan-out + 聚合 |
 | **子代理派发** | | | |
-| 3 | `delegate-with-context` | 调 `task` 派发子 agent | 写最小简报,显式 fork_turns,消息信封 |
-| 4 | `fork-context-decision` | 调 `task` 派发 | 选 `all`/`N`/`none` 给子 agent 多少 context |
+| 3 | `delegate-with-context` | 调 `task` 派发子 agent | 4-part 信封写进 `prompt`,`subagent_type` 三选一 |
+| 4 | `fork-context-decision` | 调 `task` 派发 | 选 `all`/`N`/`none`,把对应内容内联到 `prompt` |
 | 5 | `subagent-family-tracking` | 派发了 sub-agent | 跟踪父子线程树 Open/Closed 状态 |
 | **执行与状态** | | | |
-| 6 | `background-task` | 命令预期 > 30s | 后台化,带 task_name,不阻塞 |
+| 6 | `background-task` | 命令预期 > 30s | `task(run_in_background)` + `task_query`/`task_output`/`task_stop`,或 `bash(run_in_background)` |
 | 7 | `streaming-output-reader` | 长流式输出 | bounded chunk + summary,最多 3 次读 |
 | 8 | `tool-output-budget` | 工具输出过大 | token-aware head/tail/marker 截断 |
 | 9 | `world-state-tracking` | 任务长到丢线索 | 持久化 world state 文件,挺过 compact |
@@ -28,7 +28,7 @@
 | **目标与成本** | | | |
 | 11 | `goal-persistence` | 非平凡任务开始 | 设 goal + drift-check + 跟到 compact |
 | 12 | `goal-token-budgeting` | 设了 token_budget | 50%/80%/100% 报告,跑超就停 |
-| 13 | `model-router` | 子任务 / 重复任务 | 显式分 cheap/medium/main + model_config_id |
+| 13 | `model-router` | 子任务 / 重复任务 | cheap/medium/main 思考框架 + session-level 路由 |
 | **质量保证** | | | |
 | 14 | `review-mode` | 子任务完成 | 切 critic,PASS / FIX / REDO 判决 |
 | 15 | `completion-audit` | 说 "done" 前 | 派生需求 + 找证据 + 逐项验 |

@@ -1,17 +1,17 @@
 ---
 name: parallel-fanout
 description: |
-  Decompose a task into 2+ truly independent sub-tasks and dispatch them concurrently. Pick whether to fan out explicitly, not by accident.
+  Decompose a task into 2+ truly independent sub-tasks and dispatch them concurrently via separate `task()` calls. Pick whether to fan out explicitly, not by accident.
   USE WHEN: the user task is clearly decomposable into 2+ independent sub-tasks (independent files, independent probes, independent analyses), you would otherwise serialize work that has no real dependency, user said "in parallel" / "并行" / "fan out" / "spawn agents" / "同时跑".
   TRIGGER PHRASES: "in parallel", "parallel", "fan out", "spawn agents", "并行", "同时", "concurrent", "subagents", "multi-agent", "同时跑几个".
   SKIP WHEN: sub-tasks have a hard data dependency (output of A is input of B), the user explicitly said "sequential" / "one at a time", there is only one sub-task.
 license: Apache-2.0
-compatibility: Requires MiniMax Code with Agent Plugins 1.0 support. The example calls use MiniMax Code's `task(agent_name=...)` syntax with the four built-in agents (`explore` / `worker` / `verifier` / `mavis`).
+compatibility: Targets MiniMax Code 0.2.4 `task` tool. Verified against the bundled `cli.js` schema. Each sub-task is a separate `task()` call with its own `description` / `prompt` / `subagent_type`. `subagent_type` is canonical (`explore` / `worker` / `verifier`); `mavis` is the root agent, not a sub-agent.
 metadata:
   author: antianqi
-  version: "1.1.0"
-  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/core/src/thread_manager.rs (design principle); the fan-out decision and wait-for-all aggregation are portable; agent_name values follow the actual mcode `task` tool schema
-  changes-from-v1.0.2: "Examples now use MiniMax Code's `task(agent_name=...)` syntax. Codex-harness `subagent=...` form removed. The earlier 'reads each agent's tool whitelist from a mcode host-internal config file' claim was dropped because the on-disk agent profile path is host implementation detail, not a Skill-level contract."
+  version: "1.2.0"
+  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/core/src/thread_manager.rs (design principle); the fan-out decision and wait-for-all aggregation are portable; on mcode each sub-task is a discrete `task()` call
+  changes-from-v1.1.0: "Replaced `agent_name=` with the canonical mcode `subagent_type=`. Replaced `brief=` with `prompt=`. Dropped `mavis` from the sub-agent list (mavis is the root). Dropped the Codex-harness pseudocode block; mcode 0.2.4 is the only shape shown. The 'concurrency cap' step now references mcode's own per-session buffer-unordered limit instead of a hypothetical host config."
 ---
 
 # Parallel Fanout
@@ -25,14 +25,27 @@ agent has two choices:
 This Skill is about **knowing when to choose (2)** and **how to dispatch + aggregate
 cleanly** so the user gets the parallel speedup without losing correctness.
 
-> **mcode 适配**:本 Skill 的 example 用 MiniMax Code `task(agent_name=...)` 语法。
-> `agent_name` 从 mcode 内置 4 agent 选:
-> - `explore` — 只读(只能 read/grep/glob/web_fetch),适合纯调查
-> - `worker` — 可改(read/write/edit/bash/todowrite),适合实施
-> - `verifier` — 有 bash 但**不能 write**,适合验证
-> - `mavis` — root,full tool set,适合跨 session 综合判断
->
-> `agent_name` 决定了子 agent 的工具范围(由 host 路由),不靠 brief 约束。
+## mcode 0.2.4 surface
+
+Each sub-task is a separate `task()` call:
+
+```text
+task(
+  description:    string,            // 3-5 word label, required
+  prompt:         string,            // the brief, required
+  subagent_type:  "explore" | "worker" | "verifier",  // required
+  run_in_background?: boolean        // optional; usually false for fan-out
+)
+```
+
+The agent dispatches all the calls in a single response; mcode executes them
+concurrently subject to the host's per-session buffer-unordered limit (8 by
+default in 0.2.4; check the runtime config if unsure). The agent then waits
+for all to complete before aggregating.
+
+`subagent_type` is the canonical mcode spelling. `agent_name=` is accepted as
+a runtime alias but the Skills prefer canonical. `mavis` is the root agent
+not a sub-agent; do not pass it as `subagent_type`.
 
 ## When to use
 
@@ -56,18 +69,19 @@ Activate when **any** of these is true:
 1. **Decompose explicitly**. Write the list of sub-tasks in the brief header before
    dispatching anything. "Sub-tasks: A, B, C" is the single most important line.
 2. **For each sub-task, decide context size** (see `fork-context-decision` Skill):
-   - Self-contained sub-task? `none` (just the brief).
-   - Needs prior context? `N` or `all`.
-3. **Check the host's concurrency cap**. Don't fan out 50 sub-tasks if the host
-   caps at 8. The agent should respect the host's buffer-unordered limit, not
-   assume unlimited concurrency.
-4. **Dispatch the batch**. The agent SHOULD wait for all to complete before
-   aggregating — partial results are usually not useful.
-5. **Aggregate per sub-task**. The aggregator MUST verify each sub-task's output
-   before declaring success (use `completion-audit`).
-6. **Surface the parallelism in the user-facing message**. "I dispatched 3 sub-agents
-   in parallel; here are their results." The user should know fan-out actually
-   happened (vs serial).
+   - Self-contained sub-task? `none` (just the brief in `prompt`).
+   - Needs prior context? `N` or `all` → inline the prior content into `prompt`.
+3. **Check mcode's per-session buffer-unordered limit**. Default in 0.2.4 is 8
+   concurrent `task` calls. If you have more sub-tasks, the host will queue or
+   fail — split the batch or use `run_in_background: true` and poll
+   `task_output` later.
+4. **Dispatch the batch** in a single response. mcode runs them concurrently
+   subject to the buffer-unordered limit.
+5. **Wait for all to complete**. The aggregator MUST verify each sub-task's
+   output before declaring success (use `completion-audit`).
+6. **Surface the parallelism in the user-facing message**. "I dispatched 3
+   sub-agents in parallel; here are their results." The user should know
+   fan-out actually happened (vs serial).
 
 ## Output contract
 
@@ -84,45 +98,70 @@ After activating this Skill, the agent's next message MUST include:
   sub-tasks are easier to do serially, do them serially.
 - **Missing the data dependency** — the most common bug. Always check: does
   sub-task B actually need sub-task A's output? If yes, serialize.
-- **Hitting the host's concurrency cap silently** — the host will queue or fail.
-  Check the cap first.
+- **Hitting mcode's buffer-unordered limit silently** — the host will queue or
+  fail. Check the limit first; if you have more than 8, run them in waves.
 - **Aggregating without verification** — one sub-task may have silently failed.
   Always read each output.
-- **Using Codex-only `subagent=...` / `fork_turns=...` parameter names** — those
-  are Codex-specific. Adapt to the actual host.
+- **Using `subagent_type="mavis"`** — mavis is the root, not a sub-agent.
+  Use `explore` / `worker` / `verifier`.
+- **Writing the sub-task brief in a separate `brief=` field** — mcode 0.2.4
+  has no `brief` field. The brief goes in `prompt`.
 
 ## Example
 
-The example below uses **MiniMax Code `task` tool syntax** with the four built-in
-agents. If your host uses different parameter names, adapt the call shape but
-preserve the fan-out decision (3 sub-tasks, `none` context, wait-for-all).
+The example below is **MiniMax Code 0.2.4 `task` tool syntax**. The fan-out
+is 3 sub-tasks, all `none` context, all dispatched in one response, mcode
+runs them concurrently.
 
 ```text
-# MiniMax Code style (current `task` tool schema):
-Sub-tasks: A, B, C
-Concurrency cap: 8 (from host config)
+# Sub-tasks: A, B, C
+# Concurrency cap: 8 (mcode 0.2.4 default)
+# Context level: none (all sub-tasks are self-contained)
+# Aggregation: read each output, run completion-audit, then summarize
 
-> task(agent_name="explore", brief="A: look up X in repo 1")
-> task(agent_name="explore", brief="B: look up Y in repo 2")
-> task(agent_name="explore", brief="C: look up Z in repo 3")
+> task(
+    description="Look up X in repo 1",
+    subagent_type="explore",
+    prompt="""
+      Task name: lookup-X-repo1
+      Task:     Find every file in <repo1> that imports `X`.
+      Return:   List of <repo1>/<path> files, one per line.
+    """
+  )
+
+> task(
+    description="Look up Y in repo 2",
+    subagent_type="explore",
+    prompt="""
+      Task name: lookup-Y-repo2
+      Task:     Find every file in <repo2> that imports `Y`.
+      Return:   List of <repo2>/<path> files, one per line.
+    """
+  )
+
+> task(
+    description="Look up Z in repo 3",
+    subagent_type="explore",
+    prompt="""
+      Task name: lookup-Z-repo3
+      Task:     Find every file in <repo3> that imports `Z`.
+      Return:   List of <repo3>/<path> files, one per line.
+    """
+  )
 
 # (Agent waits for all three.)
 # Aggregator reads each output, audits per `completion-audit`.
-
-# Codex-harness style (for reference only — adapt the param names):
-> task(subagent=explore, fork_turns=0, brief="A: look up X in repo 1")
-> task(subagent=explore, fork_turns=0, brief="B: look up Y in repo 2")
-> task(subagent=explore, fork_turns=0, brief="C: look up Z in repo 3")
 ```
 
 The **decision** (3 sub-tasks, `none` context, wait-for-all) is the same; the
-**spelling** depends on the host.
+**call shape** is what mcode 0.2.4 actually exposes.
 
 ## Verification checklist
 
 - [ ] Did you write the sub-task list in the brief header before dispatching?
-- [ ] Did you check the host's concurrency cap and stay under it?
+- [ ] Did you stay under mcode's per-session buffer-unordered limit (default 8)?
 - [ ] Did you choose the right context level per sub-task (via `fork-context-decision`)?
 - [ ] Did you wait for all sub-tasks to complete before aggregating?
 - [ ] Did you verify each sub-task's output (via `completion-audit`)?
-- [ ] Did you adapt Codex-only parameter names to the actual host API?
+- [ ] Did you use `subagent_type` from `{explore, worker, verifier}` (not `mavis`)?
+- [ ] Did you put the sub-task brief in the `prompt` field (not a separate `brief`)?

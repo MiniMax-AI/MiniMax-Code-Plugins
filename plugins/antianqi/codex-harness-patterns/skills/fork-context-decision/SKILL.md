@@ -1,17 +1,17 @@
 ---
 name: fork-context-decision
 description: |
-  Decide how much parent context to pass to a sub-agent before spawning it. Pick "all / N turns / brief only" explicitly, not by accident.
-  USE WHEN: about to call `task()` to hand off work, designing a multi-agent flow, sub-agent failed and debugging whether cause was over- or under-forking, user said "give it the full history" / "传 history" / "just the brief" / "don't carry context" / "不用 fork" / "不要带 context".
-  TRIGGER PHRASES: "fork 多少", "give it the full history", "不用 fork", "传 history", "just the brief", "不要带 context", "fork 0", "fork all", "传全部对话", "不带 context".
+  Decide how much parent context to include in a sub-agent's `prompt` before spawning it. Pick "all / N turns / brief only" explicitly, not by accident.
+  USE WHEN: about to call `task()` to hand off work, designing a multi-agent flow, sub-agent failed and debugging whether cause was over- or under-forking, user said "give it the full history" / "no history" / "just the brief" / "don't carry context" / "深度 fork" / "不要带 context".
+  TRIGGER PHRASES: "fork 深度", "give it the full history", "深 fork", "no history", "just the brief", "不要带 context", "fork 0", "fork all", "完全独立会话", "轻量 context".
   SKIP WHEN: sub-task is trivial (one-line read), you have already decided "no context" (no decision to make).
 license: Apache-2.0
-compatibility: Requires MiniMax Code with Agent Plugins 1.0 support. The example calls use MiniMax Code's `task(agent_name=...)` syntax with the four built-in agents. The context-sharing parameter name (here shown as `history=`) is a placeholder — adapt to whatever the actual `task` tool exposes.
+compatibility: Targets MiniMax Code 0.2.4 `task` tool. Verified against the bundled `cli.js` schema (`description` / `prompt` / `subagent_type` / `run_in_background`). `subagent_type` is the canonical mcode spelling; `agent_name` is accepted as an alias by mcode's normaliser but the Skills prefer the canonical form. The mcode `task` tool has no `history` / `fork_turns` / `context_size` parameter — all context sharing is done by what you write into the `prompt` string itself.
 metadata:
   author: antianqi
-  version: "0.2.0"
-  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/core/src/session/multi_agents.rs (design principle; the 3 fork modes are portable; the parameter naming follows the actual mcode `task` tool schema)
-  changes-from-v0.1.2: "Examples now use MiniMax Code's `task(agent_name=...)` syntax with the four built-in agents. Replaces the Codex-only `task(subagent=..., fork_turns=...)` form. The 3 fork modes (all / N / none) and the decision framework are unchanged."
+  version: "0.3.0"
+  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/core/src/session/multi_agents.rs (design principle; the 3 fork modes are portable; the prompt-content decision is host-neutral)
+  changes-from-v0.2.0: "Removed the v0.2.0 `history=N` PLACEHOLDER — the mcode 0.2.4 `task` tool has no context-sharing parameter, so the 3 fork modes (all / N / none) are now expressed by what the calling agent writes into the `prompt` (full conversation dump / last N turns inline / brief only). Replaced `agent_name=` with the canonical mcode `subagent_type=`. Dropped `mavis` from the subagent list because `mavis` is the root agent (it has no `agent.md` subagent manifest and cannot be used as `subagent_type`); the 3 actual mcode sub-agent types are `explore` / `worker` / `verifier`."
 ---
 
 # Fork Context Decision
@@ -23,15 +23,42 @@ way, the work slows down or silently fails.
 
 This Skill codifies the decision so the agent makes it explicitly, not by accident.
 
-> **mcode 适配**:本 Skill 的 example 用 MiniMax Code `task(agent_name=..., brief=...)` 语法。
-> `agent_name` 从 mcode 内置 4 agent 选:
-> - `explore` — 只读(纯调查)
-> - `worker` — 可改可写(实际干活)
-> - `verifier` — 有 bash 不能 write(可验证)
-> - `mavis` — root,full tool set
->
-> `history` 参数名是**占位符**——实际 host `task` 工具可能用不同名字(如 `context_size` / `forks`)。
-> **如果 host 不支持 `history` 参数**,降级为 `none`(只传 brief)。
+## The hard fact about mcode 0.2.4
+
+The mcode 0.2.4 `task` tool **has no parameter for context sharing**. The
+canonical schema is:
+
+```text
+task(
+  description: string,        // 3-5 word label, required
+  prompt:      string,        // the task itself, required
+  subagent_type: string,      // "explore" | "worker" | "verifier", required
+  run_in_background?: boolean // optional
+)
+```
+
+`agent_name` is accepted as a runtime alias (the normaliser at `cli.js:j6c` converts
+it to `subagent_type`) but the canonical form is `subagent_type`. There is **no
+`history=`, no `fork_turns=`, no `context_size=`** — the calling agent has full
+control of what the sub-agent sees by writing it into the `prompt` string. So
+the 3 fork modes (all / N / none) become a `prompt` content decision, not a
+parameter.
+
+## mcode 0.2.4 sub-agent types
+
+`subagent_type` must be one of the three sub-agent manifests in
+`assets/agents/<name>/agent.md`:
+
+| `subagent_type` | Tools (from `agent.md`) | Use when |
+|---|---|---|
+| `explore` | `read`, `grep`, `glob`, `web_fetch` | Read-only investigation; cannot write or run commands. |
+| `worker` | `read`, `write`, `edit`, `bash`, `grep`, `glob`, `todowrite`, `web_fetch`, `website_deploy` | Implementation; full read/write/run. |
+| `verifier` | `read`, `grep`, `glob`, `bash`, `web_fetch` | Has `bash` but **no `write` / `edit` / `website_deploy`**: can run checks, cannot modify. |
+
+`mavis` is the **root** agent (different layout: `modes/`, `skills/`, persona
+files — no `agent.md`). It is not a `subagent_type` value; the calling session
+already *is* mavis. The v0.2.0 list that included `mavis` as a sub-agent
+option is removed.
 
 ## When to use
 
@@ -52,13 +79,14 @@ Activate when **any** of these is true:
 
 ## The decision
 
-Three choices, ordered by cost:
+Three choices, ordered by cost. Each is implemented by what you write into
+the `prompt` field.
 
-| Choice | What the sub-agent sees | Use when |
+| Choice | What the sub-agent sees (in `prompt`) | Use when |
 |---|---|---|
-| **all** | The full parent conversation history. | Sub-agent must reason about a prior decision, debug an earlier failure, or reuse a result the parent has already computed. |
-| **N** (integer) | The last N turns. | Sub-agent needs recent context but not the full history. |
-| **none** (or `0` / `brief`) | Only the brief you write inline. | Sub-task is self-contained; the brief is enough. |
+| **`all`** | The full parent conversation history, inlined or attached. | Sub-agent must reason about a prior decision, debug an earlier failure, or reuse a result the parent has already computed. |
+| **`N`** (integer) | The last N turns, inlined. | Sub-agent needs recent context but not the full history. |
+| **`none`** (or `0` / `brief`) | Only the brief you write inline. | Sub-task is self-contained; the brief is enough. |
 
 ### Pseudo-cost table
 
@@ -75,20 +103,33 @@ Three choices, ordered by cost:
    - If **no**: choose `none` and write a self-contained brief.
 2. **If you chose `N`**: pick the smallest N that still works.
    - Start at 3. If the sub-agent asks for more context, bump to 5, then 10, then `all`.
-3. **Document the choice in the brief**:
-   - `Context: last 3 turns (decided N=3 because the sub-task needs the prior tool output).`
-4. **If the sub-agent fails**, retry with the next higher N before changing anything
-   else.
+3. **Build the `prompt`** for the chosen level:
+   - `all` → concatenate the entire prior conversation, then append the brief.
+   - `N` → concatenate the last N turns verbatim, then append the brief.
+   - `none` → just the brief, no prior content.
+4. **Document the choice in the brief**:
+   - `Context level: <all | N | none>`
+   - `Reason: <one sentence>`
+5. **If the sub-agent fails**, retry with the next higher N before changing anything
+   else. A `none` that failed is almost always a brief problem, not a context
+   problem — but try `N=3` first because the cost is small.
 
 ## Output contract
 
-After activating this Skill, the next `task` call MUST include the chosen context level,
-either as a parameter or in the brief header:
+After activating this Skill, the next `task` call MUST:
+
+- Pick a `subagent_type` from `{explore, worker, verifier}` based on what the
+  sub-task needs (read / write+run / run-only).
+- Include a `description` (3-5 word label).
+- Build the `prompt` according to the chosen context level.
+- Either inline the context (for `N` or `all`) or start the `prompt` with the
+  brief header:
 
 ```text
 # Sub-task brief
 Context level: <all | N | none>
 Reason: <one sentence>
+Sub-agent type: <explore | worker | verifier>
 <the actual brief>
 ```
 
@@ -102,35 +143,86 @@ Reason: <one sentence>
   why `N=3` was chosen. Document or it didn't happen.
 - **Changing the brief without changing `N`** — if the brief is wrong, more context
   doesn't help. Fix the brief first.
+- **Writing a single tool call expecting the host to manage history** — mcode 0.2.4
+  does not auto-attach prior conversation. The decision is in the call you write.
+- **Using `subagent_type="mavis"`** — mavis is the root agent, not a sub-agent.
+  Use `explore` / `worker` / `verifier`.
 
 ## Example
 
-The example below uses **MiniMax Code `task` tool syntax** with the four built-in
-agents. If your host uses a different parameter name for context-sharing, adapt
-the call shape but preserve the decision (3 turns).
+The example below uses **MiniMax Code 0.2.4 `task` tool syntax**. The 3 fork
+modes are demonstrated; the `prompt` content is what changes between them.
 
 ```text
-# MiniMax Code style (current `task` tool schema):
+# Context level: none
+# Sub-agent: worker (writes files)
+# Cost: minimal
 > task(
-    agent_name="explore",          # or "worker" / "verifier" / "mavis"
-    history=3,                      # ← PLACEHOLDER: host param name may differ
-    brief="Investigate why test_lint.py flakes on Windows. ..."
+    description="Investigate lint flake",
+    subagent_type="worker",
+    prompt="""
+      Context level: none
+      Reason: this is a self-contained repro request.
+      Sub-agent type: worker
+
+      Investigate why <project>/tests/test_lint.py line 47
+      flakes on Windows but not Linux. Write a 1-paragraph
+      root-cause analysis to <project>/notes/lint.md under
+      "## Windows flake root cause".
+    """
   )
 
-# Codex-harness style (for reference only — adapt the param name):
+# Context level: N=3
+# Sub-agent: worker
+# Cost: 3 prior turns inlined
 > task(
-    subagent=explore,
-    fork_turns=3,
-    brief="..."
+    description="Diagnose test failure",
+    subagent_type="worker",
+    prompt="""
+      Context level: 3
+      Reason: the previous tool output is the most likely
+      cause; the sub-agent needs to see it.
+      Sub-agent type: worker
+
+      === last 3 turns (verbatim) ===
+      <turn -3: user request>
+      <turn -2: read of test_lint.py>
+      <turn -1: bash pytest run with failure at line 47>
+
+      Investigate the line 47 failure and write a fix to
+      <project>/tests/test_lint.py.
+    """
+  )
+
+# Context level: all
+# Sub-agent: explore (read-only)
+# Cost: 100% of parent context
+> task(
+    description="Audit earlier decision",
+    subagent_type="explore",
+    prompt="""
+      Context level: all
+      Reason: the sub-agent must reason about a decision
+      made 12 turns ago.
+      Sub-agent type: explore
+
+      === full prior conversation (verbatim) ===
+      <entire conversation history>
+
+      Find every place we used 'json.dumps(indent=2)' and
+      confirm the output matches the user's earlier spec.
+    """
   )
 ```
 
-The **decision** (3 turns) is the same; the **spelling** depends on the host.
+The **decision** (3 turns vs full history vs brief only) is the same; the
+**implementation** is what you put in the `prompt` string.
 
 ## Verification checklist
 
 - [ ] Did you classify the sub-task before choosing?
 - [ ] Did you pick the smallest N that works (not jumping straight to `all`)?
-- [ ] Did you document the choice in the brief header?
+- [ ] Did you pick a `subagent_type` from `{explore, worker, verifier}`?
+- [ ] Did you document the context level in the brief header?
+- [ ] Did you build the `prompt` so the sub-agent actually sees the chosen context?
 - [ ] If the sub-agent failed, did you bump N before changing the brief?
-- [ ] Did you adapt the example parameter names to the actual host `task` API?

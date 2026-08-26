@@ -1,17 +1,17 @@
 ---
 name: model-router
 description: |
-  Classify sub-task complexity (cheap / medium / main) and pick matching `model_config_id`.
-  USE WHEN: about to call `task()` for non-trivial sub-task, about to spend main model on work cheap model could do, "do this with the cheap model" / "用便宜模型" / "不要用主模型" / "sub-task 不重" / "small task", sub-task is routine lookup / reformat / list / reformat-only, "this is just a grep" / "this is just a reformat" / "小任务".
+  Classify sub-task complexity (cheap / medium / main) and decide whether to spawn a sub-agent at all. On MiniMax Code 0.2.4 the `task` tool does not expose per-call model selection, so the 3-tier rubric here is a thinking framework for session-level model choice and a "do I really need a sub-agent?" gate, not a per-call `model_config_id` field.
+  USE WHEN: about to spawn a sub-agent for non-trivial work, about to spend the main model on something a cheap model could do, "do this with the cheap model" / "用便宜模型" / "不要用主模型" / "sub-task 不重" / "small task" / "小任务".
   TRIGGER PHRASES: "用便宜模型", "cheap model", "use the cheap model", "小任务用便宜模型", "不要用主模型", "用本地模型", "sub-task 不重", "小任务", "this is just a", "小 case 用便宜".
-  SKIP WHEN: sub-task IS the main task (no delegation), sub-agent tool does not support a model / tier parameter, sub-task is genuinely synthesis / design / cross-file reasoning.
+  SKIP WHEN: sub-task IS the main task, mcode 0.2.4's `task` tool does not expose a per-call model field, sub-task is genuinely synthesis / design / cross-file reasoning.
 license: Apache-2.0
-compatibility: Requires MiniMax Code with Agent Plugins 1.0 support. The example calls reference `model_config_id` as the host's model-routing parameter. MiniMax Code's `task` tool accepts `model_config_id` directly; for fine-grained per-tier routing, read the actual `task` tool schema in your host. `reasoning_effort` is a Codex-harness concept and is not exposed by mcode today.
+compatibility: Targets MiniMax Code 0.2.4. **The mcode 0.2.4 `task` tool does NOT expose a `model_config_id` parameter or any other per-call model-routing field.** Verified against the bundled `cli.js` canonical schema (only `description` / `prompt` / `subagent_type` / `run_in_background`). Model selection on mcode 0.2.4 is **session-level** (chosen at session start via the host's `model` flag / interactive picker). This Skill therefore reframes the original 3-tier rubric into a session-level thinking framework and a sub-agent gate, not a per-`task()` argument.
 metadata:
   author: antianqi
-  version: "0.3.3"
-  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/model-provider-info/ and codex-rs/models-manager/ (design principle only; example model names are Codex-specific)
-  changes-from-v0.3.2: "Replaced the v0.3.2 'mcode 适配' block that claimed an agent-type parameter already implied a model tier — that claim was unverified and depended on a (now-dropped) host-internal config path. Restored the portable 3-tier rubric and the explicit `model_config_id` advice. The model-name to tier mapping is host-specific; pick the cheapest that can succeed in the actual mcode model list."
+  version: "0.4.0"
+  inspired-by: https://github.com/openai/codex/blob/main/codex-rs/model-provider-info/ and codex-rs/models-manager/ (design principle only; the 3-tier classification is portable; the mcode 0.2.4 surface for model selection is session-level, not per-task)
+  changes-from-v0.3.3: "Removed the v0.3.3 claim that 'MiniMax Code's `task` tool accepts `model_config_id` directly' — that was wrong. The canonical mcode 0.2.4 `task` schema has no per-call model field; the only model-routing surface on 0.2.4 is session-level (the host's `model` config at session start). The 3-tier rubric is preserved as a thinking framework and as a sub-agent gate ('don't spawn a sub-agent if the work is `cheap` enough that the calling session's current model could do it in 2 tool calls'), but no `model_config_id` is passed in any `task()` call. The Example section is reframed to match the actual mcode 0.2.4 surface."
 ---
 
 # Model Router
@@ -21,39 +21,61 @@ The main model is expensive and slow. Most sub-tasks a long agent spawns are not
 Codex harness routes those to cheaper models and reserves the main model for synthesis and
 hard reasoning.
 
-> **mcode 适配**:本 Skill 提到 `model_config_id` 是 host 暴露的 model-routing 参数(MiniMax Code
-> `task` 工具实际支持)。请根据当前 mcode 模型列表替换具体 model 名字;`reasoning_effort` 是
-> Codex-harness 概念,mcode 当前不暴露,不要再用。Skill 的**设计原则**(3-tier / 不要默认 main /
-> cheap 默认)是 portable 的,model 名字是 host-specific 的。
+On **mcode 0.2.4** specifically, the `task` tool does **not** expose a per-call model
+parameter. The 3-tier rubric below is therefore a **thinking framework for session-level
+model choice and a sub-agent gate**, not a per-`task()` argument. The Skills keep the
+classification because the cost-of-thought question is the same; they just do not pretend
+mcode 0.2.4 routes per call.
 
-This Skill codifies that routing: before every `task` call, classify the sub-task and pick
-the right tier. The savings are not theoretical — the same model router that gave
-Codex a 6× token reduction on context compaction works the same way on delegation.
+## The hard fact about mcode 0.2.4
+
+The canonical mcode 0.2.4 `task` schema:
+
+```text
+task(
+  description:    string,        // required
+  prompt:         string,        // required
+  subagent_type:  "explore" | "worker" | "verifier",  // required
+  run_in_background?: boolean    // optional
+)
+```
+
+**No `model_config_id`, no `model`, no `reasoning_effort`, no per-call tier.** Model
+selection on mcode 0.2.4 is session-level (chosen at session start via the host's
+`model` flag / interactive picker — the same model is used for the whole session,
+including every `task` call). Trying to pass `model_config_id="..."` is rejected
+by the strict validator in `cli.js:B6c` (the only allowed keys are the four above).
+
+The v0.3.3 wording "MiniMax Code's `task` tool accepts `model_config_id` directly"
+was wrong. The cost-of-thought question (cheap / medium / main) is still worth
+asking; just not as a per-`task()` argument.
 
 ## When to use
 
 Activate when **any** of these is true:
 
-- You are about to call `task` and the sub-task is non-trivial.
+- You are about to spawn a sub-agent and the work is non-trivial.
 - You are about to spend the main model on a work step that has clearly bounded
   complexity (a lookup, a transform, a reformat, a coverage report).
-- A sub-task failed and you are about to retry; consider whether a stronger model would
-  help, or whether the brief was just bad.
-- A batch of N similar sub-tasks is about to run; one model call to classify them
-  first, then route each.
+- A sub-task failed and you are about to retry; consider whether the brief was
+  bad, not whether a stronger model would help (mcode cannot route per call).
+- A batch of N similar sub-tasks is about to run; classify them once and decide
+  whether to spawn at all (the sub-agent gate).
 
 ## When NOT to use
 
-- The sub-task *is* the main task (no delegation happening). You are already on the
-  right model.
-- The sub-task requires the same context the main thread has, and you cannot pass a
-  minimal-context brief. A cheap model with no context will fail — route to main.
+- The sub-task *is* the main task (no delegation happening). You are already on
+  the right model.
+- The sub-task requires the same context the main thread has, and you cannot
+  pass a minimal-context brief (see `fork-context-decision`). A sub-agent with
+  no context will fail — do it yourself.
 - The user explicitly said "use the main model for this" or "don't downgrade the
-  model".
+  model" (no-op on mcode 0.2.4 anyway, but respects the user's framing).
 
 ## Process
 
-1. **Classify the sub-task** into one of three tiers, before writing the brief:
+1. **Classify the sub-task** into one of three tiers, before deciding whether to
+   spawn a sub-agent at all:
 
    | Tier | When to use | Examples |
    |---|---|---|
@@ -63,91 +85,121 @@ Activate when **any** of these is true:
 
    If unsure, classify up — `main` is the safe default.
 
-2. **Pick the `model_config_id`** for the tier:
+2. **Decide whether to spawn at all** (the sub-agent gate, on mcode 0.2.4):
+   - If the work is **`cheap`** AND the calling session can do it in 2 tool calls
+     (one `read` / `grep` / `bash` + one `write` / nothing), **do not spawn**.
+     The cost of the spawn (the sub-agent's bootstrap, the brief round-trip) is
+     higher than just doing the work.
+   - If the work is **`medium`** or **`main`**, spawn with the appropriate
+     `subagent_type` (`explore` / `worker` / `verifier`).
+   - The model that runs the sub-agent is the same as the calling session's
+     model — there is no per-call tier routing on mcode 0.2.4.
 
-   - `cheap` → the cheapest model the harness exposes (often a haiku-class or local model).
-   - `medium` → the same model family as `main` but at the lowest reasoning effort, or a
-     mid-tier model.
-   - `main` → the user's main model at its default reasoning effort.
-
-   The exact names depend on the harness; the principle is: cheapest that can succeed.
-
-3. **Pass the model config explicitly** in the `task` call. Do not rely on default
-   routing — the default is the main model, which is the wrong answer for `cheap` and
-   `medium` tiers.
-
-4. **State the tier in the sub-task brief** so a human reviewer can see why you picked
-   that model:
+3. **State the tier and the spawn decision in the sub-task brief** so a human
+   reviewer can see why you spawned (or did not spawn):
 
    ```markdown
    ## Sub-task brief
    ...
 
-   **Model tier**: cheap   (reformat-only, no judgement needed)
+   **Tier**: cheap | medium | main
+   **Spawn decision**: doing-it-myself | task(subagent_type=...)
+   **Reason**: <one sentence>
    ```
 
-5. **If the sub-task returns a "I can't do this"** (cheap model could not satisfy the
-   brief), do not silently retry on the same tier. Re-classify up, and explain to the
-   user *why* the sub-task was harder than the tier suggested.
+4. **If the sub-task returns a "I can't do this"**, do not silently retry on the
+   same call. Re-classify: either the brief is wrong (rewrite it) or the work is
+   harder than the tier suggested (re-classify up). On mcode 0.2.4 "going up a
+   tier" means ending the session and restarting on a stronger model, not passing
+   a different parameter — call this out to the user.
 
-6. **Record the actual spend** if the harness surfaces per-call token counts. After a
-   fan-out, note in the aggregation how much of the total was `cheap` vs `medium` vs
-   `main`. This is how you learn the right tier for each sub-task shape.
+5. **Record the actual spend** if the harness surfaces per-call token counts.
+   After a fan-out, note in the aggregation how much of the total was cheap-vs-
+   medium-vs-main. This is how you learn the right tier for each sub-task shape.
 
 ## Output contract
 
 The user sees, in this order:
 
-- For every `task` call: the tier and the chosen `model_config_id` (one line each).
+- For every spawn decision: the tier and the spawn reason (one line each).
 - For the fan-out aggregation: a one-line "X cheap / Y medium / Z main" summary.
-- For upgrades (cheap → medium → main on a retry): a one-line reason.
+- For upgrades (cheap → medium → main on a retry): a one-line reason plus the
+  user-facing cost (on mcode 0.2.4: "this needs main; please restart the
+  session on a stronger model").
 
 ## Example
 
+The example below is **MiniMax Code 0.2.4 `task` tool syntax**. The
+`model_config_id` argument is **deliberately not shown** because mcode 0.2.4
+does not accept it.
+
 ```text
-[planning] 1 cheap call: list all *.rs files in /repo/src/auth/ that import `tokio::sync::Mutex`.
+[planning] 1 cheap call: list all *.rs files in <repo>/src/auth/ that
+            import `tokio::sync::Mutex`.
             — tier: cheap (deterministic glob + grep, no judgement)
-            — model_config_id: anthropic-haiku-3
+            — spawn decision: DO NOT SPAWN. 1 read + 1 grep is faster than
+              the sub-agent bootstrap.
 
-[execution] 1 medium call: refactor auth/callback.rs to extract the SAML response parser.
+[execution] 1 medium call: refactor auth/callback.rs to extract the SAML
+            response parser.
             — tier: medium (multi-step refactor, brief is the spec)
-            — model_config_id: anthropic-sonnet-4
+            — spawn decision: task(subagent_type="worker")
+            — model: same as calling session (mcode 0.2.4 has no per-call
+              model field)
 
-[execution] 1 main call: design the OidcProvider trait given the existing IdP interface
-            and the OIDC spec. Resolve the "extend IdP vs new sibling" question.
+> task(
+    description="Refactor SAML parser",
+    subagent_type="worker",
+    prompt="""
+      Tier:        medium
+      Spawn:       task(subagent_type=worker)
+      Task name:   refactor-saml-parser
+      Sender:      main agent
+      Task:        Extract the SAML response parser from
+                   <repo>/src/auth/callback.rs lines 80-140 into
+                   <repo>/src/auth/saml.rs as a free function.
+      Payload:     <repo>/src/auth/callback.rs (lines 80-140);
+                   <repo>/src/auth/mod.rs (re-export point).
+      Return:      Write the new file <repo>/src/auth/saml.rs and
+                   update <repo>/src/auth/mod.rs. Run
+                   `cargo test --lib auth` and confirm green.
+    """
+  )
+
+[execution] 1 main call: design the OidcProvider trait given the existing
+            IdP interface and the OIDC spec. Resolve the
+            "extend IdP vs new sibling" question.
             — tier: main (synthesis + cross-source judgement)
-            — model_config_id: anthropic-sonnet-4
-
-[aggregation] spend summary: 1 cheap / 1 medium / 1 main. 78% of the work was on the
-            main call; the other two ran in <2s.
+            — spawn decision: this is the main task; no spawn.
+            — model: session-level main model.
 ```
 
 ## Common pitfalls
 
-- **Do not default to main.** The default is the most expensive answer. The skill exists
-  to move work *off* main, not to confirm the obvious.
-- **Do not route synthesis to cheap.** Synthesis requires judgement, cheap models
-  hallucinate on it, and you will pay more on the retry. If in doubt, tier up.
-- **Do not classify by token count of the sub-task input.** Classify by *what the
-  sub-task is* (lookup vs synthesis). A 50,000-token doc summary is `medium`, not
-  `cheap`, even though the input is large.
-- **Do not skip the explicit `model_config_id`.** The default in most harnesses is
-  the main model. If you do not pass a config, you have routed to `main`.
-- **Do not retry a failed sub-task on the same tier without re-classifying.** A cheap
-  model failure on a synthesis-class task is a classification error; the fix is to
-  move up a tier, not to rephrase the brief.
-- **Do not hide the tier from the user.** The tier is part of the contract — they
-  should be able to see "this is cheap because…" and disagree.
+- **Do not default to main.** The default is the most expensive answer. The
+  skill exists to move work *off* main, not to confirm the obvious.
+- **Do not route synthesis to cheap.** Synthesis requires judgement, cheap
+  models hallucinate on it, and you will pay more on the retry.
+- **Do not classify by token count of the sub-task input.** Classify by *what
+  the sub-task is* (lookup vs synthesis). A 50,000-token doc summary is
+  `medium`, not `cheap`, even though the input is large.
+- **Do not pass `model_config_id` in a `task()` call on mcode 0.2.4.** The
+  strict validator in `cli.js:B6c` rejects it; only `description` / `prompt` /
+  `subagent_type` / `run_in_background` are allowed. Model selection is
+  session-level on 0.2.4.
+- **Do not retry a failed sub-task on the same tier without re-classifying.**
+  A cheap-model failure on a synthesis-class task is a classification error;
+  the fix is to re-classify up, not to rephrase the brief.
+- **Do not hide the tier from the user.** The tier is part of the contract —
+  they should be able to see "this is cheap because…" and disagree.
 
 ## Verification checklist
 
-- [ ] Did you classify the sub-task into cheap / medium / main before writing the brief?
-- [ ] Did you pass the `model_config_id` explicitly in the `task` call?
-- [ ] Did you state the tier in the sub-task brief?
+- [ ] Did you classify the sub-task into cheap / medium / main before spawning?
+- [ ] Did you decide whether to spawn at all (the sub-agent gate)?
+- [ ] Did you state the tier and the spawn reason in the brief?
+- [ ] Did you avoid passing `model_config_id` in the `task()` call (not supported
+      on mcode 0.2.4)?
 - [ ] If the sub-task failed, did you re-classify (not just rephrase)?
 - [ ] If you ran a fan-out, did you record "X cheap / Y medium / Z main" in the
       aggregation?
-- [ ] Did the cheap-model portion actually run on the cheap model (not silently
-      re-routed to main)?
-- [ ] Did the savings justify the routing decision (i.e. was the work appropriate for
-      the tier you picked)?
