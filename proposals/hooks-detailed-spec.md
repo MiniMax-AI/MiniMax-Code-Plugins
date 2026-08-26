@@ -21,6 +21,23 @@ proposal governs for upstream Agent Plugins alignment; this companion governs fo
 runtime. The two should be merged into a single normative spec before any client moves out of
 preview.
 
+Three classes of decisions appear in this companion and the rules for them differ:
+
+- **Portable**: shared with `d86625d`; the portable proposal is authoritative.
+- **Mcode-specific**: this companion adds or refines a behavior that the 0.2.4 runtime
+  ships but the portable proposal intentionally does not. Marked inline as
+  *Mcode-specific* or *0.2.4 specific* in the section that introduces it.
+- **Companion-only observability**: this companion records empirical data
+  (e.g. event name literal counts in `cli.js`, dual-client bridging) that is
+  *evidence* for portable decisions, not portable decisions themselves. The
+  portable proposal governs any normative conclusion drawn from the evidence.
+
+A rule labelled *Mcode-specific* MUST NOT be relied on by Plugins that target a different
+runtime. A rule labelled *Portable* MUST be honored by every `io.minimax.mcode` client. The
+"ask" decision value on `PermissionRequest` (§ "Decision semantics") and the dual-client
+bridging rules (§ "Dual-client bridging") are Mcode-specific; the closed-schema field
+vocabulary (§ "Field vocabulary") is Portable.
+
 ## Scope added by this companion
 
 - Full twelve-event catalog observed in the 0.2.4 runtime, with PascalCase keys that match
@@ -131,9 +148,10 @@ Three invariants apply to all decision-bearing events:
   is to allow; for `PermissionRequest` it is to ask the user (not deny) when any Hook is
   registered, and to fall back to the runtime's own permission owner otherwise. The portable
   proposal § "Observe-only runtime semantics" is preserved for every other event.
-- An observer Hook on `PermissionRequest` MUST return `ask` (or no decision at all) and MUST
-  NOT return `allow` or `deny` unless the Plugin is genuinely the permission owner. Returning
-  `allow` from a status-publication Hook is a UX bug, not a feature.
+- **Mcode-specific.** An observer Hook on `PermissionRequest` SHOULD return `ask` (or no
+  decision at all) and SHOULD NOT return `allow` or `deny` unless the Plugin is genuinely the
+  permission owner. Returning `allow` from a status-publication Hook is a UX bug, not a
+  feature. The portable proposal does not define the `ask` value; it is Mcode-specific.
 
 ## Dual-client bridging
 
@@ -191,8 +209,14 @@ ${PLUGIN_ROOT}/io.minimax.mcode/hooks/hooks.json
 ```
 
 `PLUGIN_ROOT` is the Runtime-reserved env var (see Field vocabulary below). Marketplace-installed
-Plugins and locally-installed Plugins read from the same path inside their own root. There is
-no separate per-plugin data path for the hooks document; the Runtime does not write to it.
+Plugins and locally-installed Plugins read from the same path inside their own root. The
+Runtime does not write to the hooks document.
+
+`PLUGIN_ROOT` and `PLUGIN_DATA` are independent roots. The hooks document lives under
+`PLUGIN_ROOT`; Hook processes MAY write state under `PLUGIN_DATA`. The example
+`examples/hello-mcode-hooks/io.minimax.mcode/hooks/scripts/record.mjs` writes to
+`${PLUGIN_DATA}/state.json`; the validator treats each expansion token as containing
+to its own root.
 
 The `hooks.json` document must satisfy:
 
@@ -282,6 +306,81 @@ The portable proposal § "Non-goals" remains authoritative. This companion does 
 
 A Plugin that needs any of these must file a follow-up proposal that links back to this
 companion and to the portable proposal.
+
+## Validator scope and limitations
+
+The static validator (`scripts/lib/validation.mjs`) is a shape check; it does not execute
+Hook code and cannot observe runtime behavior. The boundary is explicit so reviewers and
+Plugin authors know where the guarantee ends.
+
+The validator **enforces**:
+
+- `hooks.json` parses as JSON and is an object (closed schema; any unknown root field is
+  rejected).
+- `hooks.json` declares `$schema` as a non-empty string.
+- Every key under `hooks` is one of the twelve PascalCase event names listed in
+  § "Empirical event catalog".
+- Each event value is a non-empty array of hook entries.
+- Every hook entry's keys are in the closed `HOOK_ENTRY_FIELDS` allowlist; reserved
+  internal discriminators (`type`, `shell`, `prompt`, `http`, `agent`, `script`,
+  `function`) are rejected separately.
+- Field types match the table in § "Field vocabulary".
+- `command` is a bare executable or a contained `./` path.
+- `env` does not contain `PLUGIN_ROOT` or `PLUGIN_DATA`; the runtime owns those.
+- `cwd` (if present) is a contained `./` path or a `PLUGIN_ROOT` / `PLUGIN_DATA`
+  expansion at the syntactic level.
+
+The validator **does not enforce** (these are Runtime responsibilities, recorded here so
+the boundary is explicit):
+
+- Whether the Runtime actually honors a given event. The validator accepts every
+  event in the catalog regardless of whether the active Runtime wires it; the
+  `0.2.4 confirmed?` column in § "Empirical event catalog" records the gap.
+- Whether the `$schema` URL is reachable or published. The validator accepts any
+  non-empty string; a future minor revision of this proposal MAY tighten this to
+  require a `https://minimax.io/schemas/...` prefix.
+- Payload data values delivered to a Hook. The validator does not parse stdin;
+  the example `record.mjs` deliberately persists only payload field names, not
+  values. A portable observer SHOULD follow the same pattern unless the
+  `PLUGIN_DATA` directory and the payload contract are both Mcode-specific and
+  the Plugin declares this in its `SKILL.md`.
+- Path safety at execution time. The example's `record.mjs` performs symlink
+  and `..` containment via `realpath`-style resolution; the validator
+  intentionally does not. Symlink, junction, reparse-point, and traversal
+  escapes on `cwd` and on Plugin-supplied `args` are the Runtime's contract
+  to enforce.
+- Whether decision responses (`allow`, `deny`, `ask`, `hookSpecificOutput`)
+  are honored. The validator does not invoke Hooks.
+- Cross-Plugin ordering. The portable proposal § "Loading and failure isolation"
+  already records that this is undefined.
+
+## Open conformance gaps
+
+CI coverage for the 0.2.4 event catalog is partial. The two CI tests in
+`test/validation.test.mjs` that exercise the example `record.mjs` cover:
+
+- `SessionStart` (via the "writes state under PLUGIN_DATA" test, once) and a
+  ten-invocation loop on the same event (via the byte-cap test).
+
+The remaining ten events — `PreToolUse`, `PostToolUse`, `SessionEnd`, `Stop`,
+`UserPromptSubmit`, `PreCompact`, `Notification`, `SubagentStart`,
+`SubagentStop`, `PermissionRequest`, `PermissionDenied` — are covered only by
+the manual smoke in § "End-to-end smoke" (mcode-island v0.3.0, 2026-08-26,
+Windows 11 24H2, `@minimax-ai/code@0.2.4`). That manual run is not
+reproducible from CI today.
+
+The path to close this gap is straightforward and is on the open decisions
+list: add one CI test per missing event, each spawning
+`record.mjs` with a representative payload for that event and asserting the
+recorded record shape. The example `record.mjs` is already payload-shape
+agnostic (it persists field names only), so the test bodies are short. Until
+those tests land, the "End-to-end smoke" output above is the only evidence
+that the events work end-to-end and the validator's claim to support all
+twelve is not yet backed by CI.
+
+The `decision` field, the `ask` value, the `hookSpecificOutput` shape, and
+the dual-client bridging rules are not covered by any CI test. They are
+backed by `cli.js` literal inspection only.
 
 ## Open decisions
 
