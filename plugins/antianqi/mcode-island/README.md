@@ -52,9 +52,17 @@ the runtime spawns a script from this plugin for every matching event:
 
 The agent does not need to remember to push state — the runtime fires the
 right script at the right time. `PermissionRequest` is the only
-decision-bearing event here; the script returns `{"decision":"allow"}` so the
-runtime's fail-closed default does not auto-deny. The widget just shows
+decision-bearing event here; the script returns `{"decision":"ask"}` so the
+plugin remains a pure observer (it does not auto-allow or auto-deny).
+The runtime's fail-closed default is bypassed only because the script
+opts the Hook into the "ask the user" path, so the TUI prompt still
+appears and the user can approve or deny. The widget just shows
 `waiting` so the user knows to act.
+
+> **Drift lock**: `scripts/smoke.mjs` reads `permission-request.ps1`
+> directly and asserts the `decision` field is exactly `ask`. A
+> future change that flips the value back to `allow` or `deny` will
+> fail the smoke before the PR can be submitted.
 
 Until the registry validator accepts the namespace, the `io.minimax.mcode/`
 directory is dormant and the plugin falls through to Mode B.

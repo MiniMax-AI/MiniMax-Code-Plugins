@@ -270,6 +270,57 @@ const main = async () => {
         out('PASS', '_lib.ps1: shared helper present');
     }
 
+    // 5b. Drift lock: permission-request.ps1 must emit `{"decision":"ask"}`,
+    // not `allow` or `deny`. The 0.2.4 Runtime default for PermissionRequest
+    // is fail-closed; an observer Hook that returns `allow` or `deny`
+    // would silently change the user-facing permission flow. The portable
+    // spec (PR #20) added `ask` exactly so observers can opt into
+    // "ask the user" without becoming the permission owner. This lock
+    // prevents a future change from regressing that invariant.
+    const permReqPath = join(PLUGIN_ROOT, 'io.minimax.mcode', 'hooks', 'scripts', 'permission-request.ps1');
+    if (!(await exists(permReqPath))) {
+        out('FAIL', 'permission-request.ps1 missing (drift lock skipped)');
+    } else {
+        const permReq = await readFile(permReqPath, 'utf8');
+        const decisionMatch = permReq.match(/WriteLine\(\s*'([^']*\{[^']*\})'\s*\)/);
+        if (!decisionMatch) {
+            out('FAIL', 'permission-request.ps1: cannot locate WriteLine decision JSON');
+        } else {
+            const decisionJson = decisionMatch[1];
+            let parsed;
+            try { parsed = JSON.parse(decisionJson); }
+            catch (e) {
+                out('FAIL', `permission-request.ps1: decision JSON is not valid JSON: ${e.message}`);
+            }
+            if (parsed) {
+                if (parsed.decision !== 'ask') {
+                    out('FAIL', `permission-request.ps1: decision is "${parsed.decision}", expected "ask" (observer opt-in, per PR #20). Returning "allow" or "deny" from an observer Hook silently changes the user-facing permission flow.`);
+                } else {
+                    out('PASS', `permission-request.ps1: decision is locked to "ask" (observer opt-in)`);
+                }
+                if (!parsed.reason || typeof parsed.reason !== 'string') {
+                    out('FAIL', 'permission-request.ps1: missing or non-string `reason` field');
+                } else {
+                    out('PASS', 'permission-request.ps1: reason field present');
+                }
+            }
+        }
+    }
+
+    // 5c. Drift lock: README must not say `{"decision":"allow"}` for
+    // PermissionRequest. The v0.2.1 baseline docstring is the most
+    // common place this regresses, since the script changed from
+    // `allow` to `ask` between v0.2.1 and v0.3.0.
+    const readmePath = join(PLUGIN_ROOT, 'README.md');
+    if (await exists(readmePath)) {
+        const readme = await readFile(readmePath, 'utf8');
+        if (/PermissionRequest[\s\S]{0,400}decision[\s\S]{0,40}"allow"/i.test(readme)) {
+            out('FAIL', 'README.md: contains "decision":"allow" near PermissionRequest (the v0.3.0 spec uses "ask")');
+        } else {
+            out('PASS', 'README.md: no stale "decision":"allow" near PermissionRequest');
+        }
+    }
+
     // 6. cross-platform: scan all .ps1 files for hardcoded paths
     console.log('-'.repeat(60));
     console.log('cross-platform scan:');
