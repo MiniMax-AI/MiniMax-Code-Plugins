@@ -13,7 +13,9 @@
     "lint": "eslint server/ test/",
     "format": "prettier --write server/ test/",
     "setup:plugin": "node scripts/setup-plugin-layout.mjs",
-    "package:plugin": "node scripts/package-plugin.mjs"
+    "package:plugin": "node scripts/package-plugin.mjs",
+    "validate:plugin": "node scripts/validate-plugin.mjs",
+    "verify": "node scripts/verify.mjs"
   },
   "engines": {
     "node": ">=22.19 <23 || >=24 <27"

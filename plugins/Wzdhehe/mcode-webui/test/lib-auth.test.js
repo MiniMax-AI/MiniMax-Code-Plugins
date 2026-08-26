@@ -31,6 +31,8 @@ const {
   isRequestAuthorized,
   isAuthEnforced,
   writeAuthRequired,
+  setExpectedToken,
+  setTokenAuthEnabled,
 } = auth;
 
 // Each test that sets process.env.TOKEN also clears it in a finally
@@ -295,4 +297,61 @@ test("writeAuthRequired: 401 + JSON body, no token echo", () => {
   assert.equal(body.error, "auth required");
   // NEVER include any token-shaped field
   assert.equal(Object.keys(body).length, 2);
+});
+
+// --- v1.0.1: setExpectedToken / setTokenAuthEnabled / in-memory override ---
+
+test("setExpectedToken: in-memory override is honored when env unset", () => {
+  delete process.env.TOKEN;
+  setExpectedToken("in-memory-token");
+  try {
+    assert.equal(isAuthEnforced(), true);
+    assert.equal(isRequestAuthorized(makeReq({ authorization: "Bearer in-memory-token" })), true);
+    assert.equal(isRequestAuthorized(makeReq({ authorization: "Bearer wrong" })), false);
+  } finally {
+    setExpectedToken("");
+  }
+});
+
+test("setExpectedToken: env TOKEN still wins over in-memory", () => {
+  setExpectedToken("in-memory-token");
+  process.env.TOKEN = "env-token";
+  try {
+    // in-memory token should NOT match
+    assert.equal(isRequestAuthorized(makeReq({ authorization: "Bearer in-memory-token" })), false);
+    // env token should match
+    assert.equal(isRequestAuthorized(makeReq({ authorization: "Bearer env-token" })), true);
+  } finally {
+    delete process.env.TOKEN;
+    setExpectedToken("");
+  }
+});
+
+test("setTokenAuthEnabled(false): bypasses even when token is set", () => {
+  setExpectedToken("some-token");
+  setTokenAuthEnabled(false);
+  try {
+    // Even with a token in expected, the gate is OFF
+    assert.equal(isAuthEnforced(), false);
+    // No token presented — but auth is off, so authorized
+    assert.equal(isRequestAuthorized(makeReq()), true);
+    // Wrong token — also OK because auth is off
+    assert.equal(isRequestAuthorized(makeReq({ authorization: "Bearer wrong" })), true);
+  } finally {
+    setTokenAuthEnabled(true);
+    setExpectedToken("");
+  }
+});
+
+test("setTokenAuthEnabled: persistent — survives across multiple isRequestAuthorized calls", () => {
+  setTokenAuthEnabled(false);
+  setExpectedToken("abc");
+  try {
+    for (let i = 0; i < 5; i++) {
+      assert.equal(isRequestAuthorized(makeReq()), true);
+    }
+  } finally {
+    setTokenAuthEnabled(true);
+    setExpectedToken("");
+  }
 });

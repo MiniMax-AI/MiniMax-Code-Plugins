@@ -15,8 +15,9 @@ All non-API routes return static files (`server.js` → `serveStatic` /
   - query: `?token=…`
   - header: `Authorization: Bearer …`
   - 401 if missing or wrong
-- **CID**: every request must include `?cid=<uuid>` to identify the webui
-  tab. The webui injects this automatically; the API is unusable without it.
+- **CID**: each request should include `?cid=<uuid>` to identify the webui
+  tab. The webui injects this automatically; if missing, the server falls
+  back to the `default` CID.
 - **Errors**: every error response is `{ok: false, error: 'human-readable message'}`
   with an appropriate 4xx/5xx status. Some legacy endpoints still return
   `{ok: true, …}` even on soft failures — those are called out below.
@@ -299,10 +300,8 @@ state changes (see [ARCHITECTURE.md §5 SSE state push](./ARCHITECTURE.md#5-sse-
   "tokenEnabled": true,             // 🆕 v1.0.1 — token auth master switch (default true)
   "currentToken": "…",              // 🆕 v1.0.1 — auto-generated 32-hex token; "" after tokenAcknowledged=true
   "tokenAcknowledged": false,       // 🆕 v1.0.1 — operator has confirmed they saved the token
-  "tokenRotatedAt": 1724259600000,  // 🆕 v1.0.1 — ms-since-epoch of the last rotation
-  "availableInterfaces": [          // 🆕 v1.0.1 — for client UI display (interface filter was removed in v1.0.1 cleanup)
-    { "name": "WLAN", "address": "192.168.1.50", "family": "IPv4" }
-  ]
+  "tokenRotatedAt": 1724259600000   // 🆕 v1.0.1 — ms-since-epoch of the last rotation
+}
 }
 ```
 

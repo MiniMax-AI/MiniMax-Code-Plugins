@@ -6,27 +6,57 @@
 //
 //   - Local request (isLocalRequest === true) is always allowed (LAN card
 //     switch + first page load without token).
-//   - Non-local request requires a token when TOKEN env is set:
+//   - Non-local request requires a token when TOKEN auth is enabled:
 //       * `?token=<value>` query string (for SSE EventSource — browsers
 //         can't set custom headers on EventSource).
 //       * `Authorization: Bearer <value>` header (for fetch / programmatic
 //         callers; preferred to avoid URL-bar / referer / history leaks).
-//   - When TOKEN is empty (not set), no token enforcement — backwards
-//     compatible with the "loopback-only" or "trusted LAN" deployment.
+//   - Token auth can be turned off (tokenEnabled = false) at runtime via
+//     the settings card; this is the "opt-in" escape hatch.
 //   - Static files (HTML/CSS/JS/images) and OPTIONS preflight are always
 //     public so the SPA can bootstrap; only `/api/*` and SSE are gated.
+//
+// Token resolution priority on each request:
+//   1. process.env.TOKEN (env wins, always — deploys / docker)
+//   2. In-memory `expectedToken` (synced from settings.js after rotation)
+//   3. Static TOKEN from config.js (fallback for tests)
+//
+// If tokenEnabled is false (set via settings.js setter) AND process.env.TOKEN
+// is empty AND the in-memory expectedToken is also empty, no auth is enforced
+// (backwards-compatible "loopback-only" / "trusted LAN" deployment).
 
 import { isLocalRequest } from "./lan.js";
 import { TOKEN } from "./config.js";
 
-// The expected token. Resolved lazily on each request (rather than once
-// at module load) so that:
+// In-memory expected token. setExpectedToken() from settings.js writes
+// this after init / rotation. The process.env.TOKEN path always wins —
+// see getExpectedToken() below.
+let expectedToken = "";
+
+// Token auth master switch. When false, requests bypass the token check
+// even if a token is set (LAN-only deployment). Default true.
+let tokenAuthOn = true;
+
+export function setExpectedToken(v) {
+  expectedToken = (typeof v === "string") ? v : "";
+}
+
+export function setTokenAuthEnabled(v) {
+  tokenAuthOn = !!v;
+}
+
+// The expected token. Resolved per-request (rather than once at module
+// load) so that:
 //   - tests can use t.mock.module() to swap config.js and re-import
 //     without rebooting the process;
 //   - admins who set TOKEN via a process supervisor (no restart) see
-//     the new value on the next request after the env var changes.
+//     the new value on the next request after the env var changes;
+//   - settings.js's rotateToken() can swap the in-memory value without
+//     touching the environment.
 function getExpectedToken() {
-  return (process.env.TOKEN || TOKEN || "").toString();
+  // env always wins (back-compat escape hatch)
+  if (process.env.TOKEN) return process.env.TOKEN.toString();
+  return expectedToken || TOKEN || "";
 }
 
 // Pull a token candidate out of a request. Tries the header first
@@ -83,8 +113,9 @@ export function safeEquals(a, b) {
 // True if the request is allowed without further auth checks.
 export function isRequestAuthorized(req) {
   if (isLocalRequest(req)) return true;
+  if (!tokenAuthOn) return true;
   const expected = getExpectedToken();
-  if (!expected) return true; // TOKEN unset = no enforcement
+  if (!expected) return true; // no token configured = no enforcement
   const supplied = extractToken(req);
   return safeEquals(supplied, expected);
 }
@@ -113,7 +144,9 @@ export function writeAuthRequired(res) {
 }
 
 // For tests / debugging: returns whether auth is currently enforced.
-// (Local requests still bypass; this only reflects "is a TOKEN set".)
+// (Local requests still bypass; this only reflects "is a TOKEN set" + "is
+// tokenAuthOn".)
 export function isAuthEnforced() {
+  if (!tokenAuthOn) return false;
   return Boolean(getExpectedToken());
 }

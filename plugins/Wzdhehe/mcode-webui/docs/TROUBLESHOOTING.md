@@ -86,7 +86,7 @@ mcode sqlite via `GET /api/acp-sessions` on init.
 **Fix**:
 1. Check `curl 'http://127.0.0.1:8080/api/acp-sessions?cid=<your-cid>'`
    — should return a list of sessions.
-2. If empty, the Mcode database is empty or the path is wrong.
+2. If empty, the mcode database is empty or the path is wrong.
    Check `$env:USERPROFILE\.minimax\v2\sqlite\runtime-state.sqlite`
    exists.
 3. If the API returns sessions but the UI is empty, hard-reload.
@@ -97,7 +97,7 @@ mcode sqlite via `GET /api/acp-sessions` on init.
 plan modal.
 
 **Cause**: the click handler is calling `hidePlan()` but the SSE
-event from Mcode hasn't arrived yet, so the next render re-opens
+event from mcode hasn't arrived yet, so the next render re-opens
 it.
 
 **Fix**:
@@ -173,9 +173,9 @@ in-flight tool calls may complete first.
 
 **Fix**: wait 2-3 seconds. The model will stop emitting tokens
 shortly. If it doesn't, the subprocess is stuck — see "Stuck
-Mcode subprocess" below.
+mcode subprocess" below.
 
-## Stuck Mcode subprocess
+## Stuck mcode subprocess
 
 **Symptoms**: webui shows "running" but no events arrive. The
 `/api/stop` endpoint doesn't help.
@@ -186,7 +186,7 @@ is waiting on stdin and we're not feeding it.
 **Fix**:
 1. Open devtools → Network → find the `/api/events` EventSource.
    If it's still open, the issue is on the mcode side.
-2. Find the Mcode subprocess: `Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.CommandLine -like "*acp*" }`
+2. Find the mcode subprocess: `Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.CommandLine -like "*acp*" }`
 3. Kill it: `Stop-Process -Id <PID> -Force`
 4. The webui will spawn a fresh subprocess on the next message.
 
@@ -196,7 +196,7 @@ is waiting on stdin and we're not feeding it.
 
 **Cause**: a render function is reading from a state field that
 doesn't exist in the current state object. This usually happens
-when a state update from Mcode is missing a field the webui
+when a state update from mcode is missing a field the webui
 expects.
 
 **Fix**: hard-reload to re-fetch the full state. The webui
@@ -208,7 +208,7 @@ optional fields, so this should be rare.
 **Symptoms**: the mode chip in the right panel is stuck on "—"
 or shows the wrong value.
 
-**Cause**: Mcode's permission state isn't being reflected in
+**Cause**: mcode's permission state isn't being reflected in
 `state.permissions`. The webui reads this from the SSE
 `state` events.
 
@@ -264,12 +264,12 @@ client isn't sending it. Or the token mismatch.
    Make sure you opened `http://127.0.0.1:8080/?token=…`, not
    `http://127.0.0.1:8080/`.
 
-## Server starts but no Mcode subprocess spawns
+## Server starts but no mcode subprocess spawns
 
 **Symptoms**: `/api/health` returns 200, but sending a message
 does nothing.
 
-**Cause**: the Mcode binary is not at the expected path. The
+**Cause**: the mcode binary is not at the expected path. The
 default is `<webui-root>/../../mcode.cmd` (which resolves to
 `%USERPROFILE%\.minimax-code\mcode.cmd`).
 

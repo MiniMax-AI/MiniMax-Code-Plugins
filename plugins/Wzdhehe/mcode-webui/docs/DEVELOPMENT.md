@@ -45,7 +45,7 @@ node server.js
 
    ```js
    // server/routes/foo.js
-   import { pushStateFor, pushEvent, getClient } from '../lib/state-bus.js'
+   import { pushStateFor, getClient } from '../lib/state-bus.js'
    import { fail, ok } from '../lib/util.js'  // if you have one
 
    export async function handleFoo(req, res, ctx, pathname) {
@@ -59,8 +59,7 @@ node server.js
 
      // if it mutates state:
      pushStateFor(cid, { /* delta */ })
-     // if it's a fire-and-forget event:
-     pushEvent(cid, { type: 'foo', … })
+     // for one-off SSE messages, see `pushOnlineCount` / `broadcastTokenRotated`
 
      return ok(res, { /* response */ })
    }
@@ -99,8 +98,9 @@ node server.js
    ```js
    yield { type: 'foo', … }
    ```
-3. The transport layer pushes events via `pushEvent(cid, event)` which
-   goes onto the SSE channel.
+3. The transport layer pushes events via `pushStateFor(cid, …)` (state
+   snapshots) or `broadcastTokenRotated(token)` (one-off event) which
+   go onto the SSE channel.
 4. In `public/app/main.js`, handle the event in the SSE message
    handler in `connect()` and update `state.foo` accordingly.
 5. If the event needs UI, add a render function `renderFoo()` and call
@@ -120,7 +120,7 @@ node server.js
 
 ## Adding a slash command (webui-side)
 
-These are commands the webui handles itself without forwarding to Mcode
+These are commands the webui handles itself without forwarding to mcode
 (used for things like `/clear`, `/exec`).
 
 1. In `server/lib/slash.js`, add an entry:
@@ -128,14 +128,14 @@ These are commands the webui handles itself without forwarding to Mcode
    { cmd: '/foo', handler: handleFoo, hidden: false }
    ```
 2. `handleFoo` receives `(content, ctx)` and returns either:
-   - `null` (not handled, forward to Mcode)
+   - `null` (not handled, forward to mcode)
    - `{ handled: true, response: '…' }` (handled, send to user as a
      synthetic message)
-3. The webui displays `response` as if it came from Mcode.
+3. The webui displays `response` as if it came from mcode.
 
-## Adding a Mcode-translated slash command
+## Adding a mcode-translated slash command
 
-If you want a slash command that maps to an Mcode command, you don't
+If you want a slash command that maps to an mcode command, you don't
 add code — mcode returns the command list via `session/commands` and
 the webui already renders it. Just make sure mcode knows about the
 command; the webui picks it up on connect.
@@ -166,13 +166,13 @@ The webui-side session store is plain JSON:
 Get-Content "$env:USERPROFILE\.minimax-code\webui\.webui-sessions.json" | ConvertFrom-Json
 ```
 
-The Mcode-side session store is SQLite:
+The mcode-side session store is SQLite:
 ```powershell
-# v0.5.bx-44: webui no longer hardcodes an anaconda sqlite3 path.
-# webui/server/lib/config.js#detectSqlite3Bin probes PATH first, then
-# platform fallbacks. For ad-hoc manual queries, just rely on PATH:
-sqlite3 "$env:USERPROFILE\.minimax\v2\sqlite\runtime-state.sqlite" ".tables"
-sqlite3 "$env:USERPROFILE\.minimax\v2\sqlite\runtime-state.sqlite" `
+& "$env:USERPROFILE\anaconda3\Library\bin\sqlite3.exe" `
+  "$env:USERPROFILE\.minimax\v2\sqlite\runtime-state.sqlite" `
+  ".tables"
+& "$env:USERPROFILE\anaconda3\Library\bin\sqlite3.exe" `
+  "$env:USERPROFILE\.minimax\v2\sqlite\runtime-state.sqlite" `
   "SELECT id, title, cwd FROM local_runtime_sessions ORDER BY updated_at DESC LIMIT 10"
 ```
 
@@ -194,7 +194,7 @@ Two options:
 - Web UI: bottom-left "局域网访问" button
 - API: `POST /api/settings {lanBroadcast: true}`
 
-### Debug a stuck Mcode subprocess
+### Debug a stuck mcode subprocess
 The webui keeps one subprocess per CID. If it's stuck:
 ```powershell
 # find the cid
