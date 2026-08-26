@@ -138,6 +138,20 @@ const KNOWN_HOOK_EVENTS = new Set([
   'PermissionRequest',
   'PermissionDenied',
 ]);
+const HOOK_DOCUMENT_FIELDS = new Set(['$schema', 'hooks']);
+const HOOK_ENTRY_FIELDS = new Set([
+  'command',
+  'args',
+  'env',
+  'cwd',
+  'matcher',
+  'pattern',
+  'regex',
+  'glob',
+  'timeout',
+  'timeoutMs',
+  'once',
+]);
 const HOOK_RESERVED_FIELDS = new Set([
   'type',
   'shell',
@@ -151,16 +165,25 @@ const HOOK_TIMEOUT_DEFAULT = 30000;
 const HOOK_TIMEOUT_MIN = 100;
 const HOOK_TIMEOUT_MAX = 600000;
 
+function rejectUnknownFields(record, allowed, label) {
+  for (const key of Object.keys(record)) {
+    if (HOOK_RESERVED_FIELDS.has(key)) {
+      throw new Error(`${label}: ${key} is a reserved internal discriminator and is not allowed in a portable Hook entry`);
+    }
+    if (!allowed.has(key)) {
+      throw new Error(`${label}: ${key} is not a recognized Hook field; expected one of ${[...allowed].sort().join(', ')}`);
+    }
+  }
+}
+
 export function validateHookEntry(value, label) {
   assert(isRecord(value), `${label}: hook entry must be an object`);
+  rejectUnknownFields(value, HOOK_ENTRY_FIELDS, label);
   assert(typeof value.command === 'string' && value.command.length > 0, `${label}: command is required`);
   assert(
     isBareCommand(value.command) || isContainedRelativePath(value.command),
     `${label}: command must be a bare executable or a contained ./ path`,
   );
-  for (const key of Object.keys(value)) {
-    assert(!HOOK_RESERVED_FIELDS.has(key), `${label}: ${key} is a reserved internal discriminator and is not allowed in a portable Hook entry`);
-  }
   if (value.args !== undefined) {
     assert(Array.isArray(value.args) && value.args.every((item) => typeof item === 'string' && item.length > 0), `${label}: args must be an array of non-empty strings`);
   }
@@ -178,8 +201,20 @@ export function validateHookEntry(value, label) {
       `${label}: cwd must be a contained ./ path or resolve under PLUGIN_ROOT or PLUGIN_DATA`,
     );
   }
+  if (value.matcher !== undefined) {
+    assert(typeof value.matcher === 'string' && value.matcher.length > 0, `${label}: matcher must be a non-empty string`);
+  }
+  if (value.pattern !== undefined) {
+    assert(typeof value.pattern === 'string' && value.pattern.length > 0, `${label}: pattern must be a non-empty string`);
+  }
   if (value.matcher !== undefined && value.pattern !== undefined) {
     assert(value.matcher === value.pattern, `${label}: matcher and pattern must agree when both are set`);
+  }
+  if (value.regex !== undefined) {
+    assert(typeof value.regex === 'boolean', `${label}: regex must be a boolean`);
+  }
+  if (value.glob !== undefined) {
+    assert(typeof value.glob === 'boolean', `${label}: glob must be a boolean`);
   }
   if (value.timeout !== undefined) {
     assert(Number.isInteger(value.timeout) && value.timeout >= HOOK_TIMEOUT_MIN && value.timeout <= HOOK_TIMEOUT_MAX, `${label}: timeout must be an integer between ${HOOK_TIMEOUT_MIN} and ${HOOK_TIMEOUT_MAX} ms`);
@@ -195,6 +230,7 @@ export function validateHookEntry(value, label) {
 
 export function validateHooksDocument(value, label) {
   assert(isRecord(value), `${label}: root must be an object`);
+  rejectUnknownFields(value, HOOK_DOCUMENT_FIELDS, label);
   assert(typeof value.$schema === 'string' && value.$schema.length > 0, `${label}: $schema is required`);
   assert(isRecord(value.hooks), `${label}: hooks must be an object`);
   const events = [];

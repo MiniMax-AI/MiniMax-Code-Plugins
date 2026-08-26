@@ -12,6 +12,7 @@ import { argv, env } from 'node:process';
 
 const MAX_STATE_BYTES = 1024 * 1024;
 const MAX_RECORDS = 4096;
+const MAX_STDIN_BYTES = 1024 * 64;
 
 function parseArgs(args) {
   const out = { event: null, state: null };
@@ -28,15 +29,23 @@ function parseArgs(args) {
   return out;
 }
 
-function expandRoot(value, root) {
-  if (typeof value !== 'string') return value;
+// Expand a single occurrence of ${PLUGIN_ROOT} or ${PLUGIN_DATA}. Only one expansion
+// token is allowed per path. The expanded value is then resolved against the corresponding
+// root for real-path and symlink containment. PLUGIN_ROOT and PLUGIN_DATA are independent
+// roots; a path under PLUGIN_DATA is not required to be under PLUGIN_ROOT.
+function expandAndCheck(value) {
+  if (typeof value !== 'string') return null;
   if (value.startsWith('${PLUGIN_ROOT}')) {
-    return join(root, value.slice('${PLUGIN_ROOT}'.length));
+    const root = env.PLUGIN_ROOT;
+    if (!root) return null;
+    return ensureContained(join(root, value.slice('${PLUGIN_ROOT}'.length)), root);
   }
   if (value.startsWith('${PLUGIN_DATA}')) {
-    return join(env.PLUGIN_DATA ?? '', value.slice('${PLUGIN_DATA}'.length));
+    const dataRoot = env.PLUGIN_DATA;
+    if (!dataRoot) return null;
+    return ensureContained(join(dataRoot, value.slice('${PLUGIN_DATA}'.length)), dataRoot);
   }
-  return value;
+  return null;
 }
 
 function ensureContained(target, root) {
@@ -44,7 +53,7 @@ function ensureContained(target, root) {
   const targetReal = resolve(target);
   const prefix = rootReal.endsWith(sep) ? rootReal : rootReal + sep;
   if (targetReal !== rootReal && !targetReal.startsWith(prefix)) {
-    throw new Error('path escapes plugin root');
+    throw new Error(`path escapes plugin root: ${targetReal} is not under ${rootReal}`);
   }
   return targetReal;
 }
@@ -54,7 +63,7 @@ async function readStdin() {
   let total = 0;
   for await (const chunk of process.stdin) {
     total += chunk.length;
-    if (total > 1024 * 64) break;
+    if (total > MAX_STDIN_BYTES) break;
     chunks.push(chunk);
   }
   if (chunks.length === 0) return null;
@@ -65,11 +74,23 @@ async function readStdin() {
   }
 }
 
+function trimRecords(records) {
+  if (records.length <= MAX_RECORDS) return records;
+  return records.slice(records.length - MAX_RECORDS);
+}
+
 async function loadState(path) {
   try {
     const text = await readFile(path, 'utf8');
+    if (Buffer.byteLength(text, 'utf8') > MAX_STATE_BYTES) {
+      // Existing state is over the bound; discard it and start clean rather than carry
+      // forward a payload that already exceeds what we promise to keep.
+      return { records: [] };
+    }
     const parsed = JSON.parse(text);
-    if (Array.isArray(parsed.records)) return parsed;
+    if (Array.isArray(parsed.records)) {
+      return { records: trimRecords(parsed.records.filter((r) => r && typeof r === 'object')) };
+    }
   } catch {
     // First run or unreadable prior state: start clean.
   }
@@ -79,41 +100,40 @@ async function loadState(path) {
 async function saveState(path, state) {
   const staged = path + '.staging';
   const text = JSON.stringify(state, null, 2);
+  if (Buffer.byteLength(text, 'utf8') > MAX_STATE_BYTES) {
+    throw new Error(`state exceeds ${MAX_STATE_BYTES} bytes after trim`);
+  }
   await writeFile(staged, text, 'utf8');
   await rename(staged, path);
 }
 
-function main() {
+async function main() {
   const args = parseArgs(argv.slice(2));
   if (!args.event || !args.state) {
-    process.exit(0);
+    return;
   }
-  const root = env.PLUGIN_ROOT;
-  if (!root) {
-    process.exit(0);
+  let statePath;
+  try {
+    statePath = expandAndCheck(args.state);
+  } catch {
+    return;
   }
-  const statePath = ensureContained(expandRoot(args.state, root), root);
+  if (!statePath) return;
 
-  readStdin()
-    .then((payload) => {
-      const record = {
-        event: args.event,
-        receivedAt: new Date().toISOString(),
-        payloadKeys: payload && typeof payload === 'object' ? Object.keys(payload).sort() : [],
-      };
-      return mkdir(dirname(statePath), { recursive: true })
-        .then(() => loadState(statePath))
-        .then((state) => {
-          state.records.push(record);
-          if (state.records.length > MAX_RECORDS) {
-            state.records.splice(0, state.records.length - MAX_RECORDS);
-          }
-          return saveState(statePath, state);
-        });
-    })
-    .catch(() => {
-      // Observer must never affect agent behavior.
-    });
+  try {
+    const payload = await readStdin();
+    const record = {
+      event: args.event,
+      receivedAt: new Date().toISOString(),
+      payloadKeys: payload && typeof payload === 'object' ? Object.keys(payload).sort() : [],
+    };
+    await mkdir(dirname(statePath), { recursive: true });
+    const state = await loadState(statePath);
+    state.records = trimRecords([...state.records, record]);
+    await saveState(statePath, state);
+  } catch {
+    // Observer must never affect agent behavior; swallow all errors silently.
+  }
 }
 
 main();
