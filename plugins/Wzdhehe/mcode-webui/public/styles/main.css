@@ -926,6 +926,11 @@ body.is-remote .btn-lan-toggle { display: none; }
 /* v0.5.z: 套餐用量按钮 + 右侧弹层（mmx quota + 本机时间自算） */
 .btn-menu#btn-usage { position: relative; }
 .btn-menu#btn-usage[aria-expanded="true"] { background: var(--bg-hover); }
+/* v2026-08-28 modacker: when quota feature is off (no Subscription
+   Key set, or quotaEnabled=false in settings), the entire button
+   is hidden — not just a "—", but gone. The popover is hidden by
+   the same toggle on its parent renderUsage() call. */
+.btn-menu#btn-usage.usage-hidden { display: none; }
 .usage-popover {
   position: absolute;
   bottom: 0;
@@ -985,6 +990,241 @@ body.is-remote .btn-lan-toggle { display: none; }
 .usage-loading { color: var(--text-muted); font-style: italic; padding: 4px 0; }
 .usage-error { color: var(--danger); padding: 4px 0; line-height: 1.5; word-break: break-word; }
 .usage-empty { color: var(--text-muted); padding: 4px 0; font-style: italic; }
+
+/* v2026-08-28 modacker: 套餐用量 popover 顶部嵌入 key 配置区 */
+.usage-popover-config {
+  padding: 4px 0 6px;
+}
+.usage-popover-config-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+.usage-popover-config-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.usage-popover-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+  color: var(--text);
+}
+.usage-popover-toggle input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+.usage-popover-toggle-label { line-height: 1; }
+.usage-popover-key-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-input, var(--bg-card));
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+}
+.usage-popover-save-btn,
+.usage-popover-clear-btn {
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.usage-popover-save-btn:hover { background: var(--bg-hover); }
+.usage-popover-clear-btn:hover { background: var(--bg-hover); color: var(--danger); }
+.usage-popover-status {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  word-break: break-all;
+}
+.usage-popover-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 6px 0 4px;
+}
+
+/* v2026-08-28 modacker: API Key 状态按钮(底部,绿/红) */
+.api-key-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  transition: background 0.15s, border-color 0.15s;
+}
+.api-key-status:hover { background: var(--bg-hover); }
+.api-key-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.api-key-status.configured {
+  border-color: var(--success, #16a34a);
+  color: var(--success, #16a34a);
+}
+.api-key-status.configured .api-key-status-dot {
+  background: var(--success, #16a34a);
+  box-shadow: 0 0 6px var(--success, #16a34a);
+}
+.api-key-status.not-configured {
+  border-color: var(--danger, #dc2626);
+  color: var(--danger, #dc2626);
+}
+.api-key-status.not-configured .api-key-status-dot {
+  background: var(--danger, #dc2626);
+  box-shadow: 0 0 6px var(--danger, #dc2626);
+}
+.api-key-status-text { flex: 1; }
+
+/* v2026-08-28 modacker: API Key 配置模态框 */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+.modal-overlay[hidden] { display: none; }
+.modal-card {
+  background: var(--bg-card, var(--bg-sidebar));
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  min-width: 360px;
+  max-width: 480px;
+  width: 90%;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.modal-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-card-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+.modal-card-close {
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.modal-card-close:hover { color: var(--text); }
+.modal-card-body {
+  padding: 12px 16px;
+}
+.modal-card-status {
+  font-size: 12px;
+  margin-bottom: 10px;
+  word-break: break-all;
+}
+.modal-card-status.configured { color: var(--success, #16a34a); }
+.modal-card-status.not-configured { color: var(--danger, #dc2626); }
+.modal-card-label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+.modal-card-input {
+  width: 100%;
+  background: var(--bg-input, var(--bg-card));
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  box-sizing: border-box;
+}
+.modal-card-input:focus {
+  outline: none;
+  border-color: var(--accent, #3b82f6);
+}
+/* v2026-08-28 modacker: Subscription Key input — visually password-like
+   but semantically type="text" (so the browser's password autofill
+   pipeline doesn't classify the entire page as a credential form
+   and start injecting emails/usernames into every other text input).
+   `-webkit-text-security: disc` renders each char as a bullet point
+   on Chrome/Safari; Firefox falls back to monospace + letter-spacing
+   (still readable as a masked secret, just not bullet-masked). */
+.modal-card-input.secret-input,
+#api-key-modal-input.secret-input {
+  font-family: var(--font-mono, monospace);
+  letter-spacing: 2px;
+  -webkit-text-security: disc;
+}
+.modal-card-help {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+.modal-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+.modal-card-btn {
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.modal-card-btn:hover { background: var(--bg-hover); }
+.modal-card-btn-primary {
+  background: var(--accent, #3b82f6);
+  color: #fff;
+  border-color: var(--accent, #3b82f6);
+}
+.modal-card-btn-primary:hover { filter: brightness(0.9); }
+.modal-card-btn-danger {
+  color: var(--danger, #dc2626);
+  border-color: var(--danger, #dc2626);
+  margin-right: auto;  /* push to the left */
+}
+.modal-card-btn-danger:hover {
+  background: var(--danger, #dc2626);
+  color: #fff;
+}
 
 /* v0.5.bb: toast 通知（用量刷新成功提示）
    v1.0: #toast 元素补齐（此前 index.html 缺该元素, showToast 一直空转）;

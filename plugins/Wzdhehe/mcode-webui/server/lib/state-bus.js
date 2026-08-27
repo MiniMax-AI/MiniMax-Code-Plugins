@@ -12,10 +12,15 @@ import {
 import {
   getCurrentToken,
   getLanBroadcast,
+  getQuotaEnabled,
   getReadOnly,
   getTokenAcknowledged,
   getTokenEnabled,
+  getTokenPlanApiKey,
+  getTokenPlanApiKeyFilePath,
+  getTokenPlanApiKeySource,
   getTokenRotatedAt,
+  maskTokenPlanKey,
 } from "./settings.js";
 
 // v0.5.ai: A2 per-client 架构
@@ -146,6 +151,24 @@ function ensureMcodeSessionsFetchedAndPush(workspace) {
         currentToken: getTokenAcknowledged() ? "" : getCurrentToken(),
         tokenAcknowledged: getTokenAcknowledged(),
         tokenRotatedAt: getTokenRotatedAt(),
+        // v2026-08-28 modacker: Token Plan (套餐用量) feature fields.
+        //   Previously these were only synced via the one-shot
+        //   /api/settings fetch in loadLanInfo(); the SSE replace-state
+        //   pattern (state = JSON.parse(ev.data)) then clobbered them
+        //   on the next push, so toggling the switch appeared to do
+        //   nothing — the usage button stayed hidden. Including them
+        //   in the snapshot makes the client single-source-of-truth
+        //   for everything it shows. The masked key never includes
+        //   the full Subscription Key, only "sk-cp-...XXXX".
+        quotaEnabled: getQuotaEnabled(),
+        hasTokenPlanKey: getTokenPlanApiKey().length > 0,
+        tokenPlanApiKeyMasked: maskTokenPlanKey(),
+        // v2026-08-28 modacker (A+C): external key source surface.
+        //   Webui uses this to hide the "delete" button when the
+        //   key is managed by env / file (the operator would have
+        //   to remove it there, not in the UI).
+        tokenPlanApiKeySource: getTokenPlanApiKeySource(),
+        tokenPlanApiKeyFilePath: getTokenPlanApiKeyFilePath(),
       };
       try {
         res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
@@ -191,6 +214,21 @@ export function pushStateFor(cid, opts = {}) {
         currentToken: getTokenAcknowledged() ? "" : getCurrentToken(),
         tokenAcknowledged: getTokenAcknowledged(),
         tokenRotatedAt: getTokenRotatedAt(),
+        // v2026-08-28 modacker: Token Plan (套餐用量) feature fields —
+        //   see note on the per-cid-branch snapshot below. Same fields,
+        //   same rationale. This is the broadcast path that fires
+        //   after /api/settings mutations (and on the second client
+        //   connect in the test we just ran), so any push without
+        //   these clobbers state.quotaEnabled and re-hides the button.
+        quotaEnabled: getQuotaEnabled(),
+        hasTokenPlanKey: getTokenPlanApiKey().length > 0,
+        tokenPlanApiKeyMasked: maskTokenPlanKey(),
+        // v2026-08-28 modacker (A+C): external key source surface.
+        //   Webui uses this to hide the "delete" button when the
+        //   key is managed by env / file (the operator would have
+        //   to remove it there, not in the UI).
+        tokenPlanApiKeySource: getTokenPlanApiKeySource(),
+        tokenPlanApiKeyFilePath: getTokenPlanApiKeyFilePath(),
       };
       try {
         res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
@@ -218,6 +256,18 @@ export function pushStateFor(cid, opts = {}) {
     currentToken: getTokenAcknowledged() ? "" : getCurrentToken(),
     tokenAcknowledged: getTokenAcknowledged(),
     tokenRotatedAt: getTokenRotatedAt(),
+    // v2026-08-28 modacker: Token Plan (套餐用量) feature fields —
+    //   see note on the broadcast-branch snapshot above. Same fields,
+    //   same rationale. Without these the per-cid SSE push also
+    //   clobbers the local `state.quotaEnabled` and the usage button
+    //   hides itself right after the user toggles it on.
+    quotaEnabled: getQuotaEnabled(),
+    hasTokenPlanKey: getTokenPlanApiKey().length > 0,
+    tokenPlanApiKeyMasked: maskTokenPlanKey(),
+    // v2026-08-28 modacker (A+C): external key source surface — see
+    //   the broadcast-branch snapshot above for rationale.
+    tokenPlanApiKeySource: getTokenPlanApiKeySource(),
+    tokenPlanApiKeyFilePath: getTokenPlanApiKeyFilePath(),
   };
   const payload = JSON.stringify(snapshot);
   const res = sseByCid.get(cid);
@@ -264,6 +314,17 @@ export function pushOnlineCount(lanBroadcast) {
       currentToken: getTokenAcknowledged() ? "" : getCurrentToken(),
       tokenAcknowledged: getTokenAcknowledged(),
       tokenRotatedAt: getTokenRotatedAt(),
+      // v2026-08-28 modacker: Token Plan (套餐用量) feature fields —
+      //   see pushStateFor above. pushOnlineCount fires on every SSE
+      //   client connect/disconnect, so without these the next push
+      //   after a tab opens would also clobber quotaEnabled.
+      quotaEnabled: getQuotaEnabled(),
+      hasTokenPlanKey: getTokenPlanApiKey().length > 0,
+      tokenPlanApiKeyMasked: maskTokenPlanKey(),
+      // v2026-08-28 modacker (A+C): external key source surface — see
+      //   the broadcast-branch snapshot above for rationale.
+      tokenPlanApiKeySource: getTokenPlanApiKeySource(),
+      tokenPlanApiKeyFilePath: getTokenPlanApiKeyFilePath(),
     };
     try {
       res.write(`data: ${JSON.stringify(snapshot)}\n\n`);

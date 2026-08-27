@@ -14,6 +14,14 @@ import {
   absPath,
   registerAcpMock,
   registerSessionsStore,
+  // v2026-08-28 modacker: Token Plan mock mutators, used in the
+  //   quota-fields regression describe block at the bottom of the file.
+  setQuotaEnabled,
+  setTokenPlanApiKey,
+  // v2026-08-28 modacker (A+C): external key source mutators, used
+  //   in the priority-chain + source-field regression block.
+  setEnvTokenPlanKey,
+  setFileTokenPlanKey,
 } from "./_setup.js";
 
 let pushStateFor, mcodeSessionsSnapshotFields;
@@ -380,5 +388,215 @@ describe("v1.0 push fields — mcodeSessions 永不缺失、永不空占位", ()
     assert.ok(Array.isArray(payload.mcodeSessions));
     assert.equal(payload.mcodeSessions.length, 1);
     assert.equal(payload.mcodeSessionsPending, true);
+  });
+});
+
+// ============================================================
+// v2026-08-28 modacker: Token Plan (套餐用量) 推送字段回归
+//   pushStateFor / pushOnlineCount / ensureMcodeSessionsFetchedAndPush
+//   三个推送点的 snapshot 都必须带 quotaEnabled / hasTokenPlanKey /
+//   tokenPlanApiKeyMasked. 之前只走 settings.snapshot (one-shot
+//   loadLanInfo), SSE 整包替换 state 后 quotaEnabled 被冲掉,
+//   "启用套餐用量" toggle 视觉上无反应 — btn-usage 一直 hidden.
+// ============================================================
+describe("v2026-08-28 modacker: Token Plan fields — 每次 SSE 推送必须带 quota 三件", () => {
+  test("pushStateFor (单播) 带 quotaEnabled / hasTokenPlanKey / tokenPlanApiKeyMasked", () => {
+    setQuotaEnabled(true);
+    setTokenPlanApiKey("eyJhbGciOiJIUzI1NiJ9.payload.signature");
+    const cid = "q-cid-1";
+    const cs = makeClientState();
+    cs.workspace.dir = "/w";
+    clients.set(cid, cs);
+    sseByCid.set(cid, fakeSse());
+    pushStateFor(cid);
+    const payload = JSON.parse(sseByCid.get(cid).writes[0].slice(6));
+    assert.equal(payload.quotaEnabled, true, "回归: 该字段缺失则 SSE 替换 state 后 toggle 失效");
+    assert.equal(payload.hasTokenPlanKey, true);
+    assert.equal(payload.tokenPlanApiKeyMasked, "sk-cp-...ture",
+      "masked 形如 sk-cp-...XXXX, 不能回传原始 key");
+    // 反向: 关掉时三件同步更新
+    setQuotaEnabled(false);
+    sseByCid.get(cid).writes.length = 0;
+    pushStateFor(cid);
+    const p2 = JSON.parse(sseByCid.get(cid).writes[0].slice(6));
+    assert.equal(p2.quotaEnabled, false);
+    assert.equal(p2.hasTokenPlanKey, false,
+      "setQuotaEnabled(false) 应当清空 key, hasTokenPlanKey 必须反映");
+    assert.equal(p2.tokenPlanApiKeyMasked, "");
+    // reset for next test
+    setQuotaEnabled(false);
+    setTokenPlanApiKey("");
+  });
+
+  test("pushStateFor (__broadcast__) 也带 quota 三件 — 推给所有 client", () => {
+    setQuotaEnabled(true);
+    setTokenPlanApiKey("abcdefghij");
+    const cidA = "q-A", cidB = "q-B";
+    clients.set(cidA, makeClientState());
+    clients.set(cidB, makeClientState());
+    sseByCid.set(cidA, fakeSse());
+    sseByCid.set(cidB, fakeSse());
+    pushStateFor("__broadcast__");
+    for (const cid of [cidA, cidB]) {
+      const payload = JSON.parse(sseByCid.get(cid).writes[0].slice(6));
+      assert.equal(payload.quotaEnabled, true, `client ${cid} 收到 broadcast 必须带 quotaEnabled`);
+      assert.equal(payload.hasTokenPlanKey, true);
+      assert.equal(payload.tokenPlanApiKeyMasked, "sk-cp-...ghij");
+    }
+    setQuotaEnabled(false);
+    setTokenPlanApiKey("");
+  });
+
+  test("pushOnlineCount 带 quota 三件 — 在线数变化那次推送不能冲掉", () => {
+    setQuotaEnabled(true);
+    setTokenPlanApiKey("1234567890");
+    const cid = "q-online";
+    const cs = makeClientState();
+    cs.workspace.dir = "/w";
+    clients.set(cid, cs);
+    sseByCid.set(cid, fakeSse());
+    pushOnlineCount(true);
+    const payload = JSON.parse(sseByCid.get(cid).writes[0].slice(6));
+    assert.equal(payload.quotaEnabled, true,
+      "回归: 之前 pushOnlineCount 不带此字段, 多 tab 打开/关闭时 toggle 被打回");
+    assert.equal(payload.hasTokenPlanKey, true);
+    assert.equal(payload.tokenPlanApiKeyMasked, "sk-cp-...7890");
+    setQuotaEnabled(false);
+    setTokenPlanApiKey("");
+  });
+});
+
+// ============================================================
+// v2026-08-28 modacker (A+C): 外部 key 源优先级链 + source 字段
+//   getTokenPlanApiKey() 优先级: env > file > settings.json
+//   每次 SSE 推送必须带 tokenPlanApiKeySource + tokenPlanApiKeyFilePath
+//   这两个新字段, webui 据此隐藏 "delete" 按钮 + 显示来源标签。
+//   这些测试同时也是 _setup.js mock 跟真实实现行为一致的契约。
+// ============================================================
+describe("v2026-08-28 modacker (A+C): external key source 优先级 + SSE 字段", () => {
+  function snapshotOf(cid) {
+    return JSON.parse(sseByCid.get(cid).writes[0].slice(6));
+  }
+
+  test("settings.json 路径: source = 'settings', 无 file path", () => {
+    setQuotaEnabled(true);
+    setTokenPlanApiKey("settings-key-1234");
+    const cid = "src-1";
+    clients.set(cid, makeClientState());
+    sseByCid.set(cid, fakeSse());
+    pushStateFor(cid);
+    const p = snapshotOf(cid);
+    assert.equal(p.tokenPlanApiKeySource, "settings");
+    assert.equal(p.tokenPlanApiKeyFilePath, "");
+    assert.equal(p.hasTokenPlanKey, true);
+    assert.equal(p.tokenPlanApiKeyMasked, "sk-cp-...1234");
+    setTokenPlanApiKey("");
+    setQuotaEnabled(false);
+  });
+
+  test("file 路径: source = 'file', 带 file path, 屏蔽 settings.json", () => {
+    setQuotaEnabled(true);
+    setTokenPlanApiKey("settings-key-1234");
+    setFileTokenPlanKey("file-key-5678", "/tmp/token-plan.json");
+    const cid = "src-2";
+    clients.set(cid, makeClientState());
+    sseByCid.set(cid, fakeSse());
+    pushStateFor(cid);
+    const p = snapshotOf(cid);
+    assert.equal(p.tokenPlanApiKeySource, "file",
+      "file 路径应当胜过 settings.json (env 缺席时)");
+    assert.equal(p.tokenPlanApiKeyFilePath, "/tmp/token-plan.json");
+    assert.equal(p.hasTokenPlanKey, true);
+    assert.equal(p.tokenPlanApiKeyMasked, "sk-cp-...5678",
+      "masked 用 file key 算, 不是 settings key");
+    // reset
+    setFileTokenPlanKey("", "");
+    setTokenPlanApiKey("");
+    setQuotaEnabled(false);
+  });
+
+  test("env 路径: source = 'env', 屏蔽 file + settings.json", () => {
+    setQuotaEnabled(true);
+    setTokenPlanApiKey("settings-key-1234");
+    setFileTokenPlanKey("file-key-5678", "/tmp/token-plan.json");
+    setEnvTokenPlanKey("env-key-9999");
+    const cid = "src-3";
+    clients.set(cid, makeClientState());
+    sseByCid.set(cid, fakeSse());
+    pushStateFor(cid);
+    const p = snapshotOf(cid);
+    assert.equal(p.tokenPlanApiKeySource, "env",
+      "env 应当胜过 file + settings.json, 是最高优先级");
+    assert.equal(p.hasTokenPlanKey, true);
+    assert.equal(p.tokenPlanApiKeyMasked, "sk-cp-...9999",
+      "masked 用 env key 算, 不是 file/settings");
+    // reset
+    setEnvTokenPlanKey("");
+    setFileTokenPlanKey("", "");
+    setTokenPlanApiKey("");
+    setQuotaEnabled(false);
+  });
+
+  test("env 清空 → 自动降级到 file → 再降级到 settings.json", () => {
+    setQuotaEnabled(true);
+    setTokenPlanApiKey("settings-key-1234");
+    setFileTokenPlanKey("file-key-5678", "/tmp/token-plan.json");
+    setEnvTokenPlanKey("env-key-9999");
+    const cid = "src-4";
+    clients.set(cid, makeClientState());
+    sseByCid.set(cid, fakeSse());
+    // initial: env
+    pushStateFor(cid);
+    assert.equal(snapshotOf(cid).tokenPlanApiKeySource, "env");
+    // 清 env — file 顶上
+    sseByCid.get(cid).writes.length = 0;
+    setEnvTokenPlanKey("");
+    pushStateFor(cid);
+    assert.equal(snapshotOf(cid).tokenPlanApiKeySource, "file",
+      "env 取消后, file 自动顶上 — 优先级链实时");
+    // 清 file — settings 顶上
+    sseByCid.get(cid).writes.length = 0;
+    setFileTokenPlanKey("", "");
+    pushStateFor(cid);
+    assert.equal(snapshotOf(cid).tokenPlanApiKeySource, "settings",
+      "file 也取消后, settings.json 顶上");
+    // reset
+    setTokenPlanApiKey("");
+    setQuotaEnabled(false);
+  });
+
+  test("broadcast (pushStateFor __broadcast__) 同样带 source + file path", () => {
+    setQuotaEnabled(true);
+    setFileTokenPlanKey("file-key-aaaa", "/etc/webui/key.json");
+    const cidA = "src-A", cidB = "src-B";
+    clients.set(cidA, makeClientState());
+    clients.set(cidB, makeClientState());
+    sseByCid.set(cidA, fakeSse());
+    sseByCid.set(cidB, fakeSse());
+    pushStateFor("__broadcast__");
+    for (const cid of [cidA, cidB]) {
+      const p = snapshotOf(cid);
+      assert.equal(p.tokenPlanApiKeySource, "file");
+      assert.equal(p.tokenPlanApiKeyFilePath, "/etc/webui/key.json");
+    }
+    setFileTokenPlanKey("", "");
+    setQuotaEnabled(false);
+  });
+
+  test("无任何 key 时 source = '', hasTokenPlanKey = false", () => {
+    // explicit reset
+    setTokenPlanApiKey("");
+    setFileTokenPlanKey("", "");
+    setEnvTokenPlanKey("");
+    setQuotaEnabled(false);
+    const cid = "src-empty";
+    clients.set(cid, makeClientState());
+    sseByCid.set(cid, fakeSse());
+    pushStateFor(cid);
+    const p = snapshotOf(cid);
+    assert.equal(p.tokenPlanApiKeySource, "");
+    assert.equal(p.hasTokenPlanKey, false);
+    assert.equal(p.tokenPlanApiKeyMasked, "");
+    assert.equal(p.quotaEnabled, false);
   });
 });

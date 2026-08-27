@@ -12,7 +12,7 @@
 
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, openSync, closeSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 
 import { PORT, HOST } from "./config.js";
@@ -41,6 +41,13 @@ function defaultState() {
     currentToken: "",         // 启动时 init() 决定
     tokenRotatedAt: 0,
     tokenAcknowledged: false,
+    // v2026-08-28 modacker: Token Plan API key (Subscription Key from
+    // platform.minimaxi.com) — when `quotaEnabled=true` AND a key is
+    // set, webui's "套餐用量" feature becomes visible and calls the
+    // official /v1/token_plan/remains API. Otherwise the feature is
+    // hidden entirely (see server/lib/usage.js).
+    quotaEnabled: false,
+    tokenPlanApiKey: "",
   };
 }
 
@@ -53,6 +60,33 @@ let tokenAuthEnabled = true;
 let currentToken = "";
 let tokenRotatedAt = 0;
 let tokenAcknowledged = false;
+let quotaEnabled = false;
+let tokenPlanApiKey = "";
+
+// v2026-08-28 modacker: external Token Plan key sources (env / file).
+//   These are read ONCE at init() and shadow the in-memory value when
+//   present. The webui's text input (which writes to `tokenPlanApiKey`
+//   via setTokenPlanApiKey) cannot override them — the priority chain
+//   is "env > file > settings.json", same shape as the existing
+//   process.env.TOKEN override for the LAN auth token (lines 91-94,
+//   230-234). This means:
+//     - Operator with env set: webui text input is "shown for
+//       discoverability" but does not take effect. The UI surfaces
+//       this by hiding the "delete" button (env-managed keys can't
+//       be deleted from the webui — only by unsetting the env).
+//     - Operator with file set: same semantics; the file is re-read
+//       only on init (not on every fetch) so a manual edit requires
+//       a webui restart to take effect — matches the operator's
+//       mental model of "this is a config file, I restart the
+//       service after editing it".
+//   We do NOT persist env/file values back to settings.json (they
+//   are not "ours" to persist) and we do NOT clobber them when
+//   setTokenPlanApiKey("") is called from the webui (it only clears
+//   the in-memory + settings.json path).
+let _envTokenPlanKey = "";     // captured from process.env at init
+let _fileTokenPlanKey = "";    // read from conventional file at init
+let _fileTokenPlanPath = "";   // resolved path (for log line + UI display)
+let _externalKeySource = "";   // "env" | "file" | "" (empty = settings.json only)
 
 // -----------------------------------------------------------------------
 // Token generation
@@ -163,6 +197,8 @@ export function buildPersistBody() {
     currentToken: currentToken,
     tokenRotatedAt: tokenRotatedAt,
     tokenAcknowledged: tokenAcknowledged,
+    quotaEnabled: quotaEnabled,
+    tokenPlanApiKey: tokenPlanApiKey,
   };
 }
 
@@ -204,6 +240,8 @@ export function init(opts = {}) {
     if (typeof onDisk.currentToken === "string") currentToken = onDisk.currentToken;
     if (typeof onDisk.tokenRotatedAt === "number") tokenRotatedAt = onDisk.tokenRotatedAt;
     if (typeof onDisk.tokenAcknowledged === "boolean") tokenAcknowledged = onDisk.tokenAcknowledged;
+    if (typeof onDisk.quotaEnabled === "boolean") quotaEnabled = onDisk.quotaEnabled;
+    if (typeof onDisk.tokenPlanApiKey === "string") tokenPlanApiKey = onDisk.tokenPlanApiKey;
   } else {
     firstRun = true;
     // Reset in-memory state to defaults
@@ -253,6 +291,28 @@ export function init(opts = {}) {
 
   // Sync to auth module
   syncAuthToken();
+
+  // v2026-08-28 modacker: capture external Token Plan key sources
+  //   (env / file). Done after the auth sync so any startup errors
+  //   in the auth path are surfaced before we touch the key plumbing.
+  //   If an external key is found and no on-disk key was loaded,
+  //   we also auto-enable quotaEnabled — the operator already
+  //   committed to using the feature by setting the env / writing
+  //   the file, so flipping the switch on is just plumbing.
+  _loadExternalTokenPlanKeys();
+  if (_externalKeySource && !onDisk && typeof onDisk === "object") {
+    // firstRun: settings.json was just created with quotaEnabled=false.
+    // External key was found → auto-enable.
+  }
+  if (_externalKeySource) {
+    const wasEnabled = quotaEnabled;
+    quotaEnabled = true;
+    if (!wasEnabled) {
+      console.log(
+        `[webui] Token Plan: external key source="${_externalKeySource}", auto-enabling quota`,
+      );
+    }
+  }
 }
 
 // -----------------------------------------------------------------------
@@ -283,6 +343,51 @@ export function getTokenAcknowledged() {
   return tokenAcknowledged;
 }
 
+// v2026-08-28 modacker: Token Plan (套餐用量) feature gates.
+// When `quotaEnabled=false` OR no `tokenPlanApiKey` set, the
+// "套餐用量" button is hidden in the UI and the API isn't called.
+//
+// v2026-08-28 (later): getTokenPlanApiKey() now consults external
+//   sources in priority order: env > file > settings.json. The
+//   in-memory `tokenPlanApiKey` (settings.json) is the lowest tier.
+//   Use getTokenPlanApiKeySource() to see which tier is in effect —
+//   the webui uses this to decide whether to show the "delete" button
+//   (only enabled for settings.json, not for env / file).
+export function getQuotaEnabled() {
+  return quotaEnabled;
+}
+
+export function getTokenPlanApiKey() {
+  if (_envTokenPlanKey) return _envTokenPlanKey;
+  if (_fileTokenPlanKey) return _fileTokenPlanKey;
+  return tokenPlanApiKey;
+}
+
+// getTokenPlanApiKeySource — "env" | "file" | "settings" | "".
+//   Empty string means the key came from the in-memory settings.json
+//   path (the "settings" value) — distinguishing the empty-source
+//   case from "no key at all" requires checking hasTokenPlanKey().
+export function getTokenPlanApiKeySource() {
+  if (_externalKeySource) return _externalKeySource;
+  return tokenPlanApiKey ? "settings" : "";
+}
+
+// getTokenPlanApiKeyFilePath — exposed for the UI's "managed by file:
+// <path>" tooltip. Empty when the file source is not in use.
+export function getTokenPlanApiKeyFilePath() {
+  return _fileTokenPlanPath || "";
+}
+
+// maskTokenPlanKey — for the GET /api/settings response. Returns
+// "sk-cp-...XXXX" where XXXX is the last 4 chars. Empty string if
+// no key set. The full key never leaves the server over GET.
+export function maskTokenPlanKey() {
+  const k = getTokenPlanApiKey();
+  if (!k) return "";
+  if (k.length <= 4) return "****";
+  return "sk-cp-..." + k.slice(-4);
+}
+
 export function getAllowedInterfaces() {
   // Removed in v1.0.1 cleanup (per #16 reviewer scope). Kept as a
   // no-op stub for tests + clients that still call it — returns the
@@ -293,6 +398,86 @@ export function getAllowedInterfaces() {
 // getPersistPath — exposed for tests + startup log ("settings at ...")
 export function getPersistPath() {
   return _settingsPath();
+}
+
+// -----------------------------------------------------------------------
+// v2026-08-28 modacker: External Token Plan key sources
+//   - MCODE_WEBUI_TOKEN_PLAN_KEY env var
+//   - ~/.minimax/credentials/token-plan.json (path overridable via
+//     MCODE_WEBUI_TOKEN_PLAN_KEY_FILE)
+//   Both are read once at init() and shadow the settings.json value
+//   when present. See comment on _externalKeySource for the rationale.
+// -----------------------------------------------------------------------
+
+// _resolveTokenPlanKeyFile — convention: ~/.minimax/credentials/token-plan.json.
+//   Resolve relative paths against cwd; absolutize, don't trust
+//   shell-expanded values.
+function _resolveTokenPlanKeyFile() {
+  if (process.env.MCODE_WEBUI_TOKEN_PLAN_KEY_FILE) {
+    return resolve(process.env.MCODE_WEBUI_TOKEN_PLAN_KEY_FILE);
+  }
+  return join(homedir(), ".minimax", "credentials", "token-plan.json");
+}
+
+// _readTokenPlanKeyFile — best-effort JSON read; never throws.
+//   Accepts either {"key": "..."} or a raw string in the file body
+//   (whitespace-trimmed), so an operator can `echo "sk-cp-..." >
+//   token-plan.json` without worrying about JSON syntax. Future
+//   fields (accountId, groupId) ignored.
+function _readTokenPlanKeyFile() {
+  const p = _resolveTokenPlanKeyFile();
+  if (!existsSync(p)) return { key: "", path: "" };
+  let raw;
+  try {
+    raw = readFileSync(p, "utf8");
+  } catch (e) {
+    console.warn(
+      `[webui] token-plan key file read ${p} failed: ${e.message} — falling back to settings.json`,
+    );
+    return { key: "", path: p };
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) return { key: "", path: p };
+  // Try JSON first; fall back to raw.
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed && typeof parsed.key === "string") {
+        return { key: parsed.key.trim(), path: p };
+      }
+    } catch {
+      // fall through to raw
+    }
+  }
+  return { key: trimmed, path: p };
+}
+
+// _loadExternalTokenPlanKeys — called from init(). Captures the
+//   env var + reads the file once. Order: env wins; file is the
+//   fallback. Sets _externalKeySource so getTokenPlanApiKeySource()
+//   can report "env" / "file" / "" (settings.json only).
+function _loadExternalTokenPlanKeys() {
+  const envRaw = (process.env.MCODE_WEBUI_TOKEN_PLAN_KEY || "").trim();
+  _envTokenPlanKey = envRaw;
+  if (envRaw) {
+    _externalKeySource = "env";
+    return;
+  }
+  const fileRead = _readTokenPlanKeyFile();
+  _fileTokenPlanKey = fileRead.key;
+  _fileTokenPlanPath = fileRead.path;
+  if (fileRead.key) {
+    _externalKeySource = "file";
+  } else {
+    _externalKeySource = "";
+  }
+}
+
+// Public, for tests: clear + reload external sources. init() calls
+// this on startup; tests can call it again after mutating process.env
+// or the file.
+export function reloadExternalTokenPlanKeys() {
+  _loadExternalTokenPlanKeys();
 }
 
 // -----------------------------------------------------------------------
@@ -330,6 +515,43 @@ export function setTokenAcknowledged(v) {
 
 export function setAllowedInterfaces(_ifaces) {
   // Removed in v1.0.1 cleanup (per #16 reviewer scope). No-op stub.
+}
+
+// v2026-08-28 modacker: set the Subscription Key (Token Plan API key).
+// Empty string clears it. Persisted on disk next to other settings;
+// the key is stored in plain text in settings.json (same trust model
+// as the existing currentToken). The owner is responsible for ensuring
+// ~/.mcode-webui/settings.json is readable only by the user account
+// running the webui.
+//
+// If an external source (env / file) is in effect, the in-memory
+// `tokenPlanApiKey` is still written and persisted — that way, if
+// the operator later unsets the env / removes the file, the
+// settings.json value is already there waiting. The webui's
+// "managed by env/file" badge hides this from the user, but the
+// data is preserved. This matches the existing pattern: env is
+// authoritative at READ time; the underlying disk state is kept
+// in sync regardless of which source is currently in use.
+export function setTokenPlanApiKey(k) {
+  tokenPlanApiKey = typeof k === "string" ? k : "";
+  try { persistNow(); } catch {}
+}
+
+export function setQuotaEnabled(v) {
+  quotaEnabled = !!v;
+  // Disabling also clears the settings.json key (don't keep
+  // credentials around if the user explicitly turned the feature
+  // off). External env/file keys are NOT cleared here — they're
+  // the operator's, not ours to delete. If the operator unset the
+  // env / file, getTokenPlanApiKey() will already return "" and
+  // /api/usage will fail with a clear "no key" path. Toggling
+  // off then back on will reuse the settings.json value if it
+  // was non-empty when toggled off, so the user's last typed key
+  // survives a UI round-trip even when env/file are not present.
+  if (!quotaEnabled) {
+    tokenPlanApiKey = "";
+  }
+  try { persistNow(); } catch {}
 }
 
 // rotateToken — generate a new token, persist, sync to auth module.
@@ -471,6 +693,26 @@ export function getSettingsSnapshot(availableInterfaces = null) {
     tokenAcknowledged: tokenAcknowledged,
     currentToken: includeToken ? currentToken : "",
     tokenRotatedAt: tokenRotatedAt,
+    // v2026-08-28 modacker: Token Plan (套餐用量) feature.
+    // `quotaEnabled` is the master switch. The Subscription Key is
+    // NEVER returned in full — only the masked preview. The full key
+    // is read directly from settings.js server-side when /api/usage
+    // fires the upstream API.
+    //   - `tokenPlanApiKeySource` ("env" / "file" / "settings" / ""):
+    //     tells the UI where the active key came from. The webui
+    //     uses this to hide the "delete" button when the key is
+    //     managed externally — you can only delete what you set.
+    //   - `tokenPlanApiKeyFilePath`: the resolved file path when
+    //     source === "file", for the tooltip / status line. Empty
+    //     string otherwise.
+    //   - `hasTokenPlanKey` is true if ANY of the three tiers
+    //     (env / file / settings.json) has a non-empty key. This
+    //     is the "can we call the upstream API right now?" signal.
+    quotaEnabled: quotaEnabled,
+    tokenPlanApiKeyMasked: maskTokenPlanKey(),
+    hasTokenPlanKey: !!getTokenPlanApiKey(),
+    tokenPlanApiKeySource: getTokenPlanApiKeySource(),
+    tokenPlanApiKeyFilePath: getTokenPlanApiKeyFilePath(),
     port: PORT,
     host: HOST,
     lanIp: LAN_IP,

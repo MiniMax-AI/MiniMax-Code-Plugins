@@ -24,12 +24,43 @@ const I18N = {
     cancel: '取消',
     usage: '套餐用量',
     usage_loading: '点击套餐用量加载...',
+    quota_card_title: '套餐用量 (Token Plan)',
+    quota_card_enabled: '显示套餐用量',
+    quota_card_enabled_help: '关闭后,套餐用量按钮在主界面消失',
+    quota_card_key: 'Subscription Key',
+    quota_card_key_help: '从 platform.minimaxi.com/user-center/token-plan 获取,明文存到 settings.json',
+    save: '保存',
+    clear: '清空',
+    quota_no_data_hint: '套餐用量暂未启用。点击下方按钮到「外观」面板配置。',
+    quota_go_settings: '去外观面板设置',
+    quota_disabled: '未启用',
+    quota_saved: '已保存',
+    quota_need_key: '请填 Subscription Key',
+    quota_clear_confirm: '确定清空 Subscription Key?清空后套餐用量数据不显示。',
+    quota_cleared: '已清空',
+    quota_status_configured: '已配置',
+    quota_status_not_configured: '未配置',
+    // v2026-08-28 modacker (A+C): external key source labels — shown
+    //   after the masked key in the popover + modal status line so
+    //   the user can tell where the active key is coming from.
+    //   "env" is short and matches the env var name; "file" pairs
+    //   with the resolved file path in the modal status line.
+    quota_source_env: 'env',
+    quota_source_file: 'file',
+    quota_delete_disabled_external: '当前 key 由外部源管理(env / file),无法在界面删除',
+    quota_input_placeholder_env: 'env 优先,此处的值在 env 取消前不会被使用',
+    quota_input_placeholder_file: 'file 优先,此处的值在文件移除前不会被使用',
+    quota_modal_title: '配置 Subscription Key',
+    delete_key: '删除',
     upgrade: '升级',
     appearance: '外观',
     language: '语言',
     settings: '设置',
     appearance_light: '明亮',
     appearance_dark: '深色',
+    appearance_theme: '主题',
+    appearance_theme_help: '切换亮色/深色主题',
+    appearance_quota_help: '关掉后,套餐用量按钮在主界面消失',
     language_zh: '简体中文',
     language_en: 'English',
     empty_hint_1: '还没有消息 — 在下方输入开始对话',
@@ -194,12 +225,39 @@ const I18N = {
     cancel: 'Cancel',
     usage: 'Usage',
     usage_loading: 'Click to load usage...',
+    quota_card_title: 'Quota (Token Plan)',
+    quota_card_enabled: 'Show usage',
+    quota_card_enabled_help: 'When off, the usage button disappears from the main UI',
+    quota_card_key: 'Subscription Key',
+    quota_card_key_help: 'Get from platform.minimaxi.com/user-center/token-plan. Stored in plain text in settings.json',
+    save: 'Save',
+    clear: 'Clear',
+    quota_no_data_hint: 'Quota feature is not enabled. Click the button below to open Appearance settings.',
+    quota_go_settings: 'Open Appearance settings',
+    quota_disabled: 'Disabled',
+    quota_saved: 'Saved',
+    quota_need_key: 'Enter Subscription Key',
+    quota_clear_confirm: 'Clear Subscription Key? Quota data will stop showing.',
+    quota_cleared: 'Cleared',
+    quota_status_configured: 'Configured',
+    quota_status_not_configured: 'Not configured',
+    // v2026-08-28 modacker (A+C): external key source labels
+    quota_source_env: 'env',
+    quota_source_file: 'file',
+    quota_delete_disabled_external: 'Key is managed externally (env / file); cannot be deleted from the UI',
+    quota_input_placeholder_env: 'env takes priority — this value is ignored while the env var is set',
+    quota_input_placeholder_file: 'file takes priority — this value is ignored while the file is present',
+    quota_modal_title: 'Configure Subscription Key',
+    delete_key: 'Delete',
     upgrade: 'Upgrade',
     appearance: 'Appearance',
     language: 'Language',
     settings: 'Settings',
     appearance_light: 'Light',
     appearance_dark: 'Dark',
+    appearance_theme: 'Theme',
+    appearance_theme_help: 'Toggle light/dark theme',
+    appearance_quota_help: 'When off, the usage button disappears from the main UI',
     language_zh: '中文',
     language_en: 'English',
     empty_hint_1: 'No messages yet — start typing below',
@@ -385,6 +443,10 @@ const APPEARANCE_ICON_MOON = '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 
 export function applyTheme() {
   document.documentElement.setAttribute('data-theme', theme)
   document.getElementById('appearance-value').textContent = t(theme === 'light' ? 'appearance_light' : 'appearance_dark')
+  // v2026-08-28 modacker: sync the appearance-card's theme checkbox
+  // (the new "外观" popover) with the current theme.
+  const cardCheckbox = document.getElementById('appearance-card-theme')
+  if (cardCheckbox) cardCheckbox.checked = theme === 'dark'
   const icon = document.getElementById('appearance-icon')
   if (icon) icon.innerHTML = (theme === 'light') ? APPEARANCE_ICON_SUN : APPEARANCE_ICON_MOON
 }

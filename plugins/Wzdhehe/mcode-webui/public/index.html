@@ -74,7 +74,7 @@
         </button>
         <div class="search-box">
           <svg class="icon search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input class="search-input" id="search-input" data-i18n-placeholder="search_placeholder" placeholder="搜索会话...">
+          <input class="search-input" id="search-input" type="text" maxlength="500" tabindex="0" data-i18n-placeholder="search_placeholder" placeholder="搜索会话..." readonly onmousedown="this.removeAttribute('readonly')" onfocus="this.removeAttribute('readonly')" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other">
         </div>
       </div>
 
@@ -115,12 +115,64 @@
             <div class="quota-loading" data-i18n="usage_loading">加载中...</div>
           </div>
         </div>
-        <button class="btn-menu" id="btn-appearance">
+
+        <!-- v2026-08-28 modacker: API Key 配置模态框. 从套餐用量 popover 底部按钮唤起.
+             弹出后 input + 保存/删除(已配置时显示). -->
+        <div class="modal-overlay" id="api-key-modal" hidden>
+          <div class="modal-card" role="dialog" aria-labelledby="api-key-modal-title">
+            <div class="modal-card-header">
+              <span class="modal-card-title" id="api-key-modal-title" data-i18n="quota_modal_title">配置 Subscription Key</span>
+              <button class="modal-card-close" id="api-key-modal-close" aria-label="关闭">×</button>
+            </div>
+            <div class="modal-card-body">
+              <div class="modal-card-status" id="api-key-modal-status"></div>
+              <label class="modal-card-label" for="api-key-modal-input" data-i18n="quota_card_key">Subscription Key</label>
+              <input type="text" class="modal-card-input secret-input" id="api-key-modal-input" placeholder="sk-cp-..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other" />
+              <div class="modal-card-help" data-i18n="quota_card_key_help">从 platform.minimaxi.com/user-center/token-plan 获取,明文存到 settings.json</div>
+            </div>
+            <div class="modal-card-actions">
+              <button class="modal-card-btn modal-card-btn-danger" id="api-key-modal-delete" data-i18n="delete_key" hidden>删除</button>
+              <button class="modal-card-btn" id="api-key-modal-cancel" data-i18n="cancel">取消</button>
+              <button class="modal-card-btn modal-card-btn-primary" id="api-key-modal-save" data-i18n="save">保存</button>
+            </div>
+          </div>
+        </div>
+        <button class="btn-menu" id="btn-appearance" aria-haspopup="true" aria-expanded="false">
           <svg class="icon btn-icon" id="appearance-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
           <span class="btn-text" data-i18n="appearance">外观</span>
           <span class="btn-value" id="appearance-value">—</span>
           <svg class="icon btn-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
         </button>
+        <!-- v2026-08-28 modacker: appearance settings card.
+             Click btn-appearance to open. Contains: light/dark toggle,
+             "显示用量" toggle, and the Token Plan Subscription Key
+             input. Replaces the previous inline theme toggle. -->
+        <div class="lan-card" id="appearance-card" hidden>
+          <div class="lan-card-title" data-i18n="appearance">外观</div>
+
+          <div class="lan-card-row">
+            <div class="lan-card-row-label">
+              <span data-i18n="appearance_theme">主题</span>
+              <span class="lan-card-row-help" data-i18n="appearance_theme_help" title="切换亮色/深色主题">切换亮色/深色主题</span>
+            </div>
+            <label class="lan-card-toggle" for="appearance-card-theme">
+              <input type="checkbox" id="appearance-card-theme" />
+              <span class="lan-card-toggle-slider"></span>
+            </label>
+          </div>
+
+          <!-- v2026-08-28 modacker: 套餐用量显示开关. 关掉 → 左下"套餐用量"按钮从主 UI 消失. -->
+          <div class="lan-card-row">
+            <div class="lan-card-row-label">
+              <span data-i18n="quota_card_enabled">启用</span>
+              <span class="lan-card-row-help" data-i18n="appearance_quota_help" title="关掉后,套餐用量按钮在主界面消失,可在 LAN 卡内填 Subscription Key">关掉后，套餐用量按钮在主界面消失</span>
+            </div>
+            <label class="lan-card-toggle" for="appearance-card-quota">
+              <input type="checkbox" id="appearance-card-quota" />
+              <span class="lan-card-toggle-slider"></span>
+            </label>
+          </div>
+        </div>
         <button class="btn-menu" id="btn-language">
           <svg class="icon btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
           <span class="btn-text" data-i18n="language">语言</span>
@@ -145,32 +197,32 @@
           <div class="lan-card-title" data-i18n="lan_card_title">局域网安全设置</div>
 
           <div class="lan-card-row">
-            <label class="lan-card-row-label">
+            <div class="lan-card-row-label">
               <span data-i18n="lan_access">局域网访问</span>
-            </label>
-            <label class="lan-card-toggle">
+            </div>
+            <label class="lan-card-toggle" for="lan-card-broadcast">
               <input type="checkbox" id="lan-card-broadcast" />
               <span class="lan-card-toggle-slider"></span>
             </label>
           </div>
 
           <div class="lan-card-row">
-            <label class="lan-card-row-label">
+            <div class="lan-card-row-label">
               <span data-i18n="lan_card_readonly">只读模式</span>
               <span class="lan-card-row-help" data-i18n="lan_card_readonly_help" title="远程客户端只能读取，不能发送消息/删除会话">远程客户端只能读取，不能发送消息/删除会话</span>
-            </label>
-            <label class="lan-card-toggle">
+            </div>
+            <label class="lan-card-toggle" for="lan-card-readonly">
               <input type="checkbox" id="lan-card-readonly" />
               <span class="lan-card-toggle-slider"></span>
             </label>
           </div>
 
           <div class="lan-card-row">
-            <label class="lan-card-row-label">
+            <div class="lan-card-row-label">
               <span data-i18n="lan_card_token_auth">Token 鉴权</span>
               <span class="lan-card-row-help" data-i18n="lan_card_token_auth_help" title="需要 ?token= 或 Authorization header；本机不受限">需要 ?token= 或 Authorization header；本机不受限</span>
-            </label>
-            <label class="lan-card-toggle">
+            </div>
+            <label class="lan-card-toggle" for="lan-card-token-auth">
               <input type="checkbox" id="lan-card-token-auth" />
               <span class="lan-card-toggle-slider"></span>
             </label>
@@ -296,7 +348,7 @@
                 <div class="model-picker-loading" data-i18n="model_picker_loading">加载中...</div>
               </div>
               <div class="model-picker-divider"></div>
-              <input class="model-picker-input" id="model-picker-input" placeholder="provider/model[#variant]" />
+              <input class="model-picker-input" id="model-picker-input" placeholder="provider/model[#variant]" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" />
               <div class="model-picker-hint" data-i18n="model_picker_hint">回车发送 /model 命令给 mcode</div>
               <div class="model-picker-actions">
                 <button class="btn-cancel" id="model-picker-cancel" data-i18n="cancel">取消</button>
@@ -576,7 +628,7 @@
       <div id="ask-modal-options" class="ask-modal-options"></div>
     </div>
     <div class="ask-modal-footer">
-      <input type="text" id="ask-modal-other" class="ask-modal-other" placeholder="其他 (回车发送)..." />
+      <input type="text" id="ask-modal-other" class="ask-modal-other" placeholder="其他 (回车发送)..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" />
       <button class="ask-modal-btn-secondary" id="ask-modal-skip">跳过</button>
       <button class="ask-modal-btn-primary" id="ask-modal-send">发送</button>
     </div>
@@ -595,7 +647,7 @@
 <!-- v7: v0.5.bx-28 ask modal X/Esc/背景 改"彻底放弃" (清除 pendingAskUser, 不发 Q/A 给 mcode) -->
 <!-- v8: v0.5.bx-29 fix context usage: SSE 连接时主动 hydrate mavis db 真值 + finalize 时 broadcast 到同 mcodeSessionId 的所有 cid -->
 <!-- v9: v0.5.bx-31 删 send() 里基于 pendingAskUser 的 Q/A 模板化兜底 + render 时设 pendingAskUser; chat 发消息永远不被套 -->
-<script type="module" src="/app/main.js?v=9"></script>
+<script type="module" src="/app/main.js?v=17"></script>
 
 <!-- v1.0: 全局 toast 容器 — #toast 元素此前缺失, showToast() 一直静默空转 (LAN 开关/复制/用量刷新全无提示) -->
 <div id="toast" class="toast" role="status" aria-live="polite"></div>

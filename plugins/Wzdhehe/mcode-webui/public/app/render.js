@@ -413,6 +413,31 @@ export function renderLanCardContent(s) {
   if (lanCardTokenAck) lanCardTokenAck.hidden = s.tokenAcknowledged !== false
 }
 
+// v2026-08-28 modacker: render the Token Plan (套餐用量) card.
+// Reflects server's `quotaEnabled` and the masked key preview. The
+// real key never leaves the server; this function only shows the
+// masked tail + a "set" / "not set" status line.
+export function renderQuotaCardContent(s) {
+  if (!s) return
+  const enabled = document.getElementById('quota-card-enabled')
+  const input = document.getElementById('quota-card-key-input')
+  const status = document.getElementById('quota-card-status')
+  if (enabled) enabled.checked = s.quotaEnabled === true
+  // Always clear the password input on render (don't keep typed-but-unsaved
+  // values around). Show a status line that indicates current server state.
+  if (input) input.value = ''
+  if (status) {
+    if (s.hasTokenPlanKey) {
+      const masked = s.tokenPlanApiKeyMasked || 'sk-cp-...'
+      status.textContent = `已保存 (${masked})`
+    } else if (s.quotaEnabled) {
+      status.textContent = '请填 Subscription Key'
+    } else {
+      status.textContent = '未启用'
+    }
+  }
+}
+
 // v0.5.bx-31: sidebar 首次 SSE 推 mcodeSessions 之前显示 skeleton, 避免点删除/切时 race
 //   mcode acp singleton 启动要 1-3s, 期间 state.mcodeSessions=[] → render 显示空
 //   用户在空 sidebar 上点删除 webui entry, mcode db 的对应 session 没删 → SSE 推过来时"又出现"

@@ -148,12 +148,45 @@ export function connect() {
       // v0.5.bx-8: 保留 askUserAnswers (webui-only, server 不存) — SSE 推送整 state 会覆盖
       // v1.0: 同理保留 mcodeSessions — pushOnlineCount 等推送点若缺该字段, 整包替换后
       //   mcodeSessions 变 undefined, 侧栏闪跌; 旧值好过没值
+      // v2026-08-28 modacker: 同理保留 Token Plan (套餐用量) feature fields
+      //   (quotaEnabled / hasTokenPlanKey / tokenPlanApiKeyMasked).
+      //   The server now includes them in the snapshot (state-bus.js),
+      //   but we still preserve them defensively: if any future
+      //   snapshot builder forgets one of these, the user's
+      //   "已开启套餐用量" toggle should not silently revert. State
+      //   class is read directly in renderUsage() to decide btn-usage
+      //   visibility, so losing quotaEnabled on a re-render hides the
+      //   button right after the user opens it.
       const preserved = state?.askUserAnswers
       const preservedMcodeSessions = state?.mcodeSessions
+      const preservedQuotaEnabled = state?.quotaEnabled
+      const preservedHasTokenPlanKey = state?.hasTokenPlanKey
+      const preservedTokenPlanApiKeyMasked = state?.tokenPlanApiKeyMasked
+      // v2026-08-28 modacker (A+C): also preserve the source
+      //   ("env" / "file" / "settings") + resolved file path so the
+      //   modal can keep its "delete" button hidden if the operator
+      //   reverts to a fresh snapshot. See state-bus.js.
+      const preservedTokenPlanApiKeySource = state?.tokenPlanApiKeySource
+      const preservedTokenPlanApiKeyFilePath = state?.tokenPlanApiKeyFilePath
       state = JSON.parse(ev.data)
       if (preserved) state.askUserAnswers = preserved
       if (state.mcodeSessions === undefined && Array.isArray(preservedMcodeSessions)) {
         state.mcodeSessions = preservedMcodeSessions
+      }
+      if (state.quotaEnabled === undefined && preservedQuotaEnabled !== undefined) {
+        state.quotaEnabled = preservedQuotaEnabled
+      }
+      if (state.hasTokenPlanKey === undefined && preservedHasTokenPlanKey !== undefined) {
+        state.hasTokenPlanKey = preservedHasTokenPlanKey
+      }
+      if (state.tokenPlanApiKeyMasked === undefined && preservedTokenPlanApiKeyMasked !== undefined) {
+        state.tokenPlanApiKeyMasked = preservedTokenPlanApiKeyMasked
+      }
+      if (state.tokenPlanApiKeySource === undefined && preservedTokenPlanApiKeySource !== undefined) {
+        state.tokenPlanApiKeySource = preservedTokenPlanApiKeySource
+      }
+      if (state.tokenPlanApiKeyFilePath === undefined && preservedTokenPlanApiKeyFilePath !== undefined) {
+        state.tokenPlanApiKeyFilePath = preservedTokenPlanApiKeyFilePath
       }
       // v0.5.bx-31 + v1.0: 收到权威 mcodeSessions 推送即 ready。
       //   旧门控要求 length>0 — 工作区会话被全删后列表合法为空, loading 永不消失;
@@ -195,18 +228,37 @@ export function renderUsagePopover() {
   const body = document.getElementById('usage-popover-body')
   const btn = document.getElementById('usage-popover-refresh')
   if (!body) return
-  const g = getGeneralQuota()
+  const u = state?.usage || {}
   const now = new Date()
-  if (!g) {
-    body.innerHTML = `<div class="usage-empty">${t('quota_loading_idle')}</div>`
-    return
-  }
-  const ip = g.current_interval_remaining_percent
-  const wp = g.current_weekly_remaining_percent
+
+  // v2026-08-28 modacker: 套餐用量 popover 现在只显示数据 + 底部
+  // 一个"API Key 状态按钮"(绿/红)。点按钮弹模态框(见
+  // openApiKeyModal)做实际配置。配置逻辑全部在模态框内完成,
+  // popover 只负责显示 + 入口。
+  const ip = u.fiveHourPercent
+  const wp = u.weekly
   const ipClass = (typeof ip === 'number' && ip < 20) ? ' low' : ''
-  const wpClass = (typeof wp === 'number' && wp < 20) ? ' low' : ''
+  const wpClass = (typeof wp === 'string' && parseFloat(wp) < 20) ? ' low' : ''
   const next5h = nextFiveHourReset(now)
   const nextWk = nextWeeklyReset(now)
+  const hasKey = !!state?.hasTokenPlanKey
+  const masked = state?.tokenPlanApiKeyMasked || ''
+  const source = state?.tokenPlanApiKeySource || ''
+  // v2026-08-28 modacker (A+C): when the active key came from env
+  //   or file, surface the source in the popover so the user can
+  //   tell at a glance "this isn't a settings.json key" without
+  //   having to open the modal. The green/red dot color stays
+  //   driven by hasKey — the source is a label, not a state.
+  let sourceTag = ''
+  if (hasKey) {
+    if (source === 'env') sourceTag = ` · ${t('quota_source_env') || 'env'}`
+    else if (source === 'file') sourceTag = ` · ${t('quota_source_file') || 'file'}`
+  }
+  const statusClass = hasKey ? 'api-key-status configured' : 'api-key-status not-configured'
+  const statusText = hasKey
+    ? `${t('quota_status_configured') || '已配置'} (${escapeHtml(masked)})${sourceTag}`
+    : t('quota_status_not_configured') || '未配置'
+
   body.innerHTML = `
     <div class="usage-row">
       <span class="usage-row-label">${t('quota_5h_limit')}</span>
@@ -218,26 +270,112 @@ export function renderUsagePopover() {
       <span class="usage-row-value${wpClass}">${wp ?? '—'}% ${t('quota_remaining')}</span>
     </div>
     <div class="usage-reset">${t('quota_next_reset')} ${escapeHtml(formatResetTime(nextWk))}（${escapeHtml(formatTimeUntil(nextWk, now))}）</div>
+    <div class="usage-popover-divider"></div>
+    <button class="${statusClass}" id="usage-popover-key-btn" type="button">
+      <span class="api-key-status-dot"></span>
+      <span class="api-key-status-text">API Key · ${statusText}</span>
+    </button>
   `
+
+  // Wire up: click the status button → open the modal.
+  const keyBtn = document.getElementById('usage-popover-key-btn')
+  if (keyBtn) {
+    keyBtn.addEventListener('click', () => openApiKeyModal())
+  }
+
   if (btn) {
     btn.classList.remove('loading')
-    // v0.5.av: 恢复 "Refresh" 文案
     const txt = btn.querySelector('.usage-popover-refresh-text')
     if (txt) txt.textContent = t('refresh')
   }
+}
+
+// v2026-08-28 modacker: open the API Key configuration modal.
+// Wired to the status button in the popover.
+export function openApiKeyModal() {
+  const modal = document.getElementById('api-key-modal')
+  const input = document.getElementById('api-key-modal-input')
+  const status = document.getElementById('api-key-modal-status')
+  const deleteBtn = document.getElementById('api-key-modal-delete')
+  if (!modal) return
+  // Pre-clear the input (we never pre-fill; user types fresh)
+  if (input) input.value = ''
+  // Status line + delete visibility based on current state
+  const hasKey = !!state?.hasTokenPlanKey
+  // v2026-08-28 modacker (A+C): when the active key comes from
+  //   env or file, the "delete" button would lie to the user —
+  //   they'd click delete, get an "ok" response, but the next
+  //   render / restart would show the key back (env/file re-load).
+  //   Hide the button in those modes and surface the source
+  //   inline so the user knows where the key is actually managed.
+  const source = state?.tokenPlanApiKeySource || ''
+  const external = source === 'env' || source === 'file'
+  if (status) {
+    if (hasKey) {
+      const masked = state?.tokenPlanApiKeyMasked || ''
+      let label = `${t('quota_saved') || '已保存'} (${escapeHtml(masked)})`
+      if (source === 'env') {
+        label += ` · ${t('quota_source_env') || 'env'}`
+      } else if (source === 'file') {
+        const fp = state?.tokenPlanApiKeyFilePath || ''
+        label += ` · ${t('quota_source_file') || 'file'}${fp ? `: ${escapeHtml(fp)}` : ''}`
+      }
+      status.textContent = label
+      status.className = 'modal-card-status configured'
+    } else {
+      status.textContent = t('quota_status_not_configured') || '未配置'
+      status.className = 'modal-card-status not-configured'
+    }
+  }
+  if (deleteBtn) {
+    // Hide for external sources. The key is the operator's, not
+    // ours to delete from the webui. (Toggling quotaEnabled off
+    // would clear the settings.json copy if any, but it wouldn't
+    // remove an env/file-provided key — so the delete button is
+    // also misleading there.)
+    deleteBtn.hidden = !hasKey || external
+    if (external) deleteBtn.title = t('quota_delete_disabled_external') || '当前 key 由外部源管理,无法在界面删除'
+  }
+  // Also: when external, the input is the only "save" path. Show
+  // a hint so the user knows typing here writes to settings.json
+  // (which will be ignored at read time while env/file is set).
+  if (input) {
+    if (external) {
+      input.placeholder = source === 'env'
+        ? (t('quota_input_placeholder_env') || 'env 优先,此处的值在 env 取消前不会被使用')
+        : (t('quota_input_placeholder_file') || 'file 优先,此处的值在文件移除前不会被使用')
+    } else {
+      input.placeholder = 'sk-cp-...'
+    }
+  }
+  modal.hidden = false
+  // Focus the input on next tick
+  setTimeout(() => { try { input?.focus() } catch {} }, 0)
+}
+
+export function closeApiKeyModal() {
+  const modal = document.getElementById('api-key-modal')
+  if (modal) modal.hidden = true
 }
 
 export function renderUsageValue() {
   // 按钮右侧的 value 字段，显示最关键的 5h 剩余%
   const val = document.getElementById('usage-value')
   if (!val) return
-  const g = getGeneralQuota()
-  if (!g || typeof g.current_interval_remaining_percent !== 'number') {
+  const u = state?.usage || {}
+  // m2026-08-28 modacker: if quota feature is off, show "—" and
+  // skip the "low" state (no value to compare).
+  if (u.hidden) {
     val.textContent = '—'
     val.classList.remove('low')
     return
   }
-  const ip = g.current_interval_remaining_percent
+  const ip = u.fiveHourPercent
+  if (typeof ip !== 'number') {
+    val.textContent = '—'
+    val.classList.remove('low')
+    return
+  }
   // v0.5.aa: 加 "剩余" 后缀让"已用"和"剩余"语义明确（用户反馈）
   val.textContent = `${ip}% ${t('quota_remaining')}`
   if (ip < 20) val.classList.add('low')
@@ -245,6 +383,14 @@ export function renderUsageValue() {
 }
 
 export function renderUsage() {
+  // v2026-08-28 modacker: 套餐用量按钮的可见性由外观卡片的"启用"toggle 控制。
+  //   quotaEnabled=false → 按钮隐藏(主 UI 不显示)
+  //   quotaEnabled=true  → 按钮显示,点击开 popover
+  // 当无 key 时,点开是降级提示。
+  const btn = document.getElementById('btn-usage')
+  if (btn) {
+    btn.classList.toggle('usage-hidden', !state?.quotaEnabled)
+  }
   renderUsageValue()
   // 弹层只在打开时才更新内容（避免每秒重算浪费）
   const popover = document.getElementById('usage-popover')

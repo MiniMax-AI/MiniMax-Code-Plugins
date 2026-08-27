@@ -5,7 +5,7 @@
 
 import { applyI18n, applyTheme, currentLang, setLang, t, toggleTheme } from './i18n.js'
 import { MODE_ICONS, __DBG, escapeHtml, formatNumber, formatResetTime, formatTimeUntil, nextFiveHourReset, nextWeeklyReset, parseMarkdown, showToast } from './util.js'
-import { refreshSessions, API_SUFFIX, CID, CID_QUERY, HEADERS, TOKEN, TOKEN_QUERY, autoRefreshTimer, connect, es, getGeneralQuota, leftOpen, refreshUsage, renderUsage, renderUsagePopover, renderUsageValue, rightOpen, sessionSearchQuery, setSearchQuery, setSidebarReady, setState, state, toggleUsagePopover, tokenParam, urlParams } from './state.js'
+import { refreshSessions, API_SUFFIX, CID, CID_QUERY, HEADERS, TOKEN, TOKEN_QUERY, autoRefreshTimer, closeApiKeyModal, connect, es, getGeneralQuota, leftOpen, openApiKeyModal, refreshUsage, renderUsage, renderUsagePopover, renderUsageValue, rightOpen, sessionSearchQuery, setLeftOpen, setRightOpen, setSearchQuery, setSidebarReady, setState, state, toggleUsagePopover, tokenParam, urlParams } from './state.js'
 import { ASK_ANSWERS_LS_KEY, ASK_DISMISSED_LS_KEY, ASK_MODAL_STATE, DISMISSED_QUESTIONS, askModalNextOrSend, askModalPqKey, askModalSkip, attachStructuredBlockHandlers, bindAskModal, buildAskUserPrompt, cancelConfirm, clearAskPresentedKeys, closeAskModal, collapsedWorkspaces, collectAskBlock, collectPlanBlock, deleteSession, hideRightForWelcome, loadAskDismissed, loadAskUserAnswers, onAskModalOptClick, onAskModalOtherInput, openAskModal, openPlanModal, parseChatLines, render, renderAskBlock, renderAskModalContent, renderAskUserToolIfChanged, renderChat, renderContext, renderGoal, renderLanCardContent, renderMessage, renderPlanBlock, renderRight, renderSessions, renderTodo, renderUserFooter, resetAskDismissed, saveAskDismissed, saveAskUserAnswers, saveCollapsedWorkspaces, sendAskAnswer, setAskUserAnswer, submitAskModal, suppressAskModal, switchSession, wsShortName } from './render.js'
 
 export let slashOpen = false
@@ -373,10 +373,37 @@ export function attachEvents() {
   document.getElementById('usage-popover-refresh')?.addEventListener('click', () => refreshUsage({ manual: true }))
 
   // Search sessions input — 实时过滤 sidebar 列表
-  document.getElementById('search-input')?.addEventListener('input', (e) => {
-    sessionSearchQuery = e.target.value || ''
-    renderSessions()
-  })
+  // v2026-08-28 modacker fix: use the setSearchQuery setter; direct
+  // assignment to the imported `let` binding throws "Assignment to
+  // constant variable" because the import binding is read-only.
+  //
+  // v2026-08-28 modacker (autofill defense): Chrome's profile
+  //   autofill ignores `autocomplete="off"` + `type="search"` for
+  //   pages where it has previously cached a value. The proven
+  //   workaround is the `readonly` attribute — Chrome (and other
+  //   password managers) skip readonly inputs entirely, so they
+  //   can't inject a value. We strip `readonly` on the very first
+  //   user-driven event (focus / mousedown / keydown) so typing
+  //   works normally thereafter. The DOM is observable enough
+  //   that this doesn't fight the user — by the time they tap
+  //   the input we have already cleared the autofill artifact.
+  const searchInput = document.getElementById('search-input')
+  if (searchInput) {
+    // The HTML markup sets `readonly` so Chrome's autofill
+    // leaves it alone. Strip on any user-initiated interaction.
+    const stripReadonly = () => {
+      if (searchInput.hasAttribute('readonly')) {
+        searchInput.removeAttribute('readonly')
+      }
+    }
+    searchInput.addEventListener('mousedown', stripReadonly, { once: true, capture: true })
+    searchInput.addEventListener('keydown', stripReadonly, { once: true, capture: true })
+    searchInput.addEventListener('focus', stripReadonly, { once: true, capture: true })
+    searchInput.addEventListener('input', (e) => {
+      setSearchQuery(e.target.value || '')
+      renderSessions()
+    })
+  }
 
   // Attach
   document.getElementById('btn-attach').addEventListener('click', () => fileInput.click())
@@ -410,7 +437,62 @@ export function attachEvents() {
   // })
 
   // Appearance / Language buttons
-  document.getElementById('btn-appearance').addEventListener('click', () => { toggleTheme() })
+  // v2026-08-28 modacker: btn-appearance now opens the appearance
+  // settings card (which has the theme toggle, plus the
+  // "套餐用量" toggle and key input). The theme toggle is moved
+  // inside the card (#appearance-card-theme).
+  const btnAppearance = document.getElementById('btn-appearance')
+  const appearanceCard = document.getElementById('appearance-card')
+  const appearanceCardTheme = document.getElementById('appearance-card-theme')
+  function setAppearanceCardOpen(open) {
+    if (!appearanceCard || !btnAppearance) return
+    appearanceCard.hidden = !open
+    btnAppearance.setAttribute('aria-expanded', open ? 'true' : 'false')
+  }
+  function toggleAppearanceCard() {
+    setAppearanceCardOpen(appearanceCard ? appearanceCard.hidden : false)
+  }
+  if (btnAppearance) {
+    btnAppearance.addEventListener('click', (e) => {
+      e.stopPropagation()
+      toggleAppearanceCard()
+    })
+  }
+  // Click outside to close.
+  document.addEventListener('click', (e) => {
+    if (!appearanceCard || appearanceCard.hidden) return
+    if (appearanceCard.contains(e.target) || btnAppearance.contains(e.target)) return
+    setAppearanceCardOpen(false)
+  })
+  if (appearanceCardTheme) {
+    appearanceCardTheme.addEventListener('change', () => {
+      toggleTheme()
+    })
+  }
+
+  // v2026-08-28 modacker: 套餐用量显示开关. 关掉 → 主 UI 按钮消失.
+  const appearanceCardQuota = document.getElementById('appearance-card-quota')
+  if (appearanceCardQuota) {
+    appearanceCardQuota.addEventListener('change', async (e) => {
+      const enabled = !!e.target.checked
+      try {
+        const r = await fetch('/api/settings' + API_SUFFIX, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...HEADERS },
+          body: JSON.stringify({ quotaEnabled: enabled }),
+        })
+        const d = await r.json()
+        if (!d.ok) { alert('切换失败: ' + (d.error || '未知错误')); e.target.checked = !enabled; return }
+        if (state) state.quotaEnabled = d.quotaEnabled === true
+        render()  // re-render to update btn-usage visibility
+        try { await fetch('/api/usage' + API_SUFFIX, { method: 'POST', headers: HEADERS }) } catch {}
+      } catch (err) {
+        console.error('[appearance-card-quota] toggle failed', err)
+        alert('切换失败: ' + err.message)
+        e.target.checked = !enabled
+      }
+    })
+  }
   document.getElementById('btn-language').addEventListener('click', () => { toggleLang() })
 
   // Usage button → toggle popover
@@ -958,7 +1040,29 @@ export function attachEvents() {
         state.tokenAcknowledged = d.tokenAcknowledged
         state.currentToken = d.currentToken || ''
         state.tokenRotatedAt = d.tokenRotatedAt || 0
+        // v2026-08-28 modacker: Token Plan feature state. The popover
+        // (renderUsagePopover in state.js) reads these directly, so
+        // just keep them in sync. The appearance-card-quota checkbox
+        // is also synced from here.
+        // v2026-08-28 modacker (A+C): also sync the external key
+        //   source + file path so the modal can show "managed by
+        //   env / file" and hide the "delete" button when the key
+        //   is external. See server/lib/settings.js for the
+        //   priority chain.
+        state.quotaEnabled = d.quotaEnabled === true
+        state.hasTokenPlanKey = d.hasTokenPlanKey === true
+        state.tokenPlanApiKeyMasked = d.tokenPlanApiKeyMasked || ''
+        state.tokenPlanApiKeySource = d.tokenPlanApiKeySource || ''
+        state.tokenPlanApiKeyFilePath = d.tokenPlanApiKeyFilePath || ''
+        const apCardQuota = document.getElementById('appearance-card-quota')
+        if (apCardQuota) apCardQuota.checked = d.quotaEnabled === true
       }
+      // Refresh the popover if it's open (otherwise the next click
+      // will re-render via the click handler).
+      try {
+        const popover = document.getElementById('usage-popover')
+        if (popover && !popover.hidden) renderUsagePopover()
+      } catch {}
     } catch (e) { console.error('[lan] load failed', e) }
   }
   loadLanInfo()  // 启动时拉一次
@@ -1145,6 +1249,87 @@ export function attachEvents() {
         console.error('[lan] acknowledgeToken failed', err)
         alert('确认失败: ' + err.message)
       }
+    })
+  }
+
+  // ----------------------------------------------------------------
+  // v2026-08-28 modacker: API Key 配置模态框 handlers.
+  // 由 popover 底部状态按钮唤起,save / delete / cancel / close / Esc
+  // ----------------------------------------------------------------
+  const apiKeyModal = document.getElementById('api-key-modal')
+  const apiKeyInput = document.getElementById('api-key-modal-input')
+  const apiKeySave = document.getElementById('api-key-modal-save')
+  const apiKeyDelete = document.getElementById('api-key-modal-delete')
+  const apiKeyCancel = document.getElementById('api-key-modal-cancel')
+  const apiKeyClose = document.getElementById('api-key-modal-close')
+
+  async function saveApiKey() {
+    const k = (apiKeyInput?.value || '').trim()
+    if (!k) { showToast(t('quota_need_key') || '请先填入 Subscription Key'); return }
+    try {
+      const r = await fetch('/api/settings' + API_SUFFIX, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...HEADERS },
+        body: JSON.stringify({ tokenPlanApiKey: k, quotaEnabled: true }),
+      })
+      const d = await r.json()
+      if (!d.ok) { showToast(d.error || '保存失败'); return }
+      if (apiKeyInput) apiKeyInput.value = ''
+      if (state) {
+        state.quotaEnabled = d.quotaEnabled === true
+        state.hasTokenPlanKey = d.hasTokenPlanKey === true
+        state.tokenPlanApiKeyMasked = d.tokenPlanApiKeyMasked || ''
+      }
+      try { await fetch('/api/usage' + API_SUFFIX, { method: 'POST', headers: HEADERS }) } catch {}
+      renderUsage()
+      closeApiKeyModal()
+      showToast(t('quota_saved') || '已保存')
+    } catch (err) {
+      console.error('[api-key-modal] save failed', err)
+    }
+  }
+
+  async function deleteApiKey() {
+    if (!confirm(t('quota_clear_confirm') || '确定清空 Subscription Key?清空后套餐用量数据不显示。')) return
+    try {
+      await fetch('/api/settings' + API_SUFFIX, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...HEADERS },
+        body: JSON.stringify({ tokenPlanApiKey: '' }),
+      })
+      if (state) {
+        state.hasTokenPlanKey = false
+        state.tokenPlanApiKeyMasked = ''
+      }
+      try { await fetch('/api/usage' + API_SUFFIX, { method: 'POST', headers: HEADERS }) } catch {}
+      renderUsage()
+      closeApiKeyModal()
+      showToast(t('quota_cleared') || '已清空')
+    } catch (err) {
+      console.error('[api-key-modal] delete failed', err)
+    }
+  }
+
+  if (apiKeySave) apiKeySave.addEventListener('click', saveApiKey)
+  if (apiKeyDelete) apiKeyDelete.addEventListener('click', deleteApiKey)
+  if (apiKeyCancel) apiKeyCancel.addEventListener('click', closeApiKeyModal)
+  if (apiKeyClose) apiKeyClose.addEventListener('click', closeApiKeyModal)
+  // Click outside the modal-card to close
+  if (apiKeyModal) {
+    apiKeyModal.addEventListener('click', (e) => {
+      if (e.target === apiKeyModal) closeApiKeyModal()
+    })
+  }
+  // Esc to close
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && apiKeyModal && !apiKeyModal.hidden) {
+      closeApiKeyModal()
+    }
+  })
+  // Enter to save when input focused
+  if (apiKeyInput) {
+    apiKeyInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') saveApiKey()
     })
   }
 
