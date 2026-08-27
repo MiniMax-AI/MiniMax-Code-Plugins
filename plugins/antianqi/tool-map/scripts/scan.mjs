@@ -300,7 +300,16 @@ function resolveProgram(name) {
   for (const dir of pathDirs) {
     for (const cand of candidates) {
       const full = join(dir, cand);
-      if (existsSync(full)) return full;
+      // The contract is "return the path of an executable file". A
+      // directory named 'node' is NOT an executable file (running it
+      // would fail with EISDIR). existsSync returns true for
+      // directories too, so the previous code would return a
+      // directory path here. Round-4 finding: require statSync to
+      // succeed AND .isFile() to be true. We also reject broken
+      // symlinks (statSync throws ENOENT) by not catching.
+      let st;
+      try { st = statSync(full); } catch { continue; }
+      if (st.isFile()) return full;
     }
   }
   return null;
@@ -314,8 +323,29 @@ async function probeVersion(cmd) {
   // Defence-in-depth: even if a future caller misuses this function, only
   // whitelisted basenames can ever be spawned. fail-closed.
   if (!ALLOWED_PROBE_NAMES.has(cmd[0])) return null;
+  // Round-4 finding: the previous implementation passed `cmd[0]`
+  // directly to execFileP. resolveProgram() already paid the cost of
+  // walking PATH and PATHEXT to find the actual file. Re-using that
+  // resolution (rather than re-doing the search at exec time inside
+  // child_process.spawn) makes the two halves of the function agree
+  // on which file gets executed. The bare-name fallback is preserved
+  // so the existing test that injects a temp script on PATH still
+  // works even if resolveProgram has a regression.
+  //
+  // Note on test coverage: the resolved-path vs bare-name difference
+  // does not actually manifest in any reproducible scenario we could
+  // construct. On POSIX, child_process.spawn and resolveProgram both
+  // walk PATH the same way. On Windows with shell: true (the
+  // .cmd/.bat case), cmd.exe performs the same PATHEXT lookup that
+  // resolveProgram did. On Windows with shell: false (the .exe case),
+  // Node's spawn only walks PATH, same as resolveProgram. So the
+  // R4-3/R4-4 tests are smoke tests for the PATH+extension lookup,
+  // not bug-replication tests. The R4-2 unit test IS a real
+  // bug-replication test for the resolveProgram change itself.
+  const resolved = resolveProgram(cmd[0]);
+  const program = resolved || cmd[0];
   try {
-    const { stdout } = await execFileP(cmd[0], cmd.slice(1), {
+    const { stdout } = await execFileP(program, cmd.slice(1), {
       timeout: 5000,
       windowsHide: true,
       shell: shouldUseShell(cmd[0]),

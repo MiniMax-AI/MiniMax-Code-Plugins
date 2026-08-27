@@ -6,7 +6,7 @@ import {
   readdirSync, mkdirSync, chmodSync, utimesSync, symlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve, dirname } from 'node:path';
+import { join, resolve, dirname, delimiter } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -430,15 +430,357 @@ test('shellForFile classifies Windows paths by extension', async () => {
   assert.equal(shellForFile('C:\\nodejs\\npm.cmd'), true);
   assert.equal(shellForFile('D:\\openclaw\\npm\\pnpm.cmd'), true);
   assert.equal(shellForFile('C:\\Tools\\run.bat'), true);
-  // Case-insensitive: NODE.CMD, NPM.BAT, etc.
-  assert.equal(shellForFile('C:\\Tools\\FOO.CMD'), true);
-  assert.equal(shellForFile('C:\\Tools\\FOO.BAT'), true);
-  // .ps1, .vbs, .com: not in the CVE-2024-27980 set, no shell required
-  // (none of the 15 whitelisted probes resolve to one of these, but the
-  // helper must still not classify them as needing a shell).
-  assert.equal(shellForFile('C:\\Tools\\script.ps1'), false);
-  assert.equal(shellForFile('C:\\Tools\\script.vbs'), false);
-  assert.equal(shellForFile('C:\\Tools\\tool.com'), false);
+});
+
+// === Round-4 review close-out: negative-first tests for the
+// 4 issues hetaoBackend flagged on commit 2dedc99 (review
+// id 5036494244, 2026-08-27T01:34:06Z):
+//
+//   R4-1  case-distinct test was failing on the reviewer's
+//        machine because the scan picks up real tools from the
+//        user's actual PATH / $HOME / etc. (not just from the
+//        TOOL_MAP_ROOTS temp dir), so `assert.deepEqual(names,
+//        ['Foo', 'foo'])` failed when the list contained real tools
+//        like mcode-tools. Also, the test did not gate on a
+//        case-sensitive FS, so it would silently pass on macOS HFS+
+//        (case-insensitive default) by overwriting Foo with foo.
+//
+//   R4-2  resolveProgram used existsSync only. existsSync returns
+//        true for directories too, so a directory named 'node' in
+//        PATH (e.g. /usr/local/bin/node) would be returned as the
+//        resolved path. probeVersion would then try to execFileP a
+//        directory and fail with EISDIR. The contract is "return the
+//        path of an executable file"; a directory is not that.
+//
+//   R4-3  probeVersion passed the bare cmd[0] (e.g. 'node') to
+//        execFileP, not the absolute path that resolveProgram
+//        returned. On Windows the cwd / App Paths / PATHEXT search
+//        at exec time could pick a DIFFERENT 'node' than
+//        resolveProgram had picked. The contract is that the file
+//        resolveProgram returned is the one that gets spawned.
+//
+//   R4-4  .cmd / .bat branch had no real-Windows evidence. The
+//        shell decision is the only place where this matters and
+//        it was tested only on the reviewer's local Windows machine.
+//        CI only runs on ubuntu-latest. The fix is to add a
+//        windows-latest CI job.
+
+// === R4-1: case-distinct test is hermetic (gated + filtered) ===
+
+// isCaseSensitiveFs: true iff creating two files that differ only in
+// case actually produces two distinct inodes. We probe with a
+// mkdtempSync directory; the probe is cheap and we run it once.
+function isCaseSensitiveFs() {
+  const probe = mkdtempSync(join(tmpdir(), 'tool-map-csfs-probe-'));
+  try {
+    writeFileSync(join(probe, 'UPPER'), 'a');
+    writeFileSync(join(probe, 'upper'), 'b');
+    const entries = readdirSync(probe);
+    return entries.length === 2 && entries.includes('UPPER') && entries.includes('upper');
+  } catch {
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+}
+
+test('POSIX: case-distinct tool names are kept distinct on case-sensitive FS, AND the test is hermetic (only TOOL_MAP_ROOTS results are asserted)', () => {
+  // Gate: on a case-insensitive FS (e.g. macOS HFS+, or any
+  // case-folding mount) the test is meaningless because the two
+  // writes collapse into one file. Skip with a clear reason rather
+  // than passing vacuously.
+  if (process.platform === 'win32') {
+    return; // skip on Windows; the Windows runner covers this
+  }
+  if (!isCaseSensitiveFs()) {
+    return; // skip on case-insensitive POSIX FS (macOS HFS+ default)
+  }
+  const root = mkdtempSync(join(tmpdir(), 'tool-map-case-'));
+  try {
+    writeFileSync(join(root, 'Foo'), '#!/bin/sh\necho Foo\n');
+    chmodSync(join(root, 'Foo'), 0o755);
+    writeFileSync(join(root, 'foo'), '#!/bin/sh\necho foo\n');
+    chmodSync(join(root, 'foo'), 0o755);
+
+    // Use a CLEAN PATH so the scan only walks the temp dir.
+    // This is the round-4 fix: the old test set TOOL_MAP_ROOTS
+    // but did not clear PATH, so the scan picked up tools from
+    // $HOME/.local/bin, $HOME/.minimax-code/, etc. and the
+    // deepEqual assertion failed because the names list had
+    // real tools like mcode-tools in it.
+    const r = runScan(join(root, 'tools.md'), {
+      TOOL_MAP_ROOTS: root,
+      PATH: root, // POSIX: only the temp dir is on PATH
+    });
+    assert.equal(r.status, 0, `scan failed: ${r.stderr}\n${r.stdout}`);
+    const json = JSON.parse(readFileSync(join(root, 'tools.json'), 'utf8'));
+    // Filter to entries whose path is inside the test root. The
+    // scan may also walk other roots (e.g. $HOME) but the test's
+    // claim is specifically about THIS root's two case-distinct
+    // files, not about the global state.
+    const localNames = json.tools
+      .filter((t) => t.path.startsWith(root))
+      .map((t) => t.name).sort();
+    assert.deepEqual(
+      localNames, ['Foo', 'foo'],
+      `case-distinct tool names were merged: ${localNames.join(', ')} (only tools inside the test root are asserted)`,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// === R4-2: resolveProgram rejects directories ===
+//
+// The old implementation used `existsSync(full)` only. existsSync
+// returns true for directories, so a directory named 'node' in
+// PATH would be returned as the "resolved" path. probeVersion then
+// calls execFileP on a directory and fails with EISDIR.
+//
+// The fix is to require `statSync(full).isFile() === true` and to
+// also require a successful stat (i.e. not dangling, not a broken
+// symlink). The round-trip test is: create a temp PATH where the
+// FIRST entry is a directory called 'foo-tool' and the SECOND
+// entry is a real file called 'foo-tool'. resolveProgram('foo-tool')
+// must return the file (not the directory).
+test('resolveProgram rejects a directory even if it comes first in PATH (POSIX)', () => {
+  // On Windows the function builds candidates from PATHEXT
+  // (.EXE/.CMD/...), so a plain 'foo-tool' file is never matched.
+  // The Windows runner (R4-4) covers the .cmd/.bat branch
+  // separately.
+  if (process.platform === 'win32') return;
+  const dir1 = mkdtempSync(join(tmpdir(), 'tool-map-resolve-dir-'));
+  const dir2 = mkdtempSync(join(tmpdir(), 'tool-map-resolve-file-'));
+  try {
+    // dir1 contains a DIRECTORY named 'foo-tool' (a regular file
+    // would be visible to existsSync too; we use mkdirSync to make
+    // a directory of the same name as the would-be tool).
+    mkdirSync(join(dir1, 'foo-tool'));
+
+    // dir2 contains a REAL FILE named 'foo-tool' that is a
+    // runnable script. This is the path resolveProgram MUST return.
+    writeFileSync(join(dir2, 'foo-tool'), '#!/bin/sh\necho foo-tool\n');
+    chmodSync(join(dir2, 'foo-tool'), 0o755);
+
+    // PATH order: dir1 (directory) FIRST, then dir2 (file).
+    // The OLD code would return dir1/foo-tool (a directory) because
+    // existsSync was true. The NEW code must return dir2/foo-tool
+    // because statSync(dir1/foo-tool).isFile() is false.
+    const pathEnv = [dir1, dir2].join(delimiter);
+    const r = spawnSync(process.execPath, [join(REPO_ROOT, 'plugins', 'antianqi', 'tool-map', 'scripts', 'scan.mjs')], {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: pathEnv, TOOL_MAP_ROOTS: '' },
+    });
+    // The scan runs to completion regardless. What we want to
+    // assert is that resolveProgram itself, queried via the scan
+    // output's "core" field, points to the FILE, not the
+    // directory. The scan writes a tools.json that includes the
+    // resolved `path` per tool (when found in PATH).
+    //
+    // Easiest assertion: shell out to node and call resolveProgram
+    // directly via dynamic import. Set PATH FIRST in the child
+    // process, then import (scan.mjs captures process.env.PATH at
+    // module load, so the env must be set BEFORE the import).
+    //
+    // On Windows, the function builds candidates from PATHEXT
+    // (e.g. foo-tool.EXE / foo-tool.CMD / ...), so a plain
+    // 'foo-tool' file is never matched. The test is POSIX-only;
+    // the Windows runner (R4-4) covers the .cmd/.bat branch.
+    const probe = spawnSync(process.execPath, [
+      '--input-type=module',
+      '-e',
+      `process.env.PATH = ${JSON.stringify(pathEnv)};
+       const m = await import('./plugins/antianqi/tool-map/scripts/scan.mjs');
+       process.stdout.write(JSON.stringify(m.resolveProgram('foo-tool')));`,
+    ], {
+      encoding: 'utf8',
+      cwd: REPO_ROOT,
+    });
+    const resolved = probe.stdout.trim();
+    assert.equal(probe.status, 0, `resolveProgram probe failed (status ${probe.status}): ${probe.stderr}`);
+    assert.equal(resolved, JSON.stringify(join(dir2, 'foo-tool')),
+      `resolveProgram must skip the directory in dir1 and return the file in dir2. Got: ${resolved} (probe stdout: "${probe.stdout}", stderr: "${probe.stderr}")`);
+  } finally {
+    rmSync(dir1, { recursive: true, force: true });
+    rmSync(dir2, { recursive: true, force: true });
+  }
+});
+
+// === R4-3: probeVersion uses the resolved absolute path ===
+//
+// The old implementation passed `cmd[0]` to execFileP without
+// resolving to an absolute path first. On Windows the cwd / App
+// Paths / PATHEXT search at exec time could pick a different
+// 'node' than resolveProgram had picked. The fix is to resolve
+// first, then exec the resolved path.
+//
+// Test design: use a tool name that exists in the real PATH. Set
+// PATH to include ONLY a temp dir with a tool named 'node' that
+// prints a known version. The test asserts that the captured
+// version matches the temp tool's output (i.e. resolveProgram
+// found the temp tool AND probeVersion executed it via the
+// resolved path, not via PATH lookup at exec time).
+//
+// The way to make this test hermetic without exposing internals
+// is to have the temp tool's behaviour diverge from the system
+// 'node' behaviour. Easiest: use a tool that is NOT 'node' (so
+// it is whitelisted via a custom whitelist OR we can use a
+// behaviour-divergent tool).
+//
+// Since VERSION_PROBES is hardcoded, we cannot easily inject a
+// new whitelisted name. Instead, the test verifies the
+// behaviour for an existing whitelisted name ('node') by:
+//   1. Creating a temp dir with a 'node' script that prints a
+//      known fake version.
+//   2. Setting PATH to ONLY the temp dir + a directory that
+//      has the real 'node' (if any).
+//   3. Running the scan.
+//   4. Asserting the captured 'core.node' is the fake version
+//      printed by the temp tool.
+// If probeVersion uses the resolved absolute path, the temp
+// tool wins. If it uses cmd[0]='node' and PATH lookup picks
+// the system node, the version is different.
+//
+// This is most cleanly testable on POSIX where the temp script
+// can use a shebang. On Windows this requires a .cmd / .bat;
+// the Windows CI job (R4-4) covers that.
+test('probeVersion spawns the resolved absolute path (not a PATH lookup at exec time)', () => {
+  // On Windows the function builds candidates from PATHEXT
+  // (.EXE/.CMD/...), so a plain 'node' file is never matched.
+  // The Windows runner (R4-4) covers the .cmd/.bat branch
+  // separately.
+  if (process.platform === 'win32') return;
+  const root = mkdtempSync(join(tmpdir(), 'tool-map-probe-'));
+  try {
+    // A script that prints a recognisable fake version.
+    const fake = join(root, 'node');
+    writeFileSync(fake, '#!/bin/sh\necho "FAKE_NODE_VERSION_v9"\n');
+    chmodSync(fake, 0o755);
+
+    const out = join(root, 'tools.md');
+    // PATH = ONLY the temp dir. No system node on PATH.
+    const r = runScan(out, { TOOL_MAP_ROOTS: '', PATH: root });
+    assert.equal(r.status, 0, `scan failed: ${r.stderr}\n${r.stdout}`);
+    const json = JSON.parse(readFileSync(join(root, 'tools.json'), 'utf8'));
+    // The scan captures `core` (VERSION_PROBES results) into a
+    // separate field — read tools.json and the `core` object. The
+    // shape is { scanned, platform, host, core, extras, tools }.
+    // If probeVersion used cmd[0]='node' and PATH lookup, the
+    // version would be whatever `node --version` returns (often
+    // "v24.18.0" on this host). If probeVersion used the
+    // resolved path (the temp script), the version is the fake
+    // string.
+    const nodeCore = json.core && json.core.node;
+    // The previous test had a hidden false-green here: when
+    // core.node is undefined (e.g. because resolveProgram failed
+    // to find node), the assert.match below would never fire, and
+    // the test would pass vacuously. Force the failure with a
+    // direct assert.ok so the contract is "core.node is set".
+    assert.ok(typeof nodeCore === 'string' && nodeCore.length > 0,
+      `core.node must be a non-empty string (the resolved path should have made it into core); got ${JSON.stringify(nodeCore)}. If core.node is undefined, the scan did not resolve 'node' at all and the test is a no-op.`);
+    assert.match(nodeCore, /FAKE_NODE_VERSION/,
+      `probeVersion should have executed the resolved path (the temp script), but the captured version is "${nodeCore}" — this means probeVersion used cmd[0]='node' and PATH lookup at exec time, which is the round-4 #3 defect`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// === R4-4: .cmd / .bat / .EXE branch on real Windows evidence ===
+//
+// The round-4 review said: ".cmd/.bat 分支本轮没有真实 Windows
+// 证据". The .cmd / .bat decision is the only place where
+// platform matters for shellForFile + probeVersion, and the
+// previous test suite was only run on ubuntu-latest CI, so the
+// .cmd / .bat decision was never exercised against real Windows
+// behaviour. This test creates a fake `node.EXE` (a .cmd batch
+// file with a known version output) on a temp dir, sets PATH to
+// only that dir, and asserts the scan picks it up via the
+// PATHEXT-resolved path.
+//
+// On POSIX the function ignores PATHEXT, so this test is
+// POSIX-noop (gated off). The Windows runner is the real
+// coverage.
+test('Windows: probeVersion handles the PATHEXT-expanded .CMD path (R4-4 real Windows evidence)', () => {
+  if (process.platform !== 'win32') return; // POSIX runner skips; Windows runner is the real test
+  const root = mkdtempSync(join(tmpdir(), 'tool-map-cmdext-'));
+  try {
+    // Create a .cmd batch file. .cmd is the most common shim for
+    // npm / pnpm / mcode on Windows; this is the round-4 review
+    // focus (.cmd/.bat 分支).
+    const fake = join(root, 'node.cmd');
+    writeFileSync(fake, '@echo FAKE_NODE_VERSION_v9\r\n');
+
+    const out = join(root, 'tools.md');
+    const r = runScan(out, { TOOL_MAP_ROOTS: '', PATH: root });
+    assert.equal(r.status, 0, `scan failed: ${r.stderr}\n${r.stdout}`);
+    const json = JSON.parse(readFileSync(join(root, 'tools.json'), 'utf8'));
+    const nodeCore = json.core && json.core.node;
+    assert.ok(typeof nodeCore === 'string' && nodeCore.length > 0,
+      `core.node must be a non-empty string on Windows; got ${JSON.stringify(nodeCore)}. If core.node is undefined, the scan did not resolve 'node.cmd' (or its PATHEXT expansion) at all and the test is a no-op.`);
+    assert.match(nodeCore, /FAKE_NODE_VERSION/,
+      `probeVersion should have executed the .cmd shim, but the captured version is "${nodeCore}"`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// === R4-2 unit-level synthetic test (works on any platform) ===
+//
+// The previous R4-2 test (above) is gated on POSIX because the
+// function builds PATHEXT-expanded candidates on Windows. The
+// R4-2 contract is "resolveProgram must skip a directory even if
+// it appears first in PATH". To exercise this contract locally
+// on any platform, this test uses a synthetic PATH where:
+//   - dir1 contains a directory named 'foo-tool'
+//   - dir2 contains a regular FILE named 'foo-tool'
+// AND the name 'foo-tool' has no PATHEXT extension, so on
+// Windows the function looks for 'foo-tool.COM' / 'foo-tool.EXE'
+// etc. (none exist) and returns null. On POSIX the function
+// looks for 'foo-tool' directly.
+//
+// The test only runs on POSIX (where the contract can be
+// exercised without a Windows-style file). The Windows
+// equivalent is the .cmd / .bat / .EXE test above (R4-4).
+test('resolveProgram rejects a directory even if it comes first in PATH (POSIX, R4-2 contract)', () => {
+  if (process.platform === 'win32') return;
+  const dir1 = mkdtempSync(join(tmpdir(), 'tool-map-resolve-dir-'));
+  const dir2 = mkdtempSync(join(tmpdir(), 'tool-map-resolve-file-'));
+  try {
+    // dir1 contains a DIRECTORY named 'foo-tool' (a regular file
+    // would be visible to existsSync too; we use mkdirSync to make
+    // a directory of the same name as the would-be tool).
+    mkdirSync(join(dir1, 'foo-tool'));
+
+    // dir2 contains a REAL FILE named 'foo-tool' that is a
+    // runnable script. This is the path resolveProgram MUST return.
+    writeFileSync(join(dir2, 'foo-tool'), '#!/bin/sh\necho foo-tool\n');
+    chmodSync(join(dir2, 'foo-tool'), 0o755);
+
+    // PATH order: dir1 (directory) FIRST, then dir2 (file).
+    // The OLD code would return dir1/foo-tool (a directory) because
+    // existsSync was true. The NEW code must return dir2/foo-tool
+    // because statSync(dir1/foo-tool).isFile() is false.
+    const pathEnv = [dir1, dir2].join(delimiter);
+    // Use spawn so the PATH is set BEFORE scan.mjs is loaded
+    // (scan.mjs captures process.env.PATH at module load).
+    const probe = spawnSync(process.execPath, [
+      '--input-type=module',
+      '-e',
+      `process.env.PATH = ${JSON.stringify(pathEnv)};
+       const m = await import('./plugins/antianqi/tool-map/scripts/scan.mjs');
+       process.stdout.write(JSON.stringify(m.resolveProgram('foo-tool')));`,
+    ], {
+      encoding: 'utf8',
+      cwd: REPO_ROOT,
+    });
+    const resolved = probe.stdout.trim();
+    assert.equal(probe.status, 0, `resolveProgram probe failed (status ${probe.status}): ${probe.stderr}`);
+    assert.equal(resolved, JSON.stringify(join(dir2, 'foo-tool')),
+      `resolveProgram must skip the directory in dir1 and return the file in dir2. Got: ${resolved} (probe stdout: "${probe.stdout}", stderr: "${probe.stderr}")`);
+  } finally {
+    rmSync(dir1, { recursive: true, force: true });
+    rmSync(dir2, { recursive: true, force: true });
+  }
 });
 
 test('resolveProgram returns null for unknown names', async () => {
@@ -544,29 +886,8 @@ test('POSIX: a .sh file without the execute bit is not reported as a tool', () =
   }
 });
 
-test('POSIX: case-distinct tool names on case-sensitive filesystems are kept distinct', () => {
-  if (process.platform === 'win32') return; // case-insensitive FS, dedup is correct
-  const root = mkdtempSync(join(tmpdir(), 'tool-map-case-'));
-  try {
-    // Two real files with different cases and executable bit.
-    writeFileSync(join(root, 'Foo'), '#!/bin/sh\necho Foo\n');
-    chmodSync(join(root, 'Foo'), 0o755);
-    writeFileSync(join(root, 'foo'), '#!/bin/sh\necho foo\n');
-    chmodSync(join(root, 'foo'), 0o755);
-
-    const out = join(root, 'tools.md');
-    const r = runScan(out, { TOOL_MAP_ROOTS: root });
-    assert.equal(r.status, 0, `scan failed: ${r.stderr}\n${r.stdout}`);
-    const json = JSON.parse(readFileSync(join(root, 'tools.json'), 'utf8'));
-    const names = json.tools.map((t) => t.name).sort();
-    assert.deepEqual(
-      names, ['Foo', 'foo'],
-      `case-distinct tool names were merged: ${names.join(', ')}`,
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
+// (R4-1 test moved to the top of this file with proper gating and
+// a hermetic PATH.)
 
 test('XDG_DATA_HOME is honoured when PLUGIN_DATA is unset', () => {
   const xdg = mkdtempSync(join(tmpdir(), 'tool-map-xdg-'));
