@@ -136,20 +136,69 @@ def main() -> int:
             got = False
         check(got == want, f'_check_loopback({url!r}) allow={got} (want {want})')
 
-    # --- 4. Server /acp/health (no auth) --------------------------------
-    print('\n[Check 4] Server /acp/health (no auth required)')
+    # --- 4. Server /acp/health via the bundled client --------------------
+    # v0.2.1 change: the health check now goes through
+    # `_acp_client.health()` (the same path the Skills take) instead of
+    # a raw `urllib.request.urlopen`. The round-4 review pointed out
+    # that the previous implementation bypassed `_OPENER` (no-redirect
+    # policy) and `_check_loopback` (loopback guard); the smoke test
+    # therefore had to exercise the bundled client, not a parallel
+    # raw-urllib path. The health endpoint is anonymous, so the bundled
+    # client sends no Authorization header; loopback + no-redirect
+    # still apply.
+    print('\n[Check 4] Server /acp/health via bundled client (loopback + no-redirect apply)')
     try:
-        with urllib.request.urlopen(f'{base_url}/acp/health', timeout=5) as r:
-            check(r.status == 200, 'GET /acp/health → 200')
-            body = json.loads(r.read().decode('utf-8'))
-            check(body.get('status') == 'ok',
-                  f'health body has status=ok (version={body.get("version")})')
-            check('inbox' in body,
-                  'health body advertises inbox (requires v7-bidir+)')
+        body = _acp_client.health(base_url=base_url)
+        check(isinstance(body, dict), f'health returned a dict: {body!r}')
+        check(body.get('status') == 'ok',
+              f'health body has status=ok (version={body.get("version")})')
+        check('inbox' in body,
+              'health body advertises inbox (requires v7-bidir+)')
+    except _acp_client.ACPError as e:
+        # A 3xx here would be a regression: the bundled client is
+        # supposed to refuse redirects outright, and the no-redirect
+        # contract now applies to /acp/health too.
+        if 300 <= e.status < 400:
+            record_fail(
+                f'redirect ({e.status}) on health: bundled client did not apply '
+                'no-redirect policy to /acp/health'
+            )
+        else:
+            record_fail(f'/acp/health via bundled client failed: {e}')
     except urllib.error.URLError as e:
         record_fail(f'server not reachable at {base_url}/acp/health: {e.reason}')
     except Exception as e:
-        record_fail(f'/acp/health failed: {e}')
+        record_fail(f'/acp/health failed: {type(e).__name__}: {e}')
+
+    # --- 4b. Bundled health() refuses non-loopback base URLs ------------
+    # Negative test for the round-4 fix: before the fix, health() used
+    # `urllib.request.urlopen` directly and never consulted
+    # `_check_loopback`. A misconfigured `ACP_BASE_URL` (e.g. an
+    # attacker-controlled host) would have leaked a probe. The fix
+    # routes health() through `_request`, so the loopback guard now
+    # raises `ACPError` before any network call.
+    #
+    # Round-trip: revert `health()` to a raw `urllib.request.urlopen`
+    # call, and this check fails — `_acp_client.health('http://1.2.3.4')
+    # would attempt a real network call instead of refusing.
+    print('\n[Check 4b] Bundled health() refuses non-loopback base URLs')
+    try:
+        _acp_client.health(base_url='http://1.2.3.4:9999')
+        record_fail(
+            'health("http://1.2.3.4:9999") did not raise; loopback guard bypassed'
+        )
+    except _acp_client.ACPError as e:
+        # The loopback guard raises ACPError with status 0; that is
+        # the expected outcome. Any other exception type means the
+        # guard is NOT in the path.
+        check(e.status == 0,
+              f'health("http://1.2.3.4:9999") raised ACPError status=0 '
+              f'(loopback refused), got status={e.status}: {e}')
+    except Exception as e:
+        record_fail(
+            f'health("http://1.2.3.4:9999") raised the wrong type '
+            f'({type(e).__name__}); loopback guard is not on the health() path'
+        )
 
     # --- 5. Inbox roundtrip via the bundled client ----------------------
     print('\n[Check 5] Inbox write/read roundtrip via bundled client')
@@ -223,6 +272,89 @@ def main() -> int:
             record_fail(f'{rel}: does not reference ACP_PLUGIN_ROOT or __file__ fallback')
         else:
             record_pass(f'{rel}: references ACP_PLUGIN_ROOT or __file__ fallback')
+
+    # --- 8. Server rejects requests without Authorization ---------------
+    # Round-4 finding: the smoke workflow started stub_server.py
+    # without --token, so state['token'] was '' and `_check_auth`
+    # returned True for every request (auth disabled). The smoke
+    # roundtrip therefore never proved the server rejects a missing
+    # Authorization header. The fix in v0.2.1 is two-fold:
+    #   1. The CI workflow now starts the stub with --token set, so
+    #      the server is in the "auth required" state.
+    #   2. This check sends a raw POST to /acp/inbox/write WITHOUT
+    #      an Authorization header and asserts the server returns
+    #      401. The bundled client always adds the header for
+    #      token-bearing requests, so this check uses raw
+    #      urllib (the same way an attacker would probe).
+    #
+    # Round-trip: with --token unset, _check_auth returns True and
+    # the server returns 200, so this check fails.
+    print('\n[Check 8] Server rejects requests without Authorization (negative test)')
+    if not token:
+        record_fail(
+            'ACP_TOKEN not set; cannot derive expected token for negative tests. '
+            'Run the smoke workflow with $ACP_TOKEN set (the CI workflow does this).'
+        )
+    else:
+        try:
+            req = urllib.request.Request(
+                f'{base_url}/acp/inbox/write',
+                data=json.dumps({
+                    'session_id': 'no-auth-test',
+                    'sender': 'plugin',
+                    'content': 'no auth header attached',
+                }).encode('utf-8'),
+                headers={'Content-Type': 'application/json'},
+                method='POST',
+            )
+            with urllib.request.urlopen(req, timeout=5) as r:
+                record_fail(
+                    f'server accepted request without Authorization: status={r.status}; '
+                    'auth is disabled on the server (--token was not set?)'
+                )
+        except urllib.error.HTTPError as e:
+            check(e.code == 401,
+                  f'server rejected missing Authorization with 401 (got {e.code})')
+        except Exception as e:
+            record_fail(
+                f'no-auth request failed unexpectedly: {type(e).__name__}: {e}'
+            )
+
+    # --- 9. Server rejects requests with wrong Authorization -----------
+    # Same negative-test discipline as Check 8, but with a wrong
+    # token attached. The server should still return 401 because
+    # `_check_auth` does a constant-string compare.
+    print('\n[Check 9] Server rejects requests with wrong Authorization (negative test)')
+    if not token:
+        record_fail(
+            'ACP_TOKEN not set; cannot run wrong-token test'
+        )
+    else:
+        try:
+            req = urllib.request.Request(
+                f'{base_url}/acp/inbox/write',
+                data=json.dumps({
+                    'session_id': 'wrong-auth-test',
+                    'sender': 'plugin',
+                    'content': 'wrong token attached',
+                }).encode('utf-8'),
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer this-is-the-wrong-token',
+                },
+                method='POST',
+            )
+            with urllib.request.urlopen(req, timeout=5) as r:
+                record_fail(
+                    f'server accepted wrong Authorization: status={r.status}'
+                )
+        except urllib.error.HTTPError as e:
+            check(e.code == 401,
+                  f'server rejected wrong Authorization with 401 (got {e.code})')
+        except Exception as e:
+            record_fail(
+                f'wrong-auth request failed unexpectedly: {type(e).__name__}: {e}'
+            )
 
     # --- Summary ---------------------------------------------------------
     print(f'\n=== Summary ===')

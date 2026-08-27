@@ -53,12 +53,22 @@ jobs:
         # /acp/health, /acp/inbox/write, /acp/inbox/read with
         # reproducible JSON, and a /acp/inbox/redirect path that
         # returns 302 to make sure the bundled client refuses it.
+        #
+        # v0.2.1 change: the stub is now started with --token so its
+        # `_check_auth` actually rejects missing / wrong Authorization
+        # headers. The previous workflow started the stub without
+        # --token; `_check_auth` then took the "auth disabled" branch
+        # and the smoke roundtrip never proved the server enforces
+        # auth. The negative tests added in v0.2.1 (Check 8 missing
+        # auth, Check 9 wrong auth) require the stub to be in the
+        # "auth required" state.
         env:
           ACP_TOKEN: 'ci-test-token-xyzzy'
           ACP_BASE_URL: 'http://127.0.0.1:19999'
         run: |
           set -euo pipefail
-          python plugins/antianqi/openclaw-acp-bridge/scripts/stub_server.py &
+          python plugins/antianqi/openclaw-acp-bridge/scripts/stub_server.py \
+            --token "$ACP_TOKEN" &
           STUB_PID=$!
           trap "kill $STUB_PID 2>/dev/null || true" EXIT
           sleep 0.5

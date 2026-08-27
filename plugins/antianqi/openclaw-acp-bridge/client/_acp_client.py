@@ -223,14 +223,15 @@ def _request(
     *,
     base_url: Optional[str] = None,
     token: Optional[str] = None,
+    auth: bool = True,
     stream: bool = False,
     timeout: Optional[float] = None,
 ) -> urllib.request.addinfourl:
     """Issue a single HTTP request, returning the raw response object.
 
-    Adds the bearer header, JSON-encodes the body, and uses the
-    no-redirect opener. The caller is responsible for `.read()` /
-    iteration / `.status` / `.headers` etc.
+    Adds the bearer header (when `auth=True`), JSON-encodes the body, and
+    uses the no-redirect opener. The caller is responsible for `.read()`
+    / iteration / `.status` / `.headers` etc.
 
     `base_url` resolution order (first hit wins):
       1. the explicit `base_url` argument
@@ -240,6 +241,11 @@ def _request(
 
     `stream=True` disables the read timeout (used for SSE). `stream=False`
     defaults to a 30s timeout.
+
+    `auth=True` (the default for every endpoint except health): the bearer
+    token is added to the request and `_resolve_token()` is consulted
+    when no token is given. `auth=False` skips both. The loopback guard
+    and no-redirect opener apply regardless of `auth`.
     """
     if base_url is None:
         base_url = os.environ.get('ACP_BASE_URL') or DEFAULT_BASE_URL
@@ -247,9 +253,10 @@ def _request(
     url = f'{base_url.rstrip("/")}{path}'
     headers = {}
     data: Optional[bytes] = None
-    if token is None:
-        token = _resolve_token()
-    headers['Authorization'] = f'Bearer {token}'
+    if auth:
+        if token is None:
+            token = _resolve_token()
+        headers['Authorization'] = f'Bearer {token}'
     if body is not None:
         data = json.dumps(body, ensure_ascii=False).encode('utf-8')
         headers['Content-Type'] = 'application/json'
@@ -276,11 +283,22 @@ _OPENER = _build_opener()
 # ---------------------------------------------------------------------------
 
 def health(base_url: str = DEFAULT_BASE_URL) -> dict:
-    """GET /acp/health (no auth required)."""
-    req = urllib.request.Request(f'{base_url.rstrip("/")}/acp/health', method='GET')
+    """GET /acp/health (no auth required, but the rest of the security
+    boundary still applies).
+
+    Health is the only endpoint that does not require a bearer token
+    (the server's `/acp/health` handler is anonymous). However, the
+    loopback guard and the no-redirect opener still apply: routing
+    health through the same `_request` primitive used by every other
+    public function means a misconfigured `ACP_BASE_URL` cannot be
+    used to probe a non-loopback host, and a 302 on the health
+    endpoint is surfaced as an error rather than silently followed.
+    This was the round-4 finding: the previous implementation called
+    `urllib.request.urlopen` directly and bypassed both checks.
+    """
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            return json.loads(r.read().decode('utf-8'))
+        resp = _request('GET', '/acp/health', base_url=base_url, auth=False, timeout=10.0)
+        return _json(resp)
     except urllib.error.HTTPError as e:
         raise ACPError(e.code, _read_err_body(e)) from None
 
