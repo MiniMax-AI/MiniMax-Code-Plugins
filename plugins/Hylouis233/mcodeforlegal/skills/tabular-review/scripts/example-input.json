@@ -1,0 +1,49 @@
+{
+  "documents": ["alpha-供货合同", "beta-供货合同", "gamma-服务协议"],
+  "questions": ["是否约定由境外机构仲裁", "违约责任上限如何约定"],
+  "cells": [
+    {
+      "document": "alpha-供货合同",
+      "question": "是否约定由境外机构仲裁",
+      "answer": "约定提交境外仲裁机构仲裁",
+      "source": "『凡因本合同引起的或与本合同有关的任何争议，均应提交境外仲裁中心仲裁』 | 第12条",
+      "status": "red",
+      "flag": "命中画像红线：不接受约定由境外机构仲裁",
+      "legal_risk": "🟠",
+      "business_friction": "阻碍",
+      "action": "升级法务负责人，谈判改为境内争议解决"
+    },
+    {
+      "document": "alpha-供货合同",
+      "question": "违约责任上限如何约定",
+      "answer": "违约方赔偿守约方全部损失，未设上限",
+      "source": "『违约方应赔偿守约方因此遭受的全部损失』 | 第10条第2款",
+      "status": "yellow",
+      "flag": "无上限违约赔偿，命中画像提示项",
+      "legal_risk": "🟠",
+      "business_friction": "拖慢",
+      "action": "建议增加责任上限条款"
+    },
+    {
+      "document": "beta-供货合同",
+      "question": "违约责任上限如何约定",
+      "answer": "累计赔偿责任不超过合同总金额的20%",
+      "source": "『累计赔偿责任不超过合同总金额的20%』 | 第9条",
+      "status": "green"
+    },
+    {
+      "document": "gamma-服务协议",
+      "question": "是否约定由境外机构仲裁",
+      "answer": "未见",
+      "source": "",
+      "status": "green"
+    },
+    {
+      "document": "gamma-服务协议",
+      "question": "违约责任上限如何约定",
+      "answer": "=SUM(1,2) 以等号开头的注入测试文本",
+      "source": "『赔偿上限为已支付服务费总额』 | 第7条",
+      "status": "yellow"
+    }
+  ]
+}
