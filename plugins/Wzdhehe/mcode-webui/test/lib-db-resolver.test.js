@@ -155,4 +155,35 @@ describe("db.js — better-sqlite3 resolver candidates (v1.0.1 round 4)", () => 
       `MCODE_CMD="mcode" should produce no MCODE_CMD-derived candidate, got: ${JSON.stringify(candidates)}`,
     );
   });
+
+  // Round 6: standard install location candidate (the one that
+  // actually fires on macOS dev boxes where ~/.minimax-code/lib/
+  // holds mcode's bundled deps).
+  test("install-layout: standard ~/.minimax-code/lib/node_modules/... is always tried", () => {
+    delete process.env.MCODE_BETTER_SQLITE3;
+    const candidates = _getBetterSqlite3Candidates({ home: "/Users/example" });
+    const expected = "/Users/example/.minimax-code/lib/node_modules/@minimax-ai/code/node_modules/better-sqlite3";
+    assert.ok(
+      candidates.includes(expected),
+      `expected standard install candidate ${expected} in ${JSON.stringify(candidates)}`,
+    );
+  });
+
+  test("install-layout: mcode at <root>/bin/mcode emits BOTH npm-style and flat candidates", () => {
+    delete process.env.MCODE_BETTER_SQLITE3;
+    const fakeCmd = "/opt/mcode/bin/mcode";
+    const candidates = _getBetterSqlite3Candidates({ mcodeCmd: fakeCmd });
+    // npm-style: <root>/lib/node_modules/...
+    const npmStyle = "/opt/mcode/lib/node_modules/@minimax-ai/code/node_modules/better-sqlite3";
+    // flat: <root>/node_modules/...
+    const flat = "/opt/mcode/bin/node_modules/@minimax-ai/code/node_modules/better-sqlite3";
+    assert.ok(
+      candidates.includes(npmStyle),
+      `expected npm-style candidate ${npmStyle} in ${JSON.stringify(candidates)}`,
+    );
+    assert.ok(
+      candidates.includes(flat),
+      `expected flat candidate ${flat} in ${JSON.stringify(candidates)}`,
+    );
+  });
 });

@@ -2,6 +2,7 @@
 // SQLite helpers — lazy require mcode's better-sqlite3 (so we don't break if missing).
 
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -30,21 +31,38 @@ let _McodeBetterSqlite3Failed = false;
 //
 // Exported (underscore prefix = test-only) so install-layout tests can
 // assert the candidate list without actually loading better-sqlite3.
-// `mcodeCmd` is parameterized so tests can simulate any install layout
-// without having to mutate the module-level MCODE_CMD constant.
-export function _getBetterSqlite3Candidates({ mcodeCmd = MCODE_CMD } = {}) {
+// `mcodeCmd` and `home` are parameterized so tests can simulate any
+// install layout without having to mutate module-level constants.
+export function _getBetterSqlite3Candidates({ mcodeCmd = MCODE_CMD, home = homedir() } = {}) {
   const candidates = [];
   if (process.env.MCODE_BETTER_SQLITE3) {
     candidates.push(process.env.MCODE_BETTER_SQLITE3);
   }
   if (mcodeCmd && mcodeCmd !== "mcode") {
     // mcodeCmd is the mcode executable file path (e.g.
-    // ~/.minimax-code/mcode.cmd or /usr/local/bin/mcode). The mcode
-    // package's `node_modules/` sits next to the binary, NOT two levels
-    // up from the file. Round 4 used `MCODE_CMD/../../` which treated
-    // the executable file as a directory and went 3 levels above the
-    // install root, landing at e.g. `/Users/moc/node_modules/...` instead
-    // of `/Users/moc/.minimax-code/node_modules/...`.
+    // ~/.minimax-code/bin/mcode on macOS, or ~/.minimax-code/mcode.cmd
+    // on Windows, or /usr/local/bin/mcode for npm-global). The mcode
+    // package's node_modules/ lives in a sibling of the binary's dir,
+    // depending on the install layout:
+    //
+    //   • npm-style install (macOS default): binary at <root>/bin/mcode,
+    //     package at <root>/lib/, deps at <root>/lib/node_modules/...
+    //     → up 1 from the binary's dir, then down to "lib/node_modules/".
+    //   • flat install (some Linux): binary at <root>/mcode, package at
+    //     <root>/, deps at <root>/node_modules/...
+    //     → same dir as the binary.
+    //
+    // Round 4 used `MCODE_CMD/../../` which treated the executable
+    // file as a directory and went 3 levels above the install root.
+    // Round 5 picked one of the two layouts; round 6 emits BOTH so the
+    // candidate list works for either install style.
+    candidates.push(
+      join(
+        dirname(mcodeCmd), "..", "lib",
+        "node_modules", "@minimax-ai", "code", "node_modules",
+        "better-sqlite3",
+      ),
+    );
     candidates.push(
       join(
         dirname(mcodeCmd),
@@ -53,6 +71,17 @@ export function _getBetterSqlite3Candidates({ mcodeCmd = MCODE_CMD } = {}) {
       ),
     );
   }
+  // Standard install location: <home>/.minimax-code/lib/node_modules/...
+  // Emitted unconditionally so we work even when MCODE_CMD is the
+  // PATH-placeholder "mcode" (config.js can't find a mcode.cmd on
+  // macOS where the binary is just "mcode").
+  candidates.push(
+    join(
+      home, ".minimax-code", "lib",
+      "node_modules", "@minimax-ai", "code", "node_modules",
+      "better-sqlite3",
+    ),
+  );
   // Dev layout fallback — webui source tree at <mcode-root>/webui/server/lib/
   candidates.push(
     join(
