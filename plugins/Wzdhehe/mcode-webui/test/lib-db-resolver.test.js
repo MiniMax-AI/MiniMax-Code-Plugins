@@ -94,15 +94,65 @@ describe("db.js — better-sqlite3 resolver candidates (v1.0.1 round 4)", () => 
     }
     delete process.env.MCODE_BETTER_SQLITE3;
     const candidates = _getBetterSqlite3Candidates();
-    // The MCODE_CMD-derived candidate starts with `dirname(MCODE_CMD)`,
-    // then `..`, then node_modules/... The candidate goes up 2 levels
-    // from MCODE_CMD itself (which points to the mcode binary file, not
-    // its parent dir) to reach npm's root node_modules.
-    const expectedPrefix = join(dirname(MCODE_CMD), "..");
+    // Round 5: the MCODE_CMD-derived candidate is `<dir-of-mcode-cmd>/node_modules/...`
+    // — `dirname(mcodeCmd)` then directly into the install dir's
+    // `node_modules/`. The previous round 4 form `MCODE_CMD/../../...`
+    // treated the executable file as a directory and went 3 levels
+    // above the install root, which is wrong.
+    const expectedPrefix = dirname(MCODE_CMD);
     const found = candidates.some((c) => c.startsWith(expectedPrefix));
     assert.ok(
       found,
       `expected at least one candidate starting with ${expectedPrefix} (MCODE_CMD="${MCODE_CMD}"), got: ${JSON.stringify(candidates)}`,
+    );
+    // And it must NOT start with `dirname(MCODE_CMD) + ".."` — that was
+    // the round 4 bug, where the candidate went one level too high.
+    const buggyPrefix = join(dirname(MCODE_CMD), "..");
+    const buggyFound = candidates.some((c) => c.startsWith(buggyPrefix));
+    assert.equal(
+      buggyFound, false,
+      `candidates must not use the round-4 buggy prefix ${buggyPrefix}`,
+    );
+  });
+
+  // Round 5: reproducible install-layout test that exercises the
+  // `mcodeCmd` parameter directly so we don't depend on whatever
+  // MCODE_CMD happens to resolve to in the test environment.
+  test("install-layout: mcode binary at <install>/mcode.cmd → candidate is <install>/node_modules/...", () => {
+    delete process.env.MCODE_BETTER_SQLITE3;
+    const fakeCmd = "/tmp/fake-mcode-install/mcode.cmd";
+    const expected = "/tmp/fake-mcode-install/node_modules/@minimax-ai/code/node_modules/better-sqlite3";
+    const candidates = _getBetterSqlite3Candidates({ mcodeCmd: fakeCmd });
+    assert.ok(
+      candidates.includes(expected),
+      `expected exact candidate ${expected} in ${JSON.stringify(candidates)}`,
+    );
+  });
+
+  test("install-layout: mcode binary at /usr/local/bin/mcode → candidate is /usr/local/bin/node_modules/...", () => {
+    // Simulates npm-global install: binary in /usr/local/bin/, deps
+    // expected to sit in the install dir's own node_modules.
+    delete process.env.MCODE_BETTER_SQLITE3;
+    const fakeCmd = "/usr/local/bin/mcode";
+    const expected = "/usr/local/bin/node_modules/@minimax-ai/code/node_modules/better-sqlite3";
+    const candidates = _getBetterSqlite3Candidates({ mcodeCmd: fakeCmd });
+    assert.ok(
+      candidates.includes(expected),
+      `expected exact candidate ${expected} in ${JSON.stringify(candidates)}`,
+    );
+  });
+
+  test("install-layout: MCODE_CMD = 'mcode' (PATH placeholder) does not produce a MCODE_CMD-derived candidate", () => {
+    delete process.env.MCODE_BETTER_SQLITE3;
+    const candidates = _getBetterSqlite3Candidates({ mcodeCmd: "mcode" });
+    // No candidate should be derived from the placeholder
+    const cmdDerived = candidates.filter(
+      (c) => !c.startsWith("/explicit/") && !c.includes("node_modules/@minimax-ai/code/node_modules/better-sqlite3")
+    );
+    // Only the dev layout fallback should remain
+    assert.equal(
+      cmdDerived.length, 0,
+      `MCODE_CMD="mcode" should produce no MCODE_CMD-derived candidate, got: ${JSON.stringify(candidates)}`,
     );
   });
 });

@@ -30,16 +30,24 @@ let _McodeBetterSqlite3Failed = false;
 //
 // Exported (underscore prefix = test-only) so install-layout tests can
 // assert the candidate list without actually loading better-sqlite3.
-export function _getBetterSqlite3Candidates() {
+// `mcodeCmd` is parameterized so tests can simulate any install layout
+// without having to mutate the module-level MCODE_CMD constant.
+export function _getBetterSqlite3Candidates({ mcodeCmd = MCODE_CMD } = {}) {
   const candidates = [];
   if (process.env.MCODE_BETTER_SQLITE3) {
     candidates.push(process.env.MCODE_BETTER_SQLITE3);
   }
-  if (MCODE_CMD && MCODE_CMD !== "mcode") {
+  if (mcodeCmd && mcodeCmd !== "mcode") {
+    // mcodeCmd is the mcode executable file path (e.g.
+    // ~/.minimax-code/mcode.cmd or /usr/local/bin/mcode). The mcode
+    // package's `node_modules/` sits next to the binary, NOT two levels
+    // up from the file. Round 4 used `MCODE_CMD/../../` which treated
+    // the executable file as a directory and went 3 levels above the
+    // install root, landing at e.g. `/Users/moc/node_modules/...` instead
+    // of `/Users/moc/.minimax-code/node_modules/...`.
     candidates.push(
       join(
-        MCODE_CMD,
-        "..", "..",
+        dirname(mcodeCmd),
         "node_modules", "@minimax-ai", "code", "node_modules",
         "better-sqlite3",
       ),
@@ -125,10 +133,15 @@ export function deleteMcodeSessionFromDb(
 ) {
   if (!/^mvs_[a-f0-9]{32}$/.test(sid))
     return { ok: false, reason: "not_mcode_sid" };
-  const Db = getMcodeBetterSqlite3();
-  if (!Db) return { ok: false, reason: "better_sqlite3_not_loaded" };
+  // Check db path BEFORE loading better-sqlite3 so callers get the most
+  // specific failure first. Round 4 had these reversed: callers passing
+  // a missing MCODE_RUNTIME_DB got `better_sqlite3_not_loaded` even when
+  // the db path was the actual problem. lib-db.test.js already
+  // documents the expected order: `mcode_db_not_found` must win.
   if (!MCODE_RUNTIME_DB || !existsSync(MCODE_RUNTIME_DB))
     return { ok: false, reason: "mcode_db_not_found" };
+  const Db = getMcodeBetterSqlite3();
+  if (!Db) return { ok: false, reason: "better_sqlite3_not_loaded" };
 
   // dry-run path: open readonly, count rows per table, do NOT modify.
   // Satisfies mcode-plugin-guide red-lines.md §"写操作/破坏性操作":
