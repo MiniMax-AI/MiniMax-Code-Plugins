@@ -35,20 +35,35 @@ lifecycle Hooks. When the registry accepts it (companion proposal:
 [`MiniMax-Code-Plugins` PR #20](https://github.com/MiniMax-AI/MiniMax-Code-Plugins/pull/20)),
 the runtime spawns a script from this plugin for every matching event:
 
-| event             | pill state  | script                          |
-| ----------------- | ----------- | ------------------------------- |
-| `SessionStart`    | `idle`      | `session-start.ps1`             |
-| `SessionEnd`      | `idle`      | `session-end.ps1`               |
-| `UserPromptSubmit`| `thinking`  | `user-prompt-submit.ps1`        |
-| `PreToolUse`      | `working`   | `pre-tool-use.ps1`              |
-| `PostToolUse`     | `done`/`error` | `post-tool-use.ps1`          |
-| `Stop`            | `done`      | `stop.ps1`                      |
-| `PreCompact`      | `thinking`  | `pre-compact.ps1`               |
-| `Notification`    | `idle`      | `notification.ps1`              |
-| `SubagentStart`   | `working` (CODEX only) | `subagent-start.ps1` |
-| `SubagentStop`    | `done` (CODEX only)    | `subagent-stop.ps1`  |
-| `PermissionRequest`| `waiting`  | `permission-request.ps1`        |
-| `PermissionDenied`| `error`     | `permission-denied.ps1`         |
+| event             | pill state  | script                          | 0.2.4 dispatch |
+| ----------------- | ----------- | ------------------------------- | -------------- |
+| `SessionStart`    | `idle`      | `session-start.ps1`             | yes            |
+| `SessionEnd`      | `idle`      | `session-end.ps1`               | yes            |
+| `UserPromptSubmit`| `thinking`  | `user-prompt-submit.ps1`        | yes            |
+| `PreToolUse`      | `working`   | `pre-tool-use.ps1`              | yes            |
+| `PostToolUse`     | `done`/`error` | `post-tool-use.ps1`          | yes            |
+| `Stop`            | `done`      | `stop.ps1`                      | **forward** — see below |
+| `PreCompact`      | `thinking`  | `pre-compact.ps1`               | **forward** — see below |
+| `Notification`    | `idle`      | `notification.ps1`              | **forward** — see below |
+| `SubagentStart`   | `working` (CODEX only) | `subagent-start.ps1` | **forward** — see below |
+| `SubagentStop`    | `done` (CODEX only)    | `subagent-stop.ps1`  | **forward** — see below |
+| `PermissionRequest`| `waiting`  | `permission-request.ps1`        | **forward** — see below |
+| `PermissionDenied`| `error`     | `permission-denied.ps1`         | **forward** — see below |
+
+**Forward events (7 of 12):** the spec reserves these in
+`proposals/hooks-detailed-spec.md` and this plugin ships a script for
+each, but the mcode 0.2.4 runtime allowlist (`Wso` set in
+`@minimax-ai/code@0.2.4`) does not yet dispatch them. The 0.2.4
+runtime treats unknown event names as no-op. Once a future mcode
+release adds the dispatch, the same `.ps1` files start firing without
+any code change here. The smoke test
+(`scripts/smoke.mjs`) tags these as `WARN` rather than `FAIL` for that
+reason — the **plugin is correct, the runtime is not yet ready**.
+
+If you need any of these events on 0.2.4 today, the supported fallback
+is to call `notify-island.ps1` from the agent (Mode B) at the moment
+you would otherwise rely on the event firing. The wrapper
+`wrap-tool.ps1` covers the `Bash` path automatically.
 
 The agent does not need to remember to push state — the runtime fires the
 right script at the right time. `PermissionRequest` is the only
@@ -217,9 +232,9 @@ binary, no symlink, no `node_modules`.
 | .NET WPF runtime  | 4.x (ships with Windows 10/11)                        |
 | mcode             | any version (Mode B works everywhere); 0.2.4+ activates Mode A |
 | execution policy  | `Bypass` for this directory; not changed globally    |
-| network access    | **none** — widget does not make any network request  |
-| accounts          | **none**                                              |
-| paid services     | **none**                                              |
+| network access    | **optional** — see "Network access" below. The widget itself is offline. `mcode-status-detect.ps1` only contacts `https://api.minimax.io/v1/coding_plan/remains` when a token is configured (see "Accounts" + "Data use"). |
+| accounts          | **optional** — see "Accounts" below. No account is required to run the widget; a token is only needed if you want the optional 5-hour usage readout in the pill. |
+| paid services     | **none added by this plugin** — the 5h usage endpoint is part of the user's existing MiniMax account, not a separate service |
 
 ## Data use
 
@@ -228,13 +243,59 @@ binary, no symlink, no `node_modules`.
 | `status.json`    | `%APPDATA%\mcode-island\`             | rewritten every transition | widget polling                       |
 | `caller.json`    | `%APPDATA%\mcode-island\`             | rewritten every transition | click-to-focus target HWND           |
 | `config.json`    | `%APPDATA%\mcode-island\`             | rewritten on drag         | pill position, size, opacity         |
+| `config.json` -> `planApiToken` | `%APPDATA%\mcode-island\` | until `-Clear` or manual edit | 5h usage API token (opt-in; see "Accounts") |
 | `widget.pid`     | `%APPDATA%\mcode-island\`             | rewritten on start        | widget process PID                   |
 | `island.log`     | `%APPDATA%\mcode-island\`             | append-only, never pruned  | state transition history             |
 | `widget.log`     | `%APPDATA%\mcode-island\`             | append-only, never pruned  | widget internal debug                |
 | `show.signal`    | `%APPDATA%\mcode-island\`             | transient                 | "raise hidden window" signal        |
 | `HKCU\...\Run`   | Windows registry                      | until disabled            | logon auto-start                     |
 
-**No data leaves the local machine. No telemetry. No network requests.**
+**Telemetry: none.** **No data is sent off-machine unless the optional
+`planApiToken` is configured (see "Network access" below).** The widget
+itself is offline and never reads or writes anything outside `%APPDATA%\mcode-island\`.
+
+## Network access
+
+The widget is fully offline. The only network caller in this plugin is
+`mcode-status-detect.ps1` (Mode B detector), and it only makes a request
+when ALL of the following are true:
+
+1. A token is configured (env `MINIMAX_OAUTH_TOKEN` or `MINIMAX_API_KEY`,
+   or `set-token.ps1 <token>` which writes to `config.json:planApiToken`).
+2. The detector is running (`mcode-island detect-on`, the default).
+3. At least 60 seconds have elapsed since the last call (rate-limited).
+
+When all three are true, the detector makes **one** GET to:
+
+- `https://api.minimax.io/v1/coding_plan/remains` (HTTPS, no credentials in
+  the URL, no fragment, body is a small JSON object)
+
+The response is parsed and only two numbers are written to
+`status.json`: `usage5h` (0..100, percent remaining) and `usage5hResetMs`
+(milliseconds until the next refresh). Nothing else is persisted and
+nothing is sent back to the plugin author. A failure or timeout is
+swallowed silently — the pill still works without the readout.
+
+Without a token, the detector skips this call entirely and the pill's
+`usage5h` field is `null`.
+
+## Accounts
+
+No account is required to install or use the widget. The token mechanism
+exists so users who already have a MiniMax account can opt in to showing
+the 5-hour usage readout in the pill.
+
+| token type        | how it enters the plugin                                | where it is stored                                | how it is removed                            |
+| ----------------- | -------------------------------------------------------- | -------------------------------------------------- | -------------------------------------------- |
+| `MINIMAX_OAUTH_TOKEN` (env) | set by the user in their shell or mcode config | process env (not on disk)                          | unset env / close shell                      |
+| `MINIMAX_API_KEY` (env)     | same as above                                          | process env                                       | same as above                                |
+| `config.json:planApiToken`   | `set-token.ps1 <token>`                                | `%APPDATA%\mcode-island\config.json` (plaintext)  | `set-token.ps1 -Clear` or edit the file      |
+
+The token is **never logged, never written to any other file, and never
+sent to a host other than `api.minimax.io`**. `set-token.ps1` only writes
+to `config.json`; it makes no network call. The detector only reads the
+token to attach as an `Authorization: Bearer ...` header on the single
+GET documented above.
 
 ## CLI reference
 

@@ -1,6 +1,5 @@
 {
   "$schema": "https://minimax.io/schemas/mcode-hooks/0.1.0/hooks.schema.json",
-  "_comment": "Conforms to the io.minimax.mcode Hooks spec proposed in MiniMax-Code-Plugins PR #20. Field vocabulary: command/args/env/cwd/matcher/pattern/regex/glob/timeout/timeoutMs/once. Reserved fields rejected by the portable spec: type, shell, prompt, http, agent, script, function. PLUGIN_ROOT and PLUGIN_DATA are reserved env names. mcode 0.2.4 ships runtime support for these events; the proposal is still pending merge in MiniMax-Code-Plugins, so this file is forward-compatible: when the registry validator accepts it, no changes are needed.",
   "hooks": {
     "SessionStart": [
       {

@@ -226,6 +226,47 @@ const main = async () => {
     }
     out('PASS', 'io.minimax.mcode/hooks/hooks.json: `hooks` is an object');
 
+    // 2b. closed-schema conformance (round-4 R21-1).
+    // The companion proposal (MiniMax-Code-Plugins PR #20) defines the
+    // root keys as a closed allowlist of { $schema, hooks }. Anything
+    // else (notably the historical `_comment` field) is rejected. We
+    // import the shared validator to avoid drifting from the proposal.
+    try {
+        const { validateHooksDocument, HOOK_SCHEMA } = await import(
+            fileURLToPath(new URL('../../../../../scripts/lib/validation.mjs', import.meta.url))
+        ).catch(() => ({}));
+        if (typeof validateHooksDocument === 'function') {
+            try {
+                validateHooksDocument(hooksDoc, 'mcode-island/hooks.json');
+                out('PASS', 'hooks.json conforms to closed schema (HOOK_DOCUMENT_FIELDS)');
+            } catch (e) {
+                // Round-4: a stray _comment or any unknown root key
+                // becomes a hard FAIL, not a soft WARN.
+                out('FAIL', `hooks.json: ${e.message} (closed schema: $schema + hooks only)`);
+                return finish();
+            }
+            if (hooksDoc.$schema && hooksDoc.$schema !== HOOK_SCHEMA) {
+                out('FAIL', `hooks.json: $schema is ${hooksDoc.$schema} but the proposal pins ${HOOK_SCHEMA}`);
+                return finish();
+            }
+            if (hooksDoc.$schema === HOOK_SCHEMA) {
+                out('PASS', `hooks.json: $schema pinned to ${HOOK_SCHEMA}`);
+            }
+        } else {
+            // Fallback: do the closed-schema check inline so the test
+            // does not depend on the validator being importable.
+            const known = new Set(['$schema', 'hooks']);
+            const unknown = Object.keys(hooksDoc).filter((k) => !known.has(k));
+            if (unknown.length > 0) {
+                out('FAIL', `hooks.json: unknown root field(s) ${unknown.map((k) => JSON.stringify(k)).join(', ')} (closed schema: $schema + hooks only)`);
+                return finish();
+            }
+            out('PASS', 'hooks.json: closed schema (no unknown root fields)');
+        }
+    } catch (e) {
+        out('WARN', `hooks.json: closed-schema check skipped: ${e.message}`);
+    }
+
     // 3. event catalog
     const eventNames = Object.keys(hooksRoot);
     if (eventNames.length === 0) {
