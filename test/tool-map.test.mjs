@@ -497,10 +497,19 @@ test('POSIX: case-distinct tool names are kept distinct on case-sensitive FS, AN
   }
   const root = mkdtempSync(join(tmpdir(), 'tool-map-case-'));
   try {
-    writeFileSync(join(root, 'Foo'), '#!/bin/sh\necho Foo\n');
-    chmodSync(join(root, 'Foo'), 0o755);
-    writeFileSync(join(root, 'foo'), '#!/bin/sh\necho foo\n');
-    chmodSync(join(root, 'foo'), 0o755);
+    // Use .sh extension so the scan's EXEC_EXTS allowlist accepts
+    // these files without depending on the NPM_BIN_HINT directory
+    // regex. The original test used extensionless files, which
+    // POSIX scan.mjs accepts only when the parent dir matches
+    // /minimax-code|openclaw|node_modules|.Codex|.claude|npm|tauri/.
+    // A /tmp/ test root never matches, so the scan correctly reports
+    // 0 tools and the test fails on Linux. The .sh files are
+    // accepted by isToolFile directly via EXEC_EXTS, regardless of
+    // the parent dir.
+    writeFileSync(join(root, 'Foo.sh'), '#!/bin/sh\necho Foo\n');
+    chmodSync(join(root, 'Foo.sh'), 0o755);
+    writeFileSync(join(root, 'foo.sh'), '#!/bin/sh\necho foo\n');
+    chmodSync(join(root, 'foo.sh'), 0o755);
 
     // Use a CLEAN PATH so the scan only walks the temp dir.
     // This is the round-4 fix: the old test set TOOL_MAP_ROOTS
