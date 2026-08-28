@@ -3,6 +3,12 @@ import path from 'node:path';
 
 export const PLUGIN_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json';
 export const MCP_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json';
+// Pinned by the proposal at proposals/hooks-detailed-spec.md. The
+// round-4 review pointed out that the previous check accepted ANY
+// non-empty string, which meant a plugin could claim a different
+// schema than the proposal. Locking the URL means the validator
+// can now reject drafts that don't match the published spec.
+export const HOOK_SCHEMA = 'https://minimax.io/schemas/mcode-hooks/0.1.0/hooks.schema.json';
 
 const PLUGIN_NAME = /^(?!.*(?:--|\.\.))[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u;
 const OWNER_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/u;
@@ -89,7 +95,12 @@ export function validateMcp(value, label = 'mcp.json') {
       assert(typeof server.command === 'string' && server.command.length > 0 && (isBareCommand(server.command) || isContainedRelativePath(server.command)), `${label}: ${name} needs a bare executable or contained ./ path`);
       assert(server.args === undefined || (Array.isArray(server.args) && server.args.every((item) => typeof item === 'string')), `${label}: ${name}.args must be strings`);
       assert(server.env === undefined || (isRecord(server.env) && Object.entries(server.env).every(([key, item]) => !['PLUGIN_ROOT', 'PLUGIN_DATA'].includes(key) && typeof item === 'string')), `${label}: ${name}.env is invalid`);
-      assert(server.cwd === undefined || (typeof server.cwd === 'string' && /^(?:\.\/|\$\{PLUGIN_ROOT\}(?:\/|$)|\$\{PLUGIN_DATA\}(?:\/|$))/u.test(server.cwd)), `${label}: ${name}.cwd is invalid`);
+      assert(
+        server.cwd === undefined
+          || (typeof server.cwd === 'string'
+            && (isContainedRelativePath(server.cwd) || isContainedPluginPath(server.cwd))),
+        `${label}: ${name}.cwd must be a contained ./ path (no '..', no '\\') or a path under \${PLUGIN_ROOT} or \${PLUGIN_DATA} (no '..', no '\\', no leading '/')`,
+      );
       assert(Object.keys(server).every((key) => ['type', 'command', 'args', 'env', 'cwd'].includes(key)), `${label}: ${name} has unsupported fields`);
     } else if (server.type === 'streamable-http' || server.type === 'sse') {
       assert(typeof server.url === 'string' && isSafeRemoteUrl(server.url), `${label}: ${name}.url must be HTTPS or loopback HTTP without credentials or fragment`);
@@ -107,7 +118,31 @@ function isBareCommand(value) {
 }
 
 function isContainedRelativePath(value) {
-  return value.startsWith('./') && !value.split('/').includes('..') && !value.includes('\\');
+  // ./foo/bar: every segment must be a non-empty name, no '..' anywhere,
+  // no backslashes (which would be a Windows-only escape hatch).
+  if (!value.startsWith('./') || value.includes('\\')) return false;
+  const parts = value.split('/');
+  // The first part is '.' (we just checked that), so we walk the rest.
+  for (let i = 1; i < parts.length; i += 1) {
+    if (parts[i] === '' || parts[i] === '..') return false;
+  }
+  return true;
+}
+
+// ${PLUGIN_ROOT}/foo/bar and ${PLUGIN_DATA}/foo/bar: the literal
+// segment between '${...}' and the first '/' (or end-of-string) must
+// not be '.' or '..' and must not contain a backslash. Same for every
+// subsequent segment. This was the round-4 finding: the previous regex
+// only checked the prefix, so '${PLUGIN_ROOT}/../../outside' passed.
+function isContainedPluginPath(value) {
+  const m = /^\$\{(PLUGIN_ROOT|PLUGIN_DATA)\}(?:\/(.*))?$/u.exec(value);
+  if (!m) return false;
+  if (m[2] === undefined) return true; // '${PLUGIN_ROOT}' alone is the root
+  if (m[2].includes('\\')) return false;
+  for (const seg of m[2].split('/')) {
+    if (seg === '' || seg === '.' || seg === '..') return false;
+  }
+  return true;
 }
 
 function isSafeRemoteUrl(value) {
@@ -197,8 +232,8 @@ export function validateHookEntry(value, label) {
   if (value.cwd !== undefined) {
     assert(
       typeof value.cwd === 'string'
-        && /^(?:\.\/|\$\{PLUGIN_ROOT\}(?:\/|$)|\$\{PLUGIN_DATA\}(?:\/|$))/u.test(value.cwd),
-      `${label}: cwd must be a contained ./ path or resolve under PLUGIN_ROOT or PLUGIN_DATA`,
+        && (isContainedRelativePath(value.cwd) || isContainedPluginPath(value.cwd)),
+      `${label}: cwd must be a contained ./ path (no '..', no '\\') or a path under \${PLUGIN_ROOT} or \${PLUGIN_DATA} (no '..', no '\\', no leading '/')`,
     );
   }
   if (value.matcher !== undefined) {
@@ -231,7 +266,13 @@ export function validateHookEntry(value, label) {
 export function validateHooksDocument(value, label) {
   assert(isRecord(value), `${label}: root must be an object`);
   rejectUnknownFields(value, HOOK_DOCUMENT_FIELDS, label);
-  assert(typeof value.$schema === 'string' && value.$schema.length > 0, `${label}: $schema is required`);
+  // Round-4 fix: the previous check was `length > 0`, which accepted
+  // any non-empty string. The proposal pins a specific URL, so the
+  // validator must require that URL exactly. A plugin that wants to
+  // claim a different schema is welcome to publish a different
+  // proposal, but the validator cannot pretend a draft matches
+  // 0.1.0 just because the field is non-empty.
+  assert(value.$schema === HOOK_SCHEMA, `${label}: $schema must equal ${HOOK_SCHEMA}`);
   assert(isRecord(value.hooks), `${label}: hooks must be an object`);
   const events = [];
   for (const [eventName, entries] of Object.entries(value.hooks)) {

@@ -6,8 +6,8 @@
 // credentials, no telemetry. Resolves all paths from runtime-injected environment values
 // only. Cross-platform: uses node:fs/promises and node:path, never host-absolute literals.
 
-import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
-import { dirname, join, resolve, sep } from 'node:path';
+import { readFile, writeFile, rename, mkdir, realpath } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { argv, env } from 'node:process';
 
 const MAX_STATE_BYTES = 1024 * 1024;
@@ -33,7 +33,7 @@ function parseArgs(args) {
 // token is allowed per path. The expanded value is then resolved against the corresponding
 // root for real-path and symlink containment. PLUGIN_ROOT and PLUGIN_DATA are independent
 // roots; a path under PLUGIN_DATA is not required to be under PLUGIN_ROOT.
-function expandAndCheck(value) {
+async function expandAndCheck(value) {
   if (typeof value !== 'string') return null;
   if (value.startsWith('${PLUGIN_ROOT}')) {
     const root = env.PLUGIN_ROOT;
@@ -48,14 +48,107 @@ function expandAndCheck(value) {
   return null;
 }
 
-function ensureContained(target, root) {
-  const rootReal = resolve(root);
-  const targetReal = resolve(target);
-  const prefix = rootReal.endsWith(sep) ? rootReal : rootReal + sep;
-  if (targetReal !== rootReal && !targetReal.startsWith(prefix)) {
-    throw new Error(`path escapes plugin root: ${targetReal} is not under ${rootReal}`);
+// Real-path containment. The round-4 review pointed out that the
+// previous implementation only did `path.resolve` (a lexical
+// normalization), which is bypassed by symlinks. For example:
+//
+//   PLUGIN_DATA = /tmp/d  (realpath /var/srv/d)
+//   ${PLUGIN_DATA}/link/state.json  where 'link' is a symlink to /etc
+//
+// Lexically: targetReal='/tmp/d/link/state.json',
+//            rootReal='/var/srv/d', prefix='/var/srv/d/'. The
+//            `startsWith` check is FALSE — the lexical check
+//            refuses. So the old code was actually safe for THIS
+//            case, but only by accident (the symlink happens to
+//            live at a different lexical prefix than the
+//            realpath of the root).
+//
+// The real bypass is the OPPOSITE: when the root itself is reached
+// via a symlink, the lexical prefix can be lexically INSIDE the
+// root, while the realpath target is OUTSIDE. For example:
+//
+//   PLUGIN_DATA = /tmp/d  (realpath /var/srv/d)
+//   realpath('/tmp/d/foo') = '/var/srv/d/foo'  → contained ✓
+//   but if /tmp/d itself is a symlink to /etc, then:
+//   lex '/tmp/d/foo' starts with '/tmp/d/'  → 'contained' (false positive)
+//   realpath('/tmp/d/foo') = '/etc/foo'     → NOT contained (the truth)
+//
+// The fix is to call realpath on the root once (if it exists) and
+// then call realpath on every prefix of the target up to the
+// common ancestor with the realpath-root. If any segment along
+// the way is a symlink, we resolve it eagerly. This makes the
+// lexical-vs-realpath race a structural impossibility: we always
+// compare realpath to realpath.
+//
+// Note on Windows: mkdtemp returns a short 8.3 path
+// (C:\Users\ADMINI~1\...) but realpath returns the long form
+// (C:\Users\Administrator\...). The two strings are different
+// lengths, so a naive `target.slice(parent.length + 1)` produces
+// a corrupted basename. We use `path.relative` instead, which is
+// length-independent.
+async function ensureContained(target, root) {
+  if (!isAbsolute(root)) {
+    throw new Error(`plugin root is not absolute: ${root}`);
   }
-  return targetReal;
+  if (!isAbsolute(target)) {
+    throw new Error(`target path is not absolute: ${target}`);
+  }
+  const rootReal = await realpathOf(root);
+  let cursor = target;
+  while (true) {
+    let cursorReal;
+    try {
+      cursorReal = await realpathOf(cursor);
+    } catch (error) {
+      if (error && error.code === 'ENOENT') {
+        const parent = dirname(cursor);
+        if (parent === cursor) {
+          throw new Error(`path escapes plugin root: ${target} is not under ${root}`);
+        }
+        const parentReal = await realpathOf(parent);
+        if (!isUnder(parentReal, rootReal)) {
+          throw new Error(`path escapes plugin root: ${target} is not under ${root}`);
+        }
+        // The basename is the segment AFTER the last path
+        // separator in `target`; using `relative` is length-safe
+        // even when short/long paths are mixed (Windows).
+        const base = relative(parent, target);
+        if (base.startsWith('..') || isAbsolute(base)) {
+          throw new Error(`path escapes plugin root: ${target} is not under ${root}`);
+        }
+        return join(parentReal, base);
+      }
+      throw error;
+    }
+    if (cursorReal === rootReal) {
+      return cursorReal;
+    }
+    if (isUnder(cursorReal, rootReal)) {
+      return cursorReal;
+    }
+    const parent = dirname(cursor);
+    if (parent === cursor) {
+      throw new Error(`path escapes plugin root: ${target} is not under ${root}`);
+    }
+    cursor = parent;
+  }
+}
+
+async function realpathOf(p) {
+  // Always run realpath. We deliberately do NOT catch ENOENT here
+  // and return the input path: that would defeat the comparison
+  // against rootReal, because a short/long path mix on Windows
+  // would compare unequal even when the file is contained. The
+  // caller (ensureContained) is responsible for the ENOENT
+  // fallback when the target is a new file inside an existing
+  // directory.
+  return await realpath(p);
+}
+
+function isUnder(child, parent) {
+  if (parent === child) return true;
+  const prefix = parent.endsWith(sep) ? parent : parent + sep;
+  return child.startsWith(prefix);
 }
 
 async function readStdin() {
@@ -114,7 +207,7 @@ async function main() {
   }
   let statePath;
   try {
-    statePath = expandAndCheck(args.state);
+    statePath = await expandAndCheck(args.state);
   } catch {
     return;
   }

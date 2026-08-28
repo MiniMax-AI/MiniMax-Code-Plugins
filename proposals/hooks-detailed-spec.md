@@ -327,8 +327,16 @@ The validator **enforces**:
 - Field types match the table in § "Field vocabulary".
 - `command` is a bare executable or a contained `./` path.
 - `env` does not contain `PLUGIN_ROOT` or `PLUGIN_DATA`; the runtime owns those.
-- `cwd` (if present) is a contained `./` path or a `PLUGIN_ROOT` / `PLUGIN_DATA`
-  expansion at the syntactic level.
+- `cwd` (if present) is a contained `./` path (no `..`, no `\`) or a
+  `PLUGIN_ROOT` / `PLUGIN_DATA` expansion (no `..`, no `\`, no leading `/`)
+  at the syntactic level. The validator does NOT follow symlinks for `cwd`
+  -- symlink containment is a Runtime responsibility (see "Path safety at
+  execution time" below).
+- `$schema` exactly equals
+  `https://minimax.io/schemas/mcode-hooks/0.1.0/hooks.schema.json`. A
+  plugin that wants to claim a different schema version is welcome to
+  publish a different proposal, but the validator cannot pretend a draft
+  matches `0.1.0` just because the field is non-empty.
 
 The validator **does not enforce** (these are Runtime responsibilities, recorded here so
 the boundary is explicit):
@@ -336,9 +344,9 @@ the boundary is explicit):
 - Whether the Runtime actually honors a given event. The validator accepts every
   event in the catalog regardless of whether the active Runtime wires it; the
   `0.2.4 confirmed?` column in § "Empirical event catalog" records the gap.
-- Whether the `$schema` URL is reachable or published. The validator accepts any
-  non-empty string; a future minor revision of this proposal MAY tighten this to
-  require a `https://minimax.io/schemas/...` prefix.
+- Whether the `$schema` URL is reachable or published. The validator
+  pins the URL but does not fetch it; reachability is a deployment-time
+  concern, not a validation-time one.
 - Payload data values delivered to a Hook. The validator does not parse stdin;
   the example `record.mjs` deliberately persists only payload field names, not
   values. A portable observer SHOULD follow the same pattern unless the
