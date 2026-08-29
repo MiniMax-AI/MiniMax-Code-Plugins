@@ -20,6 +20,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   readdirSync, readFileSync, statSync, existsSync, writeFileSync, mkdirSync,
   realpathSync, renameSync as _fsRename, rmSync,
+  accessSync, constants as fsConstants,
 } from 'node:fs';
 import { join, dirname, basename, sep, extname, resolve, delimiter } from 'node:path';
 import { homedir, hostname, platform } from 'node:os';
@@ -309,7 +310,26 @@ function resolveProgram(name) {
       // symlinks (statSync throws ENOENT) by not catching.
       let st;
       try { st = statSync(full); } catch { continue; }
-      if (st.isFile()) return full;
+      if (st.isFile()) {
+        // Round-5 finding: isFile() is necessary but not sufficient
+        // on POSIX. A non-executable regular file in an earlier PATH
+        // directory must not shadow an executable regular file later
+        // in PATH. Without the X_OK gate, resolveProgram() would
+        // return the 0644 file and probeVersion() would then try to
+        // execFileP it; the kernel's execve() would fail with
+        // EACCES and probeVersion() would surface null instead of
+        // continuing to the 0755 candidate behind it.
+        //
+        // Windows ignores the x bit per platform convention; the
+        // .exe/.cmd/.bat extension is the executable contract on
+        // Windows, and PATHEXT above already enforces it. No
+        // permission check is needed there.
+        if (!IS_WIN) {
+          try { accessSync(full, fsConstants.X_OK); }
+          catch { continue; }
+        }
+        return full;
+      }
     }
   }
   return null;

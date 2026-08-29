@@ -792,6 +792,97 @@ test('resolveProgram rejects a directory even if it comes first in PATH (POSIX, 
   }
 });
 
+// === R5-1: resolveProgram requires X_OK on POSIX (non-executable in earlier PATH dir must not shadow executable in later dir) ===
+//
+// Round-5 review finding: a non-executable (0644) candidate in an
+// earlier PATH directory must not shadow a runnable (0755) candidate
+// later in PATH. The previous isFile()-only check would return the
+// 0644 file, and a subsequent probeVersion() call would surface null
+// (because the kernel's execve() of the 0644 file would fail with
+// EACCES) instead of continuing on to the 0755 candidate that the
+// user actually intended to run.
+//
+// This is a real bug-replication test: with the fix reverted
+// (isFile() only, no X_OK gate) the assert below fails because
+// resolveProgram returns the dir1 path. With the fix in place it
+// returns the dir2 path.
+//
+// On Windows the executable contract is the .exe/.cmd/.bat
+// extension (PATHEXT above). The x bit is ignored by convention
+// on Windows, so this test is POSIX-only.
+test('resolveProgram skips a non-executable file even if it comes first in PATH (POSIX, R5-1 X_OK contract)', () => {
+  if (process.platform === 'win32') return;
+  const dir1 = mkdtempSync(join(tmpdir(), 'tool-map-resolve-noexec-first-'));
+  const dir2 = mkdtempSync(join(tmpdir(), 'tool-map-resolve-exec-later-'));
+  try {
+    // dir1 contains a NON-EXECUTABLE regular file. With the fix
+    // reverted, resolveProgram would stop here (isFile() is true)
+    // and return this path; the assertion at the end would then
+    // fail because this is the WRONG path.
+    writeFileSync(join(dir1, 'foo-tool'), '#!/bin/sh\necho foo-tool\n');
+    chmodSync(join(dir1, 'foo-tool'), 0o644);
+
+    // dir2 contains an EXECUTABLE regular file. resolveProgram
+    // must keep searching past the 0644 candidate and return this.
+    writeFileSync(join(dir2, 'foo-tool'), '#!/bin/sh\necho foo-tool\n');
+    chmodSync(join(dir2, 'foo-tool'), 0o755);
+
+    const pathEnv = `${dir1}${delimiter}${dir2}`;
+    const probe = spawnSync(process.execPath, [
+      '--input-type=module',
+      '-e',
+      `process.env.PATH = ${JSON.stringify(pathEnv)};
+       const m = await import('./plugins/antianqi/tool-map/scripts/scan.mjs');
+       process.stdout.write(JSON.stringify(m.resolveProgram('foo-tool')));`,
+    ], {
+      encoding: 'utf8',
+      cwd: REPO_ROOT,
+    });
+    const resolved = probe.stdout.trim();
+    assert.equal(probe.status, 0, `resolveProgram probe failed (status ${probe.status}): ${probe.stderr}`);
+    assert.equal(resolved, JSON.stringify(join(dir2, 'foo-tool')),
+      `resolveProgram must skip the 0644 file in dir1 and return the 0755 file in dir2. ` +
+      `Got: ${resolved} (probe stdout: "${probe.stdout}", stderr: "${probe.stderr}")`);
+  } finally {
+    rmSync(dir1, { recursive: true, force: true });
+    rmSync(dir2, { recursive: true, force: true });
+  }
+});
+
+// === R5-1 mirror: resolveProgram returns null when NO candidate in PATH is executable ===
+//
+// Companion to the X_OK test above. If every candidate in PATH is a
+// regular file but NONE has the x bit set, resolveProgram must
+// return null (not the first non-executable file, not an arbitrary
+// one). Without the X_OK gate, the old code would have returned the
+// first isFile() match regardless of executability.
+test('resolveProgram returns null when the only candidate in PATH is a non-executable file (POSIX, R5-1 X_OK null return)', () => {
+  if (process.platform === 'win32') return;
+  const dir1 = mkdtempSync(join(tmpdir(), 'tool-map-resolve-noexec-only-'));
+  try {
+    writeFileSync(join(dir1, 'foo-tool'), '#!/bin/sh\necho foo-tool\n');
+    chmodSync(join(dir1, 'foo-tool'), 0o644);
+
+    const pathEnv = dir1;
+    const probe = spawnSync(process.execPath, [
+      '--input-type=module',
+      '-e',
+      `process.env.PATH = ${JSON.stringify(pathEnv)};
+       const m = await import('./plugins/antianqi/tool-map/scripts/scan.mjs');
+       process.stdout.write(JSON.stringify(m.resolveProgram('foo-tool')));`,
+    ], {
+      encoding: 'utf8',
+      cwd: REPO_ROOT,
+    });
+    assert.equal(probe.status, 0, `resolveProgram probe failed (status ${probe.status}): ${probe.stderr}`);
+    assert.equal(probe.stdout.trim(), 'null',
+      `resolveProgram must return null when no candidate has X_OK. ` +
+      `Got: ${probe.stdout} (stderr: ${probe.stderr})`);
+  } finally {
+    rmSync(dir1, { recursive: true, force: true });
+  }
+});
+
 test('resolveProgram returns null for unknown names', async () => {
   const scanUrl = pathToFileURL(SCAN).href;
   const { resolveProgram } = await import(scanUrl);
