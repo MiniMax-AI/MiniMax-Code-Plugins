@@ -152,9 +152,15 @@ function parseFrontmatter(text) {
 // to count prose claims (placeholders, Codex-harness parameter names),
 // not to interpret the code; the asserts are conservative.
 function findInCodeFences(text, re) {
+  // Normalize line endings to LF (see parseFrontmatter for rationale).
+  // The function is currently unused by the round-5 test surface
+  // (extractCallBodies replaced it on 61ae6f4), but it is kept as a
+  // public helper for any future round and must therefore be CRLF-safe
+  // to avoid silently returning 0 hits on Windows-checked-out files.
+  const t = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   const hits = [];
   const fenceRe = /```[a-zA-Z0-9_-]*\n([\s\S]*?)```/gu;
-  for (const m of text.matchAll(fenceRe)) {
+  for (const m of t.matchAll(fenceRe)) {
     const block = m[1];
     let mm;
     const local = new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g');

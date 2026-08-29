@@ -11,7 +11,7 @@ metadata:
   author: antianqi
   version: "1.2.0"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/protocol/src/protocol.rs (InterAgentCommunication) and core/src/session/multi_agents.rs (CollabAgentSpawn); the 4-part envelope is the portable design; on mcode the envelope fills the `prompt` field
-  changes-from-v1.1.0: "Replaced `agent_name=` with the canonical mcode `agent_name=`. Replaced `brief=` with `prompt=`. Dropped `mavis` from the sub-agent list (mavis is the root). The 4-part envelope is unchanged but now lives inside the `prompt` string, not in a separate `brief` parameter. The host-pseudocode 'Codex-harness style' block was removed; the mcode 0.2.4 schema is now the only one shown."
+  changes-from-v1.1.0: "Replaced `subagent_type=` with the canonical mcode `agent_name=`. Replaced `brief=` with `prompt=`. Dropped `mavis` from the sub-agent list (mavis is the root). The 4-part envelope is unchanged but now lives inside the `prompt` string, not in a separate `brief` parameter. The host-pseudocode 'Codex-harness style' block was removed; the mcode 0.2.4 schema is now the only one shown."
 ---
 
 # Delegate with Context

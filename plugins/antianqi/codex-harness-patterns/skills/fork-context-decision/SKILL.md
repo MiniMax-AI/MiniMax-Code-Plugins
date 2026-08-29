@@ -11,7 +11,7 @@ metadata:
   author: antianqi
   version: "0.3.0"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/core/src/session/multi_agents.rs (design principle; the 3 fork modes are portable; the prompt-content decision is host-neutral)
-  changes-from-v0.2.0: "Removed the v0.2.0 `history=N` PLACEHOLDER — the mcode 0.2.4 `task` tool has no context-sharing parameter, so the 3 fork modes (all / N / none) are now expressed by what the calling agent writes into the `prompt` (full conversation dump / last N turns inline / brief only). Replaced `agent_name=` with the canonical mcode `agent_name=`. Dropped `mavis` from the subagent list because `mavis` is the root agent (it has no `agent.md` subagent manifest and cannot be used as `agent_name`); the 3 actual mcode sub-agent types are `explore` / `worker` / `verifier`."
+  changes-from-v0.2.0: "Removed the v0.2.0 `history=N` PLACEHOLDER — the mcode 0.2.4 `task` tool has no context-sharing parameter, so the 3 fork modes (all / N / none) are now expressed by what the calling agent writes into the `prompt` (full conversation dump / last N turns inline / brief only). Replaced `subagent_type=` with the canonical mcode `agent_name=`. Dropped `mavis` from the subagent list because `mavis` is the root agent (it has no `agent.md` subagent manifest and cannot be used as `agent_name`); the 3 actual mcode sub-agent types are `explore` / `worker` / `verifier`."
 ---
 
 # Fork Context Decision
@@ -38,7 +38,7 @@ task(
 ```
 
 `agent_name` is accepted as a runtime alias (the normaliser at `cli.js:j6c` converts
-it to `agent_name`) but the canonical form is `agent_name`. There is **no
+it to `subagent_type`) but the canonical form is `agent_name`. There is **no
 `history=`, no `fork_turns=`, no `context_size=`** — the calling agent has full
 control of what the sub-agent sees by writing it into the `prompt` string. So
 the 3 fork modes (all / N / none) become a `prompt` content decision, not a

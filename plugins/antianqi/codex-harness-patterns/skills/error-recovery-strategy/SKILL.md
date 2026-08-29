@@ -11,7 +11,7 @@ metadata:
   author: antianqi
   version: "0.1.2"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/code-mode/src/grpc_session/reconnect.rs and core/src/session/multi_agents.rs
-  changes-from-v0.1.1: "Audit gap: the sub-agent invocation example in '## Example' (line 115) used the Codex-style `task(subagent=...)` shape; switched to the canonical mcode 0.2.4 `task(agent_name=..., prompt=...)` shape (mcode accepts `agent_name=` as a runtime alias but `agent_name=` is the strict-validator form per `cli.js:B6c`). The round-1 72952c9 amend touched 4 Skills (fork-context-decision / delegate-with-context / parallel-fanout / model-router) and missed this 5th; the v1.0.4 round-2 close-out also missed it. Caught by the v1.0.4 audit sweep across all 23 Skills' code blocks. The rest of the Skill body is unchanged."
+  changes-from-v0.1.1: "Audit gap: the sub-agent invocation example in '## Example' (line 115) used the Codex-style `task(subagent=...)` shape; switched to the canonical mcode 0.2.4 `task(agent_name=..., prompt=...)` shape (mcode accepts `subagent_type=` as a runtime alias but `agent_name=` is the canonical form per `cli.js:B6c`). The round-1 72952c9 amend touched 4 Skills (fork-context-decision / delegate-with-context / parallel-fanout / model-router) and missed this 5th; the v1.0.4 round-2 close-out also missed it. Caught by the v1.0.4 audit sweep across all 23 Skills' code blocks. The rest of the Skill body is unchanged."
 ---
 
 # Error Recovery Strategy

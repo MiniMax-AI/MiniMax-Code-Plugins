@@ -11,7 +11,7 @@ metadata:
   author: antianqi
   version: "1.2.0"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/core/src/thread_manager.rs (design principle); the fan-out decision and wait-for-all aggregation are portable; on mcode each sub-task is a discrete `task()` call
-  changes-from-v1.1.0: "Replaced `agent_name=` with the canonical mcode `agent_name=`. Replaced `brief=` with `prompt=`. Dropped `mavis` from the sub-agent list (mavis is the root). Dropped the Codex-harness pseudocode block; mcode 0.2.4 is the only shape shown. The 'concurrency cap' step now references mcode's own per-session buffer-unordered limit instead of a hypothetical host config."
+  changes-from-v1.1.0: "Replaced `subagent_type=` with the canonical mcode `agent_name=`. Replaced `brief=` with `prompt=`. Dropped `mavis` from the sub-agent list (mavis is the root). Dropped the Codex-harness pseudocode block; mcode 0.2.4 is the only shape shown. The 'concurrency cap' step now references mcode's own per-session buffer-unordered limit instead of a hypothetical host config."
 ---
 
 # Parallel Fanout
