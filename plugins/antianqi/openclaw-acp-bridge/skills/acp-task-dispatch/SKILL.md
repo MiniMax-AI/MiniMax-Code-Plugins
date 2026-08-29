@@ -2,7 +2,7 @@
 name: acp-task-dispatch
 description: Dispatch a self-contained task to the OpenClaw-mcode-ACP HTTP server from inside MiniMax Code. Use when a task should be persisted, retried, observed over time, or processed by a worker pool instead of the current MiniMax Code session.
 license: Apache-2.0
-compatibility: Requires MiniMax Code with Agent Plugins 1.0 support and an OpenClaw-mcode-ACP server reachable on http://localhost:9999.
+compatibility: Requires MiniMax Code with Agent Plugins 1.0 support and an OpenClaw-mcode-ACP server reachable on http://127.0.0.1:9999.
 metadata:
   author: 安天齐 (antianqi)
   homepage: https://github.com/antianqi/openclaw-mcode-acp

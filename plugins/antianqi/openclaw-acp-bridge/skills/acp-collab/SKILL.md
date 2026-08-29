@@ -2,7 +2,7 @@
 name: acp-collab
 description: Use the OpenClaw-mcode-ACP inbox to collaborate peer-to-peer with goudan (OpenClaw main session) instead of one-shot task calls. Read incoming messages, push progress, ask blocking questions, and answer peer questions. Use when working on multi-step tasks that span MiniMax Code and OpenClaw sessions, when uncertain decisions need goudan's input, or when long-running work should report progress back to the parent session.
 license: Apache-2.0
-compatibility: Requires MiniMax Code with Agent Plugins 1.0 support and an OpenClaw-mcode-ACP server reachable on http://localhost:9999.
+compatibility: Requires MiniMax Code with Agent Plugins 1.0 support and an OpenClaw-mcode-ACP server reachable on http://127.0.0.1:9999.
 metadata:
   author: 安天齐 (antianqi)
   homepage: https://github.com/antianqi/openclaw-mcode-acp
@@ -25,7 +25,7 @@ Activate this Skill whenever any of the following is true:
 
 ## Setup
 
-The ACP server is at `http://localhost:9999`. Your `session_id` is given in the task prompt as `session_id: <id>`.
+The ACP server is at `http://127.0.0.1:9999`. Your `session_id` is given in the task prompt as `session_id: <id>`.
 
 The Plugin ships its own HTTP client. There is **no `ACP_HOME` to set**, no external Python SDK to install, and no `sys.path` to mutate. The client lives at `<plugin_root>/client/_acp_client.py` and is resolved through the `ACP_PLUGIN_ROOT` environment variable (set automatically by the Plugin runtime) with a `__file__`-based fallback for ad-hoc invocations.
 

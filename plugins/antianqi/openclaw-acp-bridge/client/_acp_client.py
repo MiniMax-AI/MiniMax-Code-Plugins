@@ -54,7 +54,17 @@ DEFAULT_BASE_URL = 'http://127.0.0.1:9999'
 #: resolver can return 127.0.0.1 for a name, so we only accept literal
 #: loopback names, not "localhost" if the user is on a misconfigured
 #: system that resolves localhost to a non-loopback address.
-ALLOWED_HOSTS = frozenset({'127.0.0.1', 'localhost', '::1', '[::1]'})
+#: Round-5 amendment: 'localhost' was previously included here, but a
+#: hostname-based allow entry shifts the loopback decision onto the
+#: platform resolver, and a misconfigured /etc/hosts or DNS that
+#: returns a non-loopback address for 'localhost' would then send the
+#: bearer token to that non-loopback address. The literal-IP allow-list
+#: below forces the connection to bind to 127.0.0.1 or ::1 directly
+#: with no resolver hop in between. This matches the docstring on
+#: `_check_loopback`, the README's "loopback-only" guarantee, and the
+#: safety promise that a misconfigured `ACP_BASE_URL` cannot redirect
+#: the token to a remote host.
+ALLOWED_HOSTS = frozenset({'127.0.0.1', '::1', '[::1]'})
 
 #: Terminal states for `create_task` (the worker pool's `succeeded` is
 #: the success state; `completed` does not exist in the server protocol).

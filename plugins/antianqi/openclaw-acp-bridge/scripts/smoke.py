@@ -123,8 +123,13 @@ def main() -> int:
     for url, want in [
         ('http://127.0.0.1:9999', True),
         ('http://127.0.0.1:9999/', True),  # trailing slash is still loopback
-        ('http://localhost:9999', True),
         ('http://[::1]:9999', True),
+        # Round-5 amendment: 'localhost' is now refused. The literal-IP
+        # allow-list means we never rely on the platform resolver to
+        # confirm the host is loopback; a misconfigured /etc/hosts or
+        # DNS that returns a non-loopback address for 'localhost' would
+        # otherwise send the bearer token to that non-loopback address.
+        ('http://localhost:9999', False),
         ('http://example.com', False),
         ('http://0.0.0.0:9999', False),
         ('https://127.0.0.1:9999', False),  # https is not allowed (server is http-only)

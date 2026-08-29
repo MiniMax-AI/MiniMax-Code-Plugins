@@ -40,7 +40,7 @@ Expected behavior:
 ## Requirements
 
 - MiniMax Code desktop app with Agent Plugins 1.0 support
-- A running OpenClaw-mcode-ACP server **v7-bidir or later** (default: `http://localhost:9999`)
+- A running OpenClaw-mcode-ACP server **v7-bidir or later** (default: `http://127.0.0.1:9999`)
 - Python 3.10+ on `PATH`
 - A bearer token that the server accepts. The Plugin reads it from (first hit wins):
   - `$ACP_TOKEN` environment variable (recommended for CI and shells)
@@ -66,7 +66,7 @@ The server requires every request to carry `Authorization: Bearer <token>`. The 
 Security properties of the bundled client (each is verified by the bundled `scripts/smoke.py` and `scripts/test_no_redirect.py`):
 
 - **No redirects.** Every token-bearing request is dispatched through an `OpenerDirector` whose `HTTPRedirectHandler` is replaced with a subclass that raises `HTTPError` on any 3xx. A loopback server that returns 302 cannot exfiltrate the token to another local origin.
-- **Loopback-only.** The client refuses to talk to anything not on `{127.0.0.1, localhost, ::1, [::1]}`. A misconfigured `ACP_BASE_URL` cannot redirect the token to a remote host.
+- **Loopback-only.** The client refuses to talk to anything not on `{127.0.0.1, ::1, [::1]}`. A misconfigured `ACP_BASE_URL` cannot redirect the token to a remote host.
 - **Single opener.** The same opener is used by `scripts/smoke.py`, the no-redirect regression test, and every Skill call. There is no "smoke test only" path: the no-redirect guarantee in the smoke test is the no-redirect guarantee in the Skills.
 
 The token is never sent to a remote host, never logged to disk, and never echoed to the model.
