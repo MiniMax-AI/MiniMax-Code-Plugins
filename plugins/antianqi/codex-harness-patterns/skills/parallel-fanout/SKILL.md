@@ -6,12 +6,12 @@ description: |
   TRIGGER PHRASES: "in parallel", "parallel", "fan out", "spawn agents", "并行", "同时", "concurrent", "subagents", "multi-agent", "同时跑几个".
   SKIP WHEN: sub-tasks have a hard data dependency (output of A is input of B), the user explicitly said "sequential" / "one at a time", there is only one sub-task.
 license: Apache-2.0
-compatibility: Targets MiniMax Code 0.2.4 `task` tool. Verified against the bundled `cli.js` schema. Each sub-task is a separate `task()` call with its own `description` / `prompt` / `subagent_type`. `subagent_type` is canonical (`explore` / `worker` / `verifier`); `mavis` is the root agent, not a sub-agent.
+compatibility: Targets MiniMax Code 0.2.4 `task` tool. Verified against the bundled `cli.js` schema. Each sub-task is a separate `task()` call with its own `description` / `prompt` / `agent_name`. `agent_name` is canonical (`explore` / `worker` / `verifier`); `mavis` is the root agent, not a sub-agent.
 metadata:
   author: antianqi
   version: "1.2.0"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/core/src/thread_manager.rs (design principle); the fan-out decision and wait-for-all aggregation are portable; on mcode each sub-task is a discrete `task()` call
-  changes-from-v1.1.0: "Replaced `agent_name=` with the canonical mcode `subagent_type=`. Replaced `brief=` with `prompt=`. Dropped `mavis` from the sub-agent list (mavis is the root). Dropped the Codex-harness pseudocode block; mcode 0.2.4 is the only shape shown. The 'concurrency cap' step now references mcode's own per-session buffer-unordered limit instead of a hypothetical host config."
+  changes-from-v1.1.0: "Replaced `agent_name=` with the canonical mcode `agent_name=`. Replaced `brief=` with `prompt=`. Dropped `mavis` from the sub-agent list (mavis is the root). Dropped the Codex-harness pseudocode block; mcode 0.2.4 is the only shape shown. The 'concurrency cap' step now references mcode's own per-session buffer-unordered limit instead of a hypothetical host config."
 ---
 
 # Parallel Fanout
@@ -33,7 +33,7 @@ Each sub-task is a separate `task()` call:
 task(
   description:    string,            // 3-5 word label, required
   prompt:         string,            // the brief, required
-  subagent_type:  "explore" | "worker" | "verifier",  // required
+  agent_name:  "explore" | "worker" | "verifier",  // required
   run_in_background?: boolean        // optional; usually false for fan-out
 )
 ```
@@ -43,9 +43,9 @@ concurrently subject to the host's per-session buffer-unordered limit (8 by
 default in 0.2.4; check the runtime config if unsure). The agent then waits
 for all to complete before aggregating.
 
-`subagent_type` is the canonical mcode spelling. `agent_name=` is accepted as
+`agent_name` is the canonical mcode spelling. `agent_name=` is accepted as
 a runtime alias but the Skills prefer canonical. `mavis` is the root agent
-not a sub-agent; do not pass it as `subagent_type`.
+not a sub-agent; do not pass it as `agent_name`.
 
 ## When to use
 
@@ -102,7 +102,7 @@ After activating this Skill, the agent's next message MUST include:
   fail. Check the limit first; if you have more than 8, run them in waves.
 - **Aggregating without verification** — one sub-task may have silently failed.
   Always read each output.
-- **Using `subagent_type="mavis"`** — mavis is the root, not a sub-agent.
+- **Using `agent_name="mavis"`** — mavis is the root, not a sub-agent.
   Use `explore` / `worker` / `verifier`.
 - **Writing the sub-task brief in a separate `brief=` field** — mcode 0.2.4
   has no `brief` field. The brief goes in `prompt`.
@@ -121,7 +121,7 @@ runs them concurrently.
 
 > task(
     description="Look up X in repo 1",
-    subagent_type="explore",
+    agent_name="explore",
     prompt="""
       Task name: lookup-X-repo1
       Task:     Find every file in <repo1> that imports `X`.
@@ -131,7 +131,7 @@ runs them concurrently.
 
 > task(
     description="Look up Y in repo 2",
-    subagent_type="explore",
+    agent_name="explore",
     prompt="""
       Task name: lookup-Y-repo2
       Task:     Find every file in <repo2> that imports `Y`.
@@ -141,7 +141,7 @@ runs them concurrently.
 
 > task(
     description="Look up Z in repo 3",
-    subagent_type="explore",
+    agent_name="explore",
     prompt="""
       Task name: lookup-Z-repo3
       Task:     Find every file in <repo3> that imports `Z`.
@@ -163,5 +163,5 @@ The **decision** (3 sub-tasks, `none` context, wait-for-all) is the same; the
 - [ ] Did you choose the right context level per sub-task (via `fork-context-decision`)?
 - [ ] Did you wait for all sub-tasks to complete before aggregating?
 - [ ] Did you verify each sub-task's output (via `completion-audit`)?
-- [ ] Did you use `subagent_type` from `{explore, worker, verifier}` (not `mavis`)?
+- [ ] Did you use `agent_name` from `{explore, worker, verifier}` (not `mavis`)?
 - [ ] Did you put the sub-task brief in the `prompt` field (not a separate `brief`)?

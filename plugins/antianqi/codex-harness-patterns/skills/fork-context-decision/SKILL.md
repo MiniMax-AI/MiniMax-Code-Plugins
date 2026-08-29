@@ -6,12 +6,12 @@ description: |
   TRIGGER PHRASES: "fork 深度", "give it the full history", "深 fork", "no history", "just the brief", "不要带 context", "fork 0", "fork all", "完全独立会话", "轻量 context".
   SKIP WHEN: sub-task is trivial (one-line read), you have already decided "no context" (no decision to make).
 license: Apache-2.0
-compatibility: Targets MiniMax Code 0.2.4 `task` tool. Verified against the bundled `cli.js` schema (`description` / `prompt` / `subagent_type` / `run_in_background`). `subagent_type` is the canonical mcode spelling; `agent_name` is accepted as an alias by mcode's normaliser but the Skills prefer the canonical form. The mcode `task` tool has no `history` / `fork_turns` / `context_size` parameter — all context sharing is done by what you write into the `prompt` string itself.
+compatibility: Targets MiniMax Code 0.2.4 `task` tool. Verified against the bundled `cli.js` schema (`description` / `prompt` / `agent_name` / `run_in_background`). `agent_name` is the canonical mcode spelling; `agent_name` is accepted as an alias by mcode's normaliser but the Skills prefer the canonical form. The mcode `task` tool has no `history` / `fork_turns` / `context_size` parameter — all context sharing is done by what you write into the `prompt` string itself.
 metadata:
   author: antianqi
   version: "0.3.0"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/core/src/session/multi_agents.rs (design principle; the 3 fork modes are portable; the prompt-content decision is host-neutral)
-  changes-from-v0.2.0: "Removed the v0.2.0 `history=N` PLACEHOLDER — the mcode 0.2.4 `task` tool has no context-sharing parameter, so the 3 fork modes (all / N / none) are now expressed by what the calling agent writes into the `prompt` (full conversation dump / last N turns inline / brief only). Replaced `agent_name=` with the canonical mcode `subagent_type=`. Dropped `mavis` from the subagent list because `mavis` is the root agent (it has no `agent.md` subagent manifest and cannot be used as `subagent_type`); the 3 actual mcode sub-agent types are `explore` / `worker` / `verifier`."
+  changes-from-v0.2.0: "Removed the v0.2.0 `history=N` PLACEHOLDER — the mcode 0.2.4 `task` tool has no context-sharing parameter, so the 3 fork modes (all / N / none) are now expressed by what the calling agent writes into the `prompt` (full conversation dump / last N turns inline / brief only). Replaced `agent_name=` with the canonical mcode `agent_name=`. Dropped `mavis` from the subagent list because `mavis` is the root agent (it has no `agent.md` subagent manifest and cannot be used as `agent_name`); the 3 actual mcode sub-agent types are `explore` / `worker` / `verifier`."
 ---
 
 # Fork Context Decision
@@ -32,13 +32,13 @@ canonical schema is:
 task(
   description: string,        // 3-5 word label, required
   prompt:      string,        // the task itself, required
-  subagent_type: string,      // "explore" | "worker" | "verifier", required
+  agent_name: string,      // "explore" | "worker" | "verifier", required
   run_in_background?: boolean // optional
 )
 ```
 
 `agent_name` is accepted as a runtime alias (the normaliser at `cli.js:j6c` converts
-it to `subagent_type`) but the canonical form is `subagent_type`. There is **no
+it to `agent_name`) but the canonical form is `agent_name`. There is **no
 `history=`, no `fork_turns=`, no `context_size=`** — the calling agent has full
 control of what the sub-agent sees by writing it into the `prompt` string. So
 the 3 fork modes (all / N / none) become a `prompt` content decision, not a
@@ -46,17 +46,21 @@ parameter.
 
 ## mcode 0.2.4 sub-agent types
 
-`subagent_type` must be one of the three sub-agent manifests in
-`assets/agents/<name>/agent.md`:
+The mcode 0.2.4 `task` tool accepts three sub-agent types as the value of
+`agent_name=`. The on-disk set of valid sub-agent manifests is verified
+best-effort from the active mcode install in the static check
+(`test/codex-harness-patterns.test.mjs` round-4 #3); a host-internal
+manifest path is not part of the public runtime contract and is not
+documented here.
 
-| `subagent_type` | Tools (from `agent.md`) | Use when |
+| `agent_name` | Tools | Use when |
 |---|---|---|
 | `explore` | `read`, `grep`, `glob`, `web_fetch` | Read-only investigation; cannot write or run commands. |
 | `worker` | `read`, `write`, `edit`, `bash`, `grep`, `glob`, `todowrite`, `web_fetch`, `website_deploy` | Implementation; full read/write/run. |
 | `verifier` | `read`, `grep`, `glob`, `bash`, `web_fetch` | Has `bash` but **no `write` / `edit` / `website_deploy`**: can run checks, cannot modify. |
 
-`mavis` is the **root** agent (different layout: `modes/`, `skills/`, persona
-files — no `agent.md`). It is not a `subagent_type` value; the calling session
+`mavis` is the **root** agent (different layout: `modes/`, `skills/`,
+persona files). It is not an `agent_name` value; the calling session
 already *is* mavis. The v0.2.0 list that included `mavis` as a sub-agent
 option is removed.
 
@@ -118,7 +122,7 @@ the `prompt` field.
 
 After activating this Skill, the next `task` call MUST:
 
-- Pick a `subagent_type` from `{explore, worker, verifier}` based on what the
+- Pick a `agent_name` from `{explore, worker, verifier}` based on what the
   sub-task needs (read / write+run / run-only).
 - Include a `description` (3-5 word label).
 - Build the `prompt` according to the chosen context level.
@@ -145,7 +149,7 @@ Sub-agent type: <explore | worker | verifier>
   doesn't help. Fix the brief first.
 - **Writing a single tool call expecting the host to manage history** — mcode 0.2.4
   does not auto-attach prior conversation. The decision is in the call you write.
-- **Using `subagent_type="mavis"`** — mavis is the root agent, not a sub-agent.
+- **Using `agent_name="mavis"`** — mavis is the root agent, not a sub-agent.
   Use `explore` / `worker` / `verifier`.
 
 ## Example
@@ -159,7 +163,7 @@ modes are demonstrated; the `prompt` content is what changes between them.
 # Cost: minimal
 > task(
     description="Investigate lint flake",
-    subagent_type="worker",
+    agent_name="worker",
     prompt="""
       Context level: none
       Reason: this is a self-contained repro request.
@@ -177,7 +181,7 @@ modes are demonstrated; the `prompt` content is what changes between them.
 # Cost: 3 prior turns inlined
 > task(
     description="Diagnose test failure",
-    subagent_type="worker",
+    agent_name="worker",
     prompt="""
       Context level: 3
       Reason: the previous tool output is the most likely
@@ -199,7 +203,7 @@ modes are demonstrated; the `prompt` content is what changes between them.
 # Cost: 100% of parent context
 > task(
     description="Audit earlier decision",
-    subagent_type="explore",
+    agent_name="explore",
     prompt="""
       Context level: all
       Reason: the sub-agent must reason about a decision
@@ -222,7 +226,7 @@ The **decision** (3 turns vs full history vs brief only) is the same; the
 
 - [ ] Did you classify the sub-task before choosing?
 - [ ] Did you pick the smallest N that works (not jumping straight to `all`)?
-- [ ] Did you pick a `subagent_type` from `{explore, worker, verifier}`?
+- [ ] Did you pick a `agent_name` from `{explore, worker, verifier}`?
 - [ ] Did you document the context level in the brief header?
 - [ ] Did you build the `prompt` so the sub-agent actually sees the chosen context?
 - [ ] If the sub-agent failed, did you bump N before changing the brief?

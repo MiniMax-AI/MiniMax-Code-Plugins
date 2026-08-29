@@ -6,7 +6,7 @@ description: |
   TRIGGER PHRASES: "用便宜模型", "cheap model", "use the cheap model", "小任务用便宜模型", "不要用主模型", "用本地模型", "sub-task 不重", "小任务", "this is just a", "小 case 用便宜".
   SKIP WHEN: sub-task IS the main task, mcode 0.2.4's `task` tool does not expose a per-call model field, sub-task is genuinely synthesis / design / cross-file reasoning.
 license: Apache-2.0
-compatibility: Targets MiniMax Code 0.2.4. **The mcode 0.2.4 `task` tool does NOT expose a `model_config_id` parameter or any other per-call model-routing field.** Verified against the bundled `cli.js` canonical schema (only `description` / `prompt` / `subagent_type` / `run_in_background`). Model selection on mcode 0.2.4 is **session-level** (chosen at session start via the host's `model` flag / interactive picker). This Skill therefore reframes the original 3-tier rubric into a session-level thinking framework and a sub-agent gate, not a per-`task()` argument.
+compatibility: Targets MiniMax Code 0.2.4. **The mcode 0.2.4 `task` tool does NOT expose a `model_config_id` parameter or any other per-call model-routing field.** Verified against the bundled `cli.js` canonical schema (only `description` / `prompt` / `agent_name` / `run_in_background`). Model selection on mcode 0.2.4 is **session-level** (chosen at session start via the host's `model` flag / interactive picker). This Skill therefore reframes the original 3-tier rubric into a session-level thinking framework and a sub-agent gate, not a per-`task()` argument.
 metadata:
   author: antianqi
   version: "0.4.0"
@@ -35,7 +35,7 @@ The canonical mcode 0.2.4 `task` schema:
 task(
   description:    string,        // required
   prompt:         string,        // required
-  subagent_type:  "explore" | "worker" | "verifier",  // required
+  agent_name:  "explore" | "worker" | "verifier",  // required
   run_in_background?: boolean    // optional
 )
 ```
@@ -91,7 +91,7 @@ Activate when **any** of these is true:
      The cost of the spawn (the sub-agent's bootstrap, the brief round-trip) is
      higher than just doing the work.
    - If the work is **`medium`** or **`main`**, spawn with the appropriate
-     `subagent_type` (`explore` / `worker` / `verifier`).
+     `agent_name` (`explore` / `worker` / `verifier`).
    - The model that runs the sub-agent is the same as the calling session's
      model — there is no per-call tier routing on mcode 0.2.4.
 
@@ -103,7 +103,7 @@ Activate when **any** of these is true:
    ...
 
    **Tier**: cheap | medium | main
-   **Spawn decision**: doing-it-myself | task(subagent_type=...)
+   **Spawn decision**: doing-it-myself | task(agent_name=...)
    **Reason**: <one sentence>
    ```
 
@@ -143,16 +143,16 @@ does not accept it.
 [execution] 1 medium call: refactor auth/callback.rs to extract the SAML
             response parser.
             — tier: medium (multi-step refactor, brief is the spec)
-            — spawn decision: task(subagent_type="worker")
+            — spawn decision: task(agent_name="worker")
             — model: same as calling session (mcode 0.2.4 has no per-call
               model field)
 
 > task(
     description="Refactor SAML parser",
-    subagent_type="worker",
+    agent_name="worker",
     prompt="""
       Tier:        medium
-      Spawn:       task(subagent_type=worker)
+      Spawn:       task(agent_name=worker)
       Task name:   refactor-saml-parser
       Sender:      main agent
       Task:        Extract the SAML response parser from
@@ -185,7 +185,7 @@ does not accept it.
   `medium`, not `cheap`, even though the input is large.
 - **Do not pass `model_config_id` in a `task()` call on mcode 0.2.4.** The
   strict validator in `cli.js:B6c` rejects it; only `description` / `prompt` /
-  `subagent_type` / `run_in_background` are allowed. Model selection is
+  `agent_name` / `run_in_background` are allowed. Model selection is
   session-level on 0.2.4.
 - **Do not retry a failed sub-task on the same tier without re-classifying.**
   A cheap-model failure on a synthesis-class task is a classification error;

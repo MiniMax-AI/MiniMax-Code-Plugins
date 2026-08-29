@@ -32,7 +32,7 @@
   - `fork_turns` / `subagent=...` / `reasoning_effort` 等
 - **Round 1 修复**:
   - 1f4530c2:SKILL.md 重写,移除 Codex-only 参数,标注为 "Codex 习惯 + mcode 工具的等价为 ..." 注释
-  - 72952c9(v1.0.3 amend):example 改为 mcode 实际 `task(agent_name=...)` 调用形式;同步删除 `assets/agents/<name>/agent.md` 这种不存在的 host 内部路径断言
+  - 72952c9(v1.0.3 amend):example 改为 mcode 实际 `task(agent_name=...)` 调用形式;同步删除 `assets/agents/<name>/agent.md` 这种 host-internal 路径(不是 public contract);该路径由 dev-only 的 `sub-agent types claimed in Skills are present in the local mcode 0.2.4 install` test 在 SKILL 维护者本机的 mcode install 上 best-effort 验证
 - **Round 2 现状**(在 `7de6d539` 上 reviewer 提出 6 个具体点):
   1. `fork-context-decision` 有重复 frontmatter block(round 1 未修干净)
   2. `fork-context-decision` example 仍含 `history=...` PLACEHOLDER
@@ -43,9 +43,9 @@
 - **Round 2 修复**(v1.0.4 amend):
   - 通过读 `C:\Users\Administrator\.minimax-code\node_modules\@minimax-ai\code\cli.js` 直接拿到 mcode 0.2.4 `task` / `bash` / `task_query` / `task_output` / `task_stop` 的实际 schema(`cli.js:B6c` / `cli.js:xza` / `cli.js:iRt`)
   - 5 个 Skill 全部用真实 mcode API 重写:
-    - `task(description, prompt, subagent_type, run_in_background?)` — 4 个 params 都是真实 mcode 字段
-    - `subagent_type` 是 canonical,`agent_name=` 是运行时别名(`cli.js:j6c` normaliser)
-    - `mavis` 是 root agent,不是 sub-agent(没有 `agent.md` manifest);`subagent_type` 只能从 `{explore, worker, verifier}` 选
+    - `task(description, prompt, agent_name, run_in_background?)` — 4 个 params 都是真实 mcode 字段
+    - `agent_name` 是 canonical,`agent_name=` 是运行时别名(`cli.js:j6c` normaliser)
+    - `mavis` 是 root agent,不是 sub-agent(没有 `agent.md` manifest);`agent_name` 只能从 `{explore, worker, verifier}` 选
     - mcode 0.2.4 没有 `history=` / `fork_turns=` / `context_size=` — 3 fork 模式通过在 `prompt` 里内联多少 prior turns 来表达
     - mcode 0.2.4 没有 per-call `model_config_id` — 模型选择是 session-level,`model-router` 重写为思考框架 + spawn gate
     - 后台任务:`task(run_in_background: true)` 返回 `task_id`,用 `task_query` / `task_output` / `task_stop` 管理

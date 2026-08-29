@@ -38,7 +38,7 @@ The canonical `task` schema:
 task(
   description:    string,            // 3-5 word label, required
   prompt:         string,            // the brief, required
-  subagent_type:  "explore" | "worker" | "verifier",  // required
+  agent_name:  "explore" | "worker" | "verifier",  // required
   run_in_background?: boolean        // optional; true = async, false = sync (default)
 )
 ```
@@ -68,9 +68,13 @@ bash(
 ```
 
 When `run_in_background: true`, the `bash` call returns immediately with a
-job handle (mcode exposes a process id or job id that the host's job-control
-API can target). **There is no `task_name=` and no `action="kill"` field.**
-The Codex-harness shape `bash(task_name=..., run_in_background=true,
+job handle that the host's job-control API can target (Windows:
+`Stop-Process -Id <pid>`; POSIX: `kill <pid>`, both invoked through a
+foreground `bash` call rather than any `action="kill"` field). The exact
+shape of the returned handle is not part of the public mcode 0.2.4 runtime
+contract; the host's job-control API is the source of truth for the
+underlying process id. **There is no `task_name=` and no `action="kill"`
+field.** The Codex-harness shape `bash(task_name=..., run_in_background=true,
 action="kill")` is **not** the mcode surface — mcode's `bash` validator
 rejects any key outside `command` / `timeout` / `run_in_background`.
 
@@ -116,7 +120,9 @@ Activate when **any** of these is true:
    - Sub-agent: `task(..., run_in_background: true)`; mcode returns a
      `task_id`. Store it.
    - Shell: `bash(command: "npm run dev", run_in_background: true)`; mcode
-     returns a job id. Store it.
+     returns a job handle (the exact shape is not part of the public
+     runtime contract; the host's job-control API is the source of
+     truth). Store the handle.
 4. **Record the handle**. In a multi-step task, store the handle (task_id,
    job id, log path) somewhere persistent — in a `world-state-tracking` file,
    a `session-handoff` note, or in the running brief.
@@ -171,7 +177,7 @@ background launches are demonstrated.
 
 > task(
     description="Research migration paths",
-    subagent_type="explore",
+    agent_name="explore",
     run_in_background=true,
     prompt="""
       Investigate migration paths from <lib-A> to <lib-B> in the
@@ -208,8 +214,12 @@ background launches are demonstrated.
     command="npm run dev",
     run_in_background=true
   )
-# Returns immediately with:
-#   { job_id: "job_01ABC...", pid: 12345, log: "<plugin-data>/logs/job_01ABC.log" }
+# Returns immediately with a job handle. The exact shape is not
+# part of the public mcode 0.2.4 runtime contract; the host's
+# job-control API is the source of truth. Treat the handle as
+# opaque and pass it to the host's job-control API in a
+# foreground `bash` call (e.g. `Stop-Process -Id <pid>` /
+# `kill <pid>` on POSIX) when you need to stop the job.
 
 # Later, check whether it is still alive (foreground bash call):
 > bash(

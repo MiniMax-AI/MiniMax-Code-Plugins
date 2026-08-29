@@ -6,12 +6,12 @@ description: |
   TRIGGER PHRASES: "delegate", "hand off", "sub-agent", "delegate this", "delegate to", "派给", "委派", "让 sub-agent 干", "把 ... 交给 ...".
   SKIP WHEN: the sub-task is so trivial a `read` will do, you are about to do the work yourself, the user explicitly wants you (not a sub-agent) to do it.
 license: Apache-2.0
-compatibility: Targets MiniMax Code 0.2.4 `task` tool. Verified against the bundled `cli.js` schema (`description` / `prompt` / `subagent_type` / `run_in_background`). The 4-part envelope is host-neutral design; on mcode the envelope goes into the `prompt` string. `subagent_type` is the canonical mcode spelling (`explore` / `worker` / `verifier`); `mavis` is the root agent, not a sub-agent.
+compatibility: Targets MiniMax Code 0.2.4 `task` tool. Verified against the bundled `cli.js` schema (`description` / `prompt` / `agent_name` / `run_in_background`). The 4-part envelope is host-neutral design; on mcode the envelope goes into the `prompt` string. `agent_name` is the canonical mcode spelling (`explore` / `worker` / `verifier`); `mavis` is the root agent, not a sub-agent.
 metadata:
   author: antianqi
   version: "1.2.0"
   inspired-by: https://github.com/openai/codex/blob/main/codex-rs/protocol/src/protocol.rs (InterAgentCommunication) and core/src/session/multi_agents.rs (CollabAgentSpawn); the 4-part envelope is the portable design; on mcode the envelope fills the `prompt` field
-  changes-from-v1.1.0: "Replaced `agent_name=` with the canonical mcode `subagent_type=`. Replaced `brief=` with `prompt=`. Dropped `mavis` from the sub-agent list (mavis is the root). The 4-part envelope is unchanged but now lives inside the `prompt` string, not in a separate `brief` parameter. The host-pseudocode 'Codex-harness style' block was removed; the mcode 0.2.4 schema is now the only one shown."
+  changes-from-v1.1.0: "Replaced `agent_name=` with the canonical mcode `agent_name=`. Replaced `brief=` with `prompt=`. Dropped `mavis` from the sub-agent list (mavis is the root). The 4-part envelope is unchanged but now lives inside the `prompt` string, not in a separate `brief` parameter. The host-pseudocode 'Codex-harness style' block was removed; the mcode 0.2.4 schema is now the only one shown."
 ---
 
 # Delegate with Context
@@ -34,17 +34,17 @@ The `task` tool on mcode 0.2.4:
 task(
   description:    string,        // 3-5 word label, required
   prompt:         string,        // the brief, required
-  subagent_type:  "explore" | "worker" | "verifier",  // required
+  agent_name:  "explore" | "worker" | "verifier",  // required
   run_in_background?: boolean    // optional
 )
 ```
 
 The 4-part envelope is **the design**; on mcode it goes into the `prompt`
-string verbatim. `subagent_type` is the canonical spelling. `agent_name=` is
+string verbatim. `agent_name` is the canonical spelling. `agent_name=` is
 accepted as a runtime alias but the Skills prefer the canonical form.
 
 `mavis` is the root agent (the calling session itself), not a sub-agent. It
-has no `agent.md` manifest and cannot be used as `subagent_type`.
+has no `agent.md` manifest and cannot be used as `agent_name`.
 
 ## When to use
 
@@ -110,7 +110,7 @@ sub-task and a confused one.
   short.
 - **Forwarding the full history when `none` would do** — costs tokens and
   dilutes focus. Decide first.
-- **Using `subagent_type="mavis"`** — mavis is the root agent, not a sub-agent.
+- **Using `agent_name="mavis"`** — mavis is the root agent, not a sub-agent.
   Use `explore` / `worker` / `verifier`.
 - **Writing the envelope in a separate `brief=` field** — mcode 0.2.4 does not
   expose a `brief` field. Put it in `prompt`.
@@ -123,7 +123,7 @@ is the `prompt` body; the call shape is the only one that exists on mcode 0.2.4.
 ```text
 > task(
     description="Investigate lint flake",
-    subagent_type="worker",   // or "explore" if read-only
+    agent_name="worker",   // or "explore" if read-only
     prompt="""
       Task name: investigate-lint-flake
       Sender:    main agent
@@ -145,7 +145,7 @@ field. There is no separate `brief` parameter.
 ## Verification checklist
 
 - [ ] Did you classify the sub-task (self-contained vs context-dependent)?
-- [ ] Did you pick `subagent_type` from `{explore, worker, verifier}`?
+- [ ] Did you pick `agent_name` from `{explore, worker, verifier}`?
 - [ ] Did you write all 4 envelope parts (Task name / Sender / Task / Payload / Return)?
 - [ ] Did you specify the **return path** (where the result goes)?
 - [ ] Did you choose the right context level (via `fork-context-decision`)?

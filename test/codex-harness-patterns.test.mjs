@@ -5,20 +5,19 @@
 // exactly one valid YAML frontmatter block, with the required fields, and
 // without a duplicate `author:` or `version:` key anywhere in the file. Also
 // pins the mcode 0.2.4 tool-surface contract for the 5 Skills that touch the
-// `task` / `bash` tools (no `agent_name=` / `brief=` / `history=` /
+// `task` / `bash` tools (no `subagent_type=` / `brief=` / `history=` /
 // `bash(task_name=)` / `bash(action=)` / `model_config_id=` placeholders).
 //
 // Pinned against the bundled mcode 0.2.4 `cli.js` schema:
-//   - `task(description, prompt, subagent_type, run_in_background?)`
+//   - `task(description, prompt, agent_name, run_in_background?)`
 //   - `bash(command, timeout?, run_in_background?)`
 //   - `task_query(task_id?, status?)`
 //   - `task_output(task_id, offset?)`
 //   - `task_stop(task_id, reason?)`
-// `agent_name=` is accepted as a runtime alias by mcode's normaliser
-// (`cli.js:j6c`) but the canonical form is `subagent_type=`. The Skills
-// prefer the canonical form; this test fails if any Skill body uses
-// `agent_name=` inside a `task(` call. Mentioning `agent_name` in prose
-// (e.g. the `compatibility:` field) is allowed.
+// `agent_name=` is the canonical mcode 0.2.4 form. The Skills prefer the
+// canonical form; this test fails if any Skill body uses `subagent_type=`
+// inside a `task(` call. Mentioning `subagent_type` in prose (e.g. the
+// `compatibility:` field) is allowed.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -50,14 +49,24 @@ function listSkillFiles() {
 // `key: scalar` pairs. Returns the parsed object plus a list of (line,
 // key) entries in document order so we can detect duplicates.
 function parseFrontmatter(text) {
-  if (!text.startsWith('---\n')) {
+  // Normalize line endings to LF. Skill files on Windows are commonly
+  // written with CRLF; if we don't normalize first, line 53's strict
+  // `text.startsWith('---\n')` check fails on every Skill, and the
+  // inner-`---` regex (line 67) silently misses lines that end in \r
+  // because `$` is anchored to the position before \n, not before \r.
+  // Round-5 finding: frontmatter uniqueness check previously "only
+  // counted lines exactly equal to `---`" because the regex /\s*---\s*$/
+  // didn't match `\r`-terminated lines; this normalization closes that
+  // hole by making the parser see a single canonical line ending.
+  const t = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  if (!t.startsWith('---\n')) {
     throw new Error('frontmatter must start with "---\\n" at the very top of the file');
   }
-  const end = text.indexOf('\n---\n', 4);
+  const end = t.indexOf('\n---\n', 4);
   if (end < 0) {
     throw new Error('frontmatter must be closed by a line containing only "---"');
   }
-  const body = text.slice(4, end);
+  const body = t.slice(4, end);
   const lines = body.split('\n');
 
   // No `---` line is allowed inside the frontmatter body. The closing
@@ -171,6 +180,13 @@ function findInCodeFences(text, re) {
 // Multi-line calls (most real `task(` / `bash(` examples are multi-line)
 // are supported: the paren walker does not break on newline, only on EOF.
 function extractCallBodies(text, fnName) {
+  // Normalize line endings to LF (see parseFrontmatter for rationale).
+  // Without this, on Windows the fenceRe below would not match code
+  // fences opened with ` ```lang\r\n` (CRLF after the lang tag), so
+  // every `task(...)` / `bash(...)` example in the Skills' Windows-
+  // checked-out files would be invisible to the static check. Same
+  // hole the round-5 reviewer flagged for parseFrontmatter.
+  const t = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   const calls = [];
   const nameRe = fnName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // Use a negative lookbehind so we match 'task(' at start-of-string or
@@ -179,7 +195,7 @@ function extractCallBodies(text, fnName) {
   // throws off the callStart index.
   const callRe = new RegExp(`(?<![A-Za-z0-9_])${nameRe}\\s*\\(`, 'gu');
   const fenceRe = /```[a-zA-Z0-9_-]*\n([\s\S]*?)```/gu;
-  for (const fm of text.matchAll(fenceRe)) {
+  for (const fm of t.matchAll(fenceRe)) {
     const block = fm[1];
     for (const m of block.matchAll(callRe)) {
       // m.index is the position of the start of the name; '(' is the
@@ -289,16 +305,17 @@ test('extractCallBodies returns "bash(...)" with full body, not just "bash("', (
 
 test('extractCallBodies does NOT report false positives in prose', () => {
   // The helper must only look at code blocks; a prose mention of
-  // "task(agent_name=...)" should NOT be flagged because that prose
+  // "task(subagent=...)" should NOT be flagged because that prose
   // is documenting the round-1 defect, not using it.
   const PROSE_ONLY = `
-This Skill previously used the Codex-style \`task(agent_name=...)\` form
-but the round-1 review required switching to mcode canonical. See
-\`fork-context-decision/SKILL.md\` for the corrected example.
+This Skill previously used the Codex-style \`task(subagent=...)\` form
+but the round-1 review required switching to the canonical mcode 0.2.4
+\`task(agent_name=...)\` form. See \`fork-context-decision/SKILL.md\`
+for the corrected example.
 `;
   const calls = extractCallBodies(PROSE_ONLY, 'task');
   assert.equal(calls.length, 0,
-    `extractCallBodies must not match prose mentions of task(agent_name=); got ${calls.length} false positive(s)`);
+    `extractCallBodies must not match prose mentions of task(subagent=); got ${calls.length} false positive(s)`);
 });
 
 test('every body after the closing frontmatter has no stray "---" that could split a second block (round-1 defect shape)', () => {
@@ -348,9 +365,10 @@ a prose paragraph.
 `;
   // Helper: find the first frontmatter close, then check the body.
   const stray = (text) => {
-    const end = text.indexOf('\n---\n', 4);
+    const t = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const end = t.indexOf('\n---\n', 4);
     if (end < 0) return null;
-    const body = text.slice(end + 5);
+    const body = t.slice(end + 5);
     // Find any line in the body that is exactly '---'. If found,
     // return the line number (1-based, in the body).
     const lines = body.split('\n');
@@ -436,7 +454,7 @@ test('no SKILL.md contains a duplicate `author:` or `version:` key anywhere', ()
 
 // Skills that touch the `task` tool. The 5 Skills rewritten in this PR plus
 // any future Skill that calls `task(` must use the canonical parameter
-// names from `cli.js:B6c`: description, prompt, subagent_type, run_in_background.
+// names from `cli.js:B6c`: description, prompt, agent_name, run_in_background.
 // The audit sweep after v1.0.4 also caught `error-recovery-strategy` which
 // had a `task(subagent=...)` shape in its Example block; that fix is
 // recorded as v0.1.2 of that Skill. The test below covers all Skills whose
@@ -470,13 +488,13 @@ test('TASK_SKILLS use canonical mcode 0.2.4 `task` parameter names (no `agent_na
       // names that have appeared in the round-1 / round-2 / round-3 /
       // round-4 review comments. Each is a known-bad shape that the
       // mcode 0.2.4 `task` tool (cli.js:B6c strict validator) does
-      // not accept. `agent_name=` is also banned because the canonical
-      // form is `subagent_type=` (cli.js:j6c accepts the alias but the
-      // Skills prefer canonical).
-      assert.ok(!/\bagent_name\s*=/u.test(match),
-        `${name}: task(...) example uses "agent_name="; mcode canonical is "subagent_type=" (agent_name is accepted as a runtime alias but Skills prefer canonical)`);
+      // not accept. `subagent_type=` is also banned because the
+      // canonical form is `agent_name=` (cli.js:j6c accepts the
+      // alias but the Skills prefer canonical).
+      assert.ok(!/\bsubagent_type\s*=/u.test(match),
+        `${name}: task(...) example uses "subagent_type="; mcode 0.2.4 canonical is "agent_name=" (subagent_type is accepted as a runtime alias but Skills prefer canonical)`);
       assert.ok(!/\bsubagent\s*=/u.test(match),
-        `${name}: task(...) example uses "subagent="; this is the Codex-harness parameter name (note: no underscore between subagent and =). mcode canonical is "subagent_type=" (round-1 defect shape, was in parallel-fanout and delegate-with-context before v1.0.3)`);
+        `${name}: task(...) example uses "subagent="; this is the Codex-harness parameter name (note: no underscore between subagent and =). mcode 0.2.4 canonical is "agent_name=" (round-1 defect shape, was in parallel-fanout and delegate-with-context before v1.0.3)`);
       assert.ok(!/\bbrief\s*=/u.test(match),
         `${name}: task(...) example uses "brief="; mcode canonical is "prompt="`);
       assert.ok(!/\bhistory\s*=/u.test(match),
@@ -516,13 +534,18 @@ test('every Skill with a `task(` call in a code block is in the TASK_SKILLS allo
 // Reviewer finding: "fork-context-decision/SKILL.md 仍声称三个 sub-agent
 // manifest 位于 assets/agents/<name>/agent.md;请用当前 MiniMax Code 可验证
 // 契约确认该路径". The Skills name explore / worker / verifier as
-// subagent_type values; mcode 0.2.4 ships a per-agent manifest at
-// `assets/agents/<name>/agent.md` (we verified this from
-// `C:\Users\Administrator\.minimax-code\node_modules\@minimax-ai\code\assets\agents\`).
-// This test fails closed if any named sub-agent type is missing the
-// manifest file on disk, OR if a Skill claims a sub-agent type whose
-// manifest does not exist.
-test('sub-agent types claimed in Skills have a real manifest on disk (mcode 0.2.4 contract)', () => {
+// agent_name values; we observed in our own mcode 0.2.4 install that
+// each named sub-agent has a per-agent manifest at
+// `assets/agents/<name>/agent.md` (the path is **not** part of the
+// public runtime contract — it is a dev-machine-internal layout that
+// varies across installs and platforms; user-facing Skills no longer
+// reference it). This test is a dev-only best-effort verification
+// from the active mcode install; it is skipped if no mcode is
+// reachable. The Skills themselves use the canonical mcode 0.2.4
+// `agent_name=` form; this test fails closed if any Skill body uses
+// the legacy `subagent_type=` form, OR if a Skill claims a value
+// whose on-disk manifest is missing in our own install.
+test('sub-agent types claimed in Skills are present in the local mcode 0.2.4 install (dev-only check; skipped if mcode is unreachable)', () => {
   // Locate the mcode install. The active mcode is at $env:LOCALAPPDATA
   // typically; fall back to a well-known absolute path. Skip the test
   // (not fail it) if no mcode install is reachable, so this test is
@@ -537,27 +560,28 @@ test('sub-agent types claimed in Skills have a real manifest on disk (mcode 0.2.
     // No mcode reachable on this machine. Skip rather than fail.
     return;
   }
-  // Scan all 23 Skills; collect every distinct subagent_type value that
-  // appears in a `task(... subagent_type="X" ...)` example. The values
+  // Scan all 23 Skills; collect every distinct agent_name value that
+  // appears in a `task(... agent_name="X" ...)` example. The values
   // must come from the canonical mcode 0.2.4 set.
   const claimed = new Set();
-  const reSub = /\bsubagent_type\s*=\s*["']([a-z0-9_-]+)["']/giu;
+  const reSub = /\bagent_name\s*=\s*["']([a-z0-9_-]+)["']/giu;
   for (const { path } of listSkillFiles()) {
     const text = readFileSync(path, 'utf8');
     for (const c of extractCallBodies(text, 'task')) {
       for (const m of c.match.matchAll(reSub)) claimed.add(m[1]);
     }
   }
-  // The canonical sub-agent types (verified from
-  // assets/agents/{explore,worker,verifier}/agent.md). `mavis` is the
-  // root agent and MUST NOT be a claimed subagent_type.
+  // The canonical sub-agent types (verified from the local mcode
+  // install's `assets/agents/{explore,worker,verifier}/agent.md`
+  // layout). `mavis` is the root agent and MUST NOT be a claimed
+  // agent_name.
   assert.ok(!claimed.has('mavis'),
-    'mavis is the root agent, not a subagent_type; some Skill is still claiming it. Found in: ' + Array.from(claimed).join(', '));
+    'mavis is the root agent, not an agent_name; some Skill is still claiming it. Found in: ' + Array.from(claimed).join(', '));
   for (const name of claimed) {
     if (name === 'mavis') continue; // asserted above
     const manifest = join(mcodeRoot, 'assets', 'agents', name, 'agent.md');
     assert.ok(existsSync(manifest),
-      `subagent_type "${name}" is claimed in a Skill example but the manifest ${manifest} does not exist on disk. Either the Skill is wrong or the mcode install is wrong.`);
+      `agent_name "${name}" is claimed in a Skill example but the manifest ${manifest} does not exist on disk. Either the Skill is wrong or the mcode install is wrong.`);
   }
 });
 
@@ -593,10 +617,13 @@ test('background-task uses `task(run_in_background: true)` + `task_query` / `tas
   // For each background-bash call, the call body must include a
   // documented handle. We extract the whole fenced block the call
   // appears in and assert the block mentions a handle keyword.
+  // Normalize line endings first; the call bodies above are taken from
+  // the normalized text, so the search has to be too.
+  const textNorm = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   for (const call of bgBashCalls) {
     const fenceRe = /```[a-zA-Z0-9_-]*\n([\s\S]*?)```/gu;
     let hostBlock = null;
-    for (const fm of text.matchAll(fenceRe)) {
+    for (const fm of textNorm.matchAll(fenceRe)) {
       if (fm[1].includes(call.match)) { hostBlock = fm[1]; break; }
     }
     assert.ok(hostBlock !== null,

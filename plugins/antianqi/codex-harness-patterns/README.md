@@ -17,9 +17,9 @@ output without filling context, or losing work at session end.
 - `fork-context-decision` `0.2.0 → 0.3.0`:reviewer 提出的 6 点全部 close
   - (1) 重复 frontmatter block(round 1 残留)→ 重新组装为单一 frontmatter
   - (2) `history=N` PLACEHOLDER 移除 — mcode 0.2.4 `task` 工具**没有** context-sharing 参数;3 fork 模式(`all` / `N` / `none`)现在通过在 `prompt` 字段内联多少 prior turns 来表达
-  - (3) `agent_name=` 换成 canonical `subagent_type=`(`cli.js:B6c` 严格 validator 只接受 `subagent_type`)
+  - (3) `agent_name=` 换成 canonical `agent_name=`(`cli.js:B6c` 严格 validator 只接受 `agent_name`, `subagent_type=` 是运行时 alias(`cli.js:j6c` normaliser))
   - (4) `brief=` 换成 canonical `prompt=`
-  - (5) `mavis` 从 subagent 列表移除(它是 root agent,没有 `agent.md` manifest;不能用作 `subagent_type`)
+  - (5) `mavis` 从 subagent 列表移除(它是 root agent,host-internal layout 不在 public contract 内;不能用作 `agent_name`)
 - `delegate-with-context` `1.1.0 → 1.2.0`:同上 4 个 API 修正;4-part 信封现在写进 `prompt` 字段(不再有 `brief=` 概念)
 - `parallel-fanout` `1.1.0 → 1.2.0`:同上;每个 sub-task 独立 `task()` 调用,host 的 `buffer-unordered` 默认 8
 - `model-router` `0.3.3 → 0.4.0`:**删除** v0.3.3 "MiniMax Code's `task` tool accepts `model_config_id` directly" 错误断言 — mcode 0.2.4 `task` 工具不接受任何 model 字段(`cli.js:B6c` 严格 validator);模型选择是 **session-level**;Skill 重新定位为 cheap/medium/main 思考框架 + spawn gate(不要为 cheap 任务 spawn sub-agent)
@@ -34,7 +34,7 @@ output without filling context, or losing work at session end.
   - 23 个 `SKILL.md` 全部要求**单一** frontmatter block(开头 `---\n`,闭合 `\n---\n`,中间无 stray `---`)
   - frontmatter 解析为结构化对象,verify 必填字段:`name`(=目录名)/ `description`(≤1024 字符)/ `license=Apache-2.0` / `metadata.author=antianqi` / `metadata.version` 非空
   - body 顶层无 `author:` / `version:` 重复(避免 round 1 reviewer 提到的"重复 frontmatter block"再发生)
-  - **mcode 0.2.4 schema pinning**:对 5 个 task-touching Skills,所有 code block 里的 `task(...)` / `bash(...)` 调用**必须**用 canonical 参数(`description` / `prompt` / `subagent_type` / `run_in_background` / `command` / `timeout`),禁止 `agent_name=` / `brief=` / `history=` / `model_config_id=` / `bash(task_name=...)` / `bash(action="kill")`(reviewer 提的全部 6 个 placeholder 都被 fail-closed)
+  - **mcode 0.2.4 schema pinning**:对 5 个 task-touching Skills,所有 code block 里的 `task(...)` / `bash(...)` 调用**必须**用 canonical 参数(`description` / `prompt` / `agent_name` / `run_in_background` / `command` / `timeout`),禁止 `subagent_type=` / `subagent=` / `agent_type=` / `fork_turns=` / `brief=` / `history=` / `model_config_id=` / `bash(task_name=...)` / `bash(action="kill")`(reviewer 提的全部 9 个 placeholder 都被 fail-closed)
   - `background-task` 必须显式 demo `task_query` / `task_output` / `task_stop`(不然跑不动 `run_in_background=true` 返回的 task_id)
   - 跑分:`node --test test/codex-harness-patterns.test.mjs` → **27 pass, 0 fail**
 
@@ -44,7 +44,7 @@ output without filling context, or losing work at session end.
 # 把 mcode 0.2.4 真实 schema 拿出来对照
 grep -A2 'name:"task",executionMode' \
   C:/Users/Administrator/.minimax-code/node_modules/@minimax-ai/code/cli.js
-#  → 4 个 param: description / prompt / subagent_type / run_in_background
+#  → 4 个 param: description / prompt / agent_name / run_in_background
 
 # 跑 frontmatter + schema pinning 测试
 node --test test/codex-harness-patterns.test.mjs

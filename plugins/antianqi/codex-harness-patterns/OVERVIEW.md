@@ -16,7 +16,7 @@
 | 1 | `plan-stream-emit` | 复杂任务 | 先出 `todowrite` 计划,等 ack 再动 |
 | 2 | `parallel-fanout` | 任务可拆 2+ 独立子任务 | 显式 spawn,opt-in,fan-out + 聚合 |
 | **子代理派发** | | | |
-| 3 | `delegate-with-context` | 调 `task` 派发子 agent | 4-part 信封写进 `prompt`,`subagent_type` 三选一 |
+| 3 | `delegate-with-context` | 调 `task` 派发子 agent | 4-part 信封写进 `prompt`,`agent_name` 三选一 |
 | 4 | `fork-context-decision` | 调 `task` 派发 | 选 `all`/`N`/`none`,把对应内容内联到 `prompt` |
 | 5 | `subagent-family-tracking` | 派发了 sub-agent | 跟踪父子线程树 Open/Closed 状态 |
 | **执行与状态** | | | |
