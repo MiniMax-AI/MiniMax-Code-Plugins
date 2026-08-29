@@ -176,16 +176,18 @@ jobs:
         run: |
           $hook = 'plugins/antianqi/mcode-island/io.minimax.mcode/hooks/scripts/pre-tool-use.ps1'
           $stdinFile = Join-Path $env:RUNNER_TEMP 'hook-stdin-pretooluse.json'
-          @'
-{
-  "session_id": "ci-fake-session",
-  "transcript_path": "C:\\fake\\transcript",
-  "cwd": "C:\\fake\\cwd",
-  "hook_event_name": "PreToolUse",
-  "tool_name": "Bash",
-  "tool_input": { "command": "echo ci-pretooluse-test" }
-}
-'@ | Out-File -FilePath $stdinFile -Encoding utf8 -NoNewline
+          # Build the JSON as a single-line PowerShell single-quoted
+          # string instead of using a here-doc. A here-doc (`@'...'@`)
+          # in this `run: |` YAML block triggered a YAML parse error
+          # in the v1 commit: the leading `@'` after a `run: |` block
+          # scalar confused js-yaml (it tried to treat `@'` as a
+          # block-scalar start, then ran into a `}` / `,` and a `\`
+          # backslash on the same line and gave up at line 187).
+          # The single-line string is a 1:1 content match for the
+          # previous here-doc body and is portable across the YAML
+          # parser GitHub Actions uses.
+          $stdinJson = '{"session_id":"ci-fake-session","transcript_path":"C:\\fake\\transcript","cwd":"C:\\fake\\cwd","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo ci-pretooluse-test"}}'
+          Set-Content -Path $stdinFile -Value $stdinJson -Encoding utf8 -NoNewline
 
           $p = Start-Process -FilePath 'powershell' `
             -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $hook) `
