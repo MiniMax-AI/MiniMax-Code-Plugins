@@ -317,7 +317,6 @@ The validator **enforces**:
 
 - `hooks.json` parses as JSON and is an object (closed schema; any unknown root field is
   rejected).
-- `hooks.json` declares `$schema` as a non-empty string.
 - Every key under `hooks` is one of the twelve PascalCase event names listed in
   § "Empirical event catalog".
 - Each event value is a non-empty array of hook entries.
