@@ -3,6 +3,12 @@ import path from 'node:path';
 
 export const PLUGIN_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json';
 export const MCP_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json';
+// Pinned by the proposal at proposals/hooks-detailed-spec.md. The
+// round-4 review pointed out that the previous check accepted ANY
+// non-empty string, which meant a plugin could claim a different
+// schema than the proposal. Locking the URL means the validator
+// can now reject drafts that don't match the published spec.
+export const HOOK_SCHEMA = 'https://minimax.io/schemas/mcode-hooks/0.1.0/hooks.schema.json';
 
 const PLUGIN_NAME = /^(?!.*(?:--|\.\.))[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u;
 const OWNER_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/u;
@@ -89,7 +95,12 @@ export function validateMcp(value, label = 'mcp.json') {
       assert(typeof server.command === 'string' && server.command.length > 0 && (isBareCommand(server.command) || isContainedRelativePath(server.command)), `${label}: ${name} needs a bare executable or contained ./ path`);
       assert(server.args === undefined || (Array.isArray(server.args) && server.args.every((item) => typeof item === 'string')), `${label}: ${name}.args must be strings`);
       assert(server.env === undefined || (isRecord(server.env) && Object.entries(server.env).every(([key, item]) => !['PLUGIN_ROOT', 'PLUGIN_DATA'].includes(key) && typeof item === 'string')), `${label}: ${name}.env is invalid`);
-      assert(server.cwd === undefined || (typeof server.cwd === 'string' && /^(?:\.\/|\$\{PLUGIN_ROOT\}(?:\/|$)|\$\{PLUGIN_DATA\}(?:\/|$))/u.test(server.cwd)), `${label}: ${name}.cwd is invalid`);
+      assert(
+        server.cwd === undefined
+          || (typeof server.cwd === 'string'
+            && (isContainedRelativePath(server.cwd) || isContainedPluginPath(server.cwd))),
+        `${label}: ${name}.cwd must be a contained ./ path (no '..', no '\\') or a path under \${PLUGIN_ROOT} or \${PLUGIN_DATA} (no '..', no '\\', no leading '/')`,
+      );
       assert(Object.keys(server).every((key) => ['type', 'command', 'args', 'env', 'cwd'].includes(key)), `${label}: ${name} has unsupported fields`);
     } else if (server.type === 'streamable-http' || server.type === 'sse') {
       assert(typeof server.url === 'string' && isSafeRemoteUrl(server.url), `${label}: ${name}.url must be HTTPS or loopback HTTP without credentials or fragment`);
@@ -107,7 +118,31 @@ function isBareCommand(value) {
 }
 
 function isContainedRelativePath(value) {
-  return value.startsWith('./') && !value.split('/').includes('..') && !value.includes('\\');
+  // ./foo/bar: every segment must be a non-empty name, no '..' anywhere,
+  // no backslashes (which would be a Windows-only escape hatch).
+  if (!value.startsWith('./') || value.includes('\\')) return false;
+  const parts = value.split('/');
+  // The first part is '.' (we just checked that), so we walk the rest.
+  for (let i = 1; i < parts.length; i += 1) {
+    if (parts[i] === '' || parts[i] === '..') return false;
+  }
+  return true;
+}
+
+// ${PLUGIN_ROOT}/foo/bar and ${PLUGIN_DATA}/foo/bar: the literal
+// segment between '${...}' and the first '/' (or end-of-string) must
+// not be '.' or '..' and must not contain a backslash. Same for every
+// subsequent segment. This was the round-4 finding: the previous regex
+// only checked the prefix, so '${PLUGIN_ROOT}/../../outside' passed.
+function isContainedPluginPath(value) {
+  const m = /^\$\{(PLUGIN_ROOT|PLUGIN_DATA)\}(?:\/(.*))?$/u.exec(value);
+  if (!m) return false;
+  if (m[2] === undefined) return true; // '${PLUGIN_ROOT}' alone is the root
+  if (m[2].includes('\\')) return false;
+  for (const seg of m[2].split('/')) {
+    if (seg === '' || seg === '.' || seg === '..') return false;
+  }
+  return true;
 }
 
 function isSafeRemoteUrl(value) {
@@ -121,6 +156,151 @@ function isSafeRemoteUrl(value) {
   } catch {
     return false;
   }
+}
+
+export const CLIENT_EXTENSION_NAMESPACES = Object.freeze(['io.minimax.mcode']);
+const KNOWN_HOOK_EVENTS = new Set([
+  'PreToolUse',
+  'PostToolUse',
+  'SessionStart',
+  'SessionEnd',
+  'Stop',
+  'UserPromptSubmit',
+  'PreCompact',
+  'Notification',
+  'SubagentStart',
+  'SubagentStop',
+  'PermissionRequest',
+  'PermissionDenied',
+]);
+const HOOK_DOCUMENT_FIELDS = new Set(['$schema', 'hooks']);
+const HOOK_ENTRY_FIELDS = new Set([
+  'command',
+  'args',
+  'env',
+  'cwd',
+  'matcher',
+  'pattern',
+  'regex',
+  'glob',
+  'timeout',
+  'timeoutMs',
+  'once',
+]);
+const HOOK_RESERVED_FIELDS = new Set([
+  'type',
+  'shell',
+  'prompt',
+  'http',
+  'agent',
+  'script',
+  'function',
+]);
+const HOOK_TIMEOUT_DEFAULT = 30000;
+const HOOK_TIMEOUT_MIN = 100;
+const HOOK_TIMEOUT_MAX = 600000;
+
+function rejectUnknownFields(record, allowed, label) {
+  for (const key of Object.keys(record)) {
+    if (HOOK_RESERVED_FIELDS.has(key)) {
+      throw new Error(`${label}: ${key} is a reserved internal discriminator and is not allowed in a portable Hook entry`);
+    }
+    if (!allowed.has(key)) {
+      throw new Error(`${label}: ${key} is not a recognized Hook field; expected one of ${[...allowed].sort().join(', ')}`);
+    }
+  }
+}
+
+export function validateHookEntry(value, label) {
+  assert(isRecord(value), `${label}: hook entry must be an object`);
+  rejectUnknownFields(value, HOOK_ENTRY_FIELDS, label);
+  assert(typeof value.command === 'string' && value.command.length > 0, `${label}: command is required`);
+  assert(
+    isBareCommand(value.command) || isContainedRelativePath(value.command),
+    `${label}: command must be a bare executable or a contained ./ path`,
+  );
+  if (value.args !== undefined) {
+    assert(Array.isArray(value.args) && value.args.every((item) => typeof item === 'string' && item.length > 0), `${label}: args must be an array of non-empty strings`);
+  }
+  if (value.env !== undefined) {
+    assert(isRecord(value.env), `${label}: env must be an object`);
+    for (const [envKey, envValue] of Object.entries(value.env)) {
+      assert(!['PLUGIN_ROOT', 'PLUGIN_DATA'].includes(envKey), `${label}: env.${envKey} is reserved`);
+      assert(typeof envValue === 'string', `${label}: env.${envKey} must be a string`);
+    }
+  }
+  if (value.cwd !== undefined) {
+    assert(
+      typeof value.cwd === 'string'
+        && (isContainedRelativePath(value.cwd) || isContainedPluginPath(value.cwd)),
+      `${label}: cwd must be a contained ./ path (no '..', no '\\') or a path under \${PLUGIN_ROOT} or \${PLUGIN_DATA} (no '..', no '\\', no leading '/')`,
+    );
+  }
+  if (value.matcher !== undefined) {
+    assert(typeof value.matcher === 'string' && value.matcher.length > 0, `${label}: matcher must be a non-empty string`);
+  }
+  if (value.pattern !== undefined) {
+    assert(typeof value.pattern === 'string' && value.pattern.length > 0, `${label}: pattern must be a non-empty string`);
+  }
+  if (value.matcher !== undefined && value.pattern !== undefined) {
+    assert(value.matcher === value.pattern, `${label}: matcher and pattern must agree when both are set`);
+  }
+  if (value.regex !== undefined) {
+    assert(typeof value.regex === 'boolean', `${label}: regex must be a boolean`);
+  }
+  if (value.glob !== undefined) {
+    assert(typeof value.glob === 'boolean', `${label}: glob must be a boolean`);
+  }
+  if (value.timeout !== undefined) {
+    assert(Number.isInteger(value.timeout) && value.timeout >= HOOK_TIMEOUT_MIN && value.timeout <= HOOK_TIMEOUT_MAX, `${label}: timeout must be an integer between ${HOOK_TIMEOUT_MIN} and ${HOOK_TIMEOUT_MAX} ms`);
+  }
+  if (value.timeoutMs !== undefined) {
+    assert(Number.isInteger(value.timeoutMs) && value.timeoutMs >= HOOK_TIMEOUT_MIN && value.timeoutMs <= HOOK_TIMEOUT_MAX, `${label}: timeoutMs must be an integer between ${HOOK_TIMEOUT_MIN} and ${HOOK_TIMEOUT_MAX} ms`);
+  }
+  if (value.once !== undefined) {
+    assert(typeof value.once === 'boolean', `${label}: once must be a boolean`);
+  }
+  return value;
+}
+
+export function validateHooksDocument(value, label) {
+  assert(isRecord(value), `${label}: root must be an object`);
+  rejectUnknownFields(value, HOOK_DOCUMENT_FIELDS, label);
+  // Round-4 fix: the previous check was `length > 0`, which accepted
+  // any non-empty string. The proposal pins a specific URL, so the
+  // validator must require that URL exactly. A plugin that wants to
+  // claim a different schema is welcome to publish a different
+  // proposal, but the validator cannot pretend a draft matches
+  // 0.1.0 just because the field is non-empty.
+  assert(value.$schema === HOOK_SCHEMA, `${label}: $schema must equal ${HOOK_SCHEMA}`);
+  assert(isRecord(value.hooks), `${label}: hooks must be an object`);
+  const events = [];
+  for (const [eventName, entries] of Object.entries(value.hooks)) {
+    assert(KNOWN_HOOK_EVENTS.has(eventName), `${label}: ${eventName} is not a recognized event; expected one of ${[...KNOWN_HOOK_EVENTS].sort().join(', ')}`);
+    assert(Array.isArray(entries) && entries.length > 0, `${label}: ${eventName} must be a non-empty array`);
+    for (let i = 0; i < entries.length; i += 1) {
+      validateHookEntry(entries[i], `${label}: ${eventName}[${i}]`);
+    }
+    events.push(eventName);
+  }
+  return events.sort();
+}
+
+export async function validateClientExtensions(root) {
+  const found = [];
+  for (const namespace of CLIENT_EXTENSION_NAMESPACES) {
+    const hooksPath = path.join(root, namespace, 'hooks', 'hooks.json');
+    let text;
+    try {
+      text = await readFile(hooksPath, 'utf8');
+    } catch (error) {
+      if (error.code === 'ENOENT') continue;
+      throw error;
+    }
+    const events = validateHooksDocument(parseJson(text, hooksPath), hooksPath);
+    found.push({ namespace, events });
+  }
+  return found;
 }
 
 export async function validatePluginDirectory(root) {
@@ -147,8 +327,9 @@ export async function validatePluginDirectory(root) {
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
+  const clientExtensions = await validateClientExtensions(root);
   assert(skills.length + mcpServers.length > 0, `${root}: plugin must expose at least one Skill or MCP server`);
-  return { manifest, skills: skills.sort(), mcpServers };
+  return { manifest, skills: skills.sort(), mcpServers, clientExtensions };
 }
 
 export async function validateHostedPluginDirectory(root, { owner, pluginName }) {
