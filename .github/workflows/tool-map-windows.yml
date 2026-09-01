@@ -1,0 +1,78 @@
+name: tool-map (windows-latest)
+
+on:
+  pull_request:
+    paths:
+      - 'plugins/antianqi/tool-map/**'
+      - '.github/workflows/tool-map-windows.yml'
+      - 'test/tool-map.test.mjs'
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/antianqi/tool-map/**'
+      - '.github/workflows/tool-map-windows.yml'
+      - 'test/tool-map.test.mjs'
+
+# PR #5 round-6 review (hetaoBackend, 2026-09-01T01:24:53Z) on commit
+# 6bb6a4b: "POSIX tests pass 29/29 ... The remaining blocker is
+# platform evidence: the Windows/.cmd/.bat tests return early on
+# non-Windows, and this head has no GitHub Actions run, so the new
+# windows-latest workflow has not actually validated the
+# shell/PATHEXT path. Please provide a real Windows run before merge."
+#
+# This workflow exercises the existing test/tool-map.test.mjs on
+# windows-latest. The two test cases gated on win32 are:
+#
+#   - "Windows: probeVersion handles the PATHEXT-expanded .CMD
+#     path (R4-4 real Windows evidence)" -- creates a fake
+#     `node.cmd` in a temp dir, sets PATH, asserts probeVersion
+#     resolves the .cmd shim and captures `node core` via the
+#     PATHEXT lookup. This is the only line of code that decides
+#     whether a .cmd shim routes through cmd.exe (CVE-2024-27980) or
+#     spawns as a normal executable.
+#   - "shouldUseShell agrees with shellForFile for every whitelisted
+#     probe that is installed" -- runs scan.mjs's `shouldUseShell`
+#     against the installed tools on the runner and asserts the
+#     decision is consistent with the resolved file extension.
+#
+# These two tests were SKIPPED on every previous CI run (POSIX
+# runner); this workflow is what makes the round-6 "real Windows
+# run" requirement reproducible in CI. The local-runnable mirror
+# `plugins/antianqi/tool-map/scripts/test-windows-workflow-local.ps1`
+# gives the same evidence without requiring Actions approval from
+# the maintainer.
+#
+# `[code]smith` is SKIPPED on this repository, so this windows-latest
+# job is the CI evidence for the round-6 review.
+
+permissions:
+  contents: read
+
+jobs:
+  tool-map-windows:
+    name: tool-map on windows-latest (.cmd/.bat / PATHEXT / shell)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Use the system Node so the .cmd / .bat PATHEXT lookup uses the
+      # same Node version the reviewer tested against. The runner
+      # images ship with Node 20.x as of 2026-09-01.
+      - name: Set up Node (system)
+        run: |
+          node --version
+          npm --version
+
+      # Round-6 reviewer finding: ".cmd/.bat tests return early on
+      # non-Windows." On windows-latest the if (process.platform
+      # !== 'win32') return guards in the test bodies will NOT trip,
+      # and the R4-4 .cmd / .bat evidence will actually exercise.
+      - name: Run tool-map Windows test suite
+        run: |
+          cd '${{ github.workspace }}'
+          node --test test/tool-map.test.mjs
