@@ -47,11 +47,11 @@ parameter.
 ## mcode 0.2.4 sub-agent types
 
 The mcode 0.2.4 `task` tool accepts three sub-agent types as the value of
-`agent_name=`. The on-disk set of valid sub-agent manifests is verified
-best-effort from the active mcode install in the static check
-(`test/codex-harness-patterns.test.mjs` round-4 #3); a host-internal
-manifest path is not part of the public runtime contract and is not
-documented here.
+`agent_name=`. The on-disk path of each sub-agent's manifest is
+host-internal (varies across installs and platforms) and is **not**
+part of the public runtime contract. The Skills in this plugin rely on
+the `agent_name` parameter, not on any on-disk manifest path; do not
+hard-code `assets/agents/<name>/agent.md` or similar layouts.
 
 | `agent_name` | Tools | Use when |
 |---|---|---|

@@ -476,7 +476,7 @@ const TASK_SKILLS = [
   'error-recovery-strategy',
 ];
 
-test('TASK_SKILLS use canonical mcode 0.2.4 `task` parameter names (no `agent_name=`, no `brief=`, no `history=`, no `model_config_id=`)', () => {
+test('TASK_SKILLS use canonical mcode 0.2.4 `task` parameter names (no legacy `subagent_type=` / `agent_type=` / `subagent=` / `brief=` / `history=` / `model_config_id=` / `fork_turns=`)', () => {
   for (const name of TASK_SKILLS) {
     const path = join(SKILLS_ROOT, name, 'SKILL.md');
     const text = readFileSync(path, 'utf8');
@@ -650,4 +650,47 @@ test('background-task uses `task(run_in_background: true)` + `task_query` / `tas
     assert.ok(!/\baction\s*=\s*["']kill["']/u.test(call.match),
       'background-task code block uses "bash(... action=\"kill\")" — mcode 0.2.4 bash has no action sub-action; killing is via task_stop or the host job-control API');
   }
+});
+
+// PR #18 round-5 (hetaoBackend, 2026-09-01T01:25:04Z): the plugin.json
+// must declare an enforceable minMcodeVersion. The Skills in this plugin
+// are pinned to the mcode 0.2.4 `task` / `bash` tool surface; a host
+// running mcode < 0.2.4 (e.g. mcode 0.2.0 with `subagent_type=` /
+// `history=` placeholders) must fail this check at smoke time, not
+// silently pass and surface a confusing runtime error. This test
+// fails closed: a missing `requirements` block, a missing
+// `minMcodeVersion` field, or a value < "0.2.4" is a hard FAIL.
+test('R18-2 plugin.json declares `requirements.minMcodeVersion >= "0.2.4"` (fail-closed)', () => {
+  const pluginPath = join(REPO_ROOT, 'plugins', 'antianqi', 'codex-harness-patterns', 'plugin.json');
+  const text = readFileSync(pluginPath, 'utf8');
+  // Normalize line endings so semver-ish string comparison is not
+  // affected by CRLF artifacts in the JSON file.
+  const textNorm = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+  // Parse the JSON (small file, sync read is fine).
+  let plugin;
+  try {
+    plugin = JSON.parse(textNorm);
+  } catch (e) {
+    assert.fail(`plugin.json is not valid JSON: ${e.message}`);
+  }
+
+  assert.ok(plugin && typeof plugin === 'object',
+    'plugin.json must parse to a JSON object');
+  assert.ok(plugin.requirements && typeof plugin.requirements === 'object',
+    'plugin.json must declare a `requirements` object (PR #18 round-5: ' +
+    '`plugin.json declares no enforceable host-version constraint`)');
+  assert.ok(typeof plugin.requirements.minMcodeVersion === 'string'
+              && plugin.requirements.minMcodeVersion.length > 0,
+    'plugin.json `requirements.minMcodeVersion` must be a non-empty string');
+  // String comparison is good enough for a 3-segment semver. If we
+  // ever need richer comparison, replace with semver.compare(); for
+  // the current pinned version ("0.2.4") and future bumps, string
+  // ordering matches numeric ordering because each segment is a
+  // fixed-width 2-3 digit number (0,1,2,...,99).
+  assert.ok(plugin.requirements.minMcodeVersion >= '0.2.4',
+    `plugin.json \`requirements.minMcodeVersion\` must be >= "0.2.4" ` +
+    `(got "${plugin.requirements.minMcodeVersion}"). Earlier mcode ` +
+    `versions (e.g. 0.2.0) used \`subagent_type=\` / \`history=\` ` +
+    `placeholders that the Skills in this plugin no longer use.`);
 });

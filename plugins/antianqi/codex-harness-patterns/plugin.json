@@ -10,6 +10,10 @@
   "homepage": "https://github.com/antianqi/MiniMax-Code-Plugins/tree/main/plugins/antianqi/codex-harness-patterns",
   "repository": "https://github.com/antianqi/MiniMax-Code-Plugins",
   "license": "Apache-2.0",
+  "requirements": {
+    "minMcodeVersion": "0.2.4",
+    "notes": "Pinned to the mcode 0.2.4 `task` / `bash` tool surface (`task(description, prompt, agent_name, run_in_background?)`, `bash(command, timeout?, run_in_background?)`, `task_query`, `task_output`, `task_stop`). Earlier mcode versions (e.g. 0.2.0) used `subagent_type=` / `history=` placeholders that the Skills in this plugin no longer use; a host running mcode < 0.2.4 will fail the static check `test/codex-harness-patterns.test.mjs` `R18-2 plugin.json declares minMcodeVersion >= 0.2.4`."
+  },
   "keywords": [
     "minimax-code",
     "plugin",
