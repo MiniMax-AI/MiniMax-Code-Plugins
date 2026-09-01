@@ -34,8 +34,9 @@ Expected behavior:
 
 ## Skills included
 
-- `acp-collab` — peer collaboration via inbox (read, write, blocking ask, answer)
+- `acp-collab` — peer collaboration via inbox (read, write, blocking ask, answer) **[mavis side]**
 - `acp-task-dispatch` — send a self-contained task to the ACP server from inside MiniMax Code
+- `acp-inbox-bridge` — goudan-side companion: lets the OpenClaw main agent drive the same inbox from the goudan perspective. **Added in v0.3.0.** See [Goudan-side companion](#goudan-side-companion) below.
 
 ## Requirements
 
@@ -76,6 +77,43 @@ The token is never sent to a remote host, never logged to disk, and never echoed
 - Do not read, print, log, or include the token in any user-facing output. If a command would expose the token (`echo $ACP_TOKEN`, `env | grep TOKEN`, etc.), refuse and explain.
 - Do not ask the user to paste the token into chat. If it is missing, tell them to set `$ACP_TOKEN` (or write one of the fallback files) and stop.
 - Do not pass the token as a parameter to any Skill function. The client reads it directly from the environment.
+
+## Goudan-side companion
+
+Added in v0.3.0. The `acp-collab` and `acp-task-dispatch` Skills above are
+written for **mavis** (running inside MiniMax Code). v0.3.0 adds the
+goudan-side perspective so the **OpenClaw main agent** (goudan) can also
+drive the inbox from its own session.
+
+| | mavis side | goudan side |
+| --- | --- | --- |
+| Skill | `acp-collab` | `acp-inbox-bridge` (v0.3.0) |
+| Default `sender` | `mavis` | `goudan` |
+| Audience | MiniMax Code child session | OpenClaw main session |
+| Wrapper | None (calls `client/_acp_client.inbox_*` directly) | `scripts/acp_inbox.py` (thin class API) |
+| Smoke test | `scripts/smoke.py` | `scripts/test_inbox_goudan.py` |
+
+Both sides drive the **same** `client/_acp_client.py` HTTP transport, so
+the loopback-only, no-redirect, token-via-env security model is shared
+unchanged. The wrapper is a class API; it does not reimplement HTTP.
+
+```python
+# goudan-side: proactive message
+import os, sys
+_plugin_root = os.environ.get("ACP_PLUGIN_ROOT") or os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))
+)
+sys.path.insert(0, os.path.join(_plugin_root, "scripts"))
+from acp_inbox import ACPInbox
+
+acp = ACPInbox()
+acp.write("goudan-mavis-001", "found 1 cron failure: list files in memory/")
+result = acp.ask("goudan-mavis-001", "retry or disable?", timeout=120)
+print(result["answer"])
+```
+
+The full goudan-side workflow is documented in
+[`skills/acp-inbox-bridge/SKILL.md`](skills/acp-inbox-bridge/SKILL.md).
 
 ## Client API contract
 
