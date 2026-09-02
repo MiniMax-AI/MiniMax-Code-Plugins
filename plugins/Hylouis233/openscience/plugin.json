@@ -1,0 +1,22 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "openscience",
+  "version": "0.2.0",
+  "description": "Evidence-first research workflow plugins for MiniMax Code — literature search, traceable evidence, citation verification, and human-gated research stages.",
+  "author": {
+    "name": "Hylouis233",
+    "url": "https://github.com/Hylouis233"
+  },
+  "homepage": "https://github.com/Hylouis233/openscience",
+  "repository": "https://github.com/Hylouis233/openscience",
+  "license": "MIT",
+  "keywords": [
+    "minimax-code",
+    "plugin",
+    "research",
+    "literature",
+    "citation-verification",
+    "evidence",
+    "science"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "comfyui-studio": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["./server.mjs"],
+      "env": {
+        "COMFYUI_URL": "http://127.0.0.1:8188"
+      }
+    }
+  }
+}

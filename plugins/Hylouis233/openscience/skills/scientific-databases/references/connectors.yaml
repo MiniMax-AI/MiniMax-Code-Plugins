@@ -1,0 +1,121 @@
+# connectors.yaml — science-data 插件 connector 元数据表
+#
+# fail-closed 原则：未登记在本表中的 connector 一律不得使用。任何检索或
+# 数据获取动作必须先在本表中找到对应条目、确认其 status 不是 deferred，
+# 才能执行；查不到条目即视为不可用，停止并向用户说明，不得临时引入
+# 表外数据源。新增 connector 的唯一途径是先修改本表（走 customize 流程）。
+#
+# 字段说明：
+#   id        connector 标识（kebab-case，SKILL.md 路由表引用此 id）
+#   domain    适用领域（生医/材料/经济/气象/地学等）
+#   type      mcp-stdio | mcp-http | skill-script
+#   pkg/url   stdio 类填包名（uvx/pip 包名），http 类填基础 URL
+#   apiKeyEnv 需要凭证时填写环境变量名；无需凭证则省略
+#   license   数据/接口的使用许可概况
+#   status    active（可用）| needs-key（需先配置凭证）| deferred（暂缓，见 reason）
+#   tested    是否经过本仓库实测（true/false）
+#
+# 诚实声明：本表中的 pkg 名为策划指针，以 PyPI / 各官方站点实际名称为准；
+# 除特别注明外，各条目均未逐一实测（tested: false），首次启用某个
+# connector 前应先小规模试运行并把结果反馈回本表（把 tested 改为 true）。
+#
+# 与 .mcp.json 的关系：.mcp.json 只放 MCP server 的启动指针；本表是合规
+# 与许可的权威清单。两边 id 保持一致；.mcp.json 中未列出的条目表示当前
+# 版本无 MCP 包装，按其条目规程直接调用。
+
+connectors:
+  - id: paper-search
+    domain: 综合文献（arXiv/PubMed/Crossref/Semantic Scholar/bioRxiv）
+    type: mcp-stdio
+    pkg: paper-search-mcp
+    license: 各上游源各自条款（arXiv、PubMed、Crossref 等公开 API）
+    status: active
+    tested: false
+    notes: 包名以 PyPI 实际为准；与 science-literature 的 paper-search 技能互补，优先用谁由调用方规程决定。
+
+  - id: biomcp
+    domain: 生医（生物医学实体、临床试验、文献）
+    type: mcp-stdio
+    pkg: biomcp
+    license: 遵循各上游（NCBI、ClinicalTrials.gov 等）公开条款
+    status: active
+    tested: false
+    notes: 部分端点无需 key；涉及 NCBI 高频访问时建议自备 NCBI_API_KEY 并遵守其速率限制。
+
+  - id: materials-project
+    domain: 材料（晶体结构、相图、计算性质）
+    type: mcp-http
+    url: https://api.materialsproject.org
+    apiKeyEnv: MP_API_KEY
+    license: Materials Project 使用条款（署名要求，禁止批量镜像）
+    status: needs-key
+    tested: false
+    notes: 需先 export MP_API_KEY；未配置时按 needs-key 停止并给出配置指引。
+
+  - id: fred
+    domain: 经济（宏观经济时间序列）
+    type: mcp-http
+    url: https://api.stlouisfed.org/fred
+    apiKeyEnv: FRED_API_KEY
+    license: FRED 使用条款（部分序列受原发布方版权限制）
+    status: needs-key
+    tested: false
+    notes: 需先 export FRED_API_KEY；免费申请，注意逐序列的版权标注差异。
+
+  - id: spaceweather
+    domain: 地学/空间物理（空间天气、地磁指数）
+    type: mcp-http
+    url: https://services.swpc.noaa.gov
+    license: NOAA SWPC 公开数据（美国政府作品，公有领域）
+    status: active
+    tested: false
+    notes: 无需 key；遵守 NOAA 站点礼貌访问要求。
+
+  - id: open-meteo
+    domain: 气象（天气预报、历史再分析、气候指标）
+    type: mcp-stdio
+    pkg: open-meteo-mcp
+    license: Open-Meteo 免费档（CC BY 4.0，署名要求；商用需付费档）
+    status: active
+    tested: false
+    notes: 免费无需 key；非商用免费档有日调用量上限，批量大任务先确认额度。
+
+  - id: usgs-water
+    domain: 地学（美国水文站点、流量与水质）
+    type: mcp-http
+    url: https://waterservices.usgs.gov
+    license: USGS 公开数据（美国政府作品，公有领域，建议署名）
+    status: active
+    tested: false
+    notes: 无需 key；仅覆盖美国站点，中国水文数据不在此 connector 范围。
+
+  # ---- deferred 清单：以下 connector 已识别但暂缓接入，不得使用 ----
+  # deferred 的原因各不相同，统一约定：status 为 deferred 的条目即停即说，
+  # 不尝试绕过、不找替代品静默顶替。
+
+  - id: kegg
+    domain: 生医（通路、基因组注释）
+    type: mcp-http
+    url: https://rest.kegg.jp
+    license: KEGG API 学术许可（仅限学术用途，禁止批量下载与再分发）
+    status: deferred
+    tested: false
+    reason: KEGG API 的学术许可对自动化访问与数据再分发有明确限制，在未确认本插件用法完全符合其许可前暂缓接入。
+
+  - id: cadd
+    domain: 生医/化学（药物 ADMET 与毒性预测）
+    type: mcp-http
+    url: https://cadd.gs.washington.edu
+    license: CADD 站点许可（学术免费但有使用条款约束）
+    status: deferred
+    tested: false
+    reason: CADD 服务许可条款与自动化调用边界未逐条核实，存在超范围使用风险，暂缓接入。
+
+  - id: panglaodb
+    domain: 生医（单细胞转录组 marker 数据库）
+    type: mcp-http
+    url: https://panglaodb.se
+    license: 站点声明的学术使用条款
+    status: deferred
+    tested: false
+    reason: 站点近年稳定性差、长期可用性无保障，接入后易产生间歇性失败噪音，待其恢复稳定或找到镜像后再评估。

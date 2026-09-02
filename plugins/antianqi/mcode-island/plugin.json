@@ -1,0 +1,30 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "mcode-island",
+  "version": "0.3.0",
+  "description": "Windows 桌面灵动岛 (Dynamic Island) 状态窗口：让 mcode agent 把工作状态（idle/thinking/working/waiting/done/error）实时推送到屏幕顶部悬浮 pill，agent 自己忙的时候用户不用切回 mcode 也能看到进度。v0.3.0 增加 io.minimax.mcode 客户端扩展（Hooks 草案），与 MiniMax-Code-Plugins PR #20 的 portable Hooks 提案对齐；mcode 0.2.4+ Runtime 触发，registry 接受后零改动生效。",
+  "author": {
+    "name": "antianqi",
+    "url": "https://github.com/antianqi"
+  },
+  "homepage": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins/tree/main/plugins/antianqi/mcode-island",
+  "repository": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins/tree/main/plugins/antianqi/mcode-island",
+  "license": "Apache-2.0",
+  "keywords": [
+    "mcode",
+    "windows",
+    "wpf",
+    "powershell",
+    "status",
+    "ui",
+    "dynamic-island",
+    "io.minimax.mcode",
+    "hooks"
+  ],
+  "extensions": {
+    "io.minimax.mcode": {
+      "version": "0.1.0",
+      "hooks": "./io.minimax.mcode/hooks/hooks.json"
+    }
+  }
+}

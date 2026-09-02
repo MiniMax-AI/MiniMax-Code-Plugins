@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<evaluation>
+  <qa_pair>
+    <question>Inspect the available tools and the capability report. A user has only a Token Plan key and explicitly confirms quota use before asking for current web information. Which single tool should be selected? Answer with the exact tool name.</question>
+    <answer>minimax_web_search</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Inspect the capability report and generation tools. A user asks for MiniMax H3 video using only a Token Plan key. Which missing environment variable must be reported instead of silently switching billing routes? Answer with the exact variable name.</question>
+    <answer>MINIMAX_PAYGO_API_KEY</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>A previous call created a video task and returned its ID. The user now wants status without creating, cancelling, or deleting anything. Which exact tool is read-only for this step?</question>
+    <answer>minimax_query_video</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>A user wants an image analyzed but supplies an arbitrary local filesystem path. According to the vision tool contract, which URI scheme must be used for a remote source? Answer only with the scheme including punctuation.</question>
+    <answer>https:</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Compare the media tools and their documented lifecycle warning. For a grandfathered account that wants to continue and revise existing song lyrics, which exact tool should be called after confirmation?</question>
+    <answer>minimax_generate_lyrics</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>A new user asks to activate the paid Music Generation API after the documented 2026 cutoff. Which MiniMax product should be suggested instead of retrying the unavailable API? Answer with the product name.</question>
+    <answer>MiniMax Audio</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Inspect the image, speech, and music tool contracts. Which output delivery value is forced so large binary media does not enter MCP context? Answer with the exact lowercase value.</question>
+    <answer>url</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>A user supplies a first frame for H3 image-to-video. Which ratio value does the tool require because the API derives the aspect ratio from the frame? Answer with the exact value.</question>
+    <answer>adaptive</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>A generic MINIMAX_API_KEY is a pay-as-you-go key rather than a Subscription Key. Which exact MINIMAX_API_KEY_MODE value must be configured?</question>
+    <answer>paygo</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>The API returns MiniMax status 2056 for a Token Plan request while a paygo key is also configured. According to the failure contract, should the server silently retry with the paygo key? Answer Yes or No.</question>
+    <answer>No</answer>
+  </qa_pair>
+</evaluation>

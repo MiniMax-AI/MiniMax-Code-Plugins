@@ -1,0 +1,22 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "plant-public",
+  "version": "0.1.0",
+  "description": "Public plant-pathology bioinformatics APIs: UniProt, NCBI, InterProScan, PDB, AlphaFold, Ensembl Plants, Sol Genomics, and Arabidopsis BAR/ATTED/STRING.",
+  "author": {
+    "name": "Presisitence",
+    "url": "https://github.com/Presisitence"
+  },
+  "homepage": "https://github.com/Presisitence/plant-public-mcp",
+  "repository": "https://github.com/Presisitence/plant-public-mcp",
+  "license": "MIT",
+  "keywords": [
+    "minimax-code",
+    "plugin",
+    "mcp",
+    "plant",
+    "uniprot",
+    "ncbi",
+    "solanaceae"
+  ]
+}
