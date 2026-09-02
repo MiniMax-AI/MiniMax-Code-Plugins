@@ -86,40 +86,25 @@ class ACPInbox:
 
     Parameters
     ----------
-    base_url:
-        Optional override; defaults to ``_acp_client.DEFAULT_BASE_URL``
-        (which is ``http://127.0.0.1:9999``).
-
-        **The wrapper validates** ``base_url`` against the inherited
-        ``_check_loopback`` at construction time. A non-loopback URL
-        raises ``ACPError`` immediately, before any HTTP call. This is a
-        fail-fast sanity check: a wrong ``base_url`` will not silently
-        leak the bearer token to a non-loopback host.
-
-        **Routing caveat:** the bundled client's ``inbox_*`` helpers do
-        NOT accept a per-call ``base_url`` -- they read it from
-        ``$ACP_BASE_URL`` or fall back to ``_acp_client.DEFAULT_BASE_URL``.
-        A wrapper constructed with a custom ``base_url`` is therefore
-        most useful as a "set ``$ACP_BASE_URL`` before instantiation"
-        contract. Pass ``base_url`` in CI scripts to fail fast on a
-        misconfiguration; for production goudan-side callers, prefer
-        setting ``$ACP_BASE_URL`` in the environment.
     default_timeout:
         Used for ``ask()``; other methods have no client-side timeout
         (the server enforces them per request).
+
+        The HTTP base URL is read from ``$ACP_BASE_URL`` (set by the
+        caller) or falls back to ``_acp_client.DEFAULT_BASE_URL``. The
+        wrapper does NOT accept a per-instance ``base_url``; the
+        bundled client's ``inbox_*`` helpers read the env var
+        directly, so a constructor parameter would be silently
+        ignored. To fail fast on a misconfiguration, set
+        ``$ACP_BASE_URL`` before instantiation and call
+        ``_acp_client._check_loopback($ACP_BASE_URL)`` explicitly;
+        the bundled smoke does this.
     """
 
     def __init__(
         self,
-        base_url: Optional[str] = None,
         default_timeout: float = 30.0,
     ) -> None:
-        if base_url is not None:
-            # Fail-fast loopback validation. _check_loopback raises
-            # ACPError on non-loopback URLs (e.g. 'http://1.2.3.4:9999',
-            # 'http://localhost:9999', 'https://127.0.0.1:9999').
-            _acp_client._check_loopback(base_url)
-        self.base_url = base_url or _acp_client.DEFAULT_BASE_URL
         self.default_timeout = float(default_timeout)
 
     # --- outbound writes (goudan → mavis) --------------------------------
@@ -171,18 +156,24 @@ class ACPInbox:
         since_id: int = 0,
         sender: Optional[str] = None,
         msg_type: Optional[str] = None,
+        limit: Optional[int] = None,
     ) -> list[dict]:
         """Read messages from the inbox (auto-marked-read by the server).
 
-        Returns a list of message dicts. The bundled client's
-        ``inbox_read`` accepts a ``limit`` parameter; we expose it via
-        ``read(limit=...)`` to keep the wrapper compact.
+        Returns a list of message dicts.
+
+        The bundled client's ``inbox_read`` accepts a ``limit`` parameter
+        that is forwarded to the server as a ``limit=N`` query param.
+        This wrapper exposes the same ``limit`` parameter; pass an
+        ``int`` to cap the response size, or ``None`` (default) to let
+        the server's default apply.
         """
         return _acp_client.inbox_read(
             session_id=session_id,
             since_id=since_id,
             sender=sender,
             msg_type=msg_type,
+            limit=limit,
         )
 
     # --- ask / answer (blocking) ----------------------------------------
@@ -246,20 +237,26 @@ def _main() -> int:
         help="question_id (for --action answer)",
     )
     p.add_argument("--timeout", type=float, default=30.0)
-    p.add_argument("--base-url", default=None)
+    # --base-url intentionally NOT exposed: routing is via $ACP_BASE_URL
+    # (the bundled client's inbox_* helpers read env directly). The CLI
+    # instead validates the resolved env at ping time so a caller can
+    # fail-fast on a misconfiguration without having to instantiate.
     args = p.parse_args()
 
-    acp = ACPInbox(base_url=args.base_url, default_timeout=args.timeout)
+    acp = ACPInbox(default_timeout=args.timeout)
 
     if args.action == "ping":
-        # No server round-trip; just confirm the client imports and the
-        # loopback guard would accept our base_url.
+        # Resolve the same env-var chain the bundled client uses, and
+        # validate it through the loopback guard. Non-loopback env
+        # values are an instant FAIL (no HTTP round-trip).
         try:
-            _acp_client._check_loopback(acp.base_url)
+            import os as _os
+            base = (_os.environ.get("ACP_BASE_URL") or _acp_client.DEFAULT_BASE_URL).rstrip("/")
+            _acp_client._check_loopback(base)
         except _acp_client.ACPError as e:
-            print(f"FAIL: base_url refused by loopback guard: {e}", file=sys.stderr)
+            print(f"FAIL: ACP_BASE_URL={base!r} refused by loopback guard: {e}", file=sys.stderr)
             return 1
-        print(f"OK -- base_url {acp.base_url} accepted by loopback guard")
+        print(f"OK -- ACP_BASE_URL {base} accepted by loopback guard")
         return 0
 
     if args.action == "read":

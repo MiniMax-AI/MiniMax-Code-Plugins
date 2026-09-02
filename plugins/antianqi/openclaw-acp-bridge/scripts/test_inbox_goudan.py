@@ -21,19 +21,23 @@ asked for "one request path that the Skills and the smoke test both
 exercise", which is structural here: the wrapper imports the bundled
 client, it does not reimplement HTTP.
 
-Checks (24 in total, 11 static, 13 live):
+Checks (26 in total, 13 static, 13 live):
   1.  ``acp_inbox.py`` parses and imports cleanly.
   2.  ``acp_inbox`` exposes the public surface (``ACPInbox``,
-      ``ACPInboxError``, ``ACPError``, ``ACPTokenMissing``, ``sessions``,
-      ``write``, ``read``, ``ask``, ``answer``, ``greet``).
+      ``ACPInboxError``, ``ACPError``, ``ACPTokenMissing``).
   3.  ``ACPInbox`` defaults ``sender`` to ``"goudan"`` (the wrapper must
       not let a goudan-side caller accidentally post as ``"mavis"``).
-  4.  ``ACPInbox`` defaults ``base_url`` to ``_acp_client.DEFAULT_BASE_URL``.
-  5.  ``ACPInbox(base_url="http://1.2.3.4")`` is rejected by the inherited
-      ``_check_loopback`` guard on the first write.
-  6.  ``ACPInbox(base_url="http://localhost:9999")`` is rejected (round-5
-      amendment: literal-IP allow-list only).
-  7.  ``ACPInbox(base_url="http://[::1]:9999")`` is accepted.
+  4.  ``ACPInbox.__init__`` public surface is exactly
+      ``(default_timeout)`` (round-7 amend: per-instance ``base_url``
+      was removed because the bundled client's ``inbox_*`` helpers
+      read ``$ACP_BASE_URL`` and a constructor parameter would be
+      silently ignored).
+  5.  Loopback guard: ``_acp_client._check_loopback`` refuses
+      non-loopback URLs (delegated; the wrapper no longer
+      constructs a URL itself).
+  6.  ``localhost`` is refused by the inherited guard
+      (round-5 amendment: literal-IP allow-list only).
+  7.  IPv6 loopback ``[::1]`` is accepted by the inherited guard.
   8.  No-redirect opener is shared: ``_acp_client._OPENER`` registers
       ``_NoRedirectHandler`` and has no default ``HTTPRedirectHandler``.
   9.  Token resolution: unset token → ``ACPTokenMissing`` (mavis-side
@@ -45,6 +49,8 @@ Checks (24 in total, 11 static, 13 live):
   12. Stub-backed: write with token returns 200 + ``message_id``.
   13. Stub-backed: read with token returns the list with the written
       message present.
+  13b. ``read(limit=N)`` forwards the limit kwarg to
+       ``_acp_client.inbox_read`` (round-7 amend).
   14. Stub-backed: write with no Authorization → 401.
   15. Stub-backed: write with wrong Authorization → 401.
   16. Stub-backed: write with token ``goudan``, read filters
@@ -187,35 +193,52 @@ def main() -> int:
     except Exception as e:
         record_fail(f"sender default inspection failed: {e}")
 
-    # --- 4. Default base_url --------------------------------------------
-    print("\n[Check 4] ACPInbox defaults base_url to _acp_client.DEFAULT_BASE_URL")
+    # --- 4. Constructor surface is exactly (default_timeout) ------------
+    # Round-7 amend (hetaoBackend, 2026-09-02T01:08:36Z on #30):
+    # `ACPInbox(base_url=...)` is removed from the public contract. The
+    # routing is via `$ACP_BASE_URL` (read by the bundled client's
+    # inbox_* helpers); a per-instance `base_url` would be silently
+    # ignored. This check pins the constructor's public surface.
+    print("\n[Check 4] ACPInbox() constructor takes only (default_timeout)")
     try:
-        acp = acp_inbox.ACPInbox()
-        check(acp.base_url == _acp_client.DEFAULT_BASE_URL,
-              f"ACPInbox().base_url = {acp.base_url!r} (want "
-              f"{_acp_client.DEFAULT_BASE_URL!r})")
+        import inspect as _inspect
+        sig = _inspect.signature(acp_inbox.ACPInbox.__init__)
+        params = list(sig.parameters)
+        # `self` is the first parameter on bound methods; skip it.
+        if params and params[0] == 'self':
+            params = params[1:]
+        check(params == ['default_timeout'],
+              f"ACPInbox.__init__ params: {params} (want exactly ['default_timeout']); "
+              f"per-instance base_url was removed in round-7 (R7) because the "
+              f"bundled client's inbox_* helpers read $ACP_BASE_URL, so a "
+              f"constructor base_url was silently ignored.")
     except Exception as e:
-        record_fail(f"default base_url check failed: {e}")
+        record_fail(f"constructor surface check failed: {e}")
 
-    # --- 5. Loopback guard at construction time ------------------------
-    # The wrapper validates `base_url` against the inherited
-    # _check_loopback in __init__. A non-loopback URL raises ACPError
-    # immediately, before any HTTP call.
-    print("\n[Check 5] ACPInbox(base_url=non-loopback) raises ACPError at construction")
+    # --- 5. Loopback guard at the env-var level ------------------------
+    # Round-7: the loopback guard is the bundled client's
+    # `_check_loopback`, called by the bundled client's `inbox_*` and
+    # `health` helpers. The wrapper exposes it for fail-fast use:
+    # callers can `_acp_client._check_loopback($ACP_BASE_URL)` to
+    # reject a misconfigured env var before any HTTP call. The
+    # loopback allow-list is exactly `{127.0.0.1, ::1, [::1]}`; the
+    # round-5 amendment removed `localhost` so DNS hijack is a
+    # non-attack.
+    print("\n[Check 5] Loopback guard refuses non-loopback (delegated to _acp_client._check_loopback)")
     try:
-        acp_inbox.ACPInbox(base_url="http://1.2.3.4:9999")
+        _acp_client._check_loopback("http://1.2.3.4:9999")
         record_fail(
-            "ACPInbox(base_url='http://1.2.3.4:9999') did not raise; "
-            "loopback guard is not on the construction path"
+            "non-loopback URL accepted by _check_loopback; "
+            "round-5 amendment regressed"
         )
     except _acp_client.ACPError as e:
         check(e.status == 0,
-              f"non-loopback construction raised ACPError status=0, got "
+              f"non-loopback raised ACPError status=0, got "
               f"status={e.status}: {e}")
     except Exception as e:
         record_fail(
-            f"non-loopback construction raised the wrong type "
-            f"({type(e).__name__}); loopback guard is not on the path"
+            f"non-loopback raised the wrong type "
+            f"({type(e).__name__})"
         )
 
     # --- 6. 'localhost' refused (round-5 amendment) --------------------
@@ -301,7 +324,11 @@ def main() -> int:
     # --- 12. Stub-backed: write returns 200 + message_id ----------------
     print("\n[Check 12] Stub-backed write with token returns message_id")
     if live:
-        acp = acp_inbox.ACPInbox(base_url=base_url)
+        # Constructor takes (default_timeout) only; routing is via
+        # $ACP_BASE_URL. The test's `base_url` local variable here is
+        # passed to the stub listener at startup; the wrapper itself
+        # reads the same env var.
+        acp = acp_inbox.ACPInbox()
         try:
             session = f"plugin-inbox-goudan-{os.getpid()}"
             msg_id = acp.write(session, "smoke from test_inbox_goudan",
@@ -328,6 +355,41 @@ def main() -> int:
             record_fail(f"ACPInbox.read failed: {type(e).__name__}: {e}")
     else:
         record_skip("stub-backed read (stub unreachable / SMOKE_SKIP_LIVE)")
+
+    # --- 13b. read(limit=N) forwards the limit to the bundled client -----
+    # Round-7 (hetaoBackend, 2026-09-02T01:08:36Z on #30): the wrapper
+    # documented `read(limit=...)` but had no `limit` parameter and
+    # never forwarded one, even though `_acp_client.inbox_read`
+    # supports it. This check mocks the bundled client and asserts
+    # that the wrapper actually forwards the kwarg.
+    print("\n[Check 13b] ACPInbox.read(limit=N) forwards the limit kwarg to _acp_client.inbox_read")
+    called: list = []
+    def _fake_read_limit(*args, **kwargs):
+        called.append((args, kwargs))
+        return [{"id": 1, "sender": "goudan", "content": "x"}]
+    saved_read_limit = _acp_client.inbox_read
+    _acp_client.inbox_read = _fake_read_limit  # type: ignore
+    try:
+        acp_lim = acp_inbox.ACPInbox()
+        result = acp_lim.read("test", limit=42)
+        check(len(called) == 1, f"inbox_read was called once (got {len(called)})")
+        check(called[0][1].get("limit") == 42,
+              f"inbox_read was called with limit=42 (got {called[0][1].get('limit')!r})")
+        check(called[0][1].get("session_id") == "test",
+              f"inbox_read was called with session_id='test' (got {called[0][1].get('session_id')!r})")
+        check(isinstance(result, list) and len(result) == 1,
+              "read(limit=42) returned the mocked list")
+        # Negative-injection: limit=None must NOT be passed to
+        # inbox_read as `limit=None` -- the underlying call should
+        # be made without the kwarg at all (or with `limit=None`
+        # is acceptable since the bundled client already filters
+        # `if limit is not None`). We accept either: pass-None
+        # behaves the same as not-passing.
+        called.clear()
+        acp_lim.read("test")
+        check(len(called) == 1, f"inbox_read was called once (got {len(called)})")
+    finally:
+        _acp_client.inbox_read = saved_read_limit  # type: ignore
 
     # --- 14. Stub-backed: missing Authorization -> 401 ------------------
     print("\n[Check 14] Stub-backed write with NO Authorization returns 401")
@@ -489,28 +551,33 @@ def main() -> int:
     finally:
         _acp_client.inbox_answer = saved_answer  # type: ignore
 
-    # --- 21. CLI: --action ping on loopback base_url -> 0 ---------------
-    print("\n[Check 21] CLI: acp_inbox.py --action ping (loopback) exits 0")
+    # --- 21. CLI: --action ping (loopback env) -> 0 ----------------------
+    # Round-7: the CLI no longer accepts --base-url; routing is via
+    # $ACP_BASE_URL. This check sets a loopback $ACP_BASE_URL in the
+    # subprocess env and asserts rc=0.
+    print("\n[Check 21] CLI: acp_inbox.py --action ping (ACP_BASE_URL=loopback) exits 0")
     try:
+        env = os.environ.copy()
+        env["ACP_BASE_URL"] = "http://127.0.0.1:9999"
         proc = subprocess.run(
             [sys.executable, str(HERE / "acp_inbox.py"),
-             "--session", "cli-test", "--action", "ping",
-             "--base-url", "http://127.0.0.1:9999"],
-            capture_output=True, text=True, timeout=10,
+             "--session", "cli-test", "--action", "ping"],
+            capture_output=True, text=True, timeout=10, env=env,
         )
         check(proc.returncode == 0,
               f"CLI ping loopback rc=0 (got {proc.returncode}, stderr={proc.stderr[:200]!r})")
     except Exception as e:
         record_fail(f"CLI ping loopback failed: {type(e).__name__}: {e}")
 
-    # --- 22. CLI: --action ping on non-loopback base_url -> 1 ------------
-    print("\n[Check 22] CLI: acp_inbox.py --action ping (non-loopback) exits 1")
+    # --- 22. CLI: --action ping (non-loopback env) -> 1 -----------------
+    print("\n[Check 22] CLI: acp_inbox.py --action ping (ACP_BASE_URL=non-loopback) exits 1")
     try:
+        env = os.environ.copy()
+        env["ACP_BASE_URL"] = "http://1.2.3.4:9999"
         proc = subprocess.run(
             [sys.executable, str(HERE / "acp_inbox.py"),
-             "--session", "cli-test", "--action", "ping",
-             "--base-url", "http://1.2.3.4:9999"],
-            capture_output=True, text=True, timeout=10,
+             "--session", "cli-test", "--action", "ping"],
+            capture_output=True, text=True, timeout=10, env=env,
         )
         check(proc.returncode == 1,
               f"CLI ping non-loopback rc=1 (got {proc.returncode})")
@@ -526,8 +593,7 @@ def main() -> int:
             env["ACP_TOKEN"] = token
             proc = subprocess.run(
                 [sys.executable, str(HERE / "acp_inbox.py"),
-                 "--session", session, "--action", "read",
-                 "--base-url", base_url],
+                 "--session", session, "--action", "read"],
                 capture_output=True, text=True, timeout=15, env=env,
             )
             check(proc.returncode == 0,
@@ -546,8 +612,7 @@ def main() -> int:
             env["ACP_TOKEN"] = token
             proc = subprocess.run(
                 [sys.executable, str(HERE / "acp_inbox.py"),
-                 "--session", "session-list", "--action", "sessions",
-                 "--base-url", base_url],
+                 "--session", "session-list", "--action", "sessions"],
                 capture_output=True, text=True, timeout=15, env=env,
             )
             # Stub returns 404 for /acp/inbox/sessions; the wrapper
