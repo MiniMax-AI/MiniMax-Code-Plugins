@@ -652,19 +652,27 @@ test('background-task uses `task(run_in_background: true)` + `task_query` / `tas
   }
 });
 
-// PR #18 round-5 (hetaoBackend, 2026-09-01T01:25:04Z): the plugin.json
-// must declare an enforceable minMcodeVersion. The Skills in this plugin
-// are pinned to the mcode 0.2.4 `task` / `bash` tool surface; a host
-// running mcode < 0.2.4 (e.g. mcode 0.2.0 with `subagent_type=` /
-// `history=` placeholders) must fail this check at smoke time, not
-// silently pass and surface a confusing runtime error. This test
-// fails closed: a missing `requirements` block, a missing
-// `minMcodeVersion` field, or a value < "0.2.4" is a hard FAIL.
-test('R18-2 plugin.json declares `requirements.minMcodeVersion >= "0.2.4"` (fail-closed)', () => {
+// PR #18 round-5 (hetaoBackend, 2026-09-01T01:25:04Z) and round-7
+// (hetaoBackend, 2026-09-02T01:08:26Z): the plugin.json must
+// declare an enforceable minMcodeVersion. PR #18 round-7 added the
+// constraint that the portable Plugin schema
+// (https://agent-plugins.org/schemas/1.0.0/plugin.schema.json) does
+// not have a `requirements` field, so we cannot pin a minMcodeVersion
+// at the manifest level. The contract surface for the version
+// requirement is the `description` field instead. This test
+// fails closed:
+//   - a missing `description`
+//   - a `description` that does not pin a mcode 0.2.4+ surface
+//   - a `description` that mentions a different tool surface than
+//     `task(description, prompt, agent_name, run_in_background?)`
+// any of these is a hard FAIL. A future change that relaxes the
+// pin (e.g. claims "any mcode version" or removes the `agent_name`
+// string) will fail this test.
+test('R18-2 plugin.json description pins mcode >= "0.2.4" and the canonical task surface (fail-closed)', () => {
   const pluginPath = join(REPO_ROOT, 'plugins', 'antianqi', 'codex-harness-patterns', 'plugin.json');
   const text = readFileSync(pluginPath, 'utf8');
-  // Normalize line endings so semver-ish string comparison is not
-  // affected by CRLF artifacts in the JSON file.
+  // Normalize line endings so string comparison is not affected by
+  // CRLF artifacts in the JSON file.
   const textNorm = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
   // Parse the JSON (small file, sync read is fine).
@@ -677,20 +685,39 @@ test('R18-2 plugin.json declares `requirements.minMcodeVersion >= "0.2.4"` (fail
 
   assert.ok(plugin && typeof plugin === 'object',
     'plugin.json must parse to a JSON object');
-  assert.ok(plugin.requirements && typeof plugin.requirements === 'object',
-    'plugin.json must declare a `requirements` object (PR #18 round-5: ' +
-    '`plugin.json declares no enforceable host-version constraint`)');
-  assert.ok(typeof plugin.requirements.minMcodeVersion === 'string'
-              && plugin.requirements.minMcodeVersion.length > 0,
-    'plugin.json `requirements.minMcodeVersion` must be a non-empty string');
-  // String comparison is good enough for a 3-segment semver. If we
-  // ever need richer comparison, replace with semver.compare(); for
-  // the current pinned version ("0.2.4") and future bumps, string
-  // ordering matches numeric ordering because each segment is a
-  // fixed-width 2-3 digit number (0,1,2,...,99).
-  assert.ok(plugin.requirements.minMcodeVersion >= '0.2.4',
-    `plugin.json \`requirements.minMcodeVersion\` must be >= "0.2.4" ` +
-    `(got "${plugin.requirements.minMcodeVersion}"). Earlier mcode ` +
-    `versions (e.g. 0.2.0) used \`subagent_type=\` / \`history=\` ` +
-    `placeholders that the Skills in this plugin no longer use.`);
+
+  // The portable Plugin schema (v1.0.0) does not have a `requirements`
+  // field. Pinned: a host version constraint must be expressed in
+  // the existing `description` field. Any `requirements` field is a
+  // hard FAIL because the validator (`node scripts/validate.mjs`)
+  // rejects unknown fields.
+  assert.ok(!('requirements' in plugin),
+    'plugin.json must NOT declare a `requirements` field; the portable ' +
+    'Plugin schema (v1.0.0) rejects unknown top-level fields, so a ' +
+    '`requirements` block makes the Plugin unloadable. Pin the host ' +
+    'version in the `description` field instead.');
+
+  // description: a non-empty string that pins a mcode 0.2.4+ surface
+  // and names the canonical `agent_name` parameter (vs the legacy
+  // `subagent_type` placeholder that earlier mcode versions used).
+  assert.ok(typeof plugin.description === 'string' && plugin.description.length > 0,
+    'plugin.json `description` must be a non-empty string');
+  assert.ok(/\bmcode\s*0\.2\.4\b/u.test(plugin.description)
+              || /\bMiniMax Code\s*0\.2\.4\b/u.test(plugin.description)
+              || /\b0\.2\.4\+/u.test(plugin.description),
+    'plugin.json `description` must pin mcode 0.2.4+ (fail-closed; if a ' +
+    'future change relaxes the version pin, this test will fail and ' +
+    'the Plugin can no longer be assumed to be safe to load on the ' +
+    'documented tool surface)');
+  assert.ok(/\bagent_name\s*=/u.test(plugin.description)
+              || /\bagent_name\b/u.test(plugin.description),
+    'plugin.json `description` must mention the canonical mcode 0.2.4 ' +
+    '`agent_name` parameter (vs the legacy `subagent_type` placeholder ' +
+    'used by mcode 0.2.0 and earlier)');
+  // Negative-injection: the description must NOT claim that the
+  // legacy `subagent_type=` placeholder is supported (we removed it).
+  assert.ok(!/\bsubagent_type\s*=/u.test(plugin.description),
+    'plugin.json `description` must NOT advertise `subagent_type=` (the ' +
+    'Skills in this plugin no longer use the legacy placeholder; mcode ' +
+    '0.2.4+ uses canonical `agent_name=`)');
 });
