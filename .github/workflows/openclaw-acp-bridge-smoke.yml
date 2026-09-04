@@ -1,0 +1,80 @@
+name: openclaw-acp-bridge smoke
+
+# Runs the Plugin-bundled smoke test on every push that touches
+# the Plugin and on every PR that does the same.
+#
+# v0.2.0 change: this workflow no longer checks out any external SDK.
+# The HTTP client used by the Skills (`client/_acp_client.py`) is
+# bundled inside the Plugin, so the smoke + no-redirect tests are now
+# the runtime's own tests. There is no `actions/checkout` of
+# `antianqi/openclaw-mcode-acp`, no `SMOKE_SKIP_LIVE=1`, and no
+# `ACP_HOME` to set.
+#
+# A live ACP server is required for the inbox roundtrip check; the
+# workflow stands one up via a pre-flight Python script and tears it
+# down on exit. Health-check failures on an unreachable server are
+# reported as failures (not silently skipped), so a regression on
+# runtime reachability is caught in CI rather than masked.
+
+on:
+  push:
+    paths:
+      - 'plugins/antianqi/openclaw-acp-bridge/**'
+      - '.github/workflows/openclaw-acp-bridge-smoke.yml'
+  pull_request:
+    paths:
+      - 'plugins/antianqi/openclaw-acp-bridge/**'
+      - '.github/workflows/openclaw-acp-bridge-smoke.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b18 # v7.0.1
+
+      - uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d # v5.3.0
+        with:
+          python-version: '3.11'
+
+      - name: Run bundled no-redirect regression test
+        # Runs without a live server: stands up its own loopback
+        # redirector + capture pair and asserts the bundled client
+        # refuses 3xx. This is the property the v0.1.3 review asked for.
+        run: |
+          set -euo pipefail
+          python plugins/antianqi/openclaw-acp-bridge/scripts/test_no_redirect.py
+
+      - name: Run bundled smoke test
+        # Starts a stub ACP server (subclass of BaseHTTPRequestHandler)
+        # and runs the smoke test against it. The stub implements
+        # /acp/health, /acp/inbox/write, /acp/inbox/read with
+        # reproducible JSON, and a /acp/inbox/redirect path that
+        # returns 302 to make sure the bundled client refuses it.
+        #
+        # v0.2.1 change: the stub is now started with --token so its
+        # `_check_auth` actually rejects missing / wrong Authorization
+        # headers. The previous workflow started the stub without
+        # --token; `_check_auth` then took the "auth disabled" branch
+        # and the smoke roundtrip never proved the server enforces
+        # auth. The negative tests added in v0.2.1 (Check 8 missing
+        # auth, Check 9 wrong auth) require the stub to be in the
+        # "auth required" state.
+        env:
+          ACP_TOKEN: 'ci-test-token-xyzzy'
+          ACP_BASE_URL: 'http://127.0.0.1:19999'
+        run: |
+          set -euo pipefail
+          python plugins/antianqi/openclaw-acp-bridge/scripts/stub_server.py \
+            --token "$ACP_TOKEN" &
+          STUB_PID=$!
+          trap "kill $STUB_PID 2>/dev/null || true" EXIT
+          sleep 0.5
+          python plugins/antianqi/openclaw-acp-bridge/scripts/smoke.py
+
+      - name: Validate plugin manifest
+        run: |
+          set -euo pipefail
+          node scripts/validate.mjs

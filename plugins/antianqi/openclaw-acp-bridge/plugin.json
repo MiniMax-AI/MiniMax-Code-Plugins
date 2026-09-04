@@ -1,0 +1,14 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "openclaw-acp-bridge",
+  "version": "0.2.0",
+  "description": "Bridge MiniMax Code to OpenClaw-mcode-ACP for true peer-to-peer collaboration. Use the inbox protocol to read messages, push progress, ask blocking questions, and answer peer questions, instead of one-shot master/slave task calls.",
+  "author": {
+    "name": "安天齐 (antianqi)",
+    "url": "https://github.com/antianqi"
+  },
+  "homepage": "https://github.com/antianqi/openclaw-mcode-acp",
+  "repository": "https://github.com/antianqi/openclaw-mcode-acp.git",
+  "license": "Apache-2.0",
+  "keywords": ["mcode", "openclaw", "acp", "peer-collaboration", "inbox", "agent-protocol"]
+}
