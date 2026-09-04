@@ -23,6 +23,73 @@ There is no visible progress signal. The agent may also be paused on a
 permission prompt or have failed silently. `mcode-island` makes all of that
 visible at a glance, without forcing the user to switch back.
 
+## How the pill is driven
+
+`mcode-island` v0.3.0 supports two modes. The widget behaves the same in
+both — what changes is who decides the state.
+
+### Mode A — Hook-driven (mcode 0.2.4+ with `io.minimax.mcode`)
+
+mcode 0.2.4 ships a `io.minimax.mcode` client-extension namespace for
+lifecycle Hooks. When the registry accepts it (companion proposal:
+[`MiniMax-Code-Plugins` PR #20](https://github.com/MiniMax-AI/MiniMax-Code-Plugins/pull/20)),
+the runtime spawns a script from this plugin for every matching event:
+
+| event             | pill state  | script                          | 0.2.4 dispatch |
+| ----------------- | ----------- | ------------------------------- | -------------- |
+| `SessionStart`    | `idle`      | `session-start.ps1`             | yes            |
+| `SessionEnd`      | `idle`      | `session-end.ps1`               | yes            |
+| `UserPromptSubmit`| `thinking`  | `user-prompt-submit.ps1`        | yes            |
+| `PreToolUse`      | `working`   | `pre-tool-use.ps1`              | yes            |
+| `PostToolUse`     | `done`/`error` | `post-tool-use.ps1`          | yes            |
+| `Stop`            | `done`      | `stop.ps1`                      | **forward** — see below |
+| `PreCompact`      | `thinking`  | `pre-compact.ps1`               | **forward** — see below |
+| `Notification`    | `idle`      | `notification.ps1`              | **forward** — see below |
+| `SubagentStart`   | `working` (CODEX only) | `subagent-start.ps1` | **forward** — see below |
+| `SubagentStop`    | `done` (CODEX only)    | `subagent-stop.ps1`  | **forward** — see below |
+| `PermissionRequest`| `waiting`  | `permission-request.ps1`        | **forward** — see below |
+| `PermissionDenied`| `error`     | `permission-denied.ps1`         | **forward** — see below |
+
+**Forward events (7 of 12):** the spec reserves these in
+`proposals/hooks-detailed-spec.md` and this plugin ships a script for
+each, but the mcode 0.2.4 runtime allowlist (`Wso` set in
+`@minimax-ai/code@0.2.4`) does not yet dispatch them. The 0.2.4
+runtime treats unknown event names as no-op. Once a future mcode
+release adds the dispatch, the same `.ps1` files start firing without
+any code change here. The smoke test
+(`scripts/smoke.mjs`) tags these as `WARN` rather than `FAIL` for that
+reason — the **plugin is correct, the runtime is not yet ready**.
+
+If you need any of these events on 0.2.4 today, the supported fallback
+is to call `notify-island.ps1` from the agent (Mode B) at the moment
+you would otherwise rely on the event firing. The wrapper
+`wrap-tool.ps1` covers the `Bash` path automatically.
+
+The agent does not need to remember to push state — the runtime fires the
+right script at the right time. `PermissionRequest` is the only
+decision-bearing event here; the script returns `{"decision":"ask"}` so the
+plugin remains a pure observer (it does not auto-allow or auto-deny).
+The runtime's fail-closed default is bypassed only because the script
+opts the Hook into the "ask the user" path, so the TUI prompt still
+appears and the user can approve or deny. The widget just shows
+`waiting` so the user knows to act.
+
+> **Drift lock**: `scripts/smoke.mjs` reads `permission-request.ps1`
+> directly and asserts the `decision` field is exactly `ask`. A
+> future change that flips the value back to `allow` or `deny` will
+> fail the smoke before the PR can be submitted.
+
+Until the registry validator accepts the namespace, the `io.minimax.mcode/`
+directory is dormant and the plugin falls through to Mode B.
+
+### Mode B — Agent-pushed (legacy, always works)
+
+The agent (or a thin wrapper) calls `notify-island.ps1` with `-State` and
+optional `-Message`. A separate `mcode-status-detect.ps1` polls the runtime's
+`ledger.jsonl` / `messages.jsonl` and infers state as a fallback so the
+pill still moves even when the agent forgets to push. See
+[`SKILL.md`](skills/mcode-island/SKILL.md) for the agent-side call patterns.
+
 ## Copyable example
 
 ### One-line install and run
@@ -118,21 +185,39 @@ alternative:
 
 ```
 mcode-island/
-├── plugin.json                    # plugin manifest (official 1.0 schema)
-├── README.md                      # this file
-├── LICENSE                        # Apache-2.0
-├── mcode-island.ps1               # WPF widget main loop
-├── mcode-island.cmd               # CLI shim: start/stop/status/show/pin/...
-├── start-island.ps1               # launcher (forces STA + hidden console)
-├── stop-island.ps1                # stop the widget
-├── status-island.ps1              # print widget PID + recent log
-├── show-island.ps1                # re-raise hidden widget
-├── pin-island.ps1                 # lock click-to-focus target
-├── autostart.ps1                  # register / unregister Windows logon
-├── notify-island.ps1              # state-push helper (agents call this)
-├── wrap-tool.ps1                  # all-in-one bash wrapper
-├── skills/mcode-island/SKILL.md   # Skill consumed by the agent
-└── assets/                        # screenshots embedded above
+├── plugin.json                       # plugin manifest (official 1.0 schema)
+├── README.md                         # this file
+├── LICENSE                           # Apache-2.0
+├── mcode-island.ps1                  # WPF widget main loop
+├── mcode-island.cmd                  # CLI shim: start/stop/status/show/pin/...
+├── start-island.ps1                  # launcher (forces STA + hidden console)
+├── stop-island.ps1                   # stop the widget
+├── status-island.ps1                 # print widget PID + recent log
+├── show-island.ps1                   # re-raise hidden widget
+├── pin-island.ps1                    # lock click-to-focus target
+├── autostart.ps1                     # register / unregister Windows logon
+├── notify-island.ps1                 # state-push helper (Mode B)
+├── wrap-tool.ps1                     # all-in-one bash wrapper
+├── mcode-status-detect.ps1           # runtime-state detector (Mode B fallback)
+├── io.minimax.mcode/                 # Mode A: client-extension Hooks
+│   └── hooks/
+│       ├── hooks.json                # 12-event declaration
+│       └── scripts/                  # one .ps1 per event
+│           ├── _lib.ps1
+│           ├── session-start.ps1
+│           ├── session-end.ps1
+│           ├── user-prompt-submit.ps1
+│           ├── pre-tool-use.ps1
+│           ├── post-tool-use.ps1
+│           ├── stop.ps1
+│           ├── pre-compact.ps1
+│           ├── notification.ps1
+│           ├── subagent-start.ps1
+│           ├── subagent-stop.ps1
+│           ├── permission-request.ps1
+│           └── permission-denied.ps1
+├── skills/mcode-island/SKILL.md      # Skill consumed by the agent
+└── assets/                           # screenshots embedded above
 ```
 
 The whole package is a single portable directory. No installer, no native
@@ -145,10 +230,11 @@ binary, no symlink, no `node_modules`.
 | Windows           | 10 1809+ or 11 (uses WPF, `user32` `kernel32`)        |
 | PowerShell        | 5.1 (ships with Windows 10/11) or PowerShell 7        |
 | .NET WPF runtime  | 4.x (ships with Windows 10/11)                        |
+| mcode             | any version (Mode B works everywhere); 0.2.4+ activates Mode A |
 | execution policy  | `Bypass` for this directory; not changed globally    |
-| network access    | **none** — widget does not make any network request  |
-| accounts          | **none**                                              |
-| paid services     | **none**                                              |
+| network access    | **optional** — see "Network access" below. The widget itself is offline. `mcode-status-detect.ps1` only contacts `https://api.minimax.io/v1/coding_plan/remains` when a token is configured (see "Accounts" + "Data use"). |
+| accounts          | **optional** — see "Accounts" below. No account is required to run the widget; a token is only needed if you want the optional 5-hour usage readout in the pill. |
+| paid services     | **none added by this plugin** — the 5h usage endpoint is part of the user's existing MiniMax account, not a separate service |
 
 ## Data use
 
@@ -157,13 +243,59 @@ binary, no symlink, no `node_modules`.
 | `status.json`    | `%APPDATA%\mcode-island\`             | rewritten every transition | widget polling                       |
 | `caller.json`    | `%APPDATA%\mcode-island\`             | rewritten every transition | click-to-focus target HWND           |
 | `config.json`    | `%APPDATA%\mcode-island\`             | rewritten on drag         | pill position, size, opacity         |
+| `config.json` -> `planApiToken` | `%APPDATA%\mcode-island\` | until `-Clear` or manual edit | 5h usage API token (opt-in; see "Accounts") |
 | `widget.pid`     | `%APPDATA%\mcode-island\`             | rewritten on start        | widget process PID                   |
 | `island.log`     | `%APPDATA%\mcode-island\`             | append-only, never pruned  | state transition history             |
 | `widget.log`     | `%APPDATA%\mcode-island\`             | append-only, never pruned  | widget internal debug                |
 | `show.signal`    | `%APPDATA%\mcode-island\`             | transient                 | "raise hidden window" signal        |
 | `HKCU\...\Run`   | Windows registry                      | until disabled            | logon auto-start                     |
 
-**No data leaves the local machine. No telemetry. No network requests.**
+**Telemetry: none.** **No data is sent off-machine unless the optional
+`planApiToken` is configured (see "Network access" below).** The widget
+itself is offline and never reads or writes anything outside `%APPDATA%\mcode-island\`.
+
+## Network access
+
+The widget is fully offline. The only network caller in this plugin is
+`mcode-status-detect.ps1` (Mode B detector), and it only makes a request
+when ALL of the following are true:
+
+1. A token is configured (env `MINIMAX_OAUTH_TOKEN` or `MINIMAX_API_KEY`,
+   or `set-token.ps1 <token>` which writes to `config.json:planApiToken`).
+2. The detector is running (`mcode-island detect-on`, the default).
+3. At least 60 seconds have elapsed since the last call (rate-limited).
+
+When all three are true, the detector makes **one** GET to:
+
+- `https://api.minimax.io/v1/coding_plan/remains` (HTTPS, no credentials in
+  the URL, no fragment, body is a small JSON object)
+
+The response is parsed and only two numbers are written to
+`status.json`: `usage5h` (0..100, percent remaining) and `usage5hResetMs`
+(milliseconds until the next refresh). Nothing else is persisted and
+nothing is sent back to the plugin author. A failure or timeout is
+swallowed silently — the pill still works without the readout.
+
+Without a token, the detector skips this call entirely and the pill's
+`usage5h` field is `null`.
+
+## Accounts
+
+No account is required to install or use the widget. The token mechanism
+exists so users who already have a MiniMax account can opt in to showing
+the 5-hour usage readout in the pill.
+
+| token type        | how it enters the plugin                                | where it is stored                                | how it is removed                            |
+| ----------------- | -------------------------------------------------------- | -------------------------------------------------- | -------------------------------------------- |
+| `MINIMAX_OAUTH_TOKEN` (env) | set by the user in their shell or mcode config | process env (not on disk)                          | unset env / close shell                      |
+| `MINIMAX_API_KEY` (env)     | same as above                                          | process env                                       | same as above                                |
+| `config.json:planApiToken`   | `set-token.ps1 <token>`                                | `%APPDATA%\mcode-island\config.json` (plaintext)  | `set-token.ps1 -Clear` or edit the file      |
+
+The token is **never logged, never written to any other file, and never
+sent to a host other than `api.minimax.io`**. `set-token.ps1` only writes
+to `config.json`; it makes no network call. The detector only reads the
+token to attach as an `Authorization: Bearer ...` header on the single
+GET documented above.
 
 ## CLI reference
 
@@ -222,12 +354,18 @@ a live MiniMax Code session. Empirical evidence (captured during development):
 - Windows only. The widget uses WPF, `user32`, and `kernel32` P/Invoke.
 - One widget per user session.
 - `wrap-tool.ps1` only wraps `bash`. Other tools need direct
-  `notify-island.ps1` calls.
+  `notify-island.ps1` calls. (In Mode A, all tools fire `PreToolUse` /
+  `PostToolUse` automatically — no manual push needed.)
 - The widget does not show a progress percentage, token usage, or per-tool
   output. v0.2 will.
 - File-system polling at 400 ms is not the most efficient design (FileSystemWatcher
   was unstable inside WPF in our tests), but it is robust against any kind of
   writer and never misses an event.
+- Mode A (Hook-driven) requires the registry validator to accept the
+  `io.minimax.mcode` client-extension namespace. The companion proposal
+  ([`MiniMax-Code-Plugins` PR #20](https://github.com/MiniMax-AI/MiniMax-Code-Plugins/pull/20))
+  is still pending merge; until then, the `io.minimax.mcode/hooks/` directory
+  is dormant and the widget runs in Mode B (agent-pushed + detector).
 
 ## Roadmap
 

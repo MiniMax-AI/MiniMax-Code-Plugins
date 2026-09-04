@@ -51,9 +51,22 @@ if ($ExitCode -lt 0) {
   exit 0
 }
 
-# 跑完了：根据退出码推 done/waiting/error
+# Tool-specific 完成文案。匹配 detector 在 messages.jsonl 里看到的 toolName 形式
+$doneMsg = switch ($Tool) {
+  'bash'     { "$brief 完成" }
+  'read'     { if ($brief) { "read $brief" } else { "read 完成" } }
+  'write'    { if ($brief) { "wrote $brief" } else { "write 完成" } }
+  'edit'     { if ($brief) { "edited $brief" } else { "edit 完成" } }
+  'glob'     { if ($Glob) { "glob $Glob" } elseif ($brief) { "glob $brief" } else { "glob 完成" } }
+  'grep'     { if ($Pattern) { "grep $Pattern" } else { "grep 完成" } }
+  'web'      { 'web 完成' }
+  'task'     { 'task 完成' }
+  'notebook' { 'notebook 完成' }
+  default    { "$Tool 完成" }
+}
+
 if ($ExitCode -eq 0) {
-  & $notify -State done -Message "$Tool 完成" | Out-Null
+  & $notify -State done -Message $doneMsg | Out-Null
   exit 0
 } elseif ($WaitingExitCodes -contains $ExitCode) {
   & $notify -State waiting -Message "$Tool 等待审批 (exit=$ExitCode)" | Out-Null

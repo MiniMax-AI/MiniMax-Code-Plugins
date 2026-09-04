@@ -1,0 +1,24 @@
+# Force LF for all source files in this plugin. PowerShell 5.1 reads
+# CRLF fine, but a cross-platform smoke (e.g. Linux CI) sees LF and
+# the pre-existing CRLF-handling bug in scripts/validate.mjs trips
+# on Windows-checked-out CRLF. LF avoids both failure modes.
+#
+# Override at clone time: `git config core.autocrlf input` for a
+# one-shot pull, or set `[core] autocrlf = false` globally.
+
+*           text=auto eol=lf
+
+*.ps1       text eol=lf
+*.cmd       text eol=lf
+*.mjs       text eol=lf
+*.js        text eol=lf
+*.json      text eol=lf
+*.md        text eol=lf
+*.txt       text eol=lf
+LICENSE     text eol=lf
+README.md   text eol=lf
+
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
