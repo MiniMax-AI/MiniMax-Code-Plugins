@@ -10,6 +10,14 @@ on:
     paths:
       - 'plugins/antianqi/mcode-island/**'
       - '.github/workflows/mcode-island-windows.yml'
+  # Manual dispatch: lets a maintainer / the PR author trigger the
+  # same windows-latest job outside a PR. Used to capture a
+  # github-hosted green check on the fork (the fork-to-upstream PR
+  # itself cannot trigger Actions without explicit maintainer
+  # approval, and first-time-contributor protection is on). Mirrors
+  # what `add-tool-map`'s `tool-map-windows.yml` did in commit
+  # `e777e3c` for PR #5.
+  workflow_dispatch:
 
 # Round-5 review (hetaoBackend, 2026-08-28T08:22:25Z) on commit 38413d9:
 # "The remaining blocker is executable platform evidence. This is a
