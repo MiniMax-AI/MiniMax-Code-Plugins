@@ -671,10 +671,23 @@ function _effectiveShareToken() {
 }
 
 export function getSettingsSnapshot(availableInterfaces = null) {
-  // currentToken is ONLY included when the operator hasn't acknowledged
-  // it yet. After acknowledgment we omit the value to reduce the
-  // window in which it lives in memory + over the wire.
-  const includeToken = !tokenAcknowledged;
+  // v1.0.1 round 8 (CSRF / bootstrap-token-disclosure fix):
+  //   `currentToken` is NO LONGER included in /api/settings responses.
+  //   Pre-fix: the field was conditionally included when the operator
+  //   hadn't acknowledged the token yet — that "first time setup" window
+  //   is exactly what a cross-origin attacker hijacks (hetaoBackend
+  //   report 2026-09-01: malicious page at https://evil.example
+  //   fetch()'s /api/settings over loopback, server returns 200 +
+  //   bootstrap token in the JSON body, attacker now has the token).
+  //   Post-fix: the token is delivered through the OUT-OF-BAND channels
+  //   only — server stdout on first start, and the on-disk
+  //   `~/.mcode-webui/settings.json` file. The webui SPA must read the
+  //   token from the URL `?token=…` (operator types it once into the
+  //   browser address bar) and store it in localStorage. The server
+  //   never echoes the value in HTTP.
+  //   `tokenAcknowledged` is kept for backward-compat with the SPA's
+  //   existing field-references but the value is irrelevant now — the
+  //   server doesn't track "have I sent it" because it never sends.
   // v1.0.1: include the full LAN URL (with token) for the top-bar chip
   // — when the user clicks it, they get a shareable URL that other
   // devices can actually use. Bare `lanUrl` (no token) stays in the
@@ -691,7 +704,10 @@ export function getSettingsSnapshot(availableInterfaces = null) {
     readOnly: readOnlyEnabled,
     tokenEnabled: tokenAuthEnabled,
     tokenAcknowledged: tokenAcknowledged,
-    currentToken: includeToken ? currentToken : "",
+    // round 8: always empty string. Kept in the response shape for
+    // backward-compat (the SPA may still read this field) but the
+    // server never returns a real value. See comment above.
+    currentToken: "",
     tokenRotatedAt: tokenRotatedAt,
     // v2026-08-28 modacker: Token Plan (套餐用量) feature.
     // `quotaEnabled` is the master switch. The Subscription Key is

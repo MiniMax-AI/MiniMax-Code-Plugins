@@ -203,6 +203,15 @@ const I18N = {
     lan_card_token_show: '显示',
     lan_card_token_hide: '隐藏',
     lan_card_token_saved: '已保存 — 查看请点"重置"',
+    // v1.0.1 round 8: the server no longer returns the token over
+    // HTTP. The placeholder text now points the operator to the
+    // out-of-band delivery channels (server stdout + the on-disk
+    // ~/.mcode-webui/settings.json file).
+    lan_card_token_saved_v2: '已保存 — token 在 server stdout 或 ~/.mcode-webui/settings.json',
+    // Toast shown when the server rotates the token (round 8 SSE event).
+    // The new value is NOT pushed over SSE — operator must read it
+    // from stdout/settings.json and re-open the URL.
+    token_rotated_toast: 'Token 已轮换 — 请从 server stdout 或 ~/.mcode-webui/settings.json 读取新 token，然后重新打开 URL（含 ?token=...）',
     lan_card_token_disabled: 'Token 鉴权已关闭',
     lan_card_token_copy: '复制',
     lan_card_token_copied: '已复制到剪贴板',
@@ -397,6 +406,9 @@ const I18N = {
     lan_card_token_show: 'Show',
     lan_card_token_hide: 'Hide',
     lan_card_token_saved: 'Saved — click "Reset" to view again',
+    // v1.0.1 round 8 (mirror of zh-CN key above)
+    lan_card_token_saved_v2: 'Saved — token lives in server stdout or ~/.mcode-webui/settings.json',
+    token_rotated_toast: 'Token rotated — read the new value from server stdout or ~/.mcode-webui/settings.json, then re-open the URL with ?token=...',
     lan_card_token_disabled: 'Token auth disabled',
     lan_card_token_copy: 'Copy',
     lan_card_token_copied: 'Copied to clipboard',

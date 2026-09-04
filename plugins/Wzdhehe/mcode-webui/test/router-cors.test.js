@@ -44,11 +44,29 @@ describe("router — CORS headers (v1.0.1)", () => {
     );
   });
 
-  test("L279: Allow-Origin remains wildcard", () => {
-    assert.match(
+  // v1.0.1 round 8: Allow-Origin NO LONGER hard-codes `*`. The blanket
+  // wildcard allowed any cross-origin page (e.g. https://evil.example)
+  // to read responses — which was the bootstrap-token leak vector
+  // (hetaoBackend report 2026-09-01). New behavior is per-origin with
+  // an env-var allowlist (see setCorsHeaders in router.js).
+  test("round 8: source MUST NOT contain Access-Control-Allow-Origin: '*' (would let any cross-origin reader in)", () => {
+    assert.doesNotMatch(
       routerSource,
       /Access-Control-Allow-Origin['"]\s*,\s*['"]\*/,
-      "router.js should keep Allow-Origin: * (LAN deployment, no credentials)"
+      "router.js must not set Access-Control-Allow-Origin: * — that allows ANY cross-origin reader (CSRF / bootstrap-token leak)"
+    );
+  });
+
+  test("round 8: setCorsHeaders helper exists and uses MCODE_WEBUI_ALLOWED_ORIGINS env for the allowlist", () => {
+    assert.match(
+      routerSource,
+      /function\s+setCorsHeaders\s*\(/,
+      "router.js should define a setCorsHeaders helper for the per-origin CORS logic"
+    );
+    assert.match(
+      routerSource,
+      /MCODE_WEBUI_ALLOWED_ORIGINS/,
+      "router.js should read MCODE_WEBUI_ALLOWED_ORIGINS env for the cross-origin allowlist"
     );
   });
 

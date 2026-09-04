@@ -600,3 +600,79 @@ describe("v2026-08-28 modacker (A+C): external key source 优先级 + SSE 字段
     assert.equal(p.quotaEnabled, false);
   });
 });
+
+// =====================================================================
+// v1.0.1 round 8 (CSRF / bootstrap-token-disclosure fix) — currentToken
+// must NEVER appear in any SSE state push or in the broadcastTokenRotated
+// event. Pre-fix these payloads carried the raw token, which was
+// readable cross-origin (a malicious page subscribed to /api/events
+// over loopback and read the token from the SSE stream). Round 8
+// removes the token from every state-bus code path; the only delivery
+// channels are server stdout + ~/.mcode-webui/settings.json.
+// =====================================================================
+
+import { setCurrentToken } from "./_setup.js";
+
+describe("state-bus — currentToken removal (round 8)", () => {
+  function snapshotOf(cid) {
+    return JSON.parse(sseByCid.get(cid).writes[0].slice(6));
+  }
+  test("pushStateFor per-cid: currentToken field is the empty string (not the real token)", async () => {
+    // Arrange: a known token + a single SSE client
+    setCurrentToken("deadbeefcafef00dbaadf00dcafebabe12345678");
+    const cid = "round8-cid";
+    clients.set(cid, makeClientState());
+    sseByCid.set(cid, fakeSse());
+
+    // Act
+    pushStateFor(cid);
+    const p = snapshotOf(cid);
+
+    // Assert: field is present (for back-compat with the SPA shape)
+    // but the value is the empty string — the real token is NOT in
+    // the SSE payload.
+    assert.ok("currentToken" in p, "currentToken field should still exist (back-compat) but with empty value");
+    assert.equal(p.currentToken, "",
+      `SSE state push must not include the token (got ${JSON.stringify(p.currentToken)})`);
+  });
+
+  test("pushStateFor __broadcast__: every connected client gets empty currentToken", async () => {
+    setCurrentToken("aabbccddeeff00112233445566778899aabbccdd");
+    const cidA = "round8-broadcast-A";
+    const cidB = "round8-broadcast-B";
+    clients.set(cidA, makeClientState());
+    clients.set(cidB, makeClientState());
+    sseByCid.set(cidA, fakeSse());
+    sseByCid.set(cidB, fakeSse());
+
+    pushStateFor("__broadcast__");
+
+    assert.equal(snapshotOf(cidA).currentToken, "");
+    assert.equal(snapshotOf(cidB).currentToken, "");
+  });
+
+  test("broadcastTokenRotated payload does NOT contain the new token", async () => {
+    const { broadcastTokenRotated } = await import(absPath("lib/state-bus.js"));
+    const cid = "round8-broadcast-rotated";
+    const sse = fakeSse();
+    clients.set(cid, makeClientState());
+    sseByCid.set(cid, sse);
+
+    // Pretend we just rotated. The new token value is sensitive —
+    // even passing it to broadcastTokenRotated should not put it on
+    // the wire (round 8 made the parameter effectively unused).
+    broadcastTokenRotated("supersecrettokenvalue_should_not_leak");
+
+    const writes = sse.writes.join("\n");
+    assert.ok(
+      !writes.includes("supersecrettokenvalue_should_not_leak"),
+      `SSE event payload must not contain the new token (writes: ${JSON.stringify(writes)})`
+    );
+    // Confirm the named event is still fired (clients listen for it)
+    assert.ok(writes.includes("event: auth.token_rotated"),
+      "broadcastTokenRotated should still emit the auth.token_rotated event name");
+    // The data field is JSON {rotated, at} (not the raw token)
+    assert.ok(writes.includes('"rotated":true'),
+      `payload should be JSON {rotated:true, at:…} (got ${JSON.stringify(writes)})`);
+  });
+});

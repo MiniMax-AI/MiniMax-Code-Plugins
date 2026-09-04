@@ -132,14 +132,39 @@ export function connect() {
   es = new EventSource(url)
 
   // v1.0.1: named event "auth.token_rotated" — server pushes this when
-  // an operator triggers a token rotation. The body is plain text
-  // (the new token) — we use it to update localStorage + live HEADERS.
+  // an operator triggers a token rotation.
+  //
+  // v1.0.1 round 8 (CSRF / bootstrap-token-disclosure fix): the event
+  // body is NO LONGER the new token (raw string). The server now sends
+  // a JSON object `{rotated: true, at: <ms>}` — a signal, not a value.
+  // The new value is delivered out-of-band: printed to server stdout and
+  // persisted to ~/.mcode-webui/settings.json. The operator must:
+  //   1. Read the new token from stdout / settings.json
+  //   2. Re-open this URL with `?token=<new-value>` appended
+  //   3. The new tab's loadToken() picks up the value from the URL
+  // In the meantime, this tab is "stranded" with the OLD token — we
+  // clear HEADERS so the next request gets 401, which is the right
+  // signal to the user that they need to re-open.
   es.addEventListener('auth.token_rotated', (ev) => {
     try {
-      const newToken = (ev.data || '').trim()
-      if (!newToken) return
-      setToken(newToken)
-      console.log('[webui] token rotated (SSE); updated HEADERS + localStorage')
+      // The body is JSON `{rotated: true, at: <ms>}`. We don't trust
+      // any token-shaped string in the payload — round 8 made sure
+      // it never carries one. Just clear local state so the next
+      // request hits 401 and the user is prompted to re-open.
+      let _payload = null
+      try { _payload = JSON.parse(ev.data || '{}') } catch { _payload = null }
+      if (!_payload || _payload.rotated !== true) return
+      setToken('') // clears HEADERS.Authorization + localStorage
+      // Dispatch a DOM event so the UI layer can show a toast.
+      // (We don't import render.js here to keep this module side-effect
+      // free; the render layer listens for this event and updates the
+      // user-visible state.)
+      try {
+        window.dispatchEvent(new CustomEvent('webui:token_rotated', {
+          detail: { at: _payload.at || Date.now() }
+        }))
+      } catch {}
+      console.log('[webui] token rotated (SSE); HEADERS + localStorage cleared. Read new value from stdout or ~/.mcode-webui/settings.json and re-open URL with ?token=...')
     } catch (e) { console.error('[webui] token rotation handler failed', e) }
   })
 

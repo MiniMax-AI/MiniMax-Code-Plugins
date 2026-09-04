@@ -72,7 +72,16 @@ export async function handlePostSettings(req, res, ctx) {
     changed = true;
   }
 
-  // resetToken — generate a new token, broadcast SSE, return the new value
+  // resetToken — generate a new token, broadcast SSE notification, do
+  // NOT return the new value in the HTTP body. Pre-fix: the response
+  // included `currentToken: newToken` so the operator's browser could
+  // auto-update its localStorage. Post-fix (round 8): the new value
+  // is delivered out-of-band — printed to server stdout + written to
+  // ~/.mcode-webui/settings.json. The operator reads it from one of
+  // those locations and re-opens the webui URL with the new token.
+  // This is the deliberate UX trade-off for closing the cross-origin
+  // bootstrap-token leak (hetaoBackend 2026-09-01): the auto-update
+  // path is gone, replaced by an explicit re-open step.
   if (payload.resetToken === true) {
     let newToken;
     try {
@@ -83,27 +92,27 @@ export async function handlePostSettings(req, res, ctx) {
       res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
       return res.end(JSON.stringify({ ok: false, error: e.message }));
     }
-    // Broadcast the new token to all currently-connected SSE clients.
-    // We push BOTH the dedicated auth.token_rotated event (so clients
-    // can update their HEADERS + localStorage immediately, before the
-    // state push arrives) AND the full state push (which includes
-    // currentToken + tokenRotatedAt in the JSON body). The auth
-    // module's expectedToken is updated synchronously by rotateToken()
-    // → syncAuthToken(), so any new requests will use the new value
-    // immediately.
+    // Broadcast a notification (no token payload — see state-bus.js
+    // round 8 changes). Connected clients use it as a signal to
+    // clear localStorage + show "token rotated, please reload" toast.
+    // The auth module's expectedToken is updated synchronously by
+    // rotateToken() → syncAuthToken(), so any new requests will use
+    // the new value immediately (a request with the OLD token gets
+    // 401, prompting the operator to re-open with the new token).
     try { broadcastTokenRotated(newToken); } catch {}
     try { pushStateFor("__broadcast__"); } catch {}
 
-    // Return immediately with the new token (don't fall through to
-    // the generic snapshot — the client just rotated, give them the
-    // fresh value so their localStorage can sync).
+    // Return immediately. No `currentToken` field — the operator gets
+    // the new value from stdout / settings.json, not from this response.
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     return res.end(JSON.stringify({
       ok: true,
       changed: true,
       tokenRotated: true,
-      currentToken: newToken,
-      tokenAcknowledged: false,
+      // round 8: the new token is NOT in this response. The operator
+      // must re-open the webui URL with the new token (printed to
+      // server stdout on rotation + persisted to settings.json).
+      hint: "token rotated; read the new value from server stdout or ~/.mcode-webui/settings.json",
       tokenRotatedAt: getTokenRotatedAt(),
     }));
   }

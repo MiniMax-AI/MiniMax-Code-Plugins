@@ -274,11 +274,61 @@ const ROUTES = [
   },
 ];
 
+// v1.0.1 round 8 (CSRF / bootstrap-token-disclosure fix):
+//   CORS is no longer `Access-Control-Allow-Origin: *`. That blanket
+//   wildcard lets any cross-origin page (e.g. https://evil.example)
+//   read responses from this server via fetch() — which was the leak
+//   vector for the bootstrap token (hetaoBackend report 2026-09-01).
+//
+//   New behavior:
+//     - If the request has no Origin header (server-to-server callers,
+//       curl, etc.): no CORS response headers are set (they're not
+//       needed — browsers aren't involved).
+//     - If Origin matches `http(s)://<Host>` (same-origin browser
+//       request): echo Origin + Vary (browsers don't enforce CORS for
+//       same-origin, but echoing lets the SPA's fetch-with-credentials
+//       pattern keep working if it's ever added).
+//     - If Origin is in the env allowlist `MCODE_WEBUI_ALLOWED_ORIGINS`
+//       (comma-separated, e.g. "https://app.example.com,https://staging.example.com"):
+//       echo Origin + Vary (allow that origin to read responses).
+//     - Otherwise: omit CORS response headers entirely. Browsers will
+//       block the cross-origin reader from reading the response body
+//       (the request still reaches the server, but the response is
+//       unreadable to the cross-origin page).
+//
+//   This is a deliberate trade-off: the convenience of `*` is replaced
+//   by an explicit allowlist (env var) + same-origin default. The CSRF
+//   PoC at /Users/moc/workspaces/Mcode-webui-sync/poc-csrf.mjs and the
+//   test/csrf-token-disclosure.test.js integration test both verify
+//   that cross-origin reads from https://evil.example no longer succeed.
+function setCorsHeaders(req, res) {
+  const origin = req.headers && req.headers.origin;
+  if (!origin) return; // server-to-server / curl — CORS not relevant
+  const host = (req.headers && req.headers.host) || "";
+  const sameOrigin = origin === `http://${host}` || origin === `https://${host}`;
+  if (sameOrigin) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    return;
+  }
+  const allowList = (process.env.MCODE_WEBUI_ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (allowList.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  }
+  // else: cross-origin and not allowlisted — omit CORS headers, browser blocks.
+}
+
 export async function handleRequest(req, res) {
-  // CORS headers (all paths)
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  // Gate 1: CORS (per-origin, see setCorsHeaders above).
+  setCorsHeaders(req, res);
 
   const pathname = (req.url || "/").split("?")[0];
   const cid = getCidFromReq(req);

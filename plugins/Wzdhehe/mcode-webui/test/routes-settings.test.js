@@ -245,8 +245,16 @@ describe("handlePostSettings — resetToken", () => {
     settingsLib.setTokenAcknowledged(false);
   });
 
-  test("resetToken:true triggers rotation + returns new token", async () => {
-    // Set an initial token
+  test("resetToken:true triggers rotation (in-memory + persisted); response NO LONGER returns the new token (round 8)", async () => {
+    // v1.0.1 round 8: the response no longer carries the new token —
+    // it would be readable cross-origin (CSRF) and via the SSE
+    // state-push. The new value is delivered out-of-band (server
+    // stdout + settings.json). This test pins the new contract:
+    //   - rotation happens (in-memory + on-disk)
+    //   - the response acknowledges rotation but does NOT include
+    //     `currentToken` (or, if it does, the value is the empty
+    //     string — back-compat with the SPA's field shape)
+    //   - a `hint` field points the operator to stdout / settings.json
     const initial = settingsLib.rotateToken();
     settingsLib.setTokenAcknowledged(true);
     const res = fakeRes();
@@ -254,12 +262,21 @@ describe("handlePostSettings — resetToken", () => {
     const body = JSON.parse(res._body);
     assert.equal(body.ok, true);
     assert.equal(body.tokenRotated, true);
-    assert.notEqual(body.currentToken, initial);
-    assert.equal(typeof body.currentToken, "string");
-    assert.ok(body.currentToken.length > 0);
-    assert.equal(body.tokenAcknowledged, false);
-    // In-memory state is updated
-    assert.equal(settingsLib.getCurrentToken(), body.currentToken);
+    assert.equal(body.tokenAcknowledged, undefined,
+      "response should no longer set tokenAcknowledged=false on the rotation path (field shape simplified in round 8)");
+    // round 8 contract: the new token is NOT in the response.
+    // Accept either an absent field or an empty string.
+    assert.ok(
+      body.currentToken === undefined || body.currentToken === "",
+      `currentToken must not be in the rotation response (got ${JSON.stringify(body.currentToken)})`
+    );
+    // The in-memory state DID rotate, even though the response hides it.
+    assert.notEqual(settingsLib.getCurrentToken(), initial);
+    // The hint points the operator to the out-of-band delivery channels.
+    assert.ok(
+      typeof body.hint === "string" && body.hint.includes("settings.json"),
+      `response should include a hint pointing to settings.json (got ${JSON.stringify(body.hint)})`
+    );
   });
 
   test("resetToken:false or non-true is ignored (no rotation)", async () => {

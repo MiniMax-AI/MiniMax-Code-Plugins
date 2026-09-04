@@ -110,9 +110,28 @@ export function safeEquals(a, b) {
   return diff === 0;
 }
 
+// v1.0.1 round 8 (CSRF / bootstrap-token-disclosure fix):
+//   A request is "cross-origin" when the Origin header is set AND does
+//   not match `http(s)://<Host>`. Cross-origin requests via the
+//   loopback interface (a malicious page at https://evil.example doing
+//   fetch('http://127.0.0.1:PORT/api/settings')) used to bypass Gate 3
+//   because isLocalRequest(req) === true (remote IP is 127.0.0.1) —
+//   that was the bootstrap-token leak vector. The fix: when a request
+//   is cross-origin, isLocalRequest alone is NOT enough to bypass; the
+//   caller must also supply a valid token.
+function isCrossOriginRequest(req) {
+  const origin = req.headers && req.headers.origin;
+  if (!origin) return false; // no Origin header — not a cross-origin claim
+  const host = (req.headers && req.headers.host) || "";
+  if (origin === `http://${host}` || origin === `https://${host}`) return false;
+  return true;
+}
+
 // True if the request is allowed without further auth checks.
 export function isRequestAuthorized(req) {
-  if (isLocalRequest(req)) return true;
+  // Local + same-origin (or no Origin header at all — server-to-server,
+  // curl, mcode acp subprocess, etc.): fast path, no token check.
+  if (isLocalRequest(req) && !isCrossOriginRequest(req)) return true;
   if (!tokenAuthOn) return true;
   const expected = getExpectedToken();
   if (!expected) return true; // no token configured = no enforcement

@@ -10,7 +10,12 @@ import {
   getMcodeSessionsStaleSync,
 } from "./acp-client.js";
 import {
-  getCurrentToken,
+  // v1.0.1 round 8: getCurrentToken removed from the imports —
+  //   the SSE state push no longer references the token (closing
+  //   the cross-origin bootstrap-token leak). If you need to read
+  //   the current token server-side, import it directly from the
+  //   file that uses it (the only consumer is settings.js itself
+  //   + auth.js via setExpectedToken).
   getLanBroadcast,
   getQuotaEnabled,
   getReadOnly,
@@ -147,8 +152,17 @@ function ensureMcodeSessionsFetchedAndPush(workspace) {
         lanBroadcast: getLanBroadcast(),
         readOnly: getReadOnly(),
         tokenEnabled: getTokenEnabled(),
-        // v1.0.1: 下发 currentToken 仅在未 acknowledge 时 (减少密钥暴露窗口)
-        currentToken: getTokenAcknowledged() ? "" : getCurrentToken(),
+        // v1.0.1 round 8: `currentToken` removed from SSE state push
+        // entirely. The server no longer echoes the token in any
+        // channel — the only way an operator gets the value is from
+        // server stdout (first start / rotation) or by reading
+        // ~/.mcode-webui/settings.json. The SPA picks up the token
+        // from the URL `?token=…` on first load and stores it in
+        // localStorage; subsequent requests use that value as the
+        // Authorization: Bearer header. The `tokenAcknowledged` flag
+        // is kept for back-compat with the SPA's existing
+        // state-shape references.
+        currentToken: "",
         tokenAcknowledged: getTokenAcknowledged(),
         tokenRotatedAt: getTokenRotatedAt(),
         // v2026-08-28 modacker: Token Plan (套餐用量) feature fields.
@@ -211,7 +225,11 @@ export function pushStateFor(cid, opts = {}) {
         lanBroadcast,
         readOnly: getReadOnly(),
         tokenEnabled: getTokenEnabled(),
-        currentToken: getTokenAcknowledged() ? "" : getCurrentToken(),
+        // v1.0.1 round 8: currentToken removed from SSE state push.
+        // See the snapshot in ensureMcodeSessionsFetchedAndPush above
+        // for the rationale (closes the cross-origin bootstrap-token
+        // leak — hetaoBackend report 2026-09-01).
+        currentToken: "",
         tokenAcknowledged: getTokenAcknowledged(),
         tokenRotatedAt: getTokenRotatedAt(),
         // v2026-08-28 modacker: Token Plan (套餐用量) feature fields —
@@ -253,7 +271,10 @@ export function pushStateFor(cid, opts = {}) {
     lanBroadcast,
     readOnly: getReadOnly(),
     tokenEnabled: getTokenEnabled(),
-    currentToken: getTokenAcknowledged() ? "" : getCurrentToken(),
+    // v1.0.1 round 8: currentToken removed from SSE state push.
+    // See the snapshot in ensureMcodeSessionsFetchedAndPush above
+    // for the rationale.
+    currentToken: "",
     tokenAcknowledged: getTokenAcknowledged(),
     tokenRotatedAt: getTokenRotatedAt(),
     // v2026-08-28 modacker: Token Plan (套餐用量) feature fields —
@@ -311,7 +332,10 @@ export function pushOnlineCount(lanBroadcast) {
       lanBroadcast,
       readOnly: getReadOnly(),
       tokenEnabled: getTokenEnabled(),
-      currentToken: getTokenAcknowledged() ? "" : getCurrentToken(),
+      // v1.0.1 round 8: currentToken removed from SSE state push.
+      // See the snapshot in ensureMcodeSessionsFetchedAndPush above
+      // for the rationale.
+      currentToken: "",
       tokenAcknowledged: getTokenAcknowledged(),
       tokenRotatedAt: getTokenRotatedAt(),
       // v2026-08-28 modacker: Token Plan (套餐用量) feature fields —
@@ -374,24 +398,38 @@ export function endSseClient(cid, res) {
 }
 
 // v1.0.1: broadcastTokenRotated — push a named SSE event so all
-// already-authenticated clients can update their HEADERS + localStorage
-// without waiting for the periodic state push. Body is the new token
-// (raw string, not JSON, to make it obvious in logs / devtools that
-// this is sensitive — never log it).
+// already-authenticated clients can react to a token rotation.
 //
-// IMPORTANT: the token is sent in cleartext over the SSE channel. The
-// connection is already authenticated (caller must have presented a
-// valid token to reach the rotation handler), and SSE is in-band
-// with the existing /api/events stream which the client already
-// authorized. So this is no worse than the periodic state push that
-// also includes currentToken in the same channel.
-export function broadcastTokenRotated(token) {
-  if (!token) return;
+// v1.0.1 round 8 (CSRF / bootstrap-token-disclosure fix): the event
+// payload NO LONGER carries the new token. Pre-fix the data field
+// was the raw new token string, and clients used it to auto-update
+// their HEADERS / localStorage without re-prompting the operator.
+// Post-fix the payload is a JSON object {rotated: true, at: <ms>}
+// — just a signal. Connected clients use this as the cue to:
+//   (a) clear their localStorage.mcode_webui_token (so the next
+//       request uses an empty Authorization header and gets 401),
+//   (b) show a "Token rotated — please re-open this URL with the
+//       new value (from server stdout or ~/.mcode-webui/settings.json)"
+//       toast.
+//
+// The new token is delivered out-of-band: server stdout on rotation
+// (existing behavior) + writeAtomic to settings.json. The operator
+// copies the new value and re-opens the webui URL with `?token=…`.
+//
+// This trades a small UX convenience (auto-update of HEADERS) for
+// closing the cross-origin bootstrap-token leak — see SECURITY-NOTES
+// §10 Cross-origin request handling (round 8).
+export function broadcastTokenRotated(_token) {
+  // _token is intentionally unused — kept in the signature so callers
+  // (routes/settings.js) don't need to change. The payload below never
+  // includes it. If you're debugging, the new value is also printed
+  // to server stdout by settings.js#printToken on the rotation path.
+  const payload = JSON.stringify({ rotated: true, at: Date.now() });
   // SSE custom event format:
   //   event: <name>\n
   //   data: <payload>\n
   //   \n
-  const frame = `event: auth.token_rotated\ndata: ${token}\n\n`;
+  const frame = `event: auth.token_rotated\ndata: ${payload}\n\n`;
   for (const [, res] of sseByCid) {
     try {
       res.write(frame);
