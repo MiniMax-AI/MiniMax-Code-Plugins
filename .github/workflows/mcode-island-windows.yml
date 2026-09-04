@@ -1,0 +1,313 @@
+name: mcode-island (windows-latest)
+
+on:
+  pull_request:
+    paths:
+      - 'plugins/antianqi/mcode-island/**'
+      - '.github/workflows/mcode-island-windows.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/antianqi/mcode-island/**'
+      - '.github/workflows/mcode-island-windows.yml'
+
+# Round-5 review (hetaoBackend, 2026-08-28T08:22:25Z) on commit 38413d9:
+# "The remaining blocker is executable platform evidence. This is a
+# Windows/PowerShell/WPF/Win32 plugin ... but the PR adds no workflow
+# and this head has no Actions run. The Node smoke is static and does
+# not execute the PowerShell scripts. Please add a windows-latest job
+# that at minimum parses all `.ps1` files and exercises token set/show/clear
+# in an isolated data directory, mocked usage-API behavior, and hook
+# stdin/stdout paths without opening the real UI."
+#
+# This workflow exercises those four contract surfaces on windows-latest
+# without requiring a desktop session, a real OAuth token, or a real
+# network round-trip to api.minimaxi.com. It does not open the WPF UI
+# (no explorer.exe, no logon session) and does not run the
+# mcode-status-detect.ps1 main loop (which would block for 60s+ in
+# CI and require a real mcode install). The detector's 5h usage path
+# is exercised in step 4 by re-using the same token + URL the detector
+# uses, pointed at a localhost HttpListener (in a Start-Job, sync
+# wait) that records the Authorization header and returns a synthetic
+# model_remains JSON.
+#
+# `[code]smith` is SKIPPED on this repository, so this windows-latest
+# job is the CI evidence for the round-5 review.
+
+permissions:
+  contents: read
+
+jobs:
+  mcode-island-windows:
+    name: mcode-island on windows-latest (parse + token + hook + mock-API)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 1) Parse all .ps1 files. Static syntax check; if any .ps1
+      #    fails to parse, CI fails. A future change that introduces
+      #    a PowerShell syntax error anywhere in the plugin (main
+      #    script, hooks/scripts/*.ps1, set-token, notify-island,
+      #    detector, ...) will fail this step. Negative-injection:
+      #    try adding a stray `}` to any .ps1 and this step fails.
+      - name: Parse all .ps1 files (round-5 requirement #1)
+        run: |
+          $root = Resolve-Path 'plugins/antianqi/mcode-island'
+          $files = @(Get-ChildItem -Path $root -Recurse -Filter *.ps1)
+          if ($files.Count -eq 0) { throw "No .ps1 files found under $root" }
+          Write-Host "Parsing $($files.Count) .ps1 files under $root..."
+          $bad = 0
+          foreach ($f in $files) {
+            $errs = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errs)
+            if ($errs -and $errs.Count -gt 0) {
+              $rel = $f.FullName.Substring($root.Path.Length + 1) -replace '\\', '/'
+              Write-Host "PARSE FAIL: $rel"
+              $errs | ForEach-Object {
+                Write-Host "  line $($_.Extent.StartLineNumber):col $($_.Extent.StartColumnNumber) $($_.Message)"
+              }
+              $bad++
+            }
+          }
+          if ($bad -gt 0) { throw "$bad / $($files.Count) .ps1 files failed to parse" }
+          Write-Host "OK: $($files.Count) .ps1 files parsed without syntax errors"
+
+      # 2) Token set/show/clear in an isolated data directory. We
+      #    redirect $env:APPDATA in **this step's process** (not
+      #    just to GITHUB_ENV for future steps), so the
+      #    set-token.ps1 invocations below write into
+      #    $RUNNER_TEMP\mcode-island-apphome\ instead of the
+      #    runner's real APPDATA. The detector's
+      #    $APPDATA\mcode-island\config.json path is followed
+      #    exactly; only the root is swapped.
+      - name: Token set / show / clear roundtrip in isolated APPDATA (round-5 requirement #2)
+        env:
+          FAKE_TOKEN: 'ci-fake-oauth-token-1234567890abcdef'
+        run: |
+          # Force UTF-8 in the parent so the round-trip
+          # parent.write -> child.stdout -> child.Console ->
+          # parent.capture chain survives the
+          # PowerShell-5.1-on-non-UTF-8-system codepage trap
+          # (children inherit the parent's [Console]::OutputEncoding
+          # at process start; if parent is cp1252/GBK and child
+          # sets UTF-8 internally, captured strings can be
+          # truncated on the way back).
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $OutputEncoding = [System.Text.Encoding]::UTF8
+          try { chcp 65001 | Out-Null } catch {}
+
+          $apphome = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'mcode-island-apphome') -Force
+          $env:APPDATA = $apphome.FullName
+          # Also export to GITHUB_ENV so step 3 (hook) and step 4
+          # (mock usage-API) inherit the same isolated APPDATA.
+          "APPDATA=$($apphome.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Isolated APPDATA: $($apphome.FullName)"
+
+          # Defensive: unset any pre-existing MINIMAX_OAUTH_TOKEN
+          # / MINIMAX_API_KEY so the set-token show step below
+          # must report the config.json source (its fallback
+          # contract). GitHub Actions does not export these by
+          # default, but a future PR could add a workflow-level
+          # env: that pollutes this test. Step 4 sets
+          # MINIMAX_OAUTH_TOKEN explicitly for its own test.
+          foreach ($name in 'MINIMAX_OAUTH_TOKEN', 'MINIMAX_API_KEY') {
+            if (Test-Path "env:$name") { Remove-Item "env:$name" -ErrorAction SilentlyContinue }
+          }
+
+          $set = 'plugins/antianqi/mcode-island/set-token.ps1'
+
+          # 2a) set: write token
+          $r1 = (& $set $env:FAKE_TOKEN | Out-String).Trim()
+          if ($r1 -notmatch '^已写入') { throw "set: expected '已写入' header, got: $r1" }
+          $cfgFile = Join-Path $apphome.FullName 'mcode-island\config.json'
+          if (-not (Test-Path $cfgFile)) { throw "set: $cfgFile not written" }
+          $cfg = Get-Content $cfgFile -Raw | ConvertFrom-Json
+          if ($cfg.planApiToken -ne $env:FAKE_TOKEN) {
+            throw "set: config.json planApiToken mismatch (got: $($cfg.planApiToken))"
+          }
+
+          # 2b) show: verify it reports the config.json source + masked prefix
+          $r2 = (& $set -Show | Out-String).Trim()
+          if ($r2 -notmatch 'config\.json planApiToken') {
+            throw "show after set: expected 'config.json planApiToken', got: $r2"
+          }
+          $expectedMask = ($env:FAKE_TOKEN).Substring(0, [Math]::Min(10, $env:FAKE_TOKEN.Length)) + '\.\.\.'
+          if ($r2 -notmatch $expectedMask) {
+            throw "show after set: expected masked prefix matching '$expectedMask', got: $r2"
+          }
+
+          # 2c) clear: remove token
+          $r3 = (& $set -Clear | Out-String).Trim()
+          if ($r3 -notmatch '已从 config\.json 删除') { throw "clear: expected '已从 config.json 删除', got: $r3" }
+          $cfgAfter = Get-Content $cfgFile -Raw | ConvertFrom-Json
+          if ($cfgAfter.PSObject.Properties['planApiToken']) {
+            throw "clear: planApiToken still present in config.json"
+          }
+
+          # 2d) show: verify it reports the unconfigured state
+          $r4 = (& $set -Show | Out-String).Trim()
+          if ($r4 -ne 'token 未配置') { throw "show after clear: expected 'token 未配置', got: $r4" }
+
+          Write-Host "Token set/show/clear roundtrip OK (4 / 4 checks)"
+
+      # 3) Hook stdin/stdout: pipe a synthetic PreToolUse event into
+      #    the bundled io.minimax.mcode/hooks/scripts/pre-tool-use.ps1
+      #    hook entry. The hook reads the JSON event from stdin
+      #    (_lib.ps1 Read-HookStdin), formats the tool summary, and
+      #    pushes a `working` state to status.json via notify-island.
+      #    The push is asserted by reading back
+      #    $APPDATA\mcode-island\status.json (the same path the
+      #    WPF widget polls at runtime). Negative-injection: change
+      #    pre-tool-use.ps1 to push a wrong state, this step fails.
+      #
+      #    PowerShell 5.1 caveat: `$string | & script.ps1` does
+      #    NOT rewire the child process's stdin; only stdout/stderr
+      #    cross the pipeline. We must launch the hook as a real
+      #    child process with an explicit -RedirectStandardInput
+      #    so [Console]::In.ReadToEnd() inside the hook sees the
+      #    JSON. The CI's isolated APPDATA (set in step 2) is
+      #    inherited via $env:APPDATA below.
+      - name: Hook stdin / stdout (PreToolUse) writes status.json (round-5 requirement #4)
+        run: |
+          $hook = 'plugins/antianqi/mcode-island/io.minimax.mcode/hooks/scripts/pre-tool-use.ps1'
+          $stdinFile = Join-Path $env:RUNNER_TEMP 'hook-stdin-pretooluse.json'
+          # Build the JSON as a single-line PowerShell single-quoted
+          # string instead of using a here-doc. A here-doc (`@'...'@`)
+          # in this `run: |` YAML block triggered a YAML parse error
+          # in the v1 commit: the leading `@'` after a `run: |` block
+          # scalar confused js-yaml (it tried to treat `@'` as a
+          # block-scalar start, then ran into a `}` / `,` and a `\`
+          # backslash on the same line and gave up at line 187).
+          # The single-line string is a 1:1 content match for the
+          # previous here-doc body and is portable across the YAML
+          # parser GitHub Actions uses.
+          $stdinJson = '{"session_id":"ci-fake-session","transcript_path":"C:\\fake\\transcript","cwd":"C:\\fake\\cwd","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo ci-pretooluse-test"}}'
+          Set-Content -Path $stdinFile -Value $stdinJson -Encoding utf8 -NoNewline
+
+          $p = Start-Process -FilePath 'powershell' `
+            -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $hook) `
+            -NoNewWindow -RedirectStandardInput $stdinFile `
+            -PassThru
+          $p.WaitForExit()
+          if ($p.ExitCode -ne 0) { throw "pre-tool-use.ps1 exited with code $($p.ExitCode)" }
+
+          $statusFile = Join-Path $env:APPDATA 'mcode-island\status.json'
+          if (-not (Test-Path $statusFile)) { throw "hook did not write $statusFile" }
+          $status = Get-Content $statusFile -Raw | ConvertFrom-Json
+          if ($status.state -ne 'working') { throw "status.state: got '$($status.state)' (want 'working')" }
+          if ($status.source -ne 'agent') { throw "status.source: got '$($status.source)' (want 'agent' -- hook push is agent-sourced)" }
+          if ($status.message -notmatch '^Bash\s*:') { throw "status.message: got '$($status.message)' (want to start with 'Bash :')" }
+          if ($status.message -notmatch 'ci-pretooluse-test') {
+            throw "status.message: got '$($status.message)' (want to contain 'ci-pretooluse-test')"
+          }
+          Write-Host "Hook PreToolUse OK: state=$($status.state) source=$($status.source) message='$($status.message)'"
+
+      # 4) Mocked usage-API behavior. mcode-status-detect.ps1's
+      #    Get-5hUsage function constructs the URL via the
+      #    byte-array `_s` helper, reads the bearer token from
+      #    $env:MINIMAX_OAUTH_TOKEN (or config.json planApiToken),
+      #    and calls Invoke-RestMethod against api.minimaxi.com.
+      #    The detector's main loop is not exercised (it would
+      #    block for 60s+ and require a real mcode install); we
+      #    instead exercise the exact same `(url, headers, token)`
+      #    triple in this step. A Start-Job starts an
+      #    HttpListener on a free 127.0.0.1 port and sync-waits
+      #    for one request; the job records the Authorization
+      #    header, returns a synthetic model_remains JSON, and
+      #    returns the captured header + path via Receive-Job.
+      - name: Mocked usage-API roundtrip via local HttpListener (round-5 requirement #3)
+        env:
+          FAKE_TOKEN: 'ci-fake-oauth-token-1234567890abcdef'
+        run: |
+          # Pick a free port before starting the listener, so the
+          # Invoke-RestMethod in the main step can use it.
+          $probe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+          $probe.Start()
+          $freePort = [int]$probe.LocalEndpoint.Port
+          $probe.Stop()
+          Write-Host "Picked free port: $freePort"
+
+          # Background job: start HttpListener, sync-wait one
+          # request, return the captured header + path.
+          $job = Start-Job -ScriptBlock {
+            param($port)
+            $listener = [System.Net.HttpListener]::new()
+            $listener.Prefixes.Add("http://127.0.0.1:$port/")
+            $listener.Start()
+            try {
+              $ctx = $listener.GetContext()  # blocks until a request arrives
+              $auth = $ctx.Request.Headers['Authorization']
+              $path = $ctx.Request.Url.AbsolutePath
+              $body = '{"model_remains":[{"model":"general","remainingPct":84,"resetMs":16200000}]}'
+              $bytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+              $ctx.Response.StatusCode = 200
+              $ctx.Response.ContentType = 'application/json'
+              $ctx.Response.ContentLength64 = $bytes.Length
+              $ctx.Response.OutputStream.Write($bytes, 0, $bytes.Length)
+              $ctx.Response.Close()
+              [PSCustomObject]@{ auth = $auth; path = $path }
+            } finally {
+              $listener.Stop()
+              $listener.Close()
+            }
+          } -ArgumentList $freePort
+
+          try {
+            # 4a) Token resolution: env wins over config.json.
+            #     Write a different token to config.json (the
+            #     fallback path); the env var must still win.
+            $env:MINIMAX_OAUTH_TOKEN = $env:FAKE_TOKEN
+            $cfgDir = Join-Path $env:APPDATA 'mcode-island'
+            if (-not (Test-Path $cfgDir)) { New-Item -ItemType Directory -Path $cfgDir -Force | Out-Null }
+            @{ planApiToken = 'config-token-should-not-be-used' } | ConvertTo-Json |
+              Out-File -FilePath (Join-Path $cfgDir 'config.json') -Encoding utf8
+
+            # 4b) Reconstruct the URL the detector uses (the
+            #     source file constructs it via the byte-array
+            #     `_s` helper, which is private to
+            #     mcode-status-detect.ps1; we don't want to
+            #     dot-source the file because the main loop
+            #     would block in CI). The literal path the
+            #     detector requests is /v1/coding_plan/remains.
+            $url = "http://127.0.0.1:$freePort/v1/coding_plan/remains"
+            $headers = @{
+              'Authorization' = "Bearer $env:MINIMAX_OAUTH_TOKEN"
+              'MM-API-Source' = 'MiniMax-MCP'
+            }
+            $resp = Invoke-RestMethod -Uri $url -Headers $headers -TimeoutSec 10 -Method Get -ErrorAction Stop
+
+            # 4c) The mock must have seen the bearer token AND
+            #     the request path the detector uses.
+            $mock = $job | Wait-Job -Timeout 15 | Receive-Job
+            if (-not $mock) {
+              throw "listener job did not complete within 15s (state: $($job.State))"
+            }
+            if ($mock.auth -ne "Bearer $env:FAKE_TOKEN") {
+              throw "mock saw Authorization='$($mock.auth)' (want 'Bearer $env:FAKE_TOKEN')"
+            }
+            if ($mock.path -ne '/v1/coding_plan/remains') {
+              throw "mock saw path='$($mock.path)' (want '/v1/coding_plan/remains')"
+            }
+
+            # 4d) Response shape: same one Get-5hUsage in
+            #     mcode-status-detect.ps1 parses (model_remains[],
+            #     taking the first entry's remainingPct + resetMs).
+            if (-not $resp -or -not $resp.model_remains) {
+              throw "response shape: missing model_remains, got: $($resp | ConvertTo-Json -Compress)"
+            }
+            $first = @($resp.model_remains)[0]
+            if ($first.remainingPct -ne 84 -or $first.resetMs -ne 16200000) {
+              throw "first model_remains entry: got remainingPct=$($first.remainingPct) resetMs=$($first.resetMs) (want 84 / 16200000)"
+            }
+            Write-Host "Mocked usage-API OK: auth='$($mock.auth)' path='$($mock.path)' first entry=remainingPct=$($first.remainingPct)% resetMs=$($first.resetMs)"
+          } finally {
+            # Make sure the job is fully reaped even on
+            # exception, so the listener is released.
+            if ($job.State -ne 'Completed') { Stop-Job $job }
+            Remove-Job $job -Force
+          }

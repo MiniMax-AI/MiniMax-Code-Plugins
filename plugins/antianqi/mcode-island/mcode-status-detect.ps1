@@ -40,6 +40,22 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 chcp 65001 | Out-Null
 
+# 防御性隐藏控制台窗口：start-detect 用 CreateNoWindow 启的进程理论上没有控制台，
+# 但偶尔有边界场景会冒出空窗口被用户误关。这里 SW_HIDE 一下兜底。
+$hideSig = @'
+using System;
+using System.Runtime.InteropServices;
+public class DetectHide {
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+}
+'@
+if (-not ('DetectHide' -as [type])) { Add-Type $hideSig -ErrorAction SilentlyContinue }
+$hwnd = [DetectHide]::GetConsoleWindow()
+if ($hwnd -ne [IntPtr]::Zero) {
+  [void][DetectHide]::ShowWindow($hwnd, 0)
+}
+
 function _s { param([byte[]]$b) [System.Text.Encoding]::UTF8.GetString($b) }
 
 # role names
@@ -92,6 +108,32 @@ if (!(Test-Path $configDir)) { New-Item -ItemType Directory -Path $configDir -Fo
 $statusFile = Join-Path $configDir 'status.json'
 $logFile    = Join-Path $configDir 'island.log'
 $pidFile    = Join-Path $configDir 'detect.pid'
+$cfgFile    = Join-Path $configDir 'config.json'
+
+# 5h 用量 API：每 60s 调一次 minimax /v1/coding_plan/remains，写进 status.json 的 usage5h 字段
+# token 来源：env MINIMAX_OAUTH_TOKEN 优先；fallback 到 config.json 的 planApiToken
+$PLAN_API_HOST = _s (0x68,0x74,0x74,0x70,0x73,0x3A,0x2F,0x2F,0x61,0x70,0x69,0x2E,0x6D,0x69,0x6E,0x69,0x6D,0x61,0x78,0x69,0x2E,0x63,0x6F,0x6D)
+$PLAN_API_PATH = _s (0x2F,0x76,0x31,0x2F,0x63,0x6F,0x64,0x69,0x6E,0x67,0x5F,0x70,0x6C,0x61,0x6E,0x2F,0x72,0x65,0x6D,0x61,0x69,0x6E,0x73)  # /v1/coding_plan/remains
+$PLAN_API_TTL  = [TimeSpan]::FromSeconds(60)
+$script:plan5hToken = $null
+if ($env:MINIMAX_OAUTH_TOKEN) { $script:plan5hToken = $env:MINIMAX_OAUTH_TOKEN }
+elseif ($env:MINIMAX_API_KEY) { $script:plan5hToken = $env:MINIMAX_API_KEY }
+elseif (Test-Path $cfgFile) {
+  try {
+    $cfg = [System.IO.File]::ReadAllText($cfgFile) | ConvertFrom-Json
+    if ($cfg.PSObject.Properties['planApiToken'] -and $cfg.planApiToken) {
+      $script:plan5hToken = [string]$cfg.planApiToken
+    }
+  } catch {}
+}
+$script:plan5hLastCallAt = [DateTime]::MinValue
+$script:plan5hRemainingPct = $null  # 0..100，剩余百分比（不再是已用！）
+$script:plan5hResetMs = $null       # 距下次刷新的毫秒数
+
+# Todo 进度缓存（widget 进度条用）：completed / (total - cancelled) * 100
+$script:plan5hTodoData = $null      # @{ percent; currentTodo; completed; total }
+$script:plan5hTodoCacheMtime = [DateTime]::MinValue
+$script:plan5hLastWrittenTodoPct = $null  # 上次写到 status.json 的 todoProgress（用来检测变化）
 
 # 解析 mcode 安装根目录（<userprofile>/.minimax-code）
 function Find-McodeRoot {
@@ -349,15 +391,123 @@ function Infer-State($msg) {
 
 function Write-Status($state, $message) {
   $tmp = "$statusFile.tmp"
+  # usage5h：0..100 表示"剩余"百分比（不是已用！）；null = 未知/未拉到
+  # usage5hResetMs：距下次刷新的毫秒数；null = 未知
+  # todoProgress：0..100 完成百分比（cancelled 不计）；null = 无 todo 列表
+  $usageField  = if ($null -ne $script:plan5hRemainingPct) { [int]$script:plan5hRemainingPct } else { $null }
+  $resetField  = if ($null -ne $script:plan5hResetMs)     { [int]$script:plan5hResetMs }     else { $null }
+  $todoPct     = if ($null -ne $script:plan5hTodoData)    { [int]$script:plan5hTodoData.percent } else { $null }
+  $todoCnt     = if ($null -ne $script:plan5hTodoData)    { ("{0}/{1}" -f $script:plan5hTodoData.completed, $script:plan5hTodoData.total) } else { $null }
   $payload = [PSCustomObject]@{
-    state    = $state
-    message  = $message
-    progress = -1
-    ts       = (Get-Date).ToString($FMT_O)
-    source   = $S_DETECTOR
+    state          = $state
+    message        = $message
+    progress       = -1
+    usage5h        = $usageField
+    usage5hResetMs = $resetField
+    todoProgress   = $todoPct
+    todosCount     = $todoCnt
+    ts             = (Get-Date).ToString($FMT_O)
+    source         = $S_DETECTOR
   } | ConvertTo-Json -Compress
   [System.IO.File]::WriteAllText($tmp, $payload, [System.Text.Encoding]::UTF8)
   Move-Item -Path $tmp -Destination $statusFile -Force
+}
+
+# 5h 用量：调 minimax /v1/coding_plan/remains，返回 general model 的 {remainingPct, resetMs}
+# 无 token / 网络错 / 解析错 → 返回 $null
+function Get-5hUsage {
+  if (-not $script:plan5hToken) { return $null }
+  try {
+    # PowerShell 5.1 在某些 Windows 上默认 TLS 1.0；强制 1.2 避免握手失败
+    if ([System.Net.ServicePointManager]::SecurityProtocol -notmatch 'Tls12') {
+      [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+    }
+    $url = $PLAN_API_HOST + $PLAN_API_PATH
+    $headers = @{
+      'Authorization' = "Bearer $($script:plan5hToken)"
+      'MM-API-Source' = _s (0x4D,0x69,0x6E,0x69,0x6D,0x61,0x78,0x2D,0x4D,0x43,0x50)  # Minimax-MCP
+    }
+    $resp = Invoke-RestMethod -Uri $url -Headers $headers -TimeoutSec 8 -Method Get -ErrorAction Stop
+    if (-not $resp -or -not $resp.model_remains) { return $null }
+    foreach ($m in @($resp.model_remains)) {
+      if ($m.model_name -eq 'general') {
+        $remPct = [int]$m.current_interval_remaining_percent
+        if ($remPct -lt 0)   { $remPct = 0 }
+        if ($remPct -gt 100) { $remPct = 100 }
+        $resetMs = [int]$m.remains_time
+        if ($resetMs -lt 0)  { $resetMs = 0 }
+        return @{ remainingPct = $remPct; resetMs = $resetMs }
+      }
+    }
+    return $null
+  } catch {
+    Log-Line ("5h usage fetch failed: " + $_.Exception.Message)
+    return $null
+  }
+}
+
+# 在主循环里每 60s 调一次（用 TTL 守门，单线程安全）
+function Refresh-5hUsage {
+  $now = Get-Date
+  if (($now - $script:plan5hLastCallAt) -lt $PLAN_API_TTL) { return }
+  $script:plan5hLastCallAt = $now
+  $data = Get-5hUsage
+  if ($null -eq $data) {
+    $script:plan5hRemainingPct = $null
+    $script:plan5hResetMs = $null
+  } else {
+    $script:plan5hRemainingPct = [int]$data.remainingPct
+    $script:plan5hResetMs = [int]$data.resetMs
+  }
+}
+
+# 读最新一次 todowrite 的 todos，计算完成百分比
+# 缓存：mtime 不变就复用上次结果（典型场景：mcode 跑 1 分钟才动一次 todo）
+function Get-TodoProgress {
+  $latest = $script:lastLatestFile
+  if (-not $latest -or -not (Test-Path $latest)) { return $null }
+
+  $mtime = [System.IO.File]::GetLastWriteTimeUtc($latest)
+  if ($mtime -eq $script:plan5hTodoCacheMtime -and $null -ne $script:plan5hTodoData) {
+    return $script:plan5hTodoData
+  }
+  $script:plan5hTodoCacheMtime = $mtime
+
+  try {
+    # 从末尾向前找最近的 toolName=todowrite 且 role=toolResult 的行
+    $lines = [System.IO.File]::ReadAllLines($latest, [System.Text.Encoding]::UTF8)
+    for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+      $line = $lines[$i]
+      if ($line.IndexOf('"toolName":"todowrite"', [System.StringComparison]::Ordinal) -lt 0) { continue }
+      if ($line.IndexOf('"role":"toolResult"', [System.StringComparison]::Ordinal) -lt 0) { continue }
+      $j = $line | ConvertFrom-Json -ErrorAction SilentlyContinue
+      if (-not $j -or -not $j.message -or -not $j.message.details -or -not $j.message.details.todos) { continue }
+      $todos = @($j.message.details.todos)
+      $total = $todos.Count
+      $done = 0; $cancelled = 0
+      foreach ($t in $todos) {
+        if ($t.status -eq 'completed')  { $done++ }
+        if ($t.status -eq 'cancelled')  { $cancelled++ }
+      }
+      $effective = $total - $cancelled
+      if ($effective -le 0) {
+        $script:plan5hTodoData = $null
+        return $null
+      }
+      $percent = [int][Math]::Floor(($done * 100) / $effective)
+      $script:plan5hTodoData = @{
+        percent   = $percent
+        completed = $done
+        total     = $total
+      }
+      return $script:plan5hTodoData
+    }
+    # 走完没找到 = 没 todowrite 调用过
+    $script:plan5hTodoData = $null
+    return $null
+  } catch {
+    return $null
+  }
 }
 
 function Read-StatusObj {
@@ -450,6 +600,39 @@ try {
           Log-Line "$newState :: $newMsg ($reason)"
           $script:lastDetectedState = $newState
         }
+      }
+    }
+
+    # 4) 5h 用量：每 60s 刷一次，刷新后若数字变化就写 status.json（让 widget 看到）
+    $prevPct  = $script:plan5hRemainingPct
+    $prevMs   = $script:plan5hResetMs
+    Refresh-5hUsage
+    $curPct   = $script:plan5hRemainingPct
+    $curMs    = $script:plan5hResetMs
+    $usageChanged = ($prevPct -ne $curPct) -or ($prevMs -ne $curMs) -and ($null -ne $curPct)
+    if ($usageChanged) {
+      $curForUsage = Read-StatusObj
+      $sForU = if ($curForUsage) { [string]$curForUsage.state } else { $S_IDLE }
+      $mForU = if ($curForUsage) { [string]$curForUsage.message } else { '' }
+      Write-Status $sForU $mForU
+      Log-Line ("5h usage refreshed: remaining=" + $curPct + "% resetMs=" + $curMs)
+    }
+
+    # 5) Todo 进度：每次都查（带 mtime 缓存），变化时写 status.json
+    $prevTodoPct  = $script:plan5hLastWrittenTodoPct
+    $curTodoData  = Get-TodoProgress
+    $curTodoPct   = if ($null -ne $curTodoData) { $curTodoData.percent } else { $null }
+    $todoChanged  = ($prevTodoPct -ne $curTodoPct)
+    if ($todoChanged) {
+      $curForTodo = Read-StatusObj
+      $sForT = if ($curForTodo) { [string]$curForTodo.state } else { $S_IDLE }
+      $mForT = if ($curForTodo) { [string]$curForTodo.message } else { '' }
+      Write-Status $sForT $mForT
+      $script:plan5hLastWrittenTodoPct = $curTodoPct
+      if ($null -ne $curTodoData) {
+        Log-Line ("todo refreshed: " + $curTodoData.completed + "/" + $curTodoData.total + " = " + $curTodoPct + "%")
+      } else {
+        Log-Line "todo refreshed: (none)"
       }
     }
 

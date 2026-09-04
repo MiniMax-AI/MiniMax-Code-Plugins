@@ -14,8 +14,12 @@ if /i "%1"=="pin" goto :pin
 if /i "%1"=="unpin" goto :unpin
 if /i "%1"=="autostart-on" goto :autostart_on
 if /i "%1"=="autostart-off" goto :autostart_off
+if /i "%1"=="detect-on" goto :detect_on
+if /i "%1"=="detect-off" goto :detect_off
+if /i "%1"=="detect-status" goto :detect_status
+if /i "%1"=="set-token" goto :set_token
 
-echo Usage: mcode-island {start ^| stop ^| status ^| show ^| hide ^| pin ^| unpin ^| autostart-on ^| autostart-off}
+echo Usage: mcode-island {start ^| stop ^| status ^| show ^| hide ^| pin ^| unpin ^| autostart-on ^| autostart-off ^| detect-on ^| detect-off ^| detect-status ^| set-token}
 exit /b 1
 
 :start
@@ -52,4 +56,29 @@ exit /b %errorlevel%
 
 :autostart_off
 %PS% -File "%SCRIPT_DIR%autostart.ps1" -Action Disable
+exit /b %errorlevel%
+
+:detect_on
+%PS% -File "%SCRIPT_DIR%start-detect-island.ps1"
+exit /b %errorlevel%
+
+:detect_off
+%PS% -File "%SCRIPT_DIR%stop-detect-island.ps1"
+exit /b %errorlevel%
+
+:detect_status
+%PS% -File "%SCRIPT_DIR%status-detect-island.ps1"
+exit /b %errorlevel%
+
+:set_token
+if "%2"=="" goto :set_token_show
+if /i "%2"=="-show" goto :set_token_show
+if /i "%2"=="-clear" goto :set_token_clear
+%PS% -File "%SCRIPT_DIR%set-token.ps1" "%2"
+exit /b %errorlevel%
+:set_token_show
+%PS% -File "%SCRIPT_DIR%set-token.ps1" -Show
+exit /b %errorlevel%
+:set_token_clear
+%PS% -File "%SCRIPT_DIR%set-token.ps1" -Clear
 exit /b %errorlevel%

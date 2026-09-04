@@ -34,9 +34,16 @@ if (Test-Path $pidFile) {
   }
 }
 
-# 新进程启动 widget
-$args = @('-NoProfile', '-STA', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', "`"$widget`"")
-$proc = Start-Process powershell.exe -ArgumentList $args -PassThru
+# 新进程启动 widget。
+# 用 ProcessStartInfo + CreateNoWindow = $true 是关键：-WindowStyle Hidden 只会设 SW_HIDE 样式，
+# 控制台窗口其实还存在，偶尔会冒进任务栏被误关。CreateNoWindow 走 Win32 CREATE_NO_WINDOW，
+# 从根上就不生成控制台窗口，任务栏/Alt-Tab 都不会看到。
+$psi = New-Object System.Diagnostics.ProcessStartInfo
+$psi.FileName = 'powershell.exe'
+$psi.Arguments = "-NoProfile -STA -ExecutionPolicy Bypass -File `"$widget`""
+$psi.UseShellExecute = $false
+$psi.CreateNoWindow = $true
+$proc = [System.Diagnostics.Process]::Start($psi)
 
 # 写 PID（先写，后面 status / stop 都靠这个）
 Set-Content -Path $pidFile -Value $proc.Id -Encoding ASCII
