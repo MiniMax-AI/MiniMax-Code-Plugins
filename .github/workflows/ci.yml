@@ -10,7 +10,28 @@ permissions:
 
 jobs:
   validate:
+    name: validate (ubuntu-latest)
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b18 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+
+  # Round-4 review: ".cmd/.bat 分支本轮没有真实 Windows 证据".
+  # The R4-1 (case-distinct), R4-2 (resolveProgram directory
+  # rejection), and R4-3 (probeVersion resolved-path) tests are
+  # POSIX-gated and were previously only run on ubuntu-latest. The
+  # R4-4 test exercises the .cmd / .bat / PATHEXT branch on real
+  # Windows. This matrix ensures the .cmd / .bat code path is
+  # validated by an actual Windows runner, not just a reviewer's
+  # local machine.
+  validate-windows:
+    name: validate (windows-latest)
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b18 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
