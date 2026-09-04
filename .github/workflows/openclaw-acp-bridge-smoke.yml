@@ -47,7 +47,7 @@ jobs:
           set -euo pipefail
           python plugins/antianqi/openclaw-acp-bridge/scripts/test_no_redirect.py
 
-      - name: Run bundled smoke test
+      - name: Run bundled smoke + goudan-side wrapper tests
         # Starts a stub ACP server (subclass of BaseHTTPRequestHandler)
         # and runs the smoke test against it. The stub implements
         # /acp/health, /acp/inbox/write, /acp/inbox/read with
@@ -62,6 +62,17 @@ jobs:
         # auth. The negative tests added in v0.2.1 (Check 8 missing
         # auth, Check 9 wrong auth) require the stub to be in the
         # "auth required" state.
+        #
+        # PR #30 round-7 amend: the goudan-side wrapper
+        # (scripts/acp_inbox.py) ships with its own 26-check smoke
+        # (scripts/test_inbox_goudan.py) that pins the round-7
+        # contract — constructor surface `['default_timeout']` only
+        # (per-instance `base_url` removed), and `read(limit=...)`
+        # forwards the kwarg to `_acp_client.inbox_read`. The wrapper
+        # smoke runs in this same step against the same stub (so
+        # one stub startup covers both), and `unset SMOKE_SKIP_LIVE`
+        # forces live mode (the wrapper's own CI fallback would
+        # otherwise degrade the live checks to skipped).
         env:
           ACP_TOKEN: 'ci-test-token-xyzzy'
           ACP_BASE_URL: 'http://127.0.0.1:19999'
@@ -73,6 +84,8 @@ jobs:
           trap "kill $STUB_PID 2>/dev/null || true" EXIT
           sleep 0.5
           python plugins/antianqi/openclaw-acp-bridge/scripts/smoke.py
+          unset SMOKE_SKIP_LIVE
+          python plugins/antianqi/openclaw-acp-bridge/scripts/test_inbox_goudan.py
 
       - name: Validate plugin manifest
         run: |
