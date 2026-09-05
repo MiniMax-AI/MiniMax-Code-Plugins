@@ -1,0 +1,22 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "document-skills",
+  "version": "0.1.0",
+  "description": "Workbench Skills for creating, reading, editing, and checking DOCX, PDF, PPTX, and XLSX documents with standard open-source tooling.",
+  "author": {
+    "name": "Hylouis233",
+    "url": "https://github.com/Hylouis233"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "minimax-code",
+    "plugin",
+    "documents",
+    "docx",
+    "pdf",
+    "pptx",
+    "xlsx",
+    "office",
+    "ooxml"
+  ]
+}
