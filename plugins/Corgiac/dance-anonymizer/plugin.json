@@ -1,0 +1,21 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "dance-anonymizer",
+  "version": "1.0.0",
+  "description": "Operate, troubleshoot, and extend a local DanceAnon video anonymization project from MiniMax Code.",
+  "author": {
+    "name": "Corgiac",
+    "url": "https://github.com/Corgiac"
+  },
+  "homepage": "https://github.com/Corgiac/dance-anonymizer",
+  "repository": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins",
+  "license": "MIT",
+  "keywords": [
+    "video",
+    "anonymization",
+    "computer-vision",
+    "yolo",
+    "sam2",
+    "fastapi"
+  ]
+}
