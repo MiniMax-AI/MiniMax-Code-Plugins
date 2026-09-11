@@ -1,0 +1,4 @@
+
+# v2026-08-28 modacker: webui runtime artifacts (server.err + sessions json)
+.server.err
+.webui-sessions.json
