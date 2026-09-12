@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#ffffff">
+<title>Mcode Web UI</title>
+<!-- v0.5.bn: highlight.js 资源包已移到 public/lib/.hl.bak/（v0.5.bn 删 4 个 broken CommonJS script），css link 同步删 -->
+<link rel="stylesheet" href="/styles/main.css?v=3">
+<link rel="stylesheet" href="/styles/premium.css?v=1">
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- ============================ Top bar ============================ -->
+  <header class="topbar">
+    <button class="btn-mobile-toggle" id="btn-toggle-left" title="菜单">
+      <svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+    </button>
+    <div class="topbar-brand">
+      <img class="topbar-logo" id="topbar-logo" src="/brand-logo.png" alt="mcode" title="双击重置 ask_user 弹窗（如果之前被 dismiss 了）" />
+      <span data-i18n="title">mcode Web UI</span>
+      <span class="topbar-version" id="version">v1.0</span>
+      <!-- v0.5.bx-37: BETA 标识 — webui 还活跃开发, 提醒用户可能不稳定 -->
+      <span class="topbar-beta" data-i18n-title="topbar_beta_title" title="Beta 测试版">BETA</span>
+    </div>
+    <div class="topbar-status" id="topbar-status">
+      <!-- v0.5.bx-37: 强制刷新按钮 — 手机/平板浏览器 hard refresh 麻烦, 一键绕过 HTTP cache 拉新资源
+           行为: fetch('/app/main.js' + '/styles/main.css' + '/') with cache:'reload' 覆盖缓存, 然后 location.reload() -->
+      <button class="chip chip-force-reload" id="chip-force-reload" data-i18n-title="force_reload_title" title="强制刷新 (绕过浏览器缓存)">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="23 4 23 10 17 10"/>
+          <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+        </svg>
+        <span data-i18n="force_reload">强制刷新</span>
+      </button>
+      <!-- v0.5.ak: 在线 webui tab 数 -->
+      <span class="chip chip-online" id="chip-online" data-i18n-title="chip_online_title" title="当前连到 webui server 的 tab 数">
+        <span>🟢</span>
+        <span id="chip-online-text">1 台</span>
+      </span>
+      <!-- v1.0.1: 只读模式指示 — server readOnly=true 时所有 client 顶部都显示
+           醒目的双语 chip ("只读" + "READ ONLY"), 让远程 client 一眼就看出
+           当前 webui 处于只读模式 (POST / DELETE 会被 server 拒) -->
+      <span class="chip chip-readonly" id="chip-readonly" hidden data-i18n-title="topbar_readonly_title" title="webui 当前处于只读模式 / webui is in read-only mode">
+        <span data-i18n="topbar_readonly_zh">只读</span>
+        <span class="chip-readonly-sep">/</span>
+        <span data-i18n="topbar_readonly_en">READ ONLY</span>
+      </span>
+      <!-- v0.5.bp: 局域网访问链接 — LAN on 时显示当前 IP，点复制完整 URL（URL 来自 server 的 detectLanIp()，非硬编码） -->
+      <a class="chip chip-lan-link" id="chip-lan-link" hidden data-lan-url="" data-i18n-title="lan_link_title" title="点击复制局域网访问 URL">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12" y2="18"/>
+        </svg>
+        <span id="chip-lan-link-text">—</span>
+      </a>
+      <!-- v0.5.by: 顶栏 tok/s 移除 (侧栏 CONTEXT 已有, 重复) — Wzdhehe 反馈 -->
+    </div>
+    <button class="btn-mobile-toggle" id="btn-toggle-right" title="详情" style="margin-left:auto">
+      <svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v6M12 17v6M4.22 4.22l4.24 4.24M15.54 15.54l4.24 4.24M1 12h6M17 12h6M4.22 19.78l4.24-4.24M15.54 8.46l4.24-4.24"/></svg>
+    </button>
+  </header>
+
+  <!-- ============================ Layout ============================ -->
+  <div class="layout">
+    <div class="drawer-backdrop" id="drawer-backdrop"></div>
+
+    <!-- ============================ Left Panel ============================ -->
+    <aside class="left-panel" id="left-panel">
+      <div class="left-section">
+        <button class="btn-new" id="btn-new-chat">
+          <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          <span data-i18n="new_chat">新建会话</span>
+        </button>
+        <div class="search-box">
+          <svg class="icon search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input class="search-input" id="search-input" data-i18n-placeholder="search_placeholder" placeholder="搜索会话...">
+        </div>
+      </div>
+
+      <div class="sessions-scroll" id="sessions-scroll">
+        <!-- v0.5.as: 会话列表 标题 + 刷新按钮 放顶部 -->
+        <div class="sessions-header">
+          <span class="sessions-header-title" data-i18n="sessions_list">会话列表</span>
+          <button class="btn-refresh-sessions" id="btn-refresh-sessions" data-i18n-title="refresh" title="刷新会话列表">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            <span data-i18n="refresh">刷新</span>
+          </button>
+        </div>
+        <!-- v0.5.ar: 按工作区分组的会话列表（每组可折叠） -->
+        <div id="sessions-list">
+          <div class="session-title-empty" data-i18n="no_sessions">暂无会话记录</div>
+        </div>
+      </div>
+
+      <div class="left-bottom">
+        <!-- v0.5.z: 套餐用量按钮（btn-menu 风格，点开右侧弹层，mmx quota + 本机时间） -->
+        <button class="btn-menu" id="btn-usage" aria-haspopup="true" aria-expanded="false">
+          <svg class="icon btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="6" y1="20" x2="6" y2="14"/><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="3" y1="20" x2="21" y2="20"/>
+          </svg>
+          <span class="btn-text" data-i18n="usage">套餐用量</span>
+          <span class="btn-value" id="usage-value">—</span>
+          <svg class="icon btn-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+        <div class="usage-popover" id="usage-popover" role="dialog" aria-label="套餐用量详情" hidden>
+          <div class="usage-popover-header">
+            <span class="usage-popover-title" data-i18n="usage">套餐用量</span>
+            <button class="usage-popover-refresh" id="usage-popover-refresh" data-i18n-title="refresh" title="刷新" data-i18n-aria-label="refresh" aria-label="刷新用量">
+              <span class="usage-popover-refresh-text" data-refresh-default data-i18n="refresh">刷新</span>
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            </button>
+          </div>
+          <div class="usage-popover-body" id="usage-popover-body">
+            <div class="quota-loading" data-i18n="usage_loading">加载中...</div>
+          </div>
+        </div>
+        <button class="btn-menu" id="btn-appearance">
+          <svg class="icon btn-icon" id="appearance-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+          <span class="btn-text" data-i18n="appearance">外观</span>
+          <span class="btn-value" id="appearance-value">—</span>
+          <svg class="icon btn-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+        <button class="btn-menu" id="btn-language">
+          <svg class="icon btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+          <span class="btn-text" data-i18n="language">语言</span>
+          <span class="btn-value" id="language-value">—</span>
+          <svg class="icon btn-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+
+        <!-- v0.5.at: 局域网访问开关（左下角）— 跟 Usage/Appearance 同结构：icon + 文字 + 右侧 开/关 + 右箭头 -->
+        <button class="btn-menu btn-lan-toggle" id="chip-lan" data-lan="on" data-i18n-aria-label="lan_access" aria-label="局域网访问">
+          <svg class="icon btn-icon chip-lan-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M5 12.55a11 11 0 0 1 14.08 0"/>
+            <path d="M1.42 9a16 16 0 0 1 21.16 0"/>
+            <path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>
+            <line x1="12" y1="20" x2="12.01" y2="20"/>
+          </svg>
+          <span class="btn-text" data-i18n="lan_access">局域网访问</span>
+          <span class="btn-value" id="chip-lan-value" data-i18n="lan_on">开</span>
+          <svg class="icon btn-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+        <!-- v1.0.1: 二级 LAN 卡片 (sub-card) — 点开 chip-lan 后弹出，含只读/Token/接口 -->
+        <div class="lan-card" id="lan-card" hidden>
+          <div class="lan-card-title" data-i18n="lan_card_title">局域网安全设置</div>
+
+          <div class="lan-card-row">
+            <label class="lan-card-row-label">
+              <span data-i18n="lan_access">局域网访问</span>
+            </label>
+            <label class="lan-card-toggle">
+              <input type="checkbox" id="lan-card-broadcast" />
+              <span class="lan-card-toggle-slider"></span>
+            </label>
+          </div>
+
+          <div class="lan-card-row">
+            <label class="lan-card-row-label">
+              <span data-i18n="lan_card_readonly">只读模式</span>
+              <span class="lan-card-row-help" data-i18n="lan_card_readonly_help" title="远程客户端只能读取，不能发送消息/删除会话">远程客户端只能读取，不能发送消息/删除会话</span>
+            </label>
+            <label class="lan-card-toggle">
+              <input type="checkbox" id="lan-card-readonly" />
+              <span class="lan-card-toggle-slider"></span>
+            </label>
+          </div>
+
+          <div class="lan-card-row">
+            <label class="lan-card-row-label">
+              <span data-i18n="lan_card_token_auth">Token 鉴权</span>
+              <span class="lan-card-row-help" data-i18n="lan_card_token_auth_help" title="需要 ?token= 或 Authorization header；本机不受限">需要 ?token= 或 Authorization header；本机不受限</span>
+            </label>
+            <label class="lan-card-toggle">
+              <input type="checkbox" id="lan-card-token-auth" />
+              <span class="lan-card-toggle-slider"></span>
+            </label>
+          </div>
+
+          <div class="lan-card-section">
+            <div class="lan-card-section-label" data-i18n="lan_card_token_value">当前 token</div>
+            <div class="lan-card-token-row" id="lan-card-token-row">
+              <span class="lan-card-token-mask" id="lan-card-token-mask">••••••••••••••••••••••••••••••••</span>
+              <span class="lan-card-token-value" id="lan-card-token-value" hidden></span>
+              <button class="lan-card-btn" id="lan-card-token-toggle" data-i18n="lan_card_token_show">显示</button>
+              <button class="lan-card-btn" id="lan-card-token-copy" data-i18n="lan_card_token_copy">复制</button>
+            </div>
+            <div class="lan-card-warning" id="lan-card-token-warning" hidden>
+              <span data-i18n="lan_card_token_new_warning">新的 token — 请在另一台设备用上面的 URL 打开</span>
+            </div>
+            <div class="lan-card-actions">
+              <button class="lan-card-btn lan-card-btn-danger" id="lan-card-token-reset" data-i18n="lan_card_reset_token">重置 token</button>
+              <button class="lan-card-btn lan-card-btn-primary" id="lan-card-token-ack" data-i18n="lan_card_token_ack" hidden>我已保存</button>
+            </div>
+            <div class="lan-card-help" data-i18n="lan_card_token_ack_help" title="保存后 token 不会再次显示；下次需要查看可点'重置'">保存后 token 不会再次显示；下次需要查看可点"重置"</div>
+          </div>
+        </div>
+
+        <!-- v0.5.ak: 改为 GitHub 链接（指向 Wzdhehe 的开源仓库） -->
+        <a class="user-footer github-link" id="user-footer" href="https://github.com/Wzdhehe/mcode-webui" target="_blank" rel="noopener noreferrer" title="mcode-webui on GitHub">
+          <svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.1.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.69-3.88-1.54-3.88-1.54-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.7.08-.7 1.16.08 1.78 1.2 1.78 1.2 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.18-3.09-.12-.29-.51-1.46.11-3.04 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.79 0c2.21-1.49 3.18-1.18 3.18-1.18.63 1.58.23 2.75.11 3.04.74.81 1.18 1.83 1.18 3.09 0 4.42-2.7 5.39-5.27 5.68.41.36.78 1.06.78 2.13 0 1.54-.01 2.78-.01 3.16 0 .31.21.67.8.56C20.21 21.39 23.5 17.08 23.5 12 23.5 5.65 18.35.5 12 .5z"/></svg>
+          <span>GitHub</span>
+        </a>
+      </div>
+    </aside>
+
+    <!-- ============================ Chat Area ============================ -->
+    <main class="chat-area" id="chat-area">
+      <div class="chat-scroll" id="chat-scroll">
+        <!-- v0.5.bb: 欢迎页挪到 chat-inner 外面，避免 renderChat 的 innerHTML='' 把它清掉 -->
+        <!-- v0.5.bc: 仿 kimi — 欢迎页只留 logo + 提示语，工作区 chip 挪到输入框下面 -->
+        <div class="chat-empty" id="chat-empty">
+          <img class="chat-empty-logo" src="/brand-logo.png" alt="MiniMax Code" />
+          <div class="chat-empty-subtitle" data-i18n="welcome_tagline">还没有消息 — 在下方输入开始对话</div>
+        </div>
+        <div class="chat-inner" id="chat-inner">
+          <!-- 消息渲染到这里（renderChat 动态填充） -->
+        </div>
+        <div class="chat-thinking" id="chat-thinking" hidden>
+          <img class="chat-thinking-avatar" src="/brand-logo.png" alt="MiniMax Code" />
+          <span class="chat-thinking-dots">
+            <span></span><span></span><span></span>
+          </span>
+          <span class="chat-thinking-text" data-i18n="status_thinking">思考中</span>
+        </div>
+      </div>
+
+      <div class="input-area">
+        <div class="input-inner">
+          <div class="attachment-list" id="attachment-list"></div>
+          <div class="input-box" id="input-box">
+            <textarea
+              class="input-textarea"
+              id="input-textarea"
+              rows="1"
+              data-i18n-placeholder="input_placeholder"
+              placeholder="输入消息... (/ 触发命令, @ 触发文件, Ctrl+V 粘贴图片)"
+            ></textarea>
+            <div class="input-toolbar">
+              <button class="btn-tool" id="btn-attach" title="附件 (Ctrl+V 粘贴)">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+              </button>
+              <input type="file" id="file-input" multiple hidden>
+              <!-- v0.5.by: btn-mode 隐藏 (mcode 0.1.5 acp 不支持 session/set_config_option, 切 mode 等于没切)
+                   仍保留 mode-label 节点让 state push 不报错, 但整按钮 hidden — Wzdhehe 反馈 -->
+              <span class="btn-mode-static" id="btn-mode" title="mcode 0.1.5 不支持 mid-session 改 permission mode (实测 probe)" hidden>
+                <svg class="icon mode-icon" id="mode-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                <span id="mode-label">Default</span>
+              </span>
+              <div class="input-spacer"></div>
+              <!-- v0.5.bz: 暂时隐藏模型切换按钮 (隐藏不删除, 等 mcode 0.1.5+ 加 set_config_option 后可恢复)
+                   原因: mcode 0.1.5 acp 协议不支持 session/set_config_option (实测 "Method not found",
+                   已在 server/lib/mcode-rpc.js:32-40 的 UNSUPPORTED set 显式列出)
+                   后果: webui 端 cs.model.name 改了 UI 也变, 但 runMcodeAcp 默认路径不读 opts.model,
+                   调 client.newSession(workspace) / client.loadSession(sid, workspace) 都不带 model 参数
+                   (acp.mjs:155-160), mcode 实际仍用旧 model 跑
+                   唯一能真切的路径: mcode exec (MCODE_USE_ACP=0) — runMcodeExec 真把 --model 透传给子进程
+                   想临时恢复: 把下面 btn-model 标签的 hidden 去掉即可, server /api/set-model 端点没动 -->
+              <button class="btn-tool" id="btn-model" title="mcode 0.1.5 acp 不支持 mid-session 改 model (实测 probe); 按钮已隐藏" hidden>
+                <span id="model-label">—</span>
+                <svg class="icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
+              <button class="btn-send" id="btn-send" title="发送 (Enter)">
+                <svg class="icon icon-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+                <svg class="icon icon-stop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+              </button>
+            </div>
+            <!-- v0.5.bf: mode popover 移到 input-box 内部，跟着输入框走（之前在 body 底部，welcome 时定位错位） -->
+            <!-- v0.5.bh: Ask 图标改成纯问号（去掉外圆）；auto ↔ full 图标互换 -->
+            <div class="mode-popover" id="mode-popover" hidden>
+              <button class="mode-popover-item" data-mode="ask">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 1.5-1 2-1.5 2.5-.5.5-1 1-1 1.5"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                <span data-i18n="mode_ask">询问</span>
+                <span class="mode-popover-item-desc" data-i18n="mode_ask_desc">敏感操作确认</span>
+              </button>
+              <button class="mode-popover-item" data-mode="auto">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                <span data-i18n="mode_auto">自动</span>
+                <span class="mode-popover-item-desc" data-i18n="mode_auto_desc">仅高风险询问</span>
+              </button>
+              <button class="mode-popover-item" data-mode="full">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                <span data-i18n="mode_full">完全 访问</span>
+                <span class="mode-popover-item-desc" data-i18n="mode_full_desc">无需确认</span>
+              </button>
+              <!-- v0.5.by: Plan 模式按钮删除
+                   mcode 0.1.5 acp 不支持 session/set_mode (实测 "Method not found")
+                   之前 v0.5.bx-9 的 plan template workaround 仍 work, 但按钮没法真接 RPC
+                   Wzdhehe 反馈 "删掉 plan" — 直接干掉按钮
+                   想用 plan 还是输 "/plan <text>" slash cmd 走 mcode 自身解析 -->
+            </div>
+            <!-- v0.5.ak: model picker popover（btn-model 点击弹出） -->
+            <!-- v0.5.bi: 列表来自 /api/models（基于 mcode TUI 已配置的 provider 映射） -->
+            <div class="model-picker" id="model-picker" hidden>
+              <div class="model-picker-title" data-i18n="model_picker_title">切换模型</div>
+              <div class="model-picker-list" id="model-picker-list">
+                <div class="model-picker-loading" data-i18n="model_picker_loading">加载中...</div>
+              </div>
+              <div class="model-picker-divider"></div>
+              <input class="model-picker-input" id="model-picker-input" placeholder="provider/model[#variant]" />
+              <div class="model-picker-hint" data-i18n="model_picker_hint">回车发送 /model 命令给 mcode</div>
+              <div class="model-picker-actions">
+                <button class="btn-cancel" id="model-picker-cancel" data-i18n="cancel">取消</button>
+              </div>
+            </div>
+            <!-- v0.5.al: workspace picker popover（chip-workspace 点击弹出） -->
+            <div class="workspace-picker" id="workspace-picker" hidden>
+              <div class="workspace-picker-title" data-i18n="workspace_picker_title">切换工作区</div>
+              <div class="workspace-picker-current" id="workspace-picker-current">—</div>
+              <input class="workspace-picker-input" id="workspace-picker-input" placeholder="C:\Users\your-name\project-path" />
+              <!-- v0.5.by: Switch/Use TUI/Reset 三按钮删除 (Wzdhehe 反馈 不需要)
+                   想换工作区直接输路径 + 回车 即可 -->
+              <label class="workspace-picker-sync">
+                <input type="checkbox" id="workspace-picker-sync" />
+                <span data-i18n="workspace_sync_tui">Also update mcode TUI's cwd (write cwd.json)</span>
+              </label>
+              <div class="workspace-picker-recents" id="workspace-picker-recents" hidden>
+                <div class="workspace-picker-recents-title" data-i18n="workspace_recents_title">最近使用</div>
+                <div class="workspace-picker-recents-list" id="workspace-picker-recents-list"></div>
+              </div>
+              <!-- v0.5.am: 可视化目录树浏览（懒加载） -->
+              <div class="workspace-picker-browse">
+                <button class="workspace-picker-browse-toggle" id="workspace-picker-browse-toggle">
+                  <span class="workspace-picker-browse-chevron" id="workspace-picker-browse-chevron">▶</span>
+                  <span data-i18n="workspace_browse">浏览目录…</span>
+                </button>
+                <div class="workspace-picker-browse-panel" id="workspace-picker-browse-panel" hidden>
+                  <div class="workspace-picker-breadcrumb" id="workspace-picker-breadcrumb"></div>
+                  <div class="workspace-picker-tree" id="workspace-picker-tree">
+                    <div class="workspace-picker-tree-loading" id="workspace-picker-tree-loading" data-i18n="workspace_loading">加载中…</div>
+                  </div>
+                </div>
+              </div>
+              <div class="workspace-picker-hint" data-i18n="workspace_picker_hint">回车切换 · Esc 关闭</div>
+            </div>
+          </div>
+          <!-- v0.5.bc: 工作区 chip 从欢迎页挪到输入框下面（独立一行，左对齐，仿 kimi） -->
+          <!-- v0.5.bx: 有对话时整个 row 隐藏（已选工作区就不让改，要改就点 sidebar "New Chat" 重新选） -->
+          <div class="input-workspace-row" id="input-workspace-row">
+            <button class="chat-empty-workspace" id="chat-empty-workspace" data-i18n-title="workspace_switch" title="点击切换工作区">
+              <svg class="icon workspace-group-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              <span id="chat-empty-ws-text">…</span>
+              <svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+          </div>
+          <div class="input-hint" id="input-hint">
+            <span data-i18n="hint_footer">/ 命令 · @ 文件 · Ctrl+V 粘贴图片 · Enter 发送</span>
+          </div>
+        </div>
+      </div>
+      <div class="dropzone-overlay" id="dropzone-overlay" data-i18n="drop_hint">松开上传文件</div>
+    </main>
+
+    <!-- ============================ Right Panel ============================ -->
+    <aside class="right-panel" id="right-panel">
+
+      <!-- TODO (dynamic, only when present) — 优先显示在最上面 -->
+      <div class="right-section" id="r-todo-section" hidden>
+        <div class="right-section-title" data-i18n="section_todo">TODO</div>
+        <div class="todo-content" id="r-todo-list"></div>
+      </div>
+
+      <!-- GOAL (dynamic, only when active) -->
+      <div class="right-section" id="r-goal-section" hidden>
+        <div class="right-section-title" data-i18n="section_goal">GOAL</div>
+        <div class="goal-content">
+          <span class="goal-status-badge" id="r-goal-status">—</span>
+          <span id="r-goal-text">—</span>
+        </div>
+        <div class="goal-content" id="r-goal-duration" style="margin-top:4px;font-size:11px;color:var(--text-tertiary)"></div>
+      </div>
+
+      <!-- SESSION -->
+      <div class="right-section">
+        <div class="right-section-title" data-i18n="section_session">SESSION</div>
+        <div class="kv-row"><span class="kv-label">ID</span><span class="kv-value muted" id="r-session-id">—</span></div>
+        <div class="kv-row"><span class="kv-label" data-i18n="r_title">标题</span><span class="kv-value muted" id="r-session-title">—</span></div>
+      </div>
+
+      <!-- MODEL -->
+      <div class="right-section">
+        <div class="right-section-title" data-i18n="section_model">MODEL</div>
+        <div class="kv-row"><span class="kv-label">Model</span><span class="kv-value muted" id="r-model">—</span></div>
+        <div class="kv-row"><span class="kv-label">Thinking</span><span class="kv-value muted" id="r-thinking">—</span></div>
+        <div class="kv-row"><span class="kv-label">Context</span><span class="kv-value muted" id="r-ctx">—</span></div>
+      </div>
+
+      <!-- WORKSPACE -->
+      <div class="right-section">
+        <div class="right-section-title" data-i18n="section_workspace">WORKSPACE</div>
+        <div class="kv-row"><span class="kv-label" data-i18n="r_dir">目录</span><span class="kv-value muted" id="r-dir">—</span></div>
+        <!-- v0.5.ca: 暂时隐藏 r-branch (分支) / r-tree (状态) 两行 (隐藏不删除, 等修好再恢复)
+             原因: 整 server/ grep `.branch\s*[:=]|\.tree\s*[:=]` 只命中 3 处, 全是 `null`:
+               - server/lib/state-bus.js:18 初始 state
+               - server/lib/workspace.js:37 切 workspace 时
+               - server/routes/sessions.js:44 切 session 时
+             0 处真实赋值. server/ 也没有任何 git 命令调用
+             (没 spawn / execSync git, 没 rev-parse / status 子进程)
+             所以 r-branch / r-tree 永远显示 HTML 默认 "—", 跟权限弹窗、模型按钮同一种"假 UI"
+             修复方向: server/lib/workspace.js 在 cs.workspace.dir 写完后调
+               spawnSync('git', ['-C', absDir, 'rev-parse', '--abbrev-ref', 'HEAD'])
+               spawnSync('git', ['-C', absDir, 'status', '--porcelain'])
+             写到 cs.workspace.branch / .tree, push state
+             想临时恢复: 把下面两行 kv-row 的 hidden 去掉即可 -->
+        <div class="kv-row" hidden><span class="kv-label" data-i18n="r_branch">分支</span><span class="kv-value muted" id="r-branch">—</span></div>
+        <div class="kv-row" hidden><span class="kv-label" data-i18n="r_tree">状态</span><span class="kv-value muted" id="r-tree">—</span></div>
+      </div>
+
+      <!-- CONTEXT (real-time usage + TPS) -->
+      <div class="right-section">
+        <!-- v0.5.bx-20 (改): mavis db badge 从 Used 行挪到 CONTEXT 标题后面 (同行, 右上)
+             Wzdhehe 反馈 "把数据来源挪到这里后面" — 跟 section title 同一行, 不挤在 used 数字旁 -->
+        <div class="right-section-title" data-i18n="section_context">CONTEXT<span class="kv-usage-source" id="r-usage-source" style="display:none"></span></div>
+        <div class="kv-row"><span class="kv-label" data-i18n="r_used">已用</span><span class="kv-value" id="r-used">—</span> <span class="kv-mavis-model" id="r-mavis-model" style="display:none"></span> <span class="kv-cache-read" id="r-cache-read" style="display:none"></span></div>
+        <div class="context-bar"><div class="context-bar-fill" id="r-context-bar" style="width:0%"></div></div>
+        <div class="kv-row"><span class="kv-label" data-i18n="r_percent">占比</span><span class="kv-value muted" id="r-percent">—</span></div>
+        <div class="tps-display">
+          <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          <span data-i18n="r_tps">速度</span>
+          <b id="r-tps">—</b>
+          <span style="color:var(--text-tertiary)">tok/s</span>
+        </div>
+      </div>
+
+    </aside>
+  </div>
+
+  <!-- v0.5.ab: Ask / Plan 弹窗容器（位置 fixed，不参与 grid） -->
+  <div id="modal-root" style="position:fixed;inset:0;pointer-events:none;z-index:8000"></div>
+
+  <!-- ============================ Slash Command Overlay ============================ -->
+  <div class="slash-overlay" id="slash-overlay" hidden>
+    <input class="slash-input" id="slash-input" placeholder="搜索命令..." autocomplete="off">
+    <div class="slash-results" id="slash-results"></div>
+  </div>
+
+  <!-- v0.5.ar: 新建会话 - 工作区选择 popover（点"新建会话"按钮弹） -->
+  <div class="ws-picker-popover" id="new-chat-ws-picker" hidden>
+    <div class="ws-picker-title" data-i18n="workspace_picker_select">选择工作区</div>
+    <div class="ws-picker-current"><span data-i18n="workspace_picker_current">当前：</span><code id="new-chat-current-ws">—</code></div>
+    <div class="ws-picker-list" id="new-chat-ws-list">
+      <!-- 动态渲染已知 workspace -->
+    </div>
+    <div class="ws-picker-actions-row">
+      <button class="btn-workspace-action" id="new-chat-ws-other">Other path…</button>
+      <button class="btn-workspace-action primary" id="new-chat-ws-cancel" data-i18n="cancel">取消</button>
+    </div>
+  </div>
+
+  <!-- v0.5.bf: mode popover 已移入 input-box 内部（避免 welcome 时定位错位） -->
+
+    <!-- v0.5.aq: 旧 settings menu 元素已删除（chip-lan 自带开关） -->
+
+  <!-- v0.5.bx-14: 旧 Ask Modal (v0.4.0) 已删除, 用 #ask-modal v0.5.bx-13 真弹窗替代 -->
+
+  <!-- ============================ Plan Review Modal (v0.4.0 新增) ============================ -->
+  <div class="modal-backdrop" id="plan-modal">
+    <div class="modal wide" role="dialog" aria-labelledby="plan-modal-title">
+      <div class="modal-header">
+        <span class="modal-title" id="plan-modal-title">Plan Review</span>
+        <span class="choice-current" id="plan-frozen">Frozen Runtime snapshot</span>
+        <button class="modal-close" id="plan-close" title="Esc 跳过">
+          <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="plan-title" id="plan-title">—</div>
+        <div class="plan-summary" id="plan-summary">
+          <div class="plan-summary-empty">没有 Plan 内容</div>
+        </div>
+        <textarea class="plan-add-context" id="plan-add-context" placeholder="Add context to revise（仅 Add 模式生效）" hidden></textarea>
+        <div class="plan-options" id="plan-options"></div>
+      </div>
+      <div class="modal-footer">
+        <span><kbd>↑↓</kbd> 移动</span>
+        <span><kbd>1-3</kbd> 选择</span>
+        <span><kbd>Enter</kbd> 确认</span>
+        <span><kbd>Esc</kbd> 跳过</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ EnterPlanMode Modal (v0.4.0 新增) ============================ -->
+  <div class="modal-backdrop" id="planmode-modal">
+    <div class="modal" role="dialog" aria-labelledby="planmode-modal-title" style="max-width:480px">
+      <div class="modal-header">
+        <span class="modal-title" id="planmode-modal-title">Use Plan mode?</span>
+        <button class="modal-close" id="planmode-close" title="Esc 拒绝">
+          <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size:13px;color:var(--text-secondary);margin-bottom:14px">Plan mode structures complex tasks before execution.</p>
+        <div class="choice-options" id="planmode-options">
+          <button class="choice-option" data-choice="continue">
+            <span class="choice-option-num">1</span>
+            <div class="choice-option-text">
+              <div class="choice-option-label">Continue with plan</div>
+              <div class="choice-option-desc">进 Plan 模式，先出方案</div>
+            </div>
+          </button>
+          <button class="choice-option" data-choice="deny">
+            <span class="choice-option-num">2</span>
+            <div class="choice-option-text">
+              <div class="choice-option-label">Deny</div>
+              <div class="choice-option-desc">不进 Plan 模式</div>
+            </div>
+          </button>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <span><kbd>1-2</kbd> 选择</span>
+        <span><kbd>Enter</kbd> 确认</span>
+        <span><kbd>Esc</kbd> 拒绝</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ Permission Modal (v0.4.0 新增) ============================ -->
+  <div class="modal-backdrop" id="perm-modal">
+    <div class="modal" role="dialog" aria-labelledby="perm-modal-title" style="max-width:520px">
+      <div class="modal-header">
+        <span class="modal-title" id="perm-modal-title">Permission</span>
+        <span class="choice-current" id="perm-current">Current · —</span>
+        <button class="modal-close" id="perm-close" title="Esc 取消">
+          <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size:13px;color:var(--text-secondary);margin-bottom:14px">Choose how MCode handles tool access.</p>
+        <div class="choice-options" id="perm-options">
+          <button class="choice-option" data-choice="ask">
+            <span class="choice-option-num">1</span>
+            <div class="choice-option-text">
+              <div class="choice-option-label">ASK</div>
+              <div class="choice-option-desc">Confirm sensitive actions</div>
+            </div>
+          </button>
+          <button class="choice-option" data-choice="auto">
+            <span class="choice-option-num">2</span>
+            <div class="choice-option-text">
+              <div class="choice-option-label">AUTO</div>
+              <div class="choice-option-desc">Ask only when risk is high</div>
+            </div>
+          </button>
+          <button class="choice-option" data-choice="full">
+            <span class="choice-option-num">3</span>
+            <div class="choice-option-text">
+              <div class="choice-option-label">FULL</div>
+              <div class="choice-option-desc">Run without confirmation</div>
+            </div>
+          </button>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <span><kbd>1-3</kbd> 选择</span>
+        <span><kbd>Enter</kbd> 确认</span>
+        <span><kbd>Esc</kbd> 取消</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- v0.5.bx-13: ask_user 弹窗 (替代内嵌问卷) — modal 居中浮在 chat 上, chat 不再显示 Q/A 行 -->
+<div id="ask-modal" class="ask-modal" style="display:none" role="dialog" aria-modal="true" aria-labelledby="ask-modal-title">
+  <div class="ask-modal-backdrop" id="ask-modal-backdrop"></div>
+  <div class="ask-modal-content">
+    <div class="ask-modal-header">
+      <div class="ask-modal-icon">❓</div>
+      <div class="ask-modal-title" id="ask-modal-title">需要你回答</div>
+      <button class="ask-modal-close" id="ask-modal-close" title="全部跳过 (Esc 同效)">×</button>
+    </div>
+    <div class="ask-modal-body">
+      <div id="ask-modal-step-counter" class="ask-modal-step-counter"></div>
+      <div id="ask-modal-question" class="ask-modal-question"></div>
+      <div id="ask-modal-options" class="ask-modal-options"></div>
+    </div>
+    <div class="ask-modal-footer">
+      <input type="text" id="ask-modal-other" class="ask-modal-other" placeholder="其他 (回车发送)..." />
+      <button class="ask-modal-btn-secondary" id="ask-modal-skip">跳过</button>
+      <button class="ask-modal-btn-primary" id="ask-modal-send">发送</button>
+    </div>
+  </div>
+</div>
+
+<!-- v0.5.ab: MD 渲染 + 代码高亮（本地化） -->
+<!-- v0.5.bn: 删掉 hl/core.min.js 等 4 个 script —— 是 CommonJS bundle (`module.exports=...`)，浏览器跑报错
+     marked 配置的 highlight() 函数有 window.hljs 判空 fallback（见下），没 hljs 就返回纯文本 code blocks，不影响聊天 -->
+<script src="/lib/marked.min.js"></script>
+<!-- v0.5.bx-NN: stage 2 — JS extracted to /public/app/main.js (ES module) -->
+<!-- v3: v0.5.by bump — tpsEl null check + workspace picker i18n + 删 3 按钮 -->
+<!-- v4: v0.5.bx-NN — 加 in-page debug log 面板 (visible), render() 包 try/catch -->
+<!-- v5: v0.5.bx-NN — session delete 确认 i18n (会话列表 X 按钮的二次确认) -->
+<!-- v6: v0.5.bx-NN — debug log 面板默认收起, 报错自动弹出, 加 close 按钮 -->
+<!-- v7: v0.5.bx-28 ask modal X/Esc/背景 改"彻底放弃" (清除 pendingAskUser, 不发 Q/A 给 mcode) -->
+<!-- v8: v0.5.bx-29 fix context usage: SSE 连接时主动 hydrate mavis db 真值 + finalize 时 broadcast 到同 mcodeSessionId 的所有 cid -->
+<!-- v9: v0.5.bx-31 删 send() 里基于 pendingAskUser 的 Q/A 模板化兜底 + render 时设 pendingAskUser; chat 发消息永远不被套 -->
+<script type="module" src="/app/main.js?v=9"></script>
+
+<!-- v1.0: 全局 toast 容器 — #toast 元素此前缺失, showToast() 一直静默空转 (LAN 开关/复制/用量刷新全无提示) -->
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<!-- v0.5.bx-40: LAN URL hover popover 已删除 — 访问地址在顶栏 chip-lan-link（点击复制） -->
+
+<!-- v0.5.bx-NN: in-page debug log (collapsed by default; auto-expand on error) -->
+<div id="debug-log-panel" hidden style="position:fixed;bottom:8px;right:8px;width:min(420px,calc(100vw - 16px));max-height:240px;background:#1e1e1e;color:#0f0;font:11px/1.4 ui-monospace,Consolas,monospace;border:1px solid #444;border-radius:6px;padding:6px 8px;z-index:99999;overflow-y:auto;box-shadow:0 4px 16px rgba(0,0,0,.4)">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;color:#0ff;border-bottom:1px solid #333;padding-bottom:2px">
+    <span id="debug-log-title">📋 webui log (last 30)</span>
+    <span>
+      <button id="debug-log-copy" style="background:#333;color:#0f0;border:1px solid #555;padding:1px 6px;font-size:10px;cursor:pointer;border-radius:3px">copy</button>
+      <button id="debug-log-clear" style="background:#333;color:#0f0;border:1px solid #555;padding:1px 6px;font-size:10px;cursor:pointer;border-radius:3px;margin-left:2px">clear</button>
+      <button id="debug-log-close" title="收起" style="background:#333;color:#0f0;border:1px solid #555;padding:1px 6px;font-size:10px;cursor:pointer;border-radius:3px;margin-left:2px">×</button>
+    </span>
+  </div>
+  <pre id="debug-log" style="margin:0;white-space:pre-wrap;word-break:break-all;font:inherit"></pre>
+</div>
+</body>
+</html>
