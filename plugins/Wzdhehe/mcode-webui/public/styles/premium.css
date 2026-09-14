@@ -1,0 +1,260 @@
+/* ============================================================
+   premium.css — "Ink & Paper" 皮肤层 v2
+   只做美学覆盖，不改任何行为。依赖 main.css 的 v3 令牌（黑白单色）。
+   加载顺序在 main.css 之后，同特异性下后者胜。
+   ============================================================ */
+
+/* ---------- 全局微质感 ---------- */
+button, .chip, .btn-menu, .btn-tool, input, textarea {
+  transition: background-color 0.16s ease, border-color 0.16s ease,
+    color 0.16s ease, box-shadow 0.16s ease, transform 0.12s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--hairline);
+  border-bottom-width: 2px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+/* ---------- 顶栏：悬浮玻璃 + 发丝线 ---------- */
+.topbar {
+  height: 48px;
+  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
+  backdrop-filter: blur(14px) saturate(1.15);
+  -webkit-backdrop-filter: blur(14px) saturate(1.15);
+  border-bottom: 1px solid var(--hairline);
+}
+.topbar-brand { font-size: 14px; font-weight: 650; letter-spacing: 0.02em; }
+.topbar-logo { border-radius: 7px; box-shadow: 0 0 0 1px var(--hairline); }
+.topbar-version {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: transparent;
+  border: 1px solid var(--hairline);
+  color: var(--text-tertiary);
+}
+.topbar-beta {
+  background: linear-gradient(135deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 78%, #000) 100%);
+  color: var(--on-accent);
+  letter-spacing: 0.12em;
+  font-size: 9px;
+  padding: 2.5px 7px;
+  border-radius: 999px;
+}
+.chip {
+  background: transparent;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 3.5px 11px;
+  color: var(--text-secondary);
+}
+#chip-online span:first-child { font-size: 8px; }
+
+/* ---------- 左栏：工作区分组 = 器物铭牌 ---------- */
+.left-panel { border-right: 1px solid var(--hairline); }
+.btn-new {
+  border-radius: var(--radius-md);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  background: linear-gradient(160deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 78%, #000) 100%);
+  color: var(--on-accent);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.28),
+    0 2px 8px var(--accent-glow);
+}
+.btn-new:hover {
+  /* v1.0: 补 background/color 覆盖 — 之前只盖了底态没盖 hover,
+     main.css 的 :hover{background: var(--bg-hover)} 透出来,
+     深色"黑底黑字"/浅色"白底白字"整块不可见 */
+  background: linear-gradient(160deg, var(--accent-hover) 0%, color-mix(in srgb, var(--accent) 82%, #000) 100%);
+  color: var(--on-accent);
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.3),
+    0 5px 16px var(--accent-glow),
+    0 0 0 1px var(--accent-glow);
+}
+.btn-new:active { transform: translateY(0); }
+.search-box { position: relative; }
+.search-input {
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: 7px 11px 7px 30px;
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.06);
+}
+:root[data-theme="dark"] .search-input { box-shadow: inset 0 1px 3px rgba(0,0,0,0.35); }
+.search-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow), inset 0 1px 3px rgba(0,0,0,0.05);
+}
+.sessions-header-title,
+.right-section-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.workspace-group-header {
+  border-radius: var(--radius-sm);
+  padding-inline: 6px;
+}
+.workspace-group-name {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+.workspace-group-count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+  background: var(--bg-hover);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 0 7px;
+  line-height: 16px;
+}
+.workspace-group-current-badge {
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--accent-text);
+  background: var(--accent-bg);
+  border-radius: 999px;
+}
+/* 会话行：悬停左移单色针指示 */
+.workspace-group-items > * {
+  border-left: 2px solid transparent;
+  border-radius: var(--radius-sm);
+  transition: background-color 0.14s ease, border-color 0.14s ease, transform 0.14s ease;
+}
+.workspace-group-items > *:hover {
+  background: var(--bg-hover);
+  border-left-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  transform: translateX(1px);
+}
+.workspace-group-items > *.active,
+.workspace-group-items > *[data-active="true"] {
+  background: var(--accent-bg);
+  border-left-color: var(--accent);
+}
+.session-name { font-weight: 550; }
+.session-id { font-family: var(--font-mono); font-size: 10px; }
+
+/* ---------- 左下菜单行 ---------- */
+.btn-menu {
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+}
+.btn-menu:hover { background: var(--bg-hover); }
+.btn-menu .btn-value { font-family: var(--font-mono); font-size: 11px; }
+.btn-menu:hover .btn-chevron { transform: translateX(1px); }
+.btn-menu .btn-chevron { transition: transform 0.16s ease; }
+
+/* ---------- 聊天区 ---------- */
+.chat-empty-subtitle { color: var(--text-tertiary); letter-spacing: 0.01em; }
+.msg-content { line-height: 1.68; }
+.msg-tool {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
+}
+.msg-tool-name { font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.01em; }
+
+/* ---------- 输入区：悬浮卡片 ---------- */
+.input-box {
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  box-shadow:
+    0 1px 2px rgba(0,0,0,0.05),
+    0 8px 28px rgba(0,0,0,0.08);
+}
+:root[data-theme="dark"] .input-box {
+  box-shadow:
+    0 1px 2px rgba(0,0,0,0.4),
+    0 10px 34px rgba(0,0,0,0.35);
+}
+.input-box:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 65%, transparent);
+  box-shadow:
+    0 0 0 3.5px var(--accent-glow),
+    0 10px 32px rgba(0,0,0,0.1);
+  transform: translateY(-1px);
+}
+.input-textarea { line-height: 1.6; }
+.btn-send {
+  border-radius: 999px;
+  background: linear-gradient(160deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 76%, #000) 100%);
+  color: var(--on-accent);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.3), 0 2px 10px var(--accent-glow);
+}
+.btn-send:hover { transform: scale(1.06); box-shadow: inset 0 1px 0 rgba(255,255,255,0.32), 0 4px 16px var(--accent-glow); }
+.btn-send:active { transform: scale(0.96); }
+.btn-tool { border-radius: var(--radius-sm); }
+.btn-tool:hover { background: var(--bg-hover); color: var(--accent-text); }
+.input-hint { color: var(--text-tertiary); font-size: 11px; letter-spacing: 0.02em; }
+
+/* ---------- 右栏：仪表盘质感 ---------- */
+.right-panel { border-left: 1px solid var(--hairline); }
+.right-section-title::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  margin-right: 7px;
+  vertical-align: 3px;
+  opacity: 0.85;
+}
+.kv-value { font-variant-numeric: tabular-nums; }
+.context-bar { height: 4px; border-radius: 999px; overflow: hidden; }
+.context-bar-fill {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 70%, #000) 0%, var(--accent) 100%);
+  border-radius: 999px;
+  transition: width 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.tps-display b { font-family: var(--font-mono); font-weight: 600; }
+
+/* ---------- 弹层 / 模态 ---------- */
+.modal {
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.modal-backdrop, .ask-modal-backdrop {
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.usage-popover, .mode-popover, .model-picker, .workspace-picker,
+.ws-picker-popover, .slash-overlay {
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow-lg);
+}
+.slash-overlay { backdrop-filter: blur(18px) saturate(1.2); -webkit-backdrop-filter: blur(18px) saturate(1.2); }
+.choice-option { border-radius: var(--radius-md); }
+.choice-option:hover { border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+.choice-option-num {
+  font-family: var(--font-mono);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+}
+
+/* ---------- 滚动条随主题更细腻 ---------- */
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text-tertiary) 38%, transparent);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--text-tertiary) 62%, transparent); }
