@@ -1,0 +1,23 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "public-bio-api": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/mcp/public-bio-api.mjs"],
+      "cwd": "${PLUGIN_ROOT}"
+    },
+    "rna-figure": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/mcp/rna-figure.mjs"],
+      "cwd": "${PLUGIN_ROOT}"
+    },
+    "local-bio-tools": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/mcp/local-bio-tools.mjs"],
+      "cwd": "${PLUGIN_ROOT}"
+    }
+  }
+}

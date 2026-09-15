@@ -1,0 +1,23 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "bio-research-forge",
+  "version": "0.1.0",
+  "description": "Vendor-neutral life-science Agent Plugin: public bio APIs, local RNA figures, safe molecular tools, and independent review.",
+  "author": {
+    "name": "Presisitence",
+    "url": "https://github.com/Presisitence"
+  },
+  "homepage": "https://github.com/Presisitence/bio-research-forge",
+  "repository": "https://github.com/Presisitence/bio-research-forge",
+  "license": "AGPL-3.0-or-later",
+  "keywords": [
+    "minimax-code",
+    "plugin",
+    "mcp",
+    "life-science",
+    "bioinformatics",
+    "rnaseq",
+    "uniprot",
+    "ncbi"
+  ]
+}
