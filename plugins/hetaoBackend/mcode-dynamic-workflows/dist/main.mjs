@@ -14248,11 +14248,6 @@ var Engine = class extends EventEmitter {
     }
     const fingerprints = {};
     const topology = assertValidDependencies(previewTopology(request.script, request.input ?? {}));
-    const duplicate = this.store.byRequest(request.requestId);
-    if (duplicate) {
-      check(duplicate.requestHash === requestHash, "requestId \u53C2\u6570\u51B2\u7A81");
-      return this.snapshot(duplicate.id);
-    }
     check(!this.closing, "\u670D\u52A1\u6B63\u5728\u5173\u95ED");
     const run = { ...repair ? { repair } : {}, id: randomUUID2(), requestId: request.requestId, requestHash, ...definition, scriptHash: hash(request.script), fingerprints, workspace: this.options.workspace, revision: 1, topology, status: "pending_review", createdAt: Date.now(), updatedAt: Date.now(), attempts: 0, phases: [], result: null, error: null };
     this.store.transaction(() => {
@@ -14581,7 +14576,10 @@ var Engine = class extends EventEmitter {
       return cached2.promise;
     }
     const repair = ctx.run.repair, candidate = !previous && repair?.reuseStepIds.includes(spec.id) ? this.store.repairCandidate(ctx.run.id, spec.id) : null;
-    if (candidate && candidate.requestHash === requestHash && repair.contextHash === hash({ workspace: ctx.run.workspace, input: ctx.run.input, executor: ctx.run.executor, fingerprints: ctx.run.fingerprints }) && deps.every((id2) => this.store.step(ctx.run.id, id2)?.reusedFrom?.runId === repair.sourceRunId)) {
+    if (candidate && candidate.requestHash === requestHash && repair.contextHash === hash({ workspace: ctx.run.workspace, input: ctx.run.input, executor: ctx.run.executor, fingerprints: ctx.run.fingerprints }) && deps.every((id2) => {
+      const dep = this.store.step(ctx.run.id, id2);
+      return dep?.reusedFrom?.runId === repair.sourceRunId || dep?.kind === "checkpoint" && dep.requestHash === this.store.step(repair.sourceRunId, id2)?.requestHash;
+    })) {
       let valid = true;
       try {
         if (validateOutput) valid = validateOutput(candidate.output);

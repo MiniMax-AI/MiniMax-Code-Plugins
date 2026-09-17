@@ -133,3 +133,16 @@ test('the false JSON Schema cannot silently accept a node output',async()=>{
  assert.equal(run.steps[0].errorDetails.code,'OUTPUT_SCHEMA_INVALID');assert.deepEqual(run.steps[0].rawOutput,{unexpected:true});
  }finally{await f.cleanup();}
 });
+
+test('checkpoint dependencies with unchanged values keep candidates reusable; changed values invalidate downstream',async()=>{
+ const calls=[],f=await fixture(async s=>{calls.push(s.id);return {output:s.id};});try{
+ const sourceScript=`await ctx.checkpoint('seed','v1');const a=await ctx.agent({id:'a',prompt:'a',dependsOn:'checkpoint:seed'});throw Error('bad synthesis');`;
+ const source=await start(f.engine,sourceScript);
+ const draft=await f.engine.repair(source.id,request(source,{script:sourceScript.replace("throw Error('bad synthesis');",'return a.output;'),reuseStepIds:['a']}));
+ await f.engine.approve(draft.id,{revision:1});const end=await finish(f.engine,draft.id);
+ assert.equal(end.status,'succeeded');assert.equal(end.attempts,0);assert.equal(end.steps.find(s=>s.id==='a').reusedFrom.runId,source.id);
+ const changed=await f.engine.repair(source.id,request(source,{script:sourceScript.replace("'v1'","'v2'").replace("throw Error('bad synthesis');",'return a.output;'),reuseStepIds:['a']}));
+ await f.engine.approve(changed.id,{revision:1});const done=await finish(f.engine,changed.id);
+ assert.equal(done.status,'succeeded');assert.equal(done.attempts,1);assert.ok(!done.steps.find(s=>s.id==='a').reusedFrom);assert.deepEqual(calls,['a','a']);
+ }finally{await f.cleanup();}
+});
