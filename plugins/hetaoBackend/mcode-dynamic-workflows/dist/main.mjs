@@ -13995,9 +13995,80 @@ async function resolveMcode(command = "mcode", { env = process.env, home = homed
 
 // src/executor.mjs
 import { spawn } from "node:child_process";
+
+// src/process-tree.mjs
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
+var exec = promisify(execFile);
+async function stopProcessTree(child, {
+  platform = process.platform,
+  run = exec,
+  kill = process.kill,
+  graceMs = 2e3,
+  forceMs = 1e3
+} = {}) {
+  const pid = child.pid;
+  if (!Number.isInteger(pid) || pid <= 0) return { confirmed: true };
+  try {
+    if (platform === "win32") {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        throw new Error("CLI exited before Windows process-tree cleanup");
+      }
+      await run("taskkill.exe", ["/PID", String(pid), "/T", "/F"], {
+        windowsHide: true,
+        timeout: 3e3,
+        killSignal: "SIGKILL",
+        maxBuffer: 65536
+      });
+      return { confirmed: true };
+    }
+    const live = async () => {
+      const { stdout } = await run("/bin/ps", ["-axo", "pid=,pgid=,stat="], {
+        timeout: 1e3,
+        killSignal: "SIGKILL",
+        maxBuffer: 8 * 1024 * 1024
+      });
+      const rows = stdout.trim().split(/\r?\n/).filter(Boolean);
+      if (!rows.length) throw new Error("Empty process table");
+      let running = false;
+      for (const row of rows) {
+        const fields = /^\s*(\d+)\s+(\d+)\s+(\S+)\s*$/.exec(row);
+        if (!fields) throw new Error("Unrecognized process table");
+        if (Number(fields[2]) === pid && !fields[3].startsWith("Z")) running = true;
+      }
+      return running;
+    };
+    const send = (signal) => {
+      try {
+        kill(-pid, signal);
+      } catch (error2) {
+        if (error2.code !== "ESRCH") throw error2;
+      }
+    };
+    const wait = async (ms) => {
+      const deadline = Date.now() + ms;
+      do {
+        if (!await live()) return true;
+        if (Date.now() >= deadline) return false;
+        await delay(50);
+      } while (true);
+    };
+    if (!await live()) return { confirmed: true };
+    send("SIGTERM");
+    if (await wait(graceMs)) return { confirmed: true };
+    send("SIGKILL");
+    if (await wait(forceMs)) return { confirmed: true };
+    throw new Error("Owned process group still contains live processes after SIGKILL");
+  } catch (error2) {
+    return { confirmed: false, reason: error2.message };
+  }
+}
+
+// src/executor.mjs
+import { setTimeout as delay2 } from "node:timers/promises";
 async function demoExecute(spec, { signal, onEvent }) {
-  await delay(500 + spec.id.length % 4 * 220, void 0, { signal });
+  await delay2(500 + spec.id.length % 4 * 220, void 0, { signal });
   onEvent({ type: "message", text: `\u6F14\u793A\u6267\u884C\uFF1A${spec.label ?? spec.id}` });
   if (spec.input?.fail) throw new Error("\u6F14\u793A\u6545\u969C\uFF1A\u6B64\u8282\u70B9\u53EF\u7528\u4E8E\u9A8C\u8BC1\u6062\u590D\u884C\u4E3A");
   return { output: spec.input?.result ?? { summary: `${spec.label ?? spec.id} \u5DF2\u5B8C\u6210`, findings: [] }, usage: null };
@@ -14014,14 +14085,17 @@ async function mcodeExecute(spec, { signal, onEvent, workspace, command, args = 
     if (configPath) argv.push("--config", configPath);
     if (spec.model) argv.push("--model", spec.model);
     if (spec.effort) argv.push("--effort", spec.effort);
-    const child = spawn(command, argv, { cwd: workspace, shell: false, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: { ...process.env, MCODE_WORKFLOW_CHILD: "1" } });
-    let buffer = "", stderr = "", terminal2 = null, protocolError = null, finished2 = false, killTimer, watchdogExpired = false, stopping = false;
+    const child = spawn(command, argv, { cwd: workspace, shell: false, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: { ...process.env, MCODE_WORKFLOW_CHILD: "1" } });
+    let buffer = "", stderr = "", terminal2 = null, protocolError = null, finished2 = false, completing = false, cleanup = null, watchdogExpired = false;
     const stop = () => {
-      if (stopping || finished2) return;
-      stopping = true;
-      child.kill("SIGTERM");
-      killTimer = setTimeout(() => child.kill("SIGKILL"), 2e3);
-      killTimer.unref();
+      if (cleanup || finished2) return;
+      cleanup = stopProcessTree(child);
+      void cleanup.then(() => {
+        child.stdin.destroy();
+        child.stdout.destroy();
+        child.stderr.destroy();
+        void complete(child.exitCode, child.signalCode);
+      });
     };
     signal.addEventListener("abort", stop, { once: true });
     const timer = setTimeout(() => {
@@ -14049,8 +14123,10 @@ async function mcodeExecute(spec, { signal, onEvent, workspace, command, args = 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
+      if (protocolError) return;
       buffer += chunk;
       if (buffer.length > 2e6) {
+        buffer = "";
         protocolError = new Error("Agent \u8F93\u51FA\u8D85\u8FC7\u534F\u8BAE\u7F13\u51B2\u4E0A\u9650");
         stop();
         return;
@@ -14068,13 +14144,24 @@ async function mcodeExecute(spec, { signal, onEvent, workspace, command, args = 
       if (finished2) return;
       finished2 = true;
       clearTimeout(timer);
-      clearTimeout(killTimer);
       signal.removeEventListener("abort", stop);
       error2 ? reject(error2) : resolve4(value);
     }
     child.on("error", (e) => settle2(failureError({ code: "MCODE_START_FAILED", message: `\u65E0\u6CD5\u542F\u52A8 MCode\uFF08${e.code ?? "unknown"}\uFF09\uFF1A${safeDetail(e.message)}`, suggestion: "\u786E\u8BA4\u5DF2\u5B89\u88C5 mcode\uFF0C\u547D\u4EE4\u53EF\u7528\uFF0C\u5DE5\u4F5C\u533A\u8DEF\u5F84\u5B58\u5728\u3002" })));
-    child.on("close", (code, exitSignal) => {
+    child.on("close", (code, exitSignal) => void complete(code, exitSignal));
+    async function complete(code, exitSignal) {
+      if (completing || finished2) return;
+      completing = true;
       if (buffer.trim()) line(buffer);
+      if (cleanup) {
+        const result = await cleanup;
+        if (!result.confirmed) return settle2(failureError({
+          code: "MCODE_CLEANUP_UNCONFIRMED",
+          pid: child.pid,
+          message: `\u65E0\u6CD5\u786E\u8BA4 MCode \u8FDB\u7A0B\u6811\u5DF2\u505C\u6B62\uFF1A${safeDetail(result.reason)}`,
+          suggestion: "\u68C0\u67E5\u8BE5\u8282\u70B9\u7684 CLI \u53CA\u5176\u5B50\u8FDB\u7A0B\uFF0C\u786E\u8BA4\u5168\u90E8\u505C\u6B62\u540E\u518D\u6062\u590D\uFF1B\u4E0D\u8981\u76F4\u63A5\u91CD\u590D\u6267\u884C\u3002"
+        }, terminal2?.usage));
+      }
       if (signal.aborted) return settle2(failureError({ code: "RUN_INTERRUPTED", message: "\u6267\u884C\u5DF2\u53D6\u6D88\u6216\u6682\u505C\uFF0C\u5F53\u524D Agent \u5DF2\u505C\u6B62\u3002" }));
       const metadata = { maxSteps, timeoutMs, exitCode: code, sessionId: terminal2?.sessionId, turnId: terminal2?.turnId, providerCode: terminal2?.error?.code, category: terminal2?.error?.category };
       if (protocolError) return settle2(failureError({ code: "MCODE_PROTOCOL_ERROR", ...metadata, message: `MCode \u8F93\u51FA\u534F\u8BAE\u5F02\u5E38\uFF1A${safeDetail(protocolError.message)}`, suggestion: "\u68C0\u67E5 MCode \u7248\u672C\u4E0E\u8282\u70B9\u65E5\u5FD7\uFF1B\u4E0D\u8981\u628A\u6CA1\u6709\u6709\u6548\u5B8C\u6210\u534F\u8BAE\u7684\u8F93\u51FA\u5F53\u6210\u6210\u529F\u3002" }, terminal2?.usage));
@@ -14082,7 +14169,7 @@ async function mcodeExecute(spec, { signal, onEvent, workspace, command, args = 
       if (!terminal2) return settle2(failureError({ code: "MCODE_MISSING_RESULT", ...metadata, message: `MCode \u672A\u8FD4\u56DE\u5B8C\u6210\u534F\u8BAE\uFF08\u9000\u51FA\u7801 ${code ?? "\u672A\u77E5"}${exitSignal ? "\uFF0C\u4FE1\u53F7 " + exitSignal : ""}\uFF09\u3002${safeDetail(stderr).slice(-600)}`, suggestion: "\u67E5\u770B\u8FDB\u7A0B\u9000\u51FA\u539F\u56E0\u548C MCode \u65E5\u5FD7\uFF0C\u786E\u8BA4\u767B\u5F55\u3001\u7F51\u7EDC\u53CA\u8FD0\u884C\u73AF\u5883\u6B63\u5E38\u3002" }));
       if (code !== 0 || terminal2.status !== "succeeded") return settle2(failureError(agentFailure(terminal2.status, { ...metadata, cause: terminal2.error?.message ?? "" }), terminal2.usage));
       settle2(null, { output: terminal2.output ?? null, usage: terminal2.usage ?? null, sessionId: terminal2.sessionId, turnId: terminal2.turnId });
-    });
+    }
     child.stdin.on("error", () => {
     });
     child.stdin.end(`${spec.prompt}
@@ -14561,6 +14648,13 @@ var Engine = class extends EventEmitter {
         step.sessionId = answer.sessionId ?? step.sessionId;
         step.turnId = answer.turnId ?? step.turnId;
       } catch (e) {
+        if (e.details?.code === "MCODE_CLEANUP_UNCONFIRMED") {
+          ctx.intent = "needs_attention";
+          ctx.failure = e.details;
+          ctx.reason = e.message;
+          ctx.controller.abort();
+          void ctx.finish(false, e.message);
+        }
         step.status = ctx.controller.signal.aborted ? "interrupted" : "failed";
         step.error = ctx.controller.signal.aborted ? ctx.reason ?? e.message : e.message ?? String(e);
         step.errorDetails = ctx.failure ?? e.details ?? { code: ctx.controller.signal.aborted ? "RUN_INTERRUPTED" : "STEP_FAILED", message: step.error };
@@ -14585,6 +14679,10 @@ var Engine = class extends EventEmitter {
         this.save(run);
         this.emitEvent(id2, "run.finished", { status: "cancelled" });
       }
+      return this.snapshot(id2);
+    }
+    if (ctx.intent === "needs_attention") {
+      await ctx.done;
       return this.snapshot(id2);
     }
     ctx.intent = intent;
@@ -27429,7 +27527,7 @@ var { values } = parseArgs({ options: { stdio: { type: "boolean" }, "stop-servic
 var settings = values.settings ? JSON.parse(await readFile2(resolve3(values.settings), "utf8")) : {};
 for (const key of Object.keys(settings)) if (!["workspace", "dataDir"].includes(key) || typeof settings[key] !== "string") throw Error("settings \u53EA\u5141\u8BB8 workspace/dataDir \u5B57\u7B26\u4E32");
 if (values.port !== void 0 && (!/^\d+$/.test(values.port) || Number(values.port) > 65535)) throw Error("port \u5FC5\u987B\u662F 0\u201365535 \u7684\u6574\u6570");
-var delay2 = (ms) => new Promise((r) => setTimeout(r, ms));
+var delay3 = (ms) => new Promise((r) => setTimeout(r, ms));
 var alive = (pid) => {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
@@ -27496,7 +27594,7 @@ if (values.stdio && process.env.MCODE_WORKFLOW_CHILD === "1") {
       if (!res.ok) throw Error("\u65E0\u6CD5\u68C0\u67E5\u6D3B\u52A8\u5DE5\u4F5C\u6D41");
       if ((await res.json()).some((r) => ["running", "queued", "pausing", "stopping"].includes(r.status))) throw Error("\u5B58\u5728\u6D3B\u52A8\u5DE5\u4F5C\u6D41\uFF0C\u8BF7\u5148\u5728\u9762\u677F\u4E2D\u6682\u505C\u6216\u53D6\u6D88\uFF0C\u518D\u505C\u6B62\u670D\u52A1");
       process.kill(service.endpoint.pid, "SIGTERM");
-      for (let i2 = 0; i2 < 100 && alive(service.endpoint.pid); i2++) await delay2(50);
+      for (let i2 = 0; i2 < 100 && alive(service.endpoint.pid); i2++) await delay3(50);
       if (alive(service.endpoint.pid)) throw Error("\u670D\u52A1\u5C1A\u672A\u9000\u51FA\uFF0C\u8BF7\u67E5\u770B service.log");
     }
     process.stdout.write("Workflow Studio service stopped. The dashboard address is preserved.\n");
@@ -27516,11 +27614,11 @@ if (values.stdio && process.env.MCODE_WORKFLOW_CHILD === "1") {
         });
         child.unref();
         await log.close();
-        await delay2(50);
+        await delay3(50);
         if (spawnError) throw spawnError;
       }
       for (let i2 = 0; i2 < 100 && !service; i2++) {
-        await delay2(80);
+        await delay3(80);
         service = await existing();
       }
       if (!service) throw Error(`\u672C\u5730\u670D\u52A1\u542F\u52A8\u5931\u8D25\u3002\u4E0A\u6B21\u7AEF\u53E3\u53EF\u80FD\u88AB\u5360\u7528\uFF1B\u4E0D\u4F1A\u81EA\u52A8\u66F4\u6362\u5730\u5740\u3002\u8BF7\u67E5\u770B ${join4(dataDir, "service.log")}`);

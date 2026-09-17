@@ -33,3 +33,15 @@ test('invalid structured output is retained on the failed producer; guarded scri
 test('without a schema, narrative output remains unparsed',async()=>{
  const raw='{"name":"report"}',f=await fixture(async()=>({output:raw}));try{const r=await f.start(request('return await ctx.agent({id:"a",prompt:"p"});'));const end=await done(f.engine,r.id);assert.equal(end.result.output,raw);assert.equal(end.steps[0].rawOutput,undefined);}finally{await f.cleanup();}
 });
+test('uncertain cleanup requires explicit confirmation and cannot be resumed or repaired directly',async()=>{
+ let calls=0;const f=await fixture(async(s,{signal})=>{calls++;try{await delay(3000,undefined,{signal});}catch{}throw Object.assign(Error('tree cleanup unconfirmed'),{details:{code:'MCODE_CLEANUP_UNCONFIRMED',message:'tree cleanup unconfirmed'}});});
+ try{
+  const r=await f.start(request('return await ctx.map([1,2,3],i=>ctx.agent({id:"a"+i,prompt:"p"}));',{concurrency:1}));
+  while(!calls)await delay(10);
+  const end=await f.engine.stop(r.id,'paused');
+  assert.equal(end.status,'needs_attention');assert.equal(end.errorDetails.code,'MCODE_CLEANUP_UNCONFIRMED');assert.equal(calls,1);
+  assert.equal(end.steps.find(s=>s.id==='a1').errorDetails.code,'MCODE_CLEANUP_UNCONFIRMED');
+  await assert.rejects(f.engine.resume(r.id),/确认旧 Agent/);
+  await assert.rejects(f.engine.repair(r.id,{script:'return 1'}),/确认旧 Agent/);
+ }finally{await f.cleanup();}
+});
