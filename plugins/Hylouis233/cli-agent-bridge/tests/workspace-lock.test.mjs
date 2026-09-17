@@ -558,16 +558,18 @@ test("post-CAS cancellation reconciles the committed owner before returning", as
     } else process.env.CLI_AGENT_BRIDGE_TEST_WORKSPACE_CAS_RESULT_RELEASE_FILE = saved.release;
   });
   const cancel = cancellationToken();
-  const acquisition = tryAcquireGitWorkspaceLock({
+  // Observe the expected rejection before releasing the CAS barrier: the
+  // operation can reject before the asynchronous release-file write resolves.
+  const acquisitionRejected = assert.rejects(tryAcquireGitWorkspaceLock({
     cwd: repo, key, cancel, heartbeatMs: 60_000,
-  });
+  }), WorkspaceLockCancelledError);
   await waitForFile(startedFile);
   assert.match(await git(repo, ["rev-parse", ref]), /^[0-9a-f]{40,64}$/u,
     "the real acquisition CAS must commit before cancellation");
   await writeFile(blocker, "intentional compensating-delete failure\n");
   cancel.cancel();
   await writeFile(releaseFile, "release\n");
-  await assert.rejects(acquisition, WorkspaceLockCancelledError);
+  await acquisitionRejected;
   assert.match(await git(repo, ["rev-parse", ref]), /^[0-9a-f]{40,64}$/u,
     "a failed exact delete must leave a recoverable owner ref");
   await rm(blocker, { force: true });
@@ -604,14 +606,14 @@ test("post-CAS deadline reconciliation deletes the exact committed owner", async
   });
   const passive = { cancelled: false, promise: new Promise(() => {}), subscribe: () => () => {} };
   const deadline = Date.now() + 3_000;
-  const acquisition = tryAcquireGitWorkspaceLock({
+  const acquisitionRejected = assert.rejects(tryAcquireGitWorkspaceLock({
     cwd: repo, key, cancel: passive, deadline, heartbeatMs: 60_000,
-  });
+  }), WorkspaceLockDeadlineError);
   await waitForFile(startedFile);
   assert.match(await git(repo, ["rev-parse", ref]), /^[0-9a-f]{40,64}$/u);
   await new Promise((resolve) => setTimeout(resolve, Math.max(0, deadline - Date.now() + 20)));
   await writeFile(releaseFile, "release\n");
-  await assert.rejects(acquisition, WorkspaceLockDeadlineError);
+  await acquisitionRejected;
   await assert.rejects(
     execFileAsync("git", ["rev-parse", "--verify", ref], { cwd: repo }), /Command failed/u,
   );
@@ -654,13 +656,15 @@ test("interrupted state CAS cleanup covers both exact commit outcomes", async (c
     }
   });
   const cancel = cancellationToken();
-  const update = result.lease.markWorkerStarting({ cancel });
+  const updateRejected = assert.rejects(
+    result.lease.markWorkerStarting({ cancel }), WorkspaceLockCancelledError,
+  );
   await waitForFile(startedFile);
   const candidateOid = await git(repo, ["rev-parse", ref]);
   assert.notEqual(candidateOid, previousOid, "the real state CAS must commit its candidate OID");
   cancel.cancel();
   await writeFile(releaseFile, "release\n");
-  await assert.rejects(update, WorkspaceLockCancelledError);
+  await updateRejected;
   delete process.env.CLI_AGENT_BRIDGE_TEST_WORKSPACE_CAS_RESULT_STARTED_FILE;
   delete process.env.CLI_AGENT_BRIDGE_TEST_WORKSPACE_CAS_RESULT_RELEASE_FILE;
   process.env.CLI_AGENT_BRIDGE_TEST_WORKSPACE_RELEASE_READBACK_FAILURES = "1";
