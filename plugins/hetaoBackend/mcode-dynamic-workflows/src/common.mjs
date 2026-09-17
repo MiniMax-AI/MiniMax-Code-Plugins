@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { parse } from 'acorn';
-export const hash = value => createHash('sha256').update(typeof value === 'string' ? value : stable(value)).digest('hex');
+export const hash = value => createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : stable(value)).digest('hex');
 export function stable(value) { return JSON.stringify(canonical(value)); }
 function canonical(v) { if (Array.isArray(v)) return v.map(canonical); if(v && typeof v==='object') return Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])])); return v; }
 export function check(ok, message) { if(!ok) throw new Error(message); }

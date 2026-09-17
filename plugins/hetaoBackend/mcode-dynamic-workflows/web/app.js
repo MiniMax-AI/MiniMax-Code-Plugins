@@ -1894,6 +1894,7 @@ var copyTimer;
 var scheduler = { active: 0, limit: 8, queued: 0 };
 var showPlan = false;
 var readSignature = "";
+var selectionVersion = 0;
 var runs = [];
 var current = null;
 var selected = null;
@@ -1976,29 +1977,57 @@ async function refreshList() {
   [runs, scheduler] = await Promise.all([api("/runs"), api("/scheduler")]);
   renderScheduler();
   renderList();
-  if (!current && runs.length) await selectRun(runs.find((r) => r.id === new URLSearchParams(location.search).get("run"))?.id ?? runs[0].id);
+  if (!current) {
+    const id = new URLSearchParams(location.search).get("run") || runs[0]?.id;
+    if (id) await selectRun(id);
+  }
 }
+var viewing = (id, version) => current?.id === id && selectionVersion === version;
 async function selectRun(id) {
-  current = await api(`/runs/${id}`);
-  history.replaceState(null, "", `${location.pathname}?run=${encodeURIComponent(id)}`);
-  showPlan = false;
-  selected = null;
-  events = [];
-  after = 0;
-  zoom = 0;
-  zoomAuto = true;
-  error("");
-  renderList();
-  renderRun();
-  await loadEvents(id);
+  const version = ++selectionVersion;
+  try {
+    const next = await api(`/runs/${id}`);
+    if (version !== selectionVersion) return;
+    current = next;
+    history.replaceState(null, "", `${location.pathname}?run=${encodeURIComponent(id)}`);
+    showPlan = false;
+    selected = null;
+    events = [];
+    after = 0;
+    zoom = 0;
+    zoomAuto = true;
+    error("");
+    renderList();
+    renderRun();
+    await loadEvents(id, version);
+  } catch (e) {
+    if (version === selectionVersion) throw e;
+  }
 }
-async function loadEvents(id) {
-  const data = await api(`/runs/${id}/wait?after=${after}`);
-  if (current?.id !== id) return;
-  after = data.nextSequence;
-  events.push(...data.events);
-  events = events.slice(-500);
-  renderEvents();
+async function loadEvents(id, version = selectionVersion) {
+  try {
+    const data = await api(`/runs/${id}/wait?after=${after}`);
+    if (!viewing(id, version)) return;
+    events.push(...data.events.filter((e) => e.seq > after));
+    after = Math.max(after, data.nextSequence);
+    events = events.slice(-500);
+    renderEvents();
+  } catch (e) {
+    if (viewing(id, version)) throw e;
+  }
+}
+async function refreshCurrent() {
+  const id = current?.id, version = selectionVersion;
+  if (!id) return;
+  try {
+    const next = await api(`/runs/${id}`);
+    if (viewing(id, version)) {
+      current = next;
+      renderRun();
+    }
+  } catch (e) {
+    if (viewing(id, version)) throw e;
+  }
 }
 function renderRun() {
   renderBrief();
@@ -2370,19 +2399,18 @@ $2("#validate").onclick = async () => {
 };
 for (const action of ["pause", "cancel"]) $2("#" + action).onclick = async () => {
   if (!current || busy) return;
-  let confirmStopped = false;
-  if (action === "resume" && current.status === "needs_attention") {
-    confirmStopped = confirm(t("confirmStopped"));
-    if (!confirmStopped) return;
-  }
+  const id = current.id, version = selectionVersion;
   busy = true;
   try {
-    current = await api(`/runs/${current.id}/${action}`, "POST", { confirmStopped });
-    error("");
-    renderRun();
+    const next = await api(`/runs/${id}/${action}`, "POST", {});
+    if (viewing(id, version)) {
+      current = next;
+      error("");
+      renderRun();
+    }
     await refreshList();
   } catch (e) {
-    error(e.message);
+    if (viewing(id, version)) error(e.message);
   } finally {
     busy = false;
   }
@@ -2474,20 +2502,14 @@ async function loop() {
   for (; ; ) {
     try {
       if (current && ["running", "pausing", "stopping", "queued"].includes(current.status)) {
-        const id = current.id;
-        await loadEvents(id);
-        if (current?.id === id) {
-          current = await api(`/runs/${id}`);
-          renderRun();
-        }
+        const id = current.id, version = selectionVersion;
+        await loadEvents(id, version);
+        if (viewing(id, version)) await refreshCurrent();
         await refreshList();
       } else {
         await new Promise((r) => setTimeout(r, 4e3));
         await refreshList();
-        if (current) {
-          current = await api(`/runs/${current.id}`);
-          renderRun();
-        }
+        await refreshCurrent();
       }
       setConnection("connected");
     } catch (e) {

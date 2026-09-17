@@ -30,7 +30,7 @@ export async function startHTTP(engine,{port=0,webRoot=new URL('../web/',import.
       const match=url.pathname.match(/^\/api\/runs\/([a-f0-9-]+)(?:\/(wait|pause|cancel|resume|edit|approve|repair))?$/);
       if(match&&req.method==='GET'){if(match[2]==='wait')return json(await waitEvents(engine,match[1],Math.max(0,Number(url.searchParams.get('after'))||0),20000));return json(engine.snapshot(match[1]));}
       if(req.method==='POST'){
-       check(req.headers['content-type']?.startsWith('application/json'),'需要 application/json');let body='';for await(const chunk of req){body+=chunk;check(Buffer.byteLength(body)<=700_000,'请求过大');}const data=JSON.parse(body||'{}');
+       check(req.headers['content-type']?.startsWith('application/json'),'需要 application/json');req.setEncoding('utf8');let body='';for await(const chunk of req){body+=chunk;check(Buffer.byteLength(body)<=700_000,'请求过大');}const data=JSON.parse(body||'{}');
        if(url.pathname==='/api/templates')return json(engine.saveTemplate(data.runId,data),201);
        if(template){check(data.action==='delete','模板操作无效');check(engine.store.deleteTemplate(template[1]),'模板不存在');return json({deleted:true});}
        if(url.pathname==='/api/scheduler')return json(engine.configureScheduler(data));

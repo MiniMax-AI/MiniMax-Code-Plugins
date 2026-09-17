@@ -7,20 +7,32 @@ import { previewTopology } from './topology.mjs';
 import { EventEmitter } from 'node:events';
 import { Worker } from 'node:worker_threads';
 import { randomUUID } from 'node:crypto';
-import { realpath, readFile } from 'node:fs/promises';
-import { resolve, relative, isAbsolute } from 'node:path';
+import { realpath, open } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { resolve, relative, isAbsolute, sep } from 'node:path';
 import Ajv from 'ajv';
 import { check, hash, boundedJSON, validateScript } from './common.mjs';
 import { resolveMcode } from './availability.mjs';
 import { DEFAULT_LIMITS, LEGACY_LIMITS, resolveLimits, runLimits, durationLabel } from './limits.mjs';
 import { agentFailure,failureError } from './failure.mjs';
 import { demoExecute, mcodeExecute } from './executor.mjs';
-const ajv=new Ajv({strict:false,allErrors:true});
 export class Engine extends EventEmitter {
  constructor(store,options){super();this.store=store;this.options=options;this.defaults=resolveLimits(options,DEFAULT_LIMITS);this.globalConcurrency=this.store.setting('globalConcurrency')??8;this.lastServedRun=null;this.approving=new Set();this.active=new Map();this.slots=0;this.queue=[];this.closing=false;}
  async fingerprints(files=[]) {
-   check(Array.isArray(files)&&files.length<=100,'files 最多 100 项');const root=await realpath(this.options.workspace);const out={};
-   for(const path of files){check(typeof path==='string'&&!isAbsolute(path),'文件必须是工作区相对路径');const full=await realpath(resolve(root,path));const rel=relative(root,full);check(rel!==''&&!rel.startsWith('..')&&!isAbsolute(rel),'文件超出工作区');const data=await readFile(full);check(data.length<=1_000_000,'单文件超过 1MB');out[path]=hash(data.toString());}return out;
+   check(Array.isArray(files)&&files.length<=100,'files 最多 100 项');const root=await realpath(this.options.workspace);const out=Object.create(null);
+   for(const path of files){
+    check(typeof path==='string'&&!isAbsolute(path),'文件必须是工作区相对路径');
+    const full=await realpath(resolve(root,path)),rel=relative(root,full);
+    check(rel!==''&&rel!=='..'&&!rel.startsWith('..'+sep)&&!isAbsolute(rel),'文件超出工作区');
+    // Nonblocking open avoids waiting on a FIFO before we can reject it.
+    const file=await open(full,constants.O_RDONLY|(constants.O_NONBLOCK??0));
+    try{
+     const info=await file.stat();check(info.isFile(),'只支持普通文件');check(info.size<=1_000_000,'单文件超过 1MB');
+     const data=Buffer.alloc(1_000_001);let length=0;
+     while(length<data.length){const {bytesRead}=await file.read(data,length,data.length-length,null);if(!bytesRead)break;length+=bytesRead;}
+     check(length<=1_000_000,'单文件超过 1MB');out[path]=hash(data.subarray(0,length));
+    }finally{await file.close();}
+   }return out;
  }
  async start(request,repair=null,candidates=[]) {
    check(!this.closing,'服务正在关闭');validateScript(request.script);boundedJSON(request.input??{});
@@ -165,7 +177,9 @@ export class Engine extends EventEmitter {
    const deps=normalizeDependencies(spec.dependsOn,{stepId:spec.id,line});
    for(const dep of deps){const status=this.store.step(ctx.run.id,dep)?.status??'not_created';if(status!=='succeeded')throw failureError({code:'DEPENDENCY_NOT_READY',stepId:spec.id,dependency:dep,dependencyStatus:status,line,message:`节点 ${spec.id} 不能启动：依赖 ${dep} 尚未成功（状态 ${status}）。`,suggestion:'先 await 上游并检查 status。需要继续处理部分结果时，只声明已成功节点的 ID，同时在结果中保留失败与覆盖缺口。'});}
    if(typeof spec.dependsOn==='string')spec={...spec,dependsOn:deps};
-   if(spec.schema)ajv.compile(spec.schema);
+   // Each node owns its schema namespace and compiler lifetime. A repeated $id
+   // in another node/run must neither conflict nor retain schemas indefinitely.
+   const validateOutput=spec.schema===undefined?null:new Ajv({strict:false,allErrors:true,addUsedSchema:false}).compile(spec.schema);
    const requestHash=hash(spec),previous=this.store.step(ctx.run.id,spec.id),cached=ctx.calls.get(spec.id);
    if(previous){check(previous.requestHash===requestHash,`步骤 ${spec.id} 使用了不同参数，恢复已停止`);if(previous.status==='succeeded')return Promise.resolve({status:'succeeded',output:previous.output,cached:true});}
    if(cached){check(cached.hash===requestHash,'重复 step id 参数冲突');return cached.promise;}
@@ -174,7 +188,7 @@ export class Engine extends EventEmitter {
       &&repair.contextHash===hash({workspace:ctx.run.workspace,input:ctx.run.input,executor:ctx.run.executor,fingerprints:ctx.run.fingerprints})
       &&deps.every(id=>this.store.step(ctx.run.id,id)?.reusedFrom?.runId===repair.sourceRunId)){
      // Recheck the output against today's validator, including legacy candidates.
-     let valid=true;try{if(spec.schema)valid=ajv.compile(spec.schema)(candidate.output);}catch{valid=false;}
+     let valid=true;try{if(validateOutput)valid=validateOutput(candidate.output);}catch{valid=false;}
      if(valid){const step={...candidate,...(typeof planId==='string'?{planId}:{}),attempt:0,createdAt:Date.now(),startedAt:null,endedAt:Date.now(),usage:null,usageHistory:[],sessionId:undefined,turnId:undefined,
        reusedFrom:{runId:repair.sourceRunId,stepId:spec.id,endedAt:candidate.endedAt??null}};
        this.store.saveStep(ctx.run.id,step);this.emitEvent(ctx.run.id,'step.reused',{stepId:step.id,sourceRunId:repair.sourceRunId});
@@ -187,7 +201,7 @@ export class Engine extends EventEmitter {
     let release;try{release=await this.acquire(ctx.controller.signal,ctx,step.id);ctx.controller.signal.throwIfAborted();step.status='running';step.startedAt=Date.now();this.store.saveStep(ctx.run.id,step);this.emitEvent(ctx.run.id,'step.started',{stepId:step.id});
       const executor=this.options.execute??(ctx.run.executor==='demo'?demoExecute:mcodeExecute);
       const answer=await executor(spec,{...this.options,signal:ctx.controller.signal,timeoutMs:step.timeoutMs,maxSteps:step.maxSteps,onEvent:e=>{if(e.sessionId){step.sessionId=e.sessionId;step.turnId=e.turnId;this.store.saveStep(ctx.run.id,step);}this.emitEvent(ctx.run.id,'step.progress',{stepId:step.id,...e});}});
-      step.usage=answer.usage??null;step.sessionId=answer.sessionId??step.sessionId;step.turnId=answer.turnId??step.turnId;boundedJSON(answer.output,100_000);let output=answer.output;if(spec.schema){step.rawOutput=answer.output;const normalized=structuredOutput(answer.output,ajv.compile(spec.schema),step.id);output=normalized.output;step.outputFormat=normalized.format;}
+      step.usage=answer.usage??null;step.sessionId=answer.sessionId??step.sessionId;step.turnId=answer.turnId??step.turnId;boundedJSON(answer.output,100_000);let output=answer.output;if(validateOutput){step.rawOutput=answer.output;const normalized=structuredOutput(answer.output,validateOutput,step.id);output=normalized.output;step.outputFormat=normalized.format;}
       step.status='succeeded';step.output=output;step.usage=answer.usage??null;step.sessionId=answer.sessionId??step.sessionId;step.turnId=answer.turnId??step.turnId;
     }catch(e){step.status=ctx.controller.signal.aborted?'interrupted':'failed';step.error=ctx.controller.signal.aborted?(ctx.reason??e.message):e.message??String(e);step.errorDetails=ctx.failure??e.details??{code:ctx.controller.signal.aborted?'RUN_INTERRUPTED':'STEP_FAILED',message:step.error};step.usage=e.usage??step.usage;}finally{step.endedAt=Date.now();this.store.saveStep(ctx.run.id,step);this.emitEvent(ctx.run.id,'step.finished',{stepId:step.id,status:step.status,error:step.error});release?.();}
     return {status:step.status,output:step.output,error:step.error,errorDetails:step.errorDetails};

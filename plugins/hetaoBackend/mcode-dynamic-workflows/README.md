@@ -41,7 +41,9 @@ Do not enable another copy of Dynamic Workflow alongside this one in the same ho
 4. Pause/cancel to stop dispatch and interrupt in-flight calls. **Resume** replays the unchanged script and reuses successful steps; failed agents restart, rather than continuing their old sessions.
 5. **Edit & repair** retains the original run and creates a new pending-review version. Select results known to remain valid; selection is opt-in and can be reduced during review. Runtime arguments, inputs, executor, workspace, tracked files and reused dependencies must still match. A changed or rerun upstream invalidates downstream reuse. Reused nodes link to their original run without double-counting calls or tokens.
 
-The repaired script runs from its beginning; checkpoints are recomputed and unreached branches are not premarked complete. Declare every data/control dependency in `dependsOn`. Untracked files, external evidence and side effects cannot be checked automatically, so stale or incorrect results must not be selected for reuse. Schema-constrained outputs accept native values, complete JSON text, or one complete JSON fence; validation errors preserve the raw output.
+Tracked files are regular workspace files (up to 1 MB each), fingerprinted from their exact bytes so binary changes invalidate reuse.
+
+The repaired script runs from its beginning; checkpoints are recomputed and unreached branches are not premarked complete. Declare every data/control dependency in `dependsOn`. Untracked files, external evidence and side effects cannot be checked automatically, so stale or incorrect results must not be selected for reuse. Schema-constrained outputs accept native values, complete JSON text, or one complete JSON fence; validation errors preserve the raw output. Each node has an independent schema namespace, including local references, so repeated schema identifiers cannot conflict across nodes or runs.
 
 ## Data, permissions and network
 
@@ -51,6 +53,7 @@ The repaired script runs from its beginning; checkpoints are recomputed and unre
 - Dashboard assets and reports are local. This plugin has no telemetry, remote MCP endpoint, hardcoded model service, or automatic installer. Development-only `npm ci` downloads dependencies from `registry.npmjs.org`.
 - Real agents run through the user's MCode CLI with its configured provider, tools and smart permissions. Project materials and prompts may be sent to that provider; agents may access other destinations and modify files as the task permits. These destinations depend on the user's configuration and task. Credentials remain managed by the CLI; the plugin does not ask for or store credentials, but prompts/outputs/logs can contain sensitive information supplied by users or tools.
 - QuickJS isolates the orchestration script from direct Node/file/network access. **The spawned MCode agents are not an OS sandbox** and do not inherit the full parent conversation. Review prompts, budgets, side effects and permissions before execution or retries.
+- A lifetime SQLite lock enforces one state owner even if a discovery lockfile is lost. The run list prioritizes active runs and recovery attention within its 100-entry window; crash recovery inspects every unfinished run.
 - The project service and approved workflows survive a chat disconnect. No OS autostart is installed; machine shutdown interrupts execution. After abnormal termination, verify old agents have stopped before recovery.
 
 ## Source, build and tests

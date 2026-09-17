@@ -5,7 +5,7 @@ const $=s=>document.querySelector(s);
 let nodeRaw=false,nodeSignature='',copyValue='',copyTimer;
 
 let scheduler={active:0,limit:8,queued:0};
-let showPlan=false,readSignature="";
+let showPlan=false,readSignature="",selectionVersion=0;
 let runs=[],current=null,selected=null,events=[],after=0,zoom=0,zoomAuto=true,tab='output',busy=false,defaults={maxSteps:120,stepTimeoutMs:1800000,runTimeoutMs:7200000};const ns='http://www.w3.org/2000/svg';
 const labels=new Proxy({}, {get:(_,key)=>{const v=t('status.'+key);return v==='status.'+key?key:v}});
 const eventLabels=new Proxy({}, {get:(_,key)=>{const v=t('event.'+key);return v==='event.'+key?key:v}});
@@ -20,9 +20,26 @@ function el(tag,attrs={},text){const e=document.createElement(tag);for(const[k,v
 function svg(tag,attrs={},text){const e=document.createElementNS(ns,tag);for(const[k,v]of Object.entries(attrs))e.setAttribute(k,v);if(text!==undefined)e.textContent=text;return e;}
 function short(s,n=24){return s.length>n?s.slice(0,n-1)+'…':s;}
 function renderList(){const list=$('#run-list');list.replaceChildren();$('#run-count').textContent=runs.length;for(const r of runs){const b=el('button',{title:r.name,class:`run-item ${current?.id===r.id?'active':''}`,'aria-current':current?.id===r.id?'true':'false'});b.append(el('span',{class:`run-dot ${r.status}`}));const title=el('span');title.append(el('b',{},r.name),el('small',{},`${r.executor==='demo'?t('demo'):'MCode'} · ${labels[r.status]??r.status}`));b.append(title);b.onclick=()=>selectRun(r.id).catch(e=>error(e.message));list.append(b);}}
-async function refreshList(){[runs,scheduler]=await Promise.all([api('/runs'),api('/scheduler')]);renderScheduler();renderList();if(!current&&runs.length)await selectRun(runs.find(r=>r.id===new URLSearchParams(location.search).get('run'))?.id??runs[0].id);}
-async function selectRun(id){current=await api(`/runs/${id}`);history.replaceState(null,'',`${location.pathname}?run=${encodeURIComponent(id)}`);showPlan=false;selected=null;events=[];after=0;zoom=0;zoomAuto=true;error('');renderList();renderRun();await loadEvents(id);}
-async function loadEvents(id){const data=await api(`/runs/${id}/wait?after=${after}`);if(current?.id!==id)return;after=data.nextSequence;events.push(...data.events);events=events.slice(-500);renderEvents();}
+async function refreshList(){[runs,scheduler]=await Promise.all([api('/runs'),api('/scheduler')]);renderScheduler();renderList();if(!current){const id=new URLSearchParams(location.search).get('run')||runs[0]?.id;if(id)await selectRun(id);}}
+const viewing=(id,version)=>current?.id===id&&selectionVersion===version;
+async function selectRun(id){
+ const version=++selectionVersion;
+ try{
+  const next=await api(`/runs/${id}`);if(version!==selectionVersion)return;
+  current=next;history.replaceState(null,'',`${location.pathname}?run=${encodeURIComponent(id)}`);showPlan=false;selected=null;events=[];after=0;zoom=0;zoomAuto=true;error('');renderList();renderRun();await loadEvents(id,version);
+ }catch(e){if(version===selectionVersion)throw e;}
+}
+async function loadEvents(id,version=selectionVersion){
+ try{
+  const data=await api(`/runs/${id}/wait?after=${after}`);if(!viewing(id,version))return;
+  events.push(...data.events.filter(e=>e.seq>after));after=Math.max(after,data.nextSequence);events=events.slice(-500);renderEvents();
+ }catch(e){if(viewing(id,version))throw e;}
+}
+async function refreshCurrent(){
+ const id=current?.id,version=selectionVersion;if(!id)return;
+ try{const next=await api(`/runs/${id}`);if(viewing(id,version)){current=next;renderRun();}}
+ catch(e){if(viewing(id,version))throw e;}
+}
 function renderRun(){renderBrief();const r=current;$('#repair-run').hidden=!r||!['failed','paused','interrupted','cancelled','completed_with_gaps','succeeded'].includes(r.status);const lineage=$('#repair-lineage');lineage.hidden=!r?.repair;lineage.replaceChildren();if(r?.repair){const link=el('a',{href:'?run='+encodeURIComponent(r.repair.sourceRunId)},t('repairSource'));lineage.append(link,document.createTextNode(' · '+r.repair.reason+' · '+t('repairCandidates',{count:r.repair.reuseStepIds.length})));}const review=r?.status==='pending_review';document.querySelector('main').classList.toggle('is-review',review);$('.metrics').hidden=review;$('.timeline').hidden=review;$('#report').hidden=review;$('#save-template').hidden=!r||review;$('#review-budgets').textContent=r?t('reviewBudgets',{concurrency:r.concurrency,calls:r.maxCalls,steps:r.maxSteps,minutes:r.stepTimeoutMs/60000}):'';$('#review-banner').hidden=!review;$('#edit-draft').hidden=!review;$('#approve').hidden=!review;$('#review-version').textContent=review?`v${r.revision}`:'';$('#graph-mode').hidden=!r?.topology||review;$('#graph-mode').textContent=t(showPlan?'showExecution':'showPlan');$('#topology-note').hidden=!r?.topology;$('#topology-warnings').textContent=r?.topology?.warnings.map(w=>t('topology.'+w)).join(' ')??'';$('#empty').hidden=!!r;$('#run-view').hidden=!r;if(!r){$('#run-title').textContent=t('canvas');$('#executor-badge').textContent=t('noRun');for(const id of ['pause','cancel','resume'])$('#'+id).hidden=true;return;}$('#run-title').textContent=r.name;$('#executor-badge').textContent=r.executor==='demo'?t('demoRun'):t('realRun');$('#metric-status').textContent=labels[r.status]??r.status;$('.status-metric').dataset.status=r.status;const tasks=r.steps.filter(s=>s.kind==='agent');const visibleNodes=graphSteps(),knownNodes=visibleNodes.filter(n=>!n.placeholder||!n.dynamic).length;$('#metric-nodes').textContent=`${tasks.filter(s=>s.status==='succeeded').length} / ${knownNodes}${visibleNodes.some(n=>n.placeholder&&n.dynamic)?'+':''}`;$('#metric-calls').textContent=`${r.attempts} / ${r.maxCalls}`;const usage=tasks.flatMap(s=>[...(s.usageHistory??[]),...(s.usage?[s.usage]:[])]);$('#metric-tokens').textContent=r.executor==='demo'?'—':usage.length?usage.reduce((n,s)=>n+(s.totalTokens??((s.inputTokens??0)+(s.outputTokens??0))),0).toLocaleString(language==='zh'?'zh-CN':'en-US')+(usage.length<r.attempts?t('unknownPlus'):''):t('unknown');$('#pause').hidden=r.status!=='running';$('#cancel').hidden=!['running','queued'].includes(r.status);$('#resume').hidden=!((!r.revision||r.approvedRevision===r.revision)&&['paused','failed','interrupted','cancelled','needs_attention','completed_with_gaps'].includes(r.status));$('#canvas-status').textContent=labels[r.status];$('#canvas-status').dataset.status=r.status;if(r.error){const f=describeFailure(language,r.errorDetails,r.error);error(f.title+(f.original?' '+t('originalReason',{cause:f.original}):'')+(/DEPENDENCY/.test(r.errorDetails?.code??'')?' '+f.advice:''),true);}renderGraph();renderNode();renderRead();}
 function graphSteps(){return workflowGraph(current,{planOnly:showPlan}).nodes;}
 function renderGraph(){
@@ -85,7 +102,11 @@ $('#create-form [name=executor]').onchange=renderModeNote;
 function renderModeNote(){$('#mode-note').textContent=t($('#create-form').elements.executor.value==='demo'?'demoNote':'mcodeNote');}
 $('#create-form').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget);const submit=e.submitter??$('#save-draft');submit.disabled=true;try{const input=JSON.parse(f.get('inputJSON'));if(!input||Array.isArray(input)||typeof input!=='object')throw Error(t('inputObject'));const form=e.currentTarget;const r=await api(form.dataset.repairId?`/runs/${form.dataset.repairId}/repair`:form.dataset.runId?`/runs/${form.dataset.runId}/edit`:'/runs','POST',{requestId:crypto.randomUUID(),...(form.dataset.repairId?{sourceUpdatedAt:Number(form.dataset.sourceUpdatedAt),reason:f.get('repairReason'),reuseStepIds:f.getAll('reuseStepId')}:{}),...(form.dataset.runId?{revision:Number(form.dataset.revision),...(!$('#repair-context').hidden?{reason:f.get('repairReason'),reuseStepIds:f.getAll('reuseStepId')}:{})}:{}),name:f.get('name'),executor:f.get('executor'),concurrency:Number(f.get('concurrency')),maxCalls:Number(f.get('maxCalls')),...readLimits(f),script:f.get('script'),input,metadata:{objective:f.get('objective'),inputDescription:f.get('inputDescription'),deliverables:String(f.get('deliverables')).split('\n').map(x=>x.trim()).filter(Boolean)}});$('#create-dialog').close();await refreshList();await selectRun(r.id);}catch(e){$('#form-error').hidden=false;$('#form-error').textContent=apiMessage(e.message);lastFormMessage={error:e.message};}finally{submit.disabled=false;}};
 $('#validate').onclick=async()=>{try{await api('/validate','POST',{script:$('#script-input').value});$('#form-error').hidden=false;$('#form-error').textContent=t('valid');lastFormMessage={key:'valid'};}catch(e){$('#form-error').hidden=false;$('#form-error').textContent=apiMessage(e.message);lastFormMessage={error:e.message};}};
-for(const action of ['pause','cancel'])$('#'+action).onclick=async()=>{if(!current||busy)return;let confirmStopped=false;if(action==='resume'&&current.status==='needs_attention'){confirmStopped=confirm(t('confirmStopped'));if(!confirmStopped)return;}busy=true;try{current=await api(`/runs/${current.id}/${action}`,'POST',{confirmStopped});error('');renderRun();await refreshList();}catch(e){error(e.message);}finally{busy=false;}};
+for(const action of ['pause','cancel'])$('#'+action).onclick=async()=>{
+ if(!current||busy)return;const id=current.id,version=selectionVersion;busy=true;
+ try{const next=await api(`/runs/${id}/${action}`,'POST',{});if(viewing(id,version)){current=next;error('');renderRun();}await refreshList();}
+ catch(e){if(viewing(id,version))error(e.message);}finally{busy=false;}
+};
 for(const b of document.querySelectorAll('[data-tab]')){b.onclick=()=>{tab=b.dataset.tab;renderNode();$('#node-scroll').scrollTop=0;};b.onkeydown=e=>{const tabs=[...document.querySelectorAll('[data-tab]')];let index=tabs.indexOf(b);if(e.key==='ArrowRight')index=(index+1)%tabs.length;else if(e.key==='ArrowLeft')index=(index+tabs.length-1)%tabs.length;else if(e.key==='Home')index=0;else if(e.key==='End')index=tabs.length-1;else return;e.preventDefault();tabs[index].click();tabs[index].focus();};}
 $('#node-raw').onclick=()=>{nodeRaw=!nodeRaw;renderNode();};
 $('#node-copy').onclick=async()=>{const signature=nodeSignature;try{await navigator.clipboard.writeText(copyValue);if(signature===nodeSignature)$('#node-copy-status').textContent=t('copied');}catch{if(signature===nodeSignature)$('#node-copy-status').textContent=t('copyFailed');}clearTimeout(copyTimer);copyTimer=setTimeout(()=>$('#node-copy-status').textContent='',2500);};
@@ -103,7 +124,12 @@ async function renderRead(){
  try{const response=await fetch(`/api/runs/${current.id}/report?format=html&language=${language}`,{headers:{'X-Workflow-Client':'1'}});if(!response.ok)throw Error(`HTTP ${response.status}`);const html=await response.text();if(signature!==readSignature)return;const frame=el('iframe',{title:t('report'),sandbox:'allow-popups allow-popups-to-escape-sandbox'});frame.srcdoc=html;preview.replaceChildren(frame);}catch(e){if(signature===readSignature){preview.replaceChildren(el('p',{},t('reportLoadFailed')+' '+e.message));readSignature='';}}
 }
 for(const mode of ['report','script'])$('#'+mode).onclick=()=>{if(!current)return;readMode=mode;renderRead();$('#read-dialog').showModal();};
-async function loop(){for(;;){try{if(current&&['running','pausing','stopping','queued'].includes(current.status)){const id=current.id;await loadEvents(id);if(current?.id===id){current=await api(`/runs/${id}`);renderRun();}await refreshList();}else{await new Promise(r=>setTimeout(r,4000));await refreshList();if(current){current=await api(`/runs/${current.id}`);renderRun();}}setConnection('connected');}catch(e){setConnection('disconnected');error(e.message);await new Promise(r=>setTimeout(r,4000));}}}
+async function loop(){for(;;){try{
+ if(current&&['running','pausing','stopping','queued'].includes(current.status)){
+  const id=current.id,version=selectionVersion;await loadEvents(id,version);if(viewing(id,version))await refreshCurrent();await refreshList();
+ }else{await new Promise(r=>setTimeout(r,4000));await refreshList();await refreshCurrent();}
+ setConnection('connected');
+ }catch(e){setConnection('disconnected');error(e.message);await new Promise(r=>setTimeout(r,4000));}}}
 applyLanguage();
 try{const c=await api('/config');mcodeAvailable=c.mcodeAvailable!==false;$('#workspace').textContent=c.workspace;defaultScripts.zh=c.example;if(!$('#script-input').dataset.edited)$('#script-input').value=defaultScripts[language];defaults=c.defaults??defaults;const f=$('#create-form');f.elements.maxSteps.value=defaults.maxSteps;f.elements.stepTimeoutMinutes.value=defaults.stepTimeoutMs/60000;f.elements.runTimeoutMinutes.value=defaults.runTimeoutMs/60000;updateLimitSummary();if(c.mcodeAvailable===false){const option=f.querySelector('option[value=mcode]');option.disabled=false;option.textContent=t('missingOption');}setConnection('connected');await refreshList();void loop();}catch(e){setConnection('notConnected');error(e.message);}
 

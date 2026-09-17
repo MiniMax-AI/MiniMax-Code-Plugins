@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm,writeFile} from 'node:fs/promises';
+import {mkdtemp,mkdir,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -85,5 +85,51 @@ test('reviewers can deselect frozen results before approval; edits cannot add un
  await assert.rejects(f.engine.update(draft.id,{revision:1,reuseStepIds:['unknown']}),/候选节点/);
  await f.engine.update(draft.id,{revision:1,reuseStepIds:['b'],reason:'The upstream result is stale'});
  await f.engine.approve(draft.id,{revision:2});const end=await finish(f.engine,draft.id);assert.equal(end.attempts,2);assert.equal(end.repair.reason,'The upstream result is stale');assert.ok(end.steps.every(s=>!s.reusedFrom));
+ }finally{await f.cleanup();}
+});
+
+test('binary file changes invalidate reuse even when UTF-8 decoding is identical',async()=>{
+ const f=await fixture(async s=>({output:s.id}));try{
+ const before=Buffer.from([0x80]),after=Buffer.from([0x81]);assert.equal(before.toString(),after.toString());
+ await writeFile(join(f.dir,'evidence.bin'),before);
+ const source=await start(f.engine,broken,{files:['evidence.bin']});
+ const draft=await f.engine.repair(source.id,request(source));
+ await writeFile(join(f.dir,'evidence.bin'),after);
+ await assert.rejects(f.engine.resume(source.id),/源文件已改变/);
+ await f.engine.approve(draft.id,{revision:1});const end=await finish(f.engine,draft.id);
+ assert.equal(end.status,'succeeded');assert.equal(end.attempts,2);assert.ok(end.steps.every(s=>!s.reusedFrom));
+ }finally{await f.cleanup();}
+});
+
+test('fingerprints retain special filenames and reject nonregular or oversized files',async()=>{
+ const f=await fixture(async()=>({output:null}));try{
+ for(const name of ['__proto__','..notes'])await writeFile(join(f.dir,name),'first');
+ const before=await f.engine.fingerprints(['__proto__','..notes']);
+ assert.equal(Object.hasOwn(before,'__proto__'),true);assert.equal(Object.hasOwn(before,'..notes'),true);
+ await writeFile(join(f.dir,'__proto__'),'second');
+ assert.notEqual((await f.engine.fingerprints(['__proto__'])).__proto__,before.__proto__);
+ await writeFile(join(f.dir,'large.bin'),Buffer.alloc(1_000_001));
+ await assert.rejects(f.engine.fingerprints(['large.bin']),/1MB/);
+ await mkdir(join(f.dir,'folder'));await assert.rejects(f.engine.fingerprints(['folder']),/普通文件|EISDIR/);
+ await assert.rejects(f.engine.fingerprints(['.']),/文件超出工作区/);
+ }finally{await f.cleanup();}
+});
+
+test('node schemas are independent even when their local identifiers repeat across nodes and runs',async()=>{
+ const f=await fixture(async s=>({output:s.id==='boolean'?true:'text'}));try{
+ const schema=type=>({$id:'urn:workflow:result',$defs:{value:{type}},$ref:'#/$defs/value'});
+ const script=`return await Promise.all([ctx.agent({id:'boolean',prompt:'p',schema:${JSON.stringify(schema('boolean'))}}),ctx.agent({id:'text',prompt:'p',schema:${JSON.stringify(schema('string'))}})]);`;
+ for(let i=0;i<2;i++){
+  const run=await start(f.engine,script);assert.equal(run.status,'succeeded',run.error);
+  assert.deepEqual(run.steps.map(s=>s.output),[true,'text']);
+ }
+ }finally{await f.cleanup();}
+});
+
+test('the false JSON Schema cannot silently accept a node output',async()=>{
+ const f=await fixture(async()=>({output:{unexpected:true}}));try{
+ const run=await start(f.engine,`return await ctx.agent({id:'never-valid',prompt:'p',schema:false});`);
+ assert.equal(run.status,'completed_with_gaps');assert.equal(run.steps[0].status,'failed');
+ assert.equal(run.steps[0].errorDetails.code,'OUTPUT_SCHEMA_INVALID');assert.deepEqual(run.steps[0].rawOutput,{unexpected:true});
  }finally{await f.cleanup();}
 });
