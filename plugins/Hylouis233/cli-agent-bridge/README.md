@@ -238,3 +238,12 @@ capture truncation, and Codex prompt delimiters on Windows and POSIX.
 ## License
 
 MIT. See LICENSE. Upstream credits: see NOTICE.
+
+### Process-tracker regression coverage
+
+The internal Linux tracker tests bind each newly visible child to its start identity while its
+original parent can still be revalidated, before enumerating the parent's remaining tasks.
+This preserves evidence for short-lived Git helpers without accepting unknown descendants or
+children of a recycled parent PID. Pending children without verifiable identities still fail
+closed. This test-path improvement does not enable Linux production delegation; the supported
+kernel containment boundary remains Windows Job Objects.

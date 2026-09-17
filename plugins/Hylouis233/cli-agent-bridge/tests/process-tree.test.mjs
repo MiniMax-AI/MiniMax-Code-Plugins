@@ -1058,3 +1058,61 @@ test("BSD process snapshots reject truncation and malformed records", async () =
     runUtility: async () => ({ exitCode: 0, stdout: valid + "malformed\n" }),
   }), null);
 });
+
+test("Linux binds a visible child before scanning its parent's remaining tasks", async () => {
+  let alive = true;
+  const fsOps = {
+    readdir: async target => target === "/fixture-proc/100/task"
+      ? [100, 101].map(pid => ({ name: String(pid), isDirectory: () => true })) : [],
+    readFile: async target => {
+      if (target.endsWith("/100/stat") && alive) {
+        return procStatLine(100, { parent: 1, group: 100, startIdentity: 10 });
+      }
+      if (target.endsWith("/200/stat") && alive) {
+        return procStatLine(200, { parent: 100, group: 100, startIdentity: 20 });
+      }
+      if (target.endsWith("/100/task/100/children")) return "200\n";
+      if (target.endsWith("/100/task/101/children")) {
+        alive = false; // Both short-lived processes exit during a later task read.
+        return "\n";
+      }
+      throw missingProcessError();
+    },
+  };
+  const state = {
+    knownPids: new Set([100]), knownStarts: new Map([[100, "10"]]),
+    runMarker: "fixture-run", markerObservationGraceMs: 0,
+  };
+  await refreshProcessTree({ pid: 100 }, state, { platform: "linux", procRoot: "/fixture-proc", fsOps });
+  assert.equal(state.knownStarts.get(200), "20", "retain identity while the original parent is still observable");
+  assert.equal(state.processIdentityUncertain, undefined);
+  assert.equal(await isProcessTreeAlive({ pid: 100 }, state, {
+    platform: "linux", procRoot: "/fixture-proc", fsOps,
+    probeProcessGroup: () => { throw missingProcessError("ESRCH"); },
+  }), false);
+});
+
+test("Linux early child binding rejects a parent whose PID identity changed", async () => {
+  let reads = 0;
+  const fsOps = {
+    readdir: async target => target === "/fixture-proc/100/task"
+      ? [{ name: "100", isDirectory: () => true }] : [],
+    readFile: async target => {
+      if (target.endsWith("/100/stat")) {
+        return procStatLine(100, { parent: 1, group: 100, startIdentity: ++reads === 1 ? 10 : 30 });
+      }
+      if (target.endsWith("/200/stat")) {
+        return procStatLine(200, { parent: 100, group: 100, startIdentity: 40 });
+      }
+      if (target.endsWith("/100/task/100/children")) return "200\n";
+      throw missingProcessError();
+    },
+  };
+  const state = {
+    knownPids: new Set([100]), knownStarts: new Map([[100, "10"]]), runMarker: "fixture-run",
+  };
+  await refreshProcessTree({ pid: 100 }, state, { platform: "linux", procRoot: "/fixture-proc", fsOps });
+  assert.equal(state.knownPids.has(200), false);
+  assert.equal(state.knownStarts.get(200), undefined);
+  assert.equal(state.processIdentityUncertain, true);
+});
