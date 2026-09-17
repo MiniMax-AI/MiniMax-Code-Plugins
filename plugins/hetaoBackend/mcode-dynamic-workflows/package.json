@@ -1,0 +1,26 @@
+{
+  "name": "mcode-dynamic-workflows",
+  "version": "0.8.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.19 <23 || >=24 <27"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test checks/*.check.mjs",
+    "test:package": "node --test test/package.test.mjs"
+  },
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "acorn": "8.18.0",
+    "ajv": "8.20.0",
+    "marked": "18.0.13",
+    "quickjs-emscripten-core": "0.32.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

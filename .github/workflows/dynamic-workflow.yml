@@ -1,0 +1,48 @@
+name: Dynamic Workflow
+
+on:
+  pull_request:
+    paths:
+      - 'plugins/hetaoBackend/mcode-dynamic-workflows/**'
+      - '.github/workflows/dynamic-workflow.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/hetaoBackend/mcode-dynamic-workflows/**'
+      - '.github/workflows/dynamic-workflow.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  source-and-package:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugins/hetaoBackend/mcode-dynamic-workflows
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b18 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: plugins/hetaoBackend/mcode-dynamic-workflows/package-lock.json
+      - run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
+      - run: npm test
+      - run: npm run build
+      - name: Verify committed runtime assets match the source and lockfile
+        run: git diff --exit-code -- dist web/app.js web/readable.css THIRD_PARTY_NOTICES.txt
+      - run: npm run test:package
+
+  windows-process-lifecycle:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: plugins/hetaoBackend/mcode-dynamic-workflows
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b18 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
+      - run: node --test checks/process-tree.check.mjs
