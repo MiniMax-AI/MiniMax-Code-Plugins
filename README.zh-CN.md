@@ -1,118 +1,127 @@
-<p align="center">
-  <img src="assets/hero.svg" alt="MiniMax Code Plugins：一个目录、一个 PR，给 Agent 一项新能力" width="100%" />
-</p>
+[English](README.md) | **中文**
 
-<p align="center">
-  <a href="README.md">English</a> ·
-  <a href="CONTRIBUTING.md">贡献指南</a> ·
-  <a href="docs/plugin-compatibility.md">Plugin 契约</a> ·
-  <a href="SECURITY.md">安全</a>
-</p>
+# HTML 2 Video for mcode
 
-<p align="center">
-  <a href="https://github.com/hetaoBackend/MiniMax-Code-Plugins/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/hetaoBackend/MiniMax-Code-Plugins/ci.yml?branch=main&amp;style=flat-square&amp;label=build" alt="构建状态" /></a>
-  <img src="https://img.shields.io/badge/Agent_Plugins-1.0-8b5cf6?style=flat-square" alt="Agent Plugins 1.0" />
-  <img src="https://img.shields.io/github/license/hetaoBackend/MiniMax-Code-Plugins?style=flat-square&amp;color=22c55e" alt="Apache-2.0 License" />
-  <img src="https://img.shields.io/badge/PRs-welcome-ec4899?style=flat-square" alt="欢迎提交 PR" />
-</p>
+把一句主题、一份大纲或一篇定稿脚本,变成**带口播的成片 MP4**:HTML 幻灯片(分步入场动画)+ TTS 配音 + 烧录字幕,并用 ASR 反向校验"配音是否真的念的是脚本里的话"。
 
-## 一个目录，就是一个发布单元
+为 MiniMax Code(mcode)定制,也能在其他 Agent 环境里通过 `mmx-cli` 运行。
 
-MiniMax Code Plugins 是 MiniMax Code Agent Plugin 的社区入口。把 Plugin 放进
-`plugins/<GitHub 用户名>/<Plugin 名>`，提交一个 PR，CI 会直接检查用户最终安装的那份代码。
+## 用户能得到什么
 
-```text
-Fork  →  创建  →  开发  →  校验  →  Pull Request  →  被发现
+用大白话提需求,拿到一条可直接发布的视频:
+
+> 帮我把这份大纲做成一条 60 秒的中文口播视频:三张关键数字、结尾一句行动号召,用深色科技主题,加中文字幕。
+
+产物:
+
+```
+my-video/
+├── slides/            8 张 HTML + tokens.css(13 套主题、17 种版式配方)
+├── audio/             8 段 TTS 音频
+├── build/timings.json 实测时长 + 每个视觉层的入场时刻
+├── preview/*.png      终态预览帧
+└── out/
+    ├── final.mp4      ★ 交付成片(1920×1080 或 1080×1920,H.264 + AAC)
+    ├── subs.srt       供平台上传的字幕
+    └── slide-*.mp4    逐张分段
 ```
 
-不用另建仓库，不用写 Catalog JSON，也不用手抄 commit SHA。源码、文档、Review 和修改历史都在
-一个地方。
+## 流水线
 
-## 30 秒创建第一个 Plugin
+一个技能驱动 11 个脚本(`skills/html2video-for-mcode/scripts/`):
+
+| 阶段 | 做什么 |
+|---|---|
+| 1. 开工对齐 | 询问语言(中文/英语/粤语)、风格与品牌色、字幕(不要/单语/双语)、画布(16:9 或 9:16)、时长、音色、素材边界 |
+| 2. 信息搜集 | 事实性题材先核查并记录来源,再动笔 |
+| 3. 脚本 | 每张 slide 的口播拆成逐句 clauses;每张必须有"标题层 + 展开层" |
+| 4. TTS | 配音合成(mcode connector,其他环境用 `mmx-cli`),随后用 ffprobe 实测每段时长 |
+| 5. 对时 | 每张时长、每层入场时刻**全部由实测音频推出**,不手写任何秒数 |
+| 6. 配图 | 官方素材优先、图片框原语、合规清单登记 |
+| 7. HTML | 分步入场动画绑定实测时刻;17 种版式配方 |
+| 8. 渲染 | 确定性逐帧步进捕获(动画真正进视频)、ffmpeg 合成与字幕、可选 BGM |
+| 9. 校验 | ASR 转写与脚本比对;对比度、主题、渲染前静态闸门 |
+
+## 几个关键设计
+
+- **时序不靠手写**:每张时长与每个动画的入场时刻都来自实测音频,所以"配音念完了画面还在等"在结构上就不可能发生。
+- **每张都有标题层与展开层**,分属不同动画 stage,不会出现"只有一行大字"的页面。
+- **动画真的进视频**:捕获用逐帧步进而不是录屏,入场动画是渲染出来的,不是冻结在终态。
+- **渲染有闸门**:静态检查会拒绝未定义 CSS 变量、图片缺失、外链资源、入场动画缺动画类的页面 —— 这些正是"视频看着坏了但每个脚本都报成功"的元凶。
+
+## 安装
+
+**作为插件(MiniMax Code)**:使用本仓库的 `plugins/Wzdhehe/html2video-for-mcode`,合并后也可从社区目录安装。
+
+**作为独立技能(任意 AgentSkills 宿主)**:
 
 ```bash
-git clone https://github.com/<你的用户名>/MiniMax-Code-Plugins.git
-cd MiniMax-Code-Plugins
-npm install
-npm run create -- <你的用户名>/my-first-plugin
+cp -r html2video-for-mcode ~/.claude/skills/          # 或 ~/.openclaw/skills/
+# 项目级安装
+cp -r html2video-for-mcode <你的项目>/.claude/skills/
+# 或直接从 GitHub 安装
+npx skills add Wzdhehe/html2video-for-mcode
 ```
 
-脚手架会生成一个 Skill-first Plugin：
-
-```text
-plugins/<你的用户名>/my-first-plugin/
-├── plugin.json
-├── README.md
-├── LICENSE
-└── skills/
-    └── my-first-plugin/
-        └── SKILL.md
-```
-
-替换全部 `TODO`，然后运行：
+然后把两个依赖装到**你的视频项目里**(不是技能目录里):
 
 ```bash
-npm run check
+cd <你的视频项目>
+npm i playwright && npx playwright install chromium
+# ffmpeg: winget install Gyan.FFmpeg / brew install ffmpeg / apt install ffmpeg
+#         或: npm i ffmpeg-static ffprobe-static
 ```
 
-通过后，为这个 Plugin 提交一个 PR。完整 Review 要求见
-[`CONTRIBUTING.md`](CONTRIBUTING.md)。
+## 依赖要求
 
-## Plugin 能给 Agent 加什么？
+- **Node.js 18+**(纯 ESM,无构建步骤)。
+- **ffmpeg / ffprobe**:在 `PATH` 上,或项目里装 `ffmpeg-static` / `ffprobe-static`。脚本按 `PATH → 项目 node_modules → 技能上两级 → 常见安装位置` 探测。
+- **Playwright Chromium**:截图用。装在视频项目里即可 —— 脚本会从项目目录、工作目录、npm 全局逐个解析。
+- **配音**:三选一 —— mcode 平台 connector、`mmx-cli`(`npm i -g mmx-cli && mmx auth login --api-key sk-...`)、或你自己的 TTS(把音频写到 `audio/<id>.mp3`)。
+- 可选:`MINIMAX_API_KEY`,用于 `scripts/asr.mjs` 把配音转写回来与脚本比对(数字、专名、语种)。
 
-### Skills
+## 快速开始
 
-把可复用的指令、工作流和领域知识打包。一个验证过的提示词方法，可以直接变成任何人都能安装的能力。
-
-### MCP Servers
-
-通过 `stdio`、`streamable-http` 或 `sse` 连接本地工具和远程服务。依赖、账号、网络目标和数据处理必须
-在安装前说清楚。
-
-### Skill + MCP
-
-Skill 教会 Agent 怎么做，MCP 给它真正的工具。可移植包结构保持简单：
-
-```text
-plugin-root/
-├── plugin.json
-├── mcp.json                  # 可选
-└── skills/                   # 可选
+```bash
+node <skill>/scripts/init-project.mjs ./my-video --topic "我的主题"
+# 填 research/notes.md 与 script.json(clauses = 每句口播一行)
+# 合成 audio/01.mp3 … audio/08.mp3
+node <skill>/scripts/plan-timings.mjs ./my-video     # 实测音频 → timings.json
+node <skill>/scripts/check-slides.mjs ./my-video     # 渲染前静态闸门
+node <skill>/scripts/capture.mjs ./my-video --mode motion
+node <skill>/scripts/build-video.mjs ./my-video --asr
 ```
 
-这个仓库只承接 **Agent 能力**。TUI Extension 是另一套独立扩展体系，不使用这里的包格式和加载流程。
+工作流全文(7 阶段、6 个确认闸门)在 `SKILL.md`;`references/` 放着编写规范、配图 SOP、TTS/对时说明与渲染内幕。
 
-## 门槛也很简单
+## 支持平台
 
-一个贡献必须：
+Windows / macOS / Linux。脚本全部是 Node ESM,不依赖特定 shell。Windows 上建议用 Git Bash 或 WSL 而非 PowerShell(非 ASCII 路径 + 复杂参数组合容易出问题);ffmpeg 与 Chromium 路径自动探测。
 
-- 位于 `plugins/<GitHub 用户名>/<Plugin 名>`；
-- 包含 `plugin.json`、`README.md` 和 `LICENSE`；
-- 至少提供一个有效的 Skill 或 MCP Server；
-- 写清示例、依赖、网络访问和数据用途；
-- 不包含密钥、私有地址、隐藏遥测、原生二进制或 symlink；
-- 通过 `npm run check` 和人工 Review。
+## 网络访问
 
-通过 Review 代表它可以作为社区软件被发现，不代表 MiniMax 背书或已经完成完整安全审计。安装前仍需阅读
-源码和能力声明。
+**只有你主动执行的那一步才会联网**:
 
-## 逛逛这个仓库
+- `scripts/asr.mjs` —— HTTPS `POST` 到 `https://api.minimaxi.com/v1/speech_to_text`(海外套餐设 `MINIMAX_REGION=global` 时走 `https://api.minimax.io`)。仅在你运行时。
+- `scripts/fetch-official-images.mjs` —— 打开**你传入的**网址(官方网站或本地 `file://` 页面)以列出并下载候选配图。
+- 配音合成经由 mcode connector 或 `mmx-cli`,它们会访问 MiniMax。
+- 其余全部离线:对时、静态检查、截图、编码、主题对比度校验。
 
-- [`plugins/`](plugins/)：社区 Plugin 源码
-- [`examples/hello-mcode`](examples/hello-mcode/)：最小 Skill Plugin
-- [`examples/hello-mcode-mcp`](examples/hello-mcode-mcp/)：零依赖 stdio MCP
-- [`docs/plugin-compatibility.md`](docs/plugin-compatibility.md)：当前支持的精确契约
-- [`docs/security-model.md`](docs/security-model.md)：校验与信任模型
-- [`docs/architecture.md`](docs/architecture.md)：中央托管架构
-- [`GOVERNANCE.md`](GOVERNANCE.md)：决策与维护者职责
+无遥测、无埋点、无隐藏端点、无安装器、无原生二进制。
 
-## Community Preview
+## 数据使用
 
-MiniMax Code 的公开 Plugin 能力仍在稳定中，所以首版契约刻意保持克制。Hooks、自定义 Agent、Commands、
-LSP、Apps、通用 OAuth 和 TUI Extension 暂不作为当前 Agent Plugin 能力宣传。
+- 你写的口播文本会送到你选择的语音服务;产物音频只在你运行 `scripts/asr.mjs` 时才送到 ASR 服务。
+- 抓取的素材下载到项目的 `assets/` 目录,并需在 `assets/MANIFEST.md` 登记来源与许可。
+- 其余数据全部留在你传入的项目目录内 —— 技能只往这个目录里写东西。
+- **不存储、不内嵌任何凭据**:ASR 脚本运行时从 `MINIMAX_API_KEY` 或 `--api-key` 读取,且从不写出到任何文件。
 
-带来一个真的有用的能力，给出一个无法误解的示例，然后用一个 PR 把它发布出来。
+## 排错
 
-## License
+`SKILL.md` 末尾有一张"症状 → 原因 → 处置"表,覆盖这条流水线真实踩过的坑:配音念完画面还在等、页面只有标题、元素在 0 秒就入场、未定义 CSS 变量导致文字隐形、图片 broken、深色主题字幕糊底、音色语种不对、拼接后时长不符。
 
-仓库工具和文档使用 Apache-2.0。每个托管 Plugin 都必须包含并声明自己的开源 License。
+## 许可
+
+MIT —— 见 `LICENSE`。设计系统的一部分(10 套主题、图片框原语、若干入场动画)改编自
+[html-ppt-skill](https://github.com/lewislulu/html-ppt-skill)(MIT,Copyright (c) 2026 lewis);
+完整声明与上游 MIT 原文见 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)。
