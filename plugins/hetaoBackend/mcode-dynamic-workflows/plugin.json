@@ -1,0 +1,21 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "mcode-dynamic-workflows",
+  "version": "0.8.0",
+  "description": "Plan complex tasks as editable multi-agent workflows. Review the topology before execution, follow live results, and repair failed scripts while reusing valid completed work. Includes bilingual dashboards, configurable budgets and HTML/Markdown reports.",
+  "author": {
+    "name": "hetaoBackend",
+    "url": "https://github.com/hetaoBackend"
+  },
+  "homepage": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins/tree/main/plugins/hetaoBackend/mcode-dynamic-workflows",
+  "repository": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins.git",
+  "license": "Apache-2.0",
+  "keywords": [
+    "minimax-code",
+    "workflow",
+    "agents",
+    "mcp",
+    "visualization",
+    "research"
+  ]
+}
