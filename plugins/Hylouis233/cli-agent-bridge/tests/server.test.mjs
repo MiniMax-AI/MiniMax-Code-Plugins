@@ -22,7 +22,7 @@ import {
 import {
   backendConfigurationControlEnvironment, backendConfigurationReaderEnvironment,
   backendEntryFromProbe, backendGitProvenanceEnvironment,
-  closestExistingBase, committedDelta,
+  closestExistingBase, committedDelta, createBackendGitProvenance,
   gitCommonDirectory, gitWorktreeRoot, loadBackends, markWorkspaceQuarantined,
   populateCommitishCache, readBackendGitProvenance, readBoundedRegularFile,
   readRepositoryLockActivity, readWorkspaceQuarantine, repositoryLockKey,
@@ -1778,7 +1778,7 @@ test("cancellation requires a fresh workspace_status to reveal earlier edits", a
   assert.ok(statusOut.git.changedFiles.includes(changedFile), JSON.stringify(statusOut.git));
 });
 
-test("provenance setup obeys cancellation and deadline before worker launch", async (context) => {
+test("pre-launch setup obeys cancellation and the overall deadline", async (context) => {
   const setupRoot = await mkdtemp(path.join(os.tmpdir(), "cli-agent-trace-setup-test-"));
   const startedFile = path.join(setupRoot, "started.txt");
   context.after(() => rm(setupRoot, { recursive: true, force: true }));
@@ -1804,12 +1804,59 @@ test("provenance setup obeys cancellation and deadline before worker launch", as
     name: "expired-trace-setup", eventFile,
   }, { timeoutMs: 5_000 }), 51_006);
   assert.equal(timed.result.structuredContent.timedOut, true, JSON.stringify(timed));
-  assert.match(timed.result.structuredContent.error, /preparing Git provenance/iu);
+  // The absolute request budget includes preflight. A slow runner can spend
+  // it in an earlier stage; the phase-specific deadline is exercised below.
+  assert.match(timed.result.structuredContent.error, /worker never started/iu);
   assert.deepEqual(await events(eventFile), [], "trace setup interruption must precede worker launch");
   for (const traceRoot of (await readFile(startedFile, "utf8")).trim().split(/\r?\n/u)) {
     await assert.rejects(access(traceRoot), /ENOENT/u,
       "interrupted provenance setup must close its handle and remove its private root");
   }
+});
+
+test("deadline during open provenance setup removes its private trace", async (context) => {
+  const setupRoot = await mkdtemp(path.join(os.tmpdir(), "cli-agent-trace-deadline-"));
+  const startedFile = path.join(setupRoot, "started.txt");
+  const settings = {
+    NODE_ENV: "test",
+    CLI_AGENT_BRIDGE_TEST_TRACE_CREATION_DELAY_MS: "60000",
+    CLI_AGENT_BRIDGE_TEST_TRACE_CREATION_STARTED_FILE: startedFile,
+  };
+  const saved = Object.fromEntries(Object.keys(settings).map(key => [key, process.env[key]]));
+  Object.assign(process.env, settings);
+  context.after(async () => {
+    context.mock.timers.reset();
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    await rm(setupRoot, { recursive: true, force: true });
+  });
+  // Keep real filesystem I/O; advance only the deadline after the trace handle
+  // is open, so machine-dependent Git startup cannot select the wrong phase.
+  context.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+  const rejected = assert.rejects(
+    createBackendGitProvenance({}, { deadline: Date.now() + 5000 }),
+    { message: "delegation deadline exceeded" },
+  );
+  const waitForIO = async predicate => {
+    const deadline = performance.now() + 5000;
+    while (!await predicate()) {
+      assert.ok(performance.now() < deadline, "filesystem barrier was not reached");
+      await new Promise(resolve => setImmediate(resolve));
+    }
+  };
+  let traceRoot;
+  await waitForIO(async () => {
+    try { traceRoot = (await readFile(startedFile, "utf8")).trim(); return !!traceRoot; }
+    catch (error) { if (error.code === "ENOENT") return false; throw error; }
+  });
+  await access(path.join(traceRoot, "git.trace"));
+  context.mock.timers.tick(5000);
+  await rejected;
+  await waitForIO(async () => {
+    try { await access(traceRoot); return false; }
+    catch (error) { if (error.code === "ENOENT") return true; throw error; }
+  });
 });
 
 test("shutdown waits for a late provenance-setup cleanup", async (context) => {
