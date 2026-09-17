@@ -52,7 +52,41 @@
 | 其他宿主 | `mmx search "关键词"` / `mmx text chat` | **返回上限约 10 条、无分页** —— 适合"找一手入口",深入核实仍需抓页面或打开官方页 |
 | 通用兜底 | 内置浏览器打开官方页 | 与配图路径 B 同一手法;官方页永远最可靠 |
 
-## notes.md 怎么写(给 Gate 0 用)
+## 抓取方法:官网 / 新闻稿 / 招股书怎么真正拿到手
+
+搜索工具只负责"找到入口",**正文要自己取**。按页面的渲染方式选方法:
+
+| 页面类型 | 方法 | 说明 |
+|---|---|---|
+| 静态页 / 文档 / 公告页 | `web_fetch <URL>` | 直接拿正文,最快 |
+| **SPA / JS 渲染页**(很多企业官网、投资者关系页) | **内置浏览器或 Playwright 渲染后取正文** | `web_fetch` 常只拿到空壳 HTML(有壳无文)。技能本来就依赖 Playwright,直接复用: |
+
+```bash
+# 渲染后取正文文本(SPA/懒加载官网通用)
+node -e "const {chromium}=require('playwright');(async()=>{
+  const b=await chromium.launch(); const p=await b.newPage();
+  await p.goto(process.argv[1],{waitUntil:'domcontentloaded'});
+  await p.waitForTimeout(2500);                       // 等异步内容
+  console.log(await p.evaluate(()=>document.body.innerText));
+  await b.close();})()" "https://官网/新闻中心/某条"
+```
+
+- 取**图片/图表**用同一个页面:`node <技能>/scripts/fetch-official-images.mjs <URL>`(它已打开并渲染页面,列候选图)
+- **PDF**(招股书、财报、年报、白皮书):直接下载,再从 PDF 提文本;**数字以 PDF 原文为准**,不要用媒体转述的版本
+- 需要登录/验证码的页面:不要在自动化里硬闯,换官方公开页或让用户提供文件
+
+## 新闻稿 / 公告的取用纪律
+
+**去哪找**:`/news`、`/newsroom`、`/press`、`/investor`、`/ir`、`/announcements`;中文公司常在"新闻中心 / 投资者关系 / 公告"栏目。交易所公告(如港交所 HKEXnews、巨潮资讯)比公司官网更权威。
+
+**四条纪律**
+
+1. **认发布主体**:官方原文(公司/交易所/机构)≠ 媒体转述。冲突时**以官方原文为准**。
+2. **认发布日期与口径**:新闻稿里的数字几乎都带口径("截至 2026 年 6 月""年化""未经审计")→ **原样抄口径**,别简写成裸数字。
+3. **警惕标题夸大**:"首个/最大/颠覆"多出现在媒体标题而非原文;写进口播前回原文核对是否真有这个说法。
+4. **转发稿要溯源**:同一篇通稿被多家转载时,找到最初发布方;引用时引原文而不是转载页。
+
+
 
 ```markdown
 ## 核心事实
