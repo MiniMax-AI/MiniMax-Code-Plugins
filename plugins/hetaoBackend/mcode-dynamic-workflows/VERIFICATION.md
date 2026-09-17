@@ -16,3 +16,16 @@ Process lifecycle regression checks use real, bounded Node CLI/descendant fixtur
 Additional CI review: three focused dependency-boundary checks cover the exact CodeQL findings documented in `SECURITY_REVIEW.md`. The two failing repository Python argument-validation tests also pass locally with Pillow installed. CI now explicitly installs Pillow and a CJK font; Ubuntu confirmation comes from the PR check results.
 
 Not verified: paid model execution, account authorization, real Windows/Linux MCode installation, or every supported host/plugin-loader version. Passing these checks does not establish correctness of model-generated findings or safety of side effects initiated by an authorized agent task.
+
+## Mechanical claims
+
+The claims above that a machine can re-check are tabulated below. Run `node scripts/verify-claims.mjs` from the plugin directory: it executes every row in order, prints one PASS/FAIL line per claim, and exits 0 only when every row matches its expected exit status (1 on the first mismatch, 2 when the tool itself cannot run). V-02 and V-03 need development dependencies (`npm ci` first); V-04 applies after V-03 on a pristine committed checkout and detects drifted committed assets. Prose claims that are not mechanically expressible (dashboard acceptance, real-agent calls, platform coverage) intentionally stay prose.
+
+```verify
+| id | command | expect |
+|----|---------|--------|
+| V-01 | node --test test/package.test.mjs | exit 0 |
+| V-02 | node --test checks/*.check.mjs | exit 0 |
+| V-03 | node scripts/build.mjs | exit 0 |
+| V-04 | git diff --exit-code -- dist web THIRD_PARTY_NOTICES.txt | exit 0 |
+```
