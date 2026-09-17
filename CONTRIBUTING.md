@@ -54,7 +54,11 @@ npm run check
 ```
 
 The validator checks the hosted directory, Manifest, Skills, MCP transports, required docs,
-placeholders, and path safety. CI runs the same command.
+placeholders, and path safety. CI runs the same command. The Ubuntu job also
+installs Python 3.13, Pillow 12.3.0 and Noto CJK fonts for the Python smoke tests.
+When Python is available locally, install Pillow before running the repository
+suite; Linux rendering checks also need a CJK font (for example,
+`fonts-noto-cjk`).
 
 ## 4. Open the pull request
 
