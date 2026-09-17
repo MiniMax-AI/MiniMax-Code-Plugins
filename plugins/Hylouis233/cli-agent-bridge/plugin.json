@@ -1,0 +1,9 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "cli-agent-bridge",
+  "version": "0.1.0",
+  "description": "Delegate coding tasks from MiniMax Code to locally installed coding CLIs (Claude Code, Codex, Kimi Code, ZCode, DSH) through a dependency-free stdio MCP server with git-diff review.",
+  "author": { "name": "Hylouis233", "url": "https://github.com/Hylouis233" },
+  "license": "MIT",
+  "keywords": ["minimax-code", "plugin", "mcp", "multi-agent", "delegation", "orchestration"]
+}

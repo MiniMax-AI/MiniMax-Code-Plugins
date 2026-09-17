@@ -1,0 +1,23 @@
+{
+  "name": "octopus-meme-maker",
+  "version": "0.2.0",
+  "description": "Generate Smooth Squishmallow-style pink-octopus office-worker GIF memes from a scene description: a 720x720 looping GIF plus a 480x480 mini-GIF for chat apps. Requires MiniMax Code to provide the image_synthesize and gen_videos host tools.",
+  "author": {
+    "name": "weekbin",
+    "url": "https://github.com/weekbin"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/weekbin/MiniMax-Code-Plugins/tree/main/plugins/weekbin/octopus-meme-maker",
+  "repository": "https://github.com/weekbin/MiniMax-Code-Plugins/tree/main/plugins/weekbin/octopus-meme-maker",
+  "keywords": [
+    "mcode",
+    "meme",
+    "octopus",
+    "gif",
+    "image-generation"
+  ],
+  "icon": "icon.png",
+  "skills": [
+    "./skills/octopus-meme-maker/SKILL.md"
+  ]
+}

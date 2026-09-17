@@ -1,0 +1,22 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "open-protein-binder-design",
+  "version": "0.1.0",
+  "description": "Replay, audit, and evaluate protein binder design campaigns with the openbinder CLI — source registry, protocol compiler, campaign replay, ranking audit, agent decision evaluation, external handoff, and evidence-graded final reports. No protein models, no GPU.",
+  "author": {
+    "name": "Hylouis233",
+    "url": "https://github.com/Hylouis233"
+  },
+  "homepage": "https://github.com/Hylouis233/open-protein-binder-design",
+  "repository": "https://github.com/Hylouis233/open-protein-binder-design",
+  "license": "MIT",
+  "keywords": [
+    "minimax-code",
+    "plugin",
+    "protein-binder",
+    "campaign-replay",
+    "ranking-audit",
+    "agent-evaluation",
+    "provenance"
+  ]
+}

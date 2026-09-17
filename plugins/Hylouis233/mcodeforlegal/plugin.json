@@ -1,0 +1,22 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "mcodeforlegal",
+  "version": "0.2.0",
+  "description": "Mainland China-first legal workflow plugins for MiniMax Code — contract review, litigation, compliance, corporate, labor & IP, with statute status checks and citation gates",
+  "author": {
+    "name": "Hylouis233",
+    "url": "https://github.com/Hylouis233"
+  },
+  "homepage": "https://github.com/Hylouis233/mcodeforlegal",
+  "repository": "https://github.com/Hylouis233/mcodeforlegal",
+  "license": "Apache-2.0",
+  "keywords": [
+    "minimax-code",
+    "plugin",
+    "legal",
+    "china-law",
+    "contract-review",
+    "compliance",
+    "citation-verification"
+  ]
+}

@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Test output
+research-output/
+
+# OS
+.DS_Store
+Thumbs.db

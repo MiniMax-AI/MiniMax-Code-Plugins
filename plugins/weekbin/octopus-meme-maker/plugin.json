@@ -1,0 +1,22 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "octopus-meme-maker",
+  "version": "0.2.0",
+  "description": "把一段场景描述变成粉红色章鱼打工人的 GIF 表情包：输出 720x720 循环 GIF 和适合聊天发送的 480x480 小图。需要 MiniMax Code 提供 image_synthesize 与 gen_videos 两个宿主工具。 / Turn a scene description into a pink octopus office-worker GIF meme: a 720x720 looping GIF plus a 480x480 mini-GIF for chat apps. Requires MiniMax Code to provide the image_synthesize and gen_videos host tools.",
+  "author": {
+    "name": "weekbin",
+    "email": "weekbin@example.com",
+    "url": "https://github.com/weekbin"
+  },
+  "homepage": "https://github.com/weekbin/MiniMax-Code-Plugins/tree/main/plugins/weekbin/octopus-meme-maker",
+  "repository": "https://github.com/weekbin/MiniMax-Code-Plugins/tree/main/plugins/weekbin/octopus-meme-maker",
+  "license": "Apache-2.0",
+  "keywords": [
+    "minimax-code",
+    "plugin",
+    "meme",
+    "octopus",
+    "gif",
+    "image-generation"
+  ]
+}

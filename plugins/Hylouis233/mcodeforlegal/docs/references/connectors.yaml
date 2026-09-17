@@ -1,0 +1,129 @@
+# connectors.yaml —— 数据源 connector 元数据表
+#
+# 本表是 legal-research 选源、cold-start-interview 凭证体检、
+# customize 数据源指引的共同依据。
+#
+# 字段说明：
+#   id:        机器可读标识
+#   name:      显示名
+#   type:      builtin-free（内置免费）| commercial（商业库）| reference（参考源）
+#   status:    active（默认可用）| needs-token（需配置凭证）| deferred（永久搁置，附原因）
+#   coverage:  覆盖范围
+#   credential_env: 凭证环境变量名（无需凭证为 null）
+#   notes:     备注与使用约束
+#
+# 安全约定：任何技能不得询问、记录、打印 token 具体值；只检查环境变量存在性。
+
+connectors:
+  - id: flk
+    name: 国家法律法规数据库（flk.npc.gov.cn）
+    type: builtin-free
+    status: active
+    coverage: 法律、行政法规、监察法规、司法解释、地方性法规/自治条例等官方文本；含状态字段（有效/已修正/已废止/尚未施行）
+    credential_env: null
+    notes: >-
+      经 mcp/flk_server.py 以 MCP stdio 接入，无 API key，无官方 API 文档。
+      上游 2026 年已改版为 /law-search/ 命名空间（search/list、flfgDetails、
+      prompts/search），旧 /api/ 端点与 wb.flk.npc.gov.cn 文件主机已失效；
+      字段名可能继续变动，server 已做容错并在 upstream_changed 时结构化报错。
+      请求间隔 ≥0.5s，超时 20s，UA 如实标识用途。不覆盖案例。
+      正文为 PDF/WORD 对象键，经 previewLink 端点换取签名阅读链接。
+
+  - id: pkulaw
+    name: 北大法宝
+    type: commercial
+    status: needs-token
+    coverage: 法律法规、司法案例、法学期刊、英文译本等；案例库是商业源中案例核验的主要选项
+    credential_env: PKULAW_TOKEN
+    notes: >-
+      商业订阅服务，opt-in：默认不启用（mcp.json 仅含 flk）。启用方法：
+      ① mcp.pkulaw.com 控制台创建服务，获取 SERVICE_ID 与 Token；
+      ② 设置 PKULAW_SERVICE_ID 与 PKULAW_TOKEN 环境变量；
+      ③ 运行 python scripts/enable_pkulaw.py——脚本先对
+      网关做握手验证，通过才把 connector 写入 mcp.json（只写 ${PKULAW_TOKEN}
+      变量引用，不落真实 token）；凭证失效时运行 enable_pkulaw.py --disable 移除。
+      未启用时，legal-research 与 case-verify 必须显式声明案例/期刊覆盖缺口。
+
+  - id: jufa
+    name: 聚法
+    type: commercial
+    status: needs-token
+    coverage: 官方案例与法规库（以聚法实际订阅范围为准）
+    credential_env: JUFA_TOKEN
+    notes: >-
+      商业订阅服务，作为案例检索的第二商业源。与北大法宝的覆盖差异未逐一
+      比对 [模型知识—待核实]；使用时以实际订阅范围为准。
+
+  - id: courtlistener
+    name: CourtListener（Free Law Project）
+    type: reference
+    status: active
+    coverage: 美国联邦与州法院判例、案卷等公开材料；仅用于美国法对照研究
+    credential_env: null
+    notes: >-
+      免费公开源。仅限美国法对照场景；不构成对中国法问题的任何依据。
+      引用美国案例时同样遵守引用纪律（占位 → 核验 → 填入）。
+
+  - id: wenshu-direct
+    name: 裁判文书网直连（wenshu.court.gov.cn）
+    type: reference
+    status: deferred
+    coverage: 中国大陆裁判文书公开库
+    credential_env: null
+    notes: >-
+      永久 deferred，原因：该站无公开 API、反爬严格，批量抓取有面临行政
+      处罚的先例 [模型知识—待核实]；本插件不实现、不接受、不协助任何针对
+      该站的抓取或绕过登录/验证码行为。案例缺口走商业源（pkulaw/jufa），
+      或指引使用者到裁判文书网、人民法院案例库官网人工检索。
+
+  - id: hk-elegislation
+    name: 电子版香港法例 e-Legislation（elegislation.gov.hk）
+    type: reference
+    status: active
+    coverage: 香港法例官方电子版（中英双语，含现行与历史版本），律政司维护；hk 法域核验入口
+    credential_env: null
+    notes: >-
+      法域核验入口：hk 法域的具体条文以本站现行版本为核验基准，
+      LEGAL_FRAMES/hk.md 基线引用本站为官方检索渠道。本插件不抓取站点
+      内容；legal-research 指引使用者到官网人工检索，或将检索结果粘贴
+      回会话（粘贴内容按 G1 标 [用户提供] 并注明来源站点与检索日期）。
+      模型凭记忆补充的 hk 法内容一律 [模型知识—待核实]。
+
+  - id: mo-io
+    name: 澳门印务局法律检索 Legismac（io.gov.mo）
+    type: reference
+    status: active
+    coverage: 澳门法律、法令、行政法规等官方文本；mo 法域核验入口
+    credential_env: null
+    notes: >-
+      法域核验入口：mo 法域的具体条文以本站公布文本为核验基准，
+      LEGAL_FRAMES/mo.md 基线引用本站为官方检索渠道。本插件不抓取站点
+      内容；legal-research 指引使用者到官网人工检索，或将检索结果粘贴
+      回会话（粘贴内容按 G1 标 [用户提供] 并注明来源站点与检索日期）。
+      模型凭记忆补充的 mo 法内容一律 [模型知识—待核实]。
+
+  - id: tw-lawmoj
+    name: 台湾"法务部"全国法规数据库（law.moj.gov.tw）
+    type: reference
+    status: active
+    coverage: 台湾地区法律、法规命令等官方文本；tw 法域核验入口
+    credential_env: null
+    notes: >-
+      法域核验入口：tw 法域的具体条文以本站公布文本为核验基准，
+      LEGAL_FRAMES/tw.md 基线引用本站为官方检索渠道。本插件不抓取站点
+      内容；legal-research 指引使用者到官网人工检索，或将检索结果粘贴
+      回会话（粘贴内容按 G1 标 [用户提供] 并注明来源站点与检索日期）。
+      模型凭记忆补充的 tw 法内容一律 [模型知识—待核实]。
+
+  - id: sg-sso
+    name: Singapore Statutes Online（sso.agc.gov.sg）
+    type: reference
+    status: active
+    coverage: 新加坡成文法与附属立法的官方现行版本，总检察署（AGC）维护；sg 法域核验入口
+    credential_env: null
+    notes: >-
+      法域核验入口：sg 法域的具体条文以本站现行版本为核验基准，
+      LEGAL_FRAMES/sg.md 基线引用本站为官方检索渠道。本插件不抓取站点
+      内容；legal-research 指引使用者到官网人工检索，或将检索结果粘贴
+      回会话（粘贴内容按 G1 标 [用户提供] 并注明来源站点与检索日期）。
+      模型凭记忆补充的 sg 法内容一律 [模型知识—待核实]。

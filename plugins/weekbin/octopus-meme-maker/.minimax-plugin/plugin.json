@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "name": "octopus-meme-maker",
+  "displayName": "章鱼表情包生成器 Octopus Meme Maker",
+  "version": "0.2.0",
+  "description": "把一段场景描述变成粉红色章鱼打工人的 GIF 表情包：输出 720x720 循环 GIF 和适合聊天发送的 480x480 小图，角色风格由包内参考素材锁定。需要 MiniMax Code 提供 image_synthesize 与 gen_videos 两个宿主工具。 / Turn a scene description into a pink octopus office-worker GIF meme: a 720x720 looping GIF plus a 480x480 mini-GIF for chat apps, with the character style locked by the bundled reference assets. Requires MiniMax Code to provide the image_synthesize and gen_videos host tools.",
+  "author": "weekbin",
+  "icon": "icon.png",
+  "category": "Other",
+  "exampleQueries": [
+    "做个摆烂躺平的章鱼表情包：趴在桌上，一只眼睛半闭，触手尖端着一杯咖啡。 / Make a lying-flat octopus meme: sprawled on the desk, one eye half-closed, a coffee cup held by one tentacle.",
+    "生成一个「我裂开了」的章鱼 GIF 表情，双手抱头、眼睛转圈。 / Generate an 'I'm falling apart' octopus GIF meme with both hands on the head and eyes spiraling.",
+    "给现有章鱼表情包库加一个新场景：「请大家喝奶茶」，8 条触手各拿一杯奶茶。 / Add a scene to the octopus meme library: 'treating everyone to milk tea' with 8 tentacles each holding a cup."
+  ],
+  "apps": [],
+  "mcpServers": [],
+  "skills": [
+    "skills/octopus-meme-maker/SKILL.md"
+  ]
+}

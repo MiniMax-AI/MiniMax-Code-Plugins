@@ -28,6 +28,25 @@ Replace every scaffold `TODO`. Your Plugin must:
 Keep source and docs inside your Plugin directory. Do not edit another contributor's Plugin in the
 same pull request.
 
+### Choose a runtime layout
+
+`docs/plugin-compatibility.md` describes two layouts. Pick one before you write `plugin.json`:
+
+- The **portable Agent Plugins 1.0** layout (top-level `plugin.json`, optional
+  `io.minimax.mcode/hooks/hooks.json` for Hooks) is the cross-runtime baseline. Use it when
+  your Plugin must run on both mcode 0.3.x and mcode 0.4.0+. The validator
+  (`scripts/validate.mjs`) checks this layout by default.
+- The **v0.4.0+ plugin format** (`.claude-plugin/plugin.json` with inline `hooks`) is the
+  preferred form for Plugins that target mcode 0.4.0+ only. The full schema and the inline
+  `hooks` shape are in [`proposals/hooks-v0.4-spec.md`](proposals/hooks-v0.4-spec.md); a
+  working example is in [`examples/hello-mcode-hooks-v04/`](examples/hello-mcode-hooks-v04/).
+
+A Plugin that needs both runtimes ships both layouts in parallel. The v0.3.x layout does
+not need to duplicate the v0.4.0+ Skill; the recommended cross-runtime shape ships
+`skills/SKILL.md` (used by mcode 0.4.0+) and `skills/<plugin-name>/SKILL.md` (a byte-identical
+copy under a subdirectory whose name matches the Plugin's `name`, used by the v0.3.x
+runtime and the current validator).
+
 ## 3. Check it
 
 ```bash

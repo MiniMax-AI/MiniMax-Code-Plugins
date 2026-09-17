@@ -1,0 +1,10 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "cli-agent-bridge": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["./server.mjs"]
+    }
+  }
+}

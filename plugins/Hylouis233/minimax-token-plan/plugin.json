@@ -1,0 +1,23 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "minimax-token-plan",
+  "version": "0.1.0",
+  "description": "Capability-aware MiniMax Token Plan and multimodal API tools for search, vision, images, speech, video, lyrics, music, and covers.",
+  "author": {
+    "name": "Hylouis233",
+    "url": "https://github.com/Hylouis233"
+  },
+  "homepage": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins/tree/main/plugins/Hylouis233/minimax-token-plan",
+  "repository": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins.git",
+  "license": "MIT",
+  "keywords": [
+    "minimax-code",
+    "token-plan",
+    "mcp",
+    "image-generation",
+    "speech",
+    "video-generation",
+    "music-generation",
+    "lyrics"
+  ]
+}

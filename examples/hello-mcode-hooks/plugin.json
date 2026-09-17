@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "hello-mcode-hooks",
+  "version": "0.1.0",
+  "description": "A minimal Plugin that demonstrates one Skill and one experimental io.minimax.mcode Hook entry for the Agent Plugins 1.0 portable Hooks preview. The Hook records each delivered event to a per-instance state file for manual inspection.",
+  "author": {
+    "name": "MCode Plugins contributors"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["mcode", "example", "hooks", "experimental"]
+}

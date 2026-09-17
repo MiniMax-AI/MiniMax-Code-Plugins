@@ -1,0 +1,10 @@
+{
+  "$comment": "Backend command templates for cli-agent-bridge. <task> and <session> are placeholders. Edit command or buildArgs to point at another binary or add flags. Never store credentials here; each CLI uses your own local authentication.",
+  "backends": {
+    "claude": { "label": "Claude Code", "command": "claude", "buildArgs": ["-p", "<task>", "--output-format", "text", "--permission-mode", "acceptEdits"], "resumeArgs": ["-p", "<task>", "--output-format", "text", "--permission-mode", "acceptEdits", "--resume", "<session>"], "experimental": false },
+    "codex": { "label": "OpenAI Codex CLI", "command": "codex", "buildArgs": ["exec", "--", "<task>"], "resumeArgs": ["exec", "resume", "<session>", "--", "<task>"], "experimental": false },
+    "kimi": { "label": "Kimi Code", "command": "kimi", "buildArgs": ["-p", "<task>"], "resumeArgs": ["-S", "<session>", "-p", "<task>"], "experimental": false },
+    "zcode": { "label": "ZCode", "command": "zcode", "buildArgs": ["-p", "<task>"], "resumeArgs": null, "experimental": true, "notes": "Desktop ZCode builds have no verified headless mode; set command to your CLI if your distribution provides one." },
+    "dsh": { "label": "DeepSeek Harness (dsh)", "command": "dsh", "buildArgs": ["--profile", "headless", "<task>"], "resumeArgs": null, "experimental": true, "notes": "Uses the documented headless profile; requires a headless profile under DSH_HOME/profiles." }
+  }
+}

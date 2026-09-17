@@ -1,0 +1,14 @@
+cli-agent-bridge is an original implementation informed by the following
+open-source projects. Their licenses are retained where applicable.
+
+- claude-subagent-mcp (https://github.com/ltxzs/claude-subagent-mcp)
+  MIT License. Copyright (c) ltxzs contributors.
+  Its headless spawn, timeout, capture-cap, and git-snapshot patterns
+  informed server.mjs.
+
+- subagent-mcp (https://github.com/Heretyc/subagent-mcp)
+  Apache License 2.0. Copyright 2026 Lexi Blackburn.
+  Its delegated-CLI orchestration concepts informed the Skill guidance.
+
+- wshobson/agents (https://github.com/wshobson/agents)
+  Reference for multi-harness agent plugin packaging patterns.

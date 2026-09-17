@@ -1,0 +1,48 @@
+name: CLI agent bridge Windows
+
+on:
+  pull_request:
+    paths:
+      - 'plugins/Hylouis233/cli-agent-bridge/**'
+      - '.github/workflows/cli-agent-bridge-windows.yml'
+  push:
+    branches: [main, plugin/cli-agent-bridge]
+    paths:
+      - 'plugins/Hylouis233/cli-agent-bridge/**'
+      - '.github/workflows/cli-agent-bridge-windows.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  windows-cli-agent-bridge:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run validate
+      - name: Run all bridge test files with real Windows containment
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test --test-concurrency=1 \
+            plugins/Hylouis233/cli-agent-bridge/tests/process-tree.test.mjs \
+            plugins/Hylouis233/cli-agent-bridge/tests/server.test.mjs \
+            plugins/Hylouis233/cli-agent-bridge/tests/workspace-lock.test.mjs \
+            plugins/Hylouis233/cli-agent-bridge/test/server.test.mjs \
+            2>&1 | tee bridge-windows.tap
+      - name: Preserve complete test output, including failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bridge-windows-test-output
+          path: bridge-windows.tap
+          if-no-files-found: warn
+          retention-days: 7

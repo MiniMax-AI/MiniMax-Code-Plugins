@@ -1,0 +1,24 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "rnaseq-plot",
+  "version": "0.1.1",
+  "description": "RNA-seq downstream plotting via local Rscript: DESeq2/edgeR/limma, volcano, heatmap, GSEA, WGCNA (png+pdf).",
+  "author": {
+    "name": "Presisitence",
+    "url": "https://github.com/Presisitence"
+  },
+  "homepage": "https://github.com/Presisitence/rnaseq-plot-mcp",
+  "repository": "https://github.com/Presisitence/rnaseq-plot-mcp",
+  "license": "MIT",
+  "keywords": [
+    "minimax-code",
+    "plugin",
+    "mcp",
+    "rnaseq",
+    "deseq2",
+    "volcano",
+    "heatmap",
+    "ggplot2",
+    "wgcna"
+  ]
+}

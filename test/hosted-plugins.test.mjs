@@ -36,7 +36,17 @@ test('contributor can scaffold a hosted Skill plugin with one command', async (c
   assert.match(readme, /# Hello World/u);
   assert.match(license, /Apache License/u);
   assert.match(skill, /^---\nname: hello-world\n/mu);
-  assert.match(stdout, /plugins\/alice\/hello-world/u);
+  // Cross-platform: `create-plugin.mjs:45` prints `path.relative(cwd, dest)`,
+  // which is platform-native (`\` on Windows, `/` on POSIX). A POSIX-only
+  // regex would fail on Windows CI. Round-8 fix (amszuidas on PR #5):
+  // accept either separator by testing the path with `path.join` and
+  // string `.includes`. The plugin itself is at the same workspace-relative
+  // location on every platform; only the printed separator changes.
+  const expectedScaffoldPath = path.join('plugins', 'alice', 'hello-world');
+  assert.ok(
+    stdout.includes(expectedScaffoldPath),
+    `stdout should mention ${JSON.stringify(expectedScaffoldPath)} (got: ${JSON.stringify(stdout)})`,
+  );
 });
 
 test('hosted Plugin is valid when its package and contribution docs are complete', async (context) => {

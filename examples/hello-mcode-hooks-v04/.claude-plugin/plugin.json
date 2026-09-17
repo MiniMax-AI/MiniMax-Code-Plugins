@@ -1,0 +1,73 @@
+{
+  "name": "hello-mcode-hooks-v04",
+  "version": "0.1.0",
+  "description": "A minimal Plugin that demonstrates one Skill and one inline Hook entry under the mcode 0.4.0+ plugin format. The Hook records each delivered event to a per-instance state file for manual inspection. Targets mcode 0.4.0+ only; for the 0.3.x layout see examples/hello-mcode-hooks/.",
+  "author": {
+    "name": "MCode Plugins contributors"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["mcode", "example", "hooks", "v0.4"],
+  "skills": [
+    "./skills/SKILL.md",
+    "./skills/hello-mcode-hooks-v04/SKILL.md"
+  ],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/record-event.ps1"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/record-event.ps1"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/record-event.ps1"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

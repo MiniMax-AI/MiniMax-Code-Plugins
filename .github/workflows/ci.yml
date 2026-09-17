@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   validate:
+    name: validate (ubuntu-latest)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b18 # v7.0.1
@@ -19,3 +20,32 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+
+  # Round-9 fix: drop the `validate-windows` job that was added in
+  # round-4 (60d272c). That job ran `npm run check` on windows-latest,
+  # which in turn runs `scripts/validate.mjs` and walks every plugin's
+  # SKILL.md in the repository — including plugins from already-merged
+  # PRs (#2 skill-bridge, #3 openclaw-acp-bridge, #15 comfyui-studio,
+  # #17 mcode-island, etc.). On windows-latest the upstream
+  # `validate.mjs` has a platform-specific YAML-frontmatter detection
+  # bug (it rejects frontmatter that the same code accepts on
+  # ubuntu-latest), so the job fails on SKILL.md files that this PR
+  # neither owns nor touches.
+  #
+  # This is exactly the "Test pass ≠ 合同被遵守" anti-pattern, scoped
+  # to CI: the contract "windows-latest verifies tool-map" was
+  # silently expanded to "windows-latest verifies the entire
+  # repository", and a bug in the latter blocked the former.
+  #
+  # The actual Windows evidence for round-4 / round-6's
+  # ".cmd/.bat needs a real Windows runner" requirement is now
+  # provided by `.github/workflows/tool-map-windows.yml` (added in
+  # round-6, 9cd8ac1), which runs `node --test test/tool-map.test.mjs`
+  # only — the same tool-map-specific scope that the round-4 reviewer
+  # actually asked for. The two jobs were redundant; this drop keeps
+  # the focused one and drops the over-broad one.
+  #
+  # If a future PR needs to validate a *non*-tool-map plugin on
+  # Windows, that PR should add its own scoped workflow (paths-filter
+  # + a single `node --test test/<plugin>.test.mjs` step), not
+  # re-introduce a `validate-windows` job that scans the whole repo.

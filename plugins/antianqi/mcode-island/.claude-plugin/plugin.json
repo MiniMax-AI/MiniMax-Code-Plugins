@@ -1,0 +1,285 @@
+{
+  "name": "mcode-island",
+  "version": "1.0.0",
+  "displayName": "mcode Dynamic Island",
+  "description": "Windows Dynamic Island status pill for MiniMax Code agents. Each session event (SessionStart, PreToolUse, PostToolUse, Stop, etc.) is forwarded to a top-of-screen WPF widget so the user can see the agent working/thinking/done without keeping mcode in focus. No credentials, no network, no telemetry, no third-party services. Pure local PowerShell + WPF on Windows.",
+  "author": {
+    "name": "antianqi",
+    "url": "https://github.com/antianqi"
+  },
+  "homepage": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins/tree/main/plugins/antianqi/mcode-island",
+  "repository": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins/tree/main/plugins/antianqi/mcode-island",
+  "license": "Apache-2.0",
+  "keywords": [
+    "mcode",
+    "windows",
+    "wpf",
+    "powershell",
+    "status",
+    "ui",
+    "dynamic-island",
+    "hooks",
+    "session-events"
+  ],
+  "skills": ["./skills"],
+  "_compatibility": {
+    "mcodeMin": "0.4.0",
+    "hookSchema": "CLAUDE",
+    "events": [
+      "SessionStart",
+      "SessionEnd",
+      "UserPromptSubmit",
+      "PreToolUse",
+      "PostToolUse",
+      "Stop",
+      "PreCompact",
+      "Notification",
+      "SubagentStart",
+      "SubagentStop",
+      "PermissionRequest",
+      "PermissionDenied"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/session-start.ps1"
+            ],
+            "shell": "powershell",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/session-end.ps1"
+            ],
+            "shell": "powershell",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/user-prompt-submit.ps1"
+            ],
+            "shell": "powershell",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/pre-tool-use.ps1"
+            ],
+            "shell": "powershell",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/post-tool-use.ps1"
+            ],
+            "shell": "powershell",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/stop.ps1"
+            ],
+            "shell": "powershell",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/pre-compact.ps1"
+            ],
+            "shell": "powershell",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/notification.ps1"
+            ],
+            "shell": "powershell",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/subagent-start.ps1"
+            ],
+            "shell": "powershell",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/subagent-stop.ps1"
+            ],
+            "shell": "powershell",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/permission-request.ps1"
+            ],
+            "shell": "powershell",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/permission-denied.ps1"
+            ],
+            "shell": "powershell",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,95 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "10Eros_v1-fp8mixed_learned.safetensors"
+    }
+  },
+  "2": {
+    "class_type": "DualCLIPLoader",
+    "inputs": {
+      "clip_name1": "ltx-2.3_text_projection_bf16.safetensors",
+      "clip_name2": "gemma_3_12B_it_fp8_scaled.safetensors",
+      "type": "ltxv",
+      "device": "default"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "LTX23_video_vae_bf16.safetensors"
+    }
+  },
+  "4": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "model": ["1", 0],
+      "clip": ["2", 0],
+      "lora_name": "any_motion_lora.safetensors",
+      "strength_model": 0.7,
+      "strength_clip": 0.7
+    }
+  },
+  "5": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "first_frame.png"
+    }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "__PROMPT__",
+      "clip": ["2", 0]
+    }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "static, no movement, jitter, flicker, watermark, blurry, low quality",
+      "clip": ["2", 0]
+    }
+  },
+  "20": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 1280,
+      "height": 720,
+      "batch_size": 1
+    }
+  },
+  "30": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["4", 0],
+      "positive": ["6", 0],
+      "negative": ["7", 0],
+      "latent_image": ["20", 0],
+      "seed": 42,
+      "steps": 8,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0
+    }
+  },
+  "40": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["30", 0],
+      "vae": ["3", 0]
+    }
+  },
+  "50": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "images": ["40", 0],
+      "frame_rate": 24,
+      "loop_count": 0,
+      "filename_prefix": "drama_clip",
+      "format": "video/h264-mp4",
+      "save_output": true,
+      "pingpong": false
+    }
+  }
+}

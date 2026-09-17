@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "hello-mcode-hooks-v04",
+  "version": "0.1.0",
+  "description": "A minimal Plugin that demonstrates one Skill and one inline Hook entry under the mcode 0.4.0+ plugin format. The authoritative manifest for mcode 0.4.0+ is .claude-plugin/plugin.json; this top-level manifest is a v0.3.x-compatible shim that exists only to satisfy the hosted validator and the v0.3.x runtime. See proposals/hooks-v0.4-spec.md for the full spec and examples/hello-mcode-hooks-v04/README.md for the layout explanation.",
+  "author": {
+    "name": "MCode Plugins contributors"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["mcode", "example", "hooks", "v0.4"]
+}
