@@ -2467,12 +2467,17 @@ test("canonical worktree locking serializes independent server processes", async
   try {
     await secondClient.initialize();
     const eventFile = path.join(tempRoot, "cross-process-events.jsonl");
+    let firstResult;
     const first = client.request("tools/call", taskArguments(workspace, {
       name: "first-server", eventFile, delayMs: 800, writeFile: "first-server.txt",
-    }));
-    await waitFor(async () => (await events(eventFile)).some(
-      (item) => item.name === "first-server" && item.event === "start",
-    ));
+    })).then((response) => { firstResult = response; return response; });
+    await waitFor(async () => {
+      if (firstResult) assert.equal(firstResult.result?.structuredContent?.ok, true,
+        "first server failed before its start event: " + JSON.stringify(firstResult));
+      return (await events(eventFile)).some(
+        (item) => item.name === "first-server" && item.event === "start",
+      );
+    });
     const second = secondClient.request("tools/call", taskArguments(workspace, {
       name: "second-server", eventFile, delayMs: 10, writeFile: "second-server.txt",
     }, { allowDirty: true }));
