@@ -169,7 +169,7 @@ console.log(answer.output_text);</code></pre>
 
 | 版式 | 用途 | 画面必含(缺一即违规) | 口播字数 | clauses |
 |---|---|---|---|---|
-| kpi-grid | 一组指标 | 标题(s1) + 3–4 张指标卡,带涨跌与语义色(s2) | 25–40 | 2 句 |
+| kpi-grid | 一组指标 | 标题(s1) + 3–4 张指标卡,带涨跌与语义色(s2)。**涨跌色用 `var(--up)/var(--down)`,A 股/港股受众要按红涨绿跌覆写(见 compliance.md)** | 25–40 | 2 句 |
 | stat-highlight | 一个数字定生死 | 巨数字(≥200px,可用 .gradient-text)(s1) + 一句说明(s2) | 15–28 | 2 句 |
 | table | 多行对比 | 标题(s1) + ≥3 行数据表,数值右对齐(s2) | 25–40 | 2 句 |
 | timeline | 发展历程 | 标题(s1) + ≥4 个时间点(横轴 + 标签)(s2) | 25–40 | 2 句 |
@@ -180,15 +180,20 @@ console.log(answer.output_text);</code></pre>
 | big-quote | 大引语转场 | 引语大字(s1) + 署名(s2) | 20–32 | 2 句 |
 
 ```html
-<!-- kpi-grid: 指标卡 + 语义色涨跌 -->
+<!-- kpi-grid: 指标卡 + 语义色涨跌(涨跌一律走 --up/--down, 财经题材按受众翻转这两个即可, 见 compliance.md) -->
 <div class="grid g4 fx-stagger" style="--stagger-base:var(--t2)">
   <div class="card"><p class="eyebrow">REVENUE</p>
     <div style="font-size:var(--fs-h2);font-family:var(--font-display)">1248K</div>
-    <p style="color:var(--good)">↑ 38% YoY</p></div>
+    <p style="color:var(--up)">↑ 38% YoY</p></div>
   <div class="card"><p class="eyebrow">RETENTION</p>
     <div style="font-size:var(--fs-h2);font-family:var(--font-display)">74%</div>
     <p style="color:var(--warn)">→ 持平</p></div>
 </div>
+
+<!-- 免责声明行: 受监管题材(财经/医疗/法律/政策)必出; 小字、不抢视觉、停留 ≥3s、口播不念 -->
+<p class="disclaimer fx-fade" data-stage="2">
+  本视频仅为信息分享,不构成任何投资建议。数据来源:公司 2026 年 Q2 财报(8 月披露),截至 2026-06-30。
+</p>
 
 <!-- stat-highlight: 单数字撑满视觉 -->
 <div class="fx-pop" data-stage="1" style="font-size:220px;line-height:1;font-weight:900;letter-spacing:-.05em">
@@ -260,6 +265,7 @@ console.log(answer.output_text);</code></pre>
 | 场景 | 主题 |
 |---|---|
 | 商务汇报 / 融资 / 财报 | `minimal-white` `swiss-grid` `corporate-clean`(另有初版 `a` 米白暖橙) |
+| 财经 / 投研(受监管) | 同上三套(数据密度高、色彩克制);**选定后按 `compliance.md` 处理免责行与涨跌色,别只挑主题就开跑** |
 | 编辑 / 杂志 / 讲述 | `editorial-serif` `magazine-bold` |
 | 科技 / AI / 开发者(深色) | `tokyo-night` `catppuccin-mocha` `nord`(另有初版 `b` 深色科技绿) |
 | 消费 / 小红书 / 生活 | `xiaohongshu-white` `soft-pastel`(另有初版 `c` 极简蓝,白底通用) |

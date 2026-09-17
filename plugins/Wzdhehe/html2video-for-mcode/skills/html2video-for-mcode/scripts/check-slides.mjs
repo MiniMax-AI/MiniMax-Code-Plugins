@@ -10,6 +10,8 @@
 //   3. 硬编码颜色(#hex / rgb() / hsl()) —— 换主题时会串色, 且说明配色没落到 token
 //   4. 外链资源(http/https 的 src/href) —— 离线沙箱会失败 + 引入 FOUT 风险
 //   5. data-stage 没配 fx-* 类 —— 元素会永远停在 opacity:0(除非放进 .fx-stagger 容器)
+//   6. 整片级领域自查 —— 命中多个财经/投研关键词却全片没有免责或出处行 → 提示(不是错误),
+//      提醒确认领域与免责口径(见 references/compliance.md); 用户明确不要免责时可忽略
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -41,6 +43,7 @@ const RUNTIME_VARS = new Set([
 const slides = script.slides.filter(s => !idsFilter || idsFilter.includes(s.id));
 let errors = 0, warns = 0;
 const report = [];
+const deckText = [];   // 整片文本(HTML 去标签 + 口播稿), 用于第 6 项领域自查
 
 for (const s of slides) {
   const file = path.join(slidesDir, s.html ?? `${s.id}.html`);
@@ -52,6 +55,7 @@ for (const s of slides) {
   }
   const html = fs.readFileSync(file, 'utf8');
   const localDefs = new Set([...html.matchAll(/(--[\w-]+)\s*:/g)].map(m => m[1]));
+  deckText.push({ id: s.id, text: html.replace(/<[^>]*>/g, ' ') });
 
   // 1. 未定义变量(只报没有 fallback 的)
   for (const m of html.matchAll(/var\(\s*(--[\w-]+)\s*(,)?/g)) {
@@ -99,6 +103,25 @@ for (const s of slides) {
   }
 }
 
+// 6. 受监管领域自查(整片级): 像财经/投研内容却没见免责或出处标注 → 提示, 不是错误
+for (const s of slides) {
+  const cls = (s.clauses ?? []).map(c => `${c.text ?? ''} ${c.text2 ?? ''}`).join(' ');
+  if (cls.trim()) deckText.push({ id: s.id, text: cls });
+}
+const FIN_WORDS = ['投资建议', '股价', '涨跌', '涨停', '跌停', '营收', '净利润', '毛利率', '市值', '市盈率',
+  '招股', '财报', '年报', '季报', '基金', '收益率', '汇率', 'A股', '港股', '美股', '募资', '估值', '分红'];
+const hits = new Map();   // 词 → 首次出现的 slide id
+for (const { id, text } of deckText) {
+  for (const w of FIN_WORDS) if (!hits.has(w) && text.includes(w)) hits.set(w, id);
+}
+const hasDisclaimerLine = deckText.some(({ text }) => /不构成|仅供参考|风险提示|免责/.test(text));
+const deckNotes = [];
+if (hits.size >= 2 && !hasDisclaimerLine) {
+  const words = [...hits.keys()];
+  deckNotes.push(`像财经/投研内容(命中 ${words.slice(0, 5).join('、')}${words.length > 5 ? ' 等' : ''}, 见 ${hits.get(words[0])} 等张), 但整片没找到免责/出处行 — 若题材受监管(财经/医疗/法律/政策/营销宣称), 结尾补 .disclaimer 行、确认涨跌色(A股=红涨绿跌)、并给数字补口径+币种+时点, 见 references/compliance.md; 用户已明确说不要免责则忽略本条`);
+  warns++;
+}
+
 if (!QUIET) {
   const bySlide = new Map();
   for (const r of report) { if (!bySlide.has(r.id)) bySlide.set(r.id, []); bySlide.get(r.id).push(r); }
@@ -108,6 +131,7 @@ if (!QUIET) {
     console.log(`${rs.some(r => r.level === 'error') ? '✗' : '⚠'} ${s.id}`);
     for (const r of rs) console.log(`    ${r.level === 'error' ? '✗' : '⚠'} ${r.msg}`);
   }
+  for (const n of deckNotes) console.log(`⚠ 整片: ${n}`);
 }
 console.log(`\n静态检查: ${slides.length} 张 · ✗ ${errors} 项错误 / ⚠ ${warns} 项提示`);
 if (errors) {

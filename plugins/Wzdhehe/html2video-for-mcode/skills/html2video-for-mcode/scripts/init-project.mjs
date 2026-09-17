@@ -42,6 +42,11 @@ const TOKENS_CSS = `/* html2video-for-mcode 设计令牌 · 由 init-project 生
   /* ── 颜色 · 语义(数据页涨跌/正负) ── */
   --good: #1AAF6C; --warn: #C98500; --bad: #C13A3A;
 
+  /* ── 涨跌专用(指标卡写 var(--up)/var(--down), 别直接写 good/bad):
+     默认 = 欧美读法(绿涨红跌); A股/港股受众在项目 tokens.css 末尾覆写成红涨绿跌:
+     :root { --up: #D92B2B; --down: #12A150; }   见 references/compliance.md ── */
+  --up: var(--good); --down: var(--bad);
+
   /* ── 渐变 ── */
   --grad: linear-gradient(135deg, #FF5B2E, #FF8A5C 55%, #D94A20);
   --grad-soft: linear-gradient(135deg, #FBF0E8, #F7E7DA);
@@ -327,6 +332,11 @@ html, body { width: var(--stage-w, 1920px); height: var(--stage-h, 1080px); over
   position: absolute; top: 14px; left: 14px; padding: 5px 14px; border-radius: 999px;
   background: rgba(10,12,20,.55); color: #fff; font-size: var(--fs-tiny); letter-spacing: .06em;
 }
+
+/* ── 免责声明 / 出处标注行(受监管题材: 财经/医疗/法律/政策, 见 references/compliance.md)
+   小字不抢视觉; 出现在 closing 张并停留 ≥3s; 口播不念、不进字幕; 加了它也不替代核实 */
+.disclaimer { font-size: var(--fs-tiny); line-height: 1.6; color: var(--fg-3); max-width: 1240px; }
+.disclaimer-box { border-left: 2px solid var(--line-strong); padding-left: var(--sp-3); }
 
 /* ── 分步入场系统 ──────────────────────────────────────────────
    要入场的块: data-stage="1|2|3" + fx-* 工具类, 例:
