@@ -10,9 +10,14 @@ Built for MiniMax Code (mcode), and runnable in any agent host through `mmx-cli`
 
 ## What the user gets
 
-Ask in plain language, get a publishable video:
+Ask in plain language, get a publishable video. Here is a real request — Chinese is the default
+narration language (English and Cantonese are supported too), so the sample input is quoted as it
+was typed:
 
 > 帮我把这份大纲做成一条 60 秒的中文口播视频:三张关键数字、结尾一句行动号召,用深色科技主题,加中文字幕。
+
+*"Turn this outline into a 60-second Chinese voiceover video: three key numbers, a closing call to
+action, a dark tech theme, Chinese subtitles."*
 
 Result:
 
