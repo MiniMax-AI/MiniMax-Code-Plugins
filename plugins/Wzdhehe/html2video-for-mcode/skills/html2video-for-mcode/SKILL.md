@@ -81,12 +81,12 @@ npm i playwright && npx playwright install chromium        # 截图用
 | 结果落盘 | `get_asset_url <node_id>` → 下载到 `audio/<id>.mp3` | `--out` 直接写盘 |
 | BGM 音乐 | `connector__matrix__batch_text_to_music`(≤5 条/批) | ⚠ **mmx-cli 无音乐生成** → 让用户提供音乐文件(确认授权后登记 MANIFEST),或跳过 BGM |
 | ASR 反向校验 | `mcode-tools upload_temp_url` + `connector__matrix__listen_audio` | **`node scripts/asr.mjs <项目目录>`** —— 用同一把 API Key 直调 REST(`/v1/speech_to_text`),不依赖 mcode、也不用装 whisper;**会自动与 checklist 的预期文本比对并回填,数字/繁体字(粤语)不符直接判 ✗**。想用字级时间戳实测句开口:`--verify-timing` |
-| 素材配图 | 内置浏览器 inspect 官网 DOM(首选;取到的图片 URL 用 `scripts/fetch-official-images.mjs --url` 落盘)/ 官方 brand kit | 同上;抽象配图可用 `mmx image generate --prompt "..." --aspect-ratio 16:9 --n 3`(竖版项目用 `9:16`;**仅限抽象概念图,禁止生成 logo / 截图 / 真人头像**),再按 `image-sources.md` 登记 |
-| 调研 | `web_search` / `web_fetch` | `mmx search "关键词"` / `mmx text chat` |
+| 素材配图 | 内置浏览器 inspect 官网 DOM(首选;取到的图片 URL 用 `scripts/fetch-official-images.mjs --url` 落盘)/ 官方 brand kit | 取图路径同左(本环境用 `fetch-official-images`,它自带 Playwright 无头浏览器渲染页面);抽象配图可用 `mmx image generate --prompt "..." --aspect-ratio 16:9 --n 3`(竖版项目用 `9:16`;**仅限抽象概念图,禁止生成 logo / 截图 / 真人头像**),再按 `image-sources.md` 登记 |
+| 调研 | `web_search` / `web_fetch`(内置);SPA/JS 渲染页用**内置浏览器**打开取正文(使用纪律见 references/research.md) | `mmx search "关键词"` / `mmx text chat`;SPA 页用项目内 Playwright **无头浏览器**渲染取正文(最小命令见 research.md) |
 
 **mmx-cli 首次配置**(非 mcode 环境):`npm install -g mmx-cli` → `mmx auth login --api-key sk-xxx` → `mmx quota` 验证。401 多半是 region 不匹配:`mmx config set --key region --value cn|global`。脚本侧用 `MINIMAX_API_KEY`(必给)与 `MINIMAX_REGION=cn|global`(可选)对齐同一套身份。
 
-**纪律不因环境而变**:时长仍由 ffprobe 实测、字幕仍来自 `clauses[]`、音色仍要试听并验语种(走上面的 asr.mjs)、Gate 一个都不跳。
+**纪律不因环境而变**:时长仍由 ffprobe 实测、字幕仍来自 `clauses[]`、音色仍要试听并验语种(走上面的 asr.mjs)、Gate 一个都不跳。**搜索与取正文也不限于上表列的工具**:本机装了其他搜索技能/插件(网页搜索、网页阅读类等),或任何无头浏览器(项目内 Playwright 就是),哪个抓得到正文就用哪个 —— 变的只是工具,来源分级、两源交叉、口径标注的纪律一条不能少。
 
 ## 工作流(7 阶段 · 6 Gate)
 
@@ -111,7 +111,7 @@ Phase 6 交付
 
 - 判断标准很简单:成片里会出现具体**数字、日期、名称、引语或归属关系** → 必须搜集。通用/抒情/创意题材可跳过,但"看起来像事实"的句子仍要核实。
 - **四条硬规则**:① 关键数字**至少 2 个独立来源**(只有一个就用限定措辞或降级为约数);② **一手优先**(官方公告/财报/技术报告/政府统计),二手转述要回溯原文;③ 标注**口径与日期**(年化还是单季?周活还是月活?币种?);④ **查不到出处或无法判定的,进"不确定项",绝不进口播稿**。
-- **正文怎么取**:先 `web_fetch`;SPA/JS 渲染的官网与投资者关系页常只返回空壳,改用**内置浏览器或 Playwright 渲染后取正文**(最小命令见 references/research.md);招股书/财报是 PDF,以 PDF 原文数字为准。新闻稿与媒体转述冲突时以官方原文为准。
+- **正文怎么取**:先 `web_fetch`;SPA/JS 渲染的官网与投资者关系页常只返回空壳,改用 **mcode 内置浏览器**(mcode 环境的宿主能力)或 **Playwright 无头浏览器**(任一环境,项目内已装)渲染后取正文(最小命令见 references/research.md);招股书/财报是 PDF,以 PDF 原文数字为准。新闻稿与媒体转述冲突时以官方原文为准。本机装了其他搜索技能/插件时同样可用——工具开放,纪律不变。
 - **受监管领域**(财经/医疗/法律/政策/营销宣称 → 读 `references/compliance.md`)另加三道约束:① 财经数字必须带**口径 + 币种 + 时点**("二季度营收"而不是"目前营收");② 口播**不给操作建议、不预测价格、不用绝对化用语**;③ 免责声明与数据出处(要不要、怎么写、放哪)在 Gate 0 就跟用户敲定,不留到成片阶段返工。
 - 输出 `research/notes.md`:每条含 来源 URL + 口径日期 + 等级 + 第二来源;另列"不确定项"与"不该进脚本的内容";受监管题材再记一行**领域 + 免责口径的确认结果**。
 - **Gate 0**:事实清单给用户过 —— 重点让用户确认**数字、名称与口径**;受监管题材把免责声明、数据时点、涨跌色一起确认掉。
