@@ -59,7 +59,14 @@ export class Store {
   event(runId,type,data={}) {const event={...data,type,time:Date.now()};return this.transaction(()=>{const seq=Number(this.db.prepare('INSERT INTO events(runId,body) VALUES(?,?)').run(runId,JSON.stringify(event)).lastInsertRowid);this.chainAdvance('event','events','SELECT seq AS pos,runId,body FROM events WHERE seq>? AND seq<=? ORDER BY seq',seq,r=>`${r.runId}:${r.pos}`);return {seq,...event};});}
   events(runId,after=0,limit=150) {return this.db.prepare('SELECT seq,body FROM events WHERE runId=? AND seq>? ORDER BY seq LIMIT ?').all(runId,after,limit).map(e=>({seq:e.seq,...JSON.parse(e.body)}));}
   rowHash(prev,kind,key,body) {return createHash('sha256').update(`${prev}:${kind}:${key}:${body}`).digest('hex');}
-  chainAdvance(kind,surface,sql,newUpto,keyOf) {const tail=this.setting(`integrity_${surface}`);let prev=tail?.head??'0'.repeat(64);for(const r of this.db.prepare(sql).all(tail?.upto??0,newUpto)){const k=keyOf(r);prev=this.rowHash(prev,kind,k,r.body);this.db.prepare('INSERT OR REPLACE INTO integrity_rows VALUES(?,?,?,?)').run(surface,r.pos,k,prev);}this.saveSetting(`integrity_${surface}`,{head:prev,upto:newUpto});}
+  // Bulk adoption of pre-existing rows is an initial-creation behavior only: it
+  // anchors whatever the table held when the chain first appears. Once a head
+  // exists, each write anchors ONLY its own new position — rows injected into the
+  // range between the head and a later write stay unanchored and verification
+  // keeps failing closed on them instead of silently legitimizing them.
+  chainAdvance(kind,surface,sql,newUpto,keyOf) {const tail=this.setting(`integrity_${surface}`);let prev=tail?.head??'0'.repeat(64);
+   const range=tail?`SELECT * FROM (${sql}) WHERE pos=${newUpto}`:sql;
+   for(const r of this.db.prepare(range).all(tail?.upto??0,newUpto)){const k=keyOf(r);prev=this.rowHash(prev,kind,k,r.body);this.db.prepare('INSERT OR REPLACE INTO integrity_rows VALUES(?,?,?,?)').run(surface,r.pos,k,prev);}this.saveSetting(`integrity_${surface}`,{head:prev,upto:newUpto});}
   integrityHeads() {return {events:this.setting('integrity_events')??null,repair:this.setting('integrity_repair')??null};}
   verifyIntegrity() {
     // Each ledger link is re-checked against the live row's own identity columns:

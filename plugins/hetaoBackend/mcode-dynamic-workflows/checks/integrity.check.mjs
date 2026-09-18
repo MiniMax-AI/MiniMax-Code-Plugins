@@ -198,3 +198,32 @@ test('a row restored into an older sequence gap fails closed on both surfaces',a
   assert.equal(r.verified,false);assert.equal(r.firstDivergence.key,'run-b/b');
   }finally{await f.cleanup();}
 });
+
+test('a raw tail insert stays rejected across subsequent normal writes (no silent adoption)',async()=>{
+ const f=await fixture(async s=>({output:s.id}));try{
+  // events: legit pos1 -> raw pos2 (rejected) -> normal pos3 must NOT absorb pos2.
+  f.store.event('run-a','legit',{});
+  f.store.db.prepare('INSERT INTO events(runId,body) VALUES(?,?)').run('run-raw',JSON.stringify({type:'raw'}));
+  let v=f.store.verifyIntegrity().events;
+  assert.equal(v.verified,false);assert.equal(v.unchained,1);
+  f.store.event('run-a','after',{});
+  v=f.store.verifyIntegrity().events;
+  assert.equal(v.verified,false,'normal write must not silently anchor the injected row');
+  assert.equal(v.unchained,0);assert.equal(v.checked,2);
+  assert.equal(v.firstDivergence.key,'run-raw:2','in-row gap is reported with the injected identity');
+  // repair_cache: same shape.
+  f.store.saveRepairCandidate('run-a',{id:'legit',kind:'agent'});
+  f.store.db.prepare('INSERT INTO repair_cache(runId,id,body) VALUES(?,?,?)').run('run-raw','raw',JSON.stringify({id:'raw',kind:'agent'}));
+  let r=f.store.verifyIntegrity().repair;
+  assert.equal(r.verified,false);assert.equal(r.unchained,1);
+  f.store.saveRepairCandidate('run-a',{id:'after',kind:'agent'});
+  r=f.store.verifyIntegrity().repair;
+  assert.equal(r.verified,false);assert.equal(r.unchained,0);assert.equal(r.checked,2);
+  assert.equal(r.firstDivergence.key,'run-raw/raw');
+  // Removing the injected rows heals both surfaces.
+  f.store.db.prepare('DELETE FROM events WHERE runId=?').run('run-raw');
+  f.store.db.prepare('DELETE FROM repair_cache WHERE runId=?').run('run-raw');
+  assert.equal(f.store.verifyIntegrity().events.verified,true);
+  assert.equal(f.store.verifyIntegrity().repair.verified,true);
+  }finally{await f.cleanup();}
+});
