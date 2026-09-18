@@ -47,7 +47,6 @@ export class Engine extends EventEmitter {
    const definition={...limits,...metadata,name:request.name,script:request.script,input:request.input??{},executor:request.executor,concurrency,maxCalls};const requestHash=hash(repair?{...definition,repair}:definition);
    const existing=this.store.byRequest(request.requestId);if(existing){const legacyDefinition={...definition};for(const key of Object.keys(DEFAULT_LIMITS))delete legacyDefinition[key];check(existing.requestHash===requestHash||(existing.maxSteps===undefined&&Object.keys(DEFAULT_LIMITS).every(k=>request[k]===undefined)&&existing.requestHash===hash(legacyDefinition)),'requestId 已用于不同参数');return this.snapshot(existing.id);}
    const fingerprints={};const topology=assertValidDependencies(previewTopology(request.script,request.input??{}));
-   const duplicate=this.store.byRequest(request.requestId);if(duplicate){check(duplicate.requestHash===requestHash,'requestId 参数冲突');return this.snapshot(duplicate.id);}
    check(!this.closing,'服务正在关闭');
    const run={...(repair?{repair}:{}),id:randomUUID(),requestId:request.requestId,requestHash,...definition,scriptHash:hash(request.script),fingerprints,workspace:this.options.workspace,revision:1,topology,status:'pending_review',createdAt:Date.now(),updatedAt:Date.now(),attempts:0,phases:[],result:null,error:null};
    this.store.transaction(()=>{this.store.save(run);for(const step of candidates)this.store.saveRepairCandidate(run.id,step);this.store.event(run.id,'run.created',{name:run.name});});return this.snapshot(run.id);
@@ -186,7 +185,10 @@ export class Engine extends EventEmitter {
    const repair=ctx.run.repair,candidate=!previous&&repair?.reuseStepIds.includes(spec.id)?this.store.repairCandidate(ctx.run.id,spec.id):null;
    if(candidate&&candidate.requestHash===requestHash
       &&repair.contextHash===hash({workspace:ctx.run.workspace,input:ctx.run.input,executor:ctx.run.executor,fingerprints:ctx.run.fingerprints})
-      &&deps.every(id=>this.store.step(ctx.run.id,id)?.reusedFrom?.runId===repair.sourceRunId)){
+      &&deps.every(id=>{const dep=this.store.step(ctx.run.id,id);return dep?.reusedFrom?.runId===repair.sourceRunId
+       // Checkpoints recompute every run by design; reuse stays valid while the
+       // recomputed value matches the source run, breaking lineage if it changed.
+       ||(dep?.kind==='checkpoint'&&dep.requestHash===this.store.step(repair.sourceRunId,id)?.requestHash);})){
      // Recheck the output against today's validator, including legacy candidates.
      let valid=true;try{if(validateOutput)valid=validateOutput(candidate.output);}catch{valid=false;}
      if(valid){const step={...candidate,...(typeof planId==='string'?{planId}:{}),attempt:0,createdAt:Date.now(),startedAt:null,endedAt:Date.now(),usage:null,usageHistory:[],sessionId:undefined,turnId:undefined,

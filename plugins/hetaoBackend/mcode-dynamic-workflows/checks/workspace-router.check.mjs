@@ -46,7 +46,7 @@ test('packaged MCP launched in plugin root routes concurrent projects and execut
   for(let i=0;i<2;i++){
    assert.equal((await fetch(new URL(`/api/runs/${drafts[i].id}/approve`,dashboards[i].url),{method:'POST',headers,body:JSON.stringify({revision:1})})).status,200);
    let status;
-   for(let n=0;n<30;n++){status=await value(a,'workflow_wait',{workspace:projects[i],runId:drafts[i].id,timeoutMs:500});if(status.status==='succeeded')break;}
+   for(let n=0;n<30;n++){status=await value(a,'workflow_wait',{workspace:projects[i],runId:drafts[i].id,timeoutMs:500,afterSequence:status?.nextSequence??0});if(status.status==='succeeded')break;}
    assert.equal(status.status,'succeeded');
    const results=await value(a,'workflow_results',{workspace:projects[i],runId:drafts[i].id});
    assert.deepEqual(results.steps.find(s=>s.id==='cwd').output,{cwd:projects[i],arg:projects[i]});
