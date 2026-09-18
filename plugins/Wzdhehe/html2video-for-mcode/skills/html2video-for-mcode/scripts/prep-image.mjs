@@ -8,12 +8,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { positionals, requireTool } from './tools.mjs';
+import { flagValue, positionals, requireTool } from './tools.mjs';
 
 const argv = process.argv.slice(2);
 // --check / --crop 是布尔开关, 它们后面那串文件名本来就是位置参数(所以不在 tools.VALUE_FLAGS 里)
 const positional = positionals(argv);
-const flag = (name, dflt) => { const i = argv.indexOf(name); return i > -1 ? argv[i + 1] : dflt; };
 
 // 按当前工作目录找项目内的 ffmpeg-static / ffprobe-static(二审 P2: README 明说支持装在视频项目里)
 const FFMPEG = requireTool('ffmpeg', process.cwd());
@@ -62,8 +61,8 @@ if (argv.includes('--crop')) {
   if (!src || !dst) { console.error('用法: node prep-image.mjs --crop <in> <out> [--ratio 16:9] [--anchor bottom|top|center] [--force]'); process.exit(1); }
   const FORCE = argv.includes('--force');
   if (fs.existsSync(dst) && !FORCE) { console.error(`✗ 输出已存在, 不覆盖: ${dst}(要覆盖加 --force)`); process.exit(1); }
-  const [rw, rh] = (flag('--ratio', '16:9')).split(':').map(Number);
-  const anchor = flag('--anchor', 'center');
+  const [rw, rh] = (flagValue(argv, '--ratio', '16:9')).split(':').map(Number);
+  const anchor = flagValue(argv, '--anchor', 'center');
   if (!rw || !rh) { console.error('✗ --ratio 形如 16:9'); process.exit(1); }
   const s = probe(src);
   if (!s) { console.error(`✗ 读不出尺寸: ${src}`); process.exit(1); }

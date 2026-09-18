@@ -15,24 +15,23 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { positionals, requireTool, safeId, safeOut, validateTimingsIds } from './tools.mjs';
+import { flagValue, positionals, requireTool, safeId, safeOut, validateTimingsIds } from './tools.mjs';
 import { assertAsrEndpoint, PolicyError } from './url-policy.mjs';
 
 const argv = process.argv.slice(2);
 // 位置参数与取值型 flag 的清单统一在 tools.mjs(单一来源): 每个脚本自己维护一份就会漂
 // (2026-09-18 复查: 三个脚本各有一份, 而 tools 那份还误把布尔开关当取值型)
 const positional = positionals(argv);
-const flag = (n, d) => { const i = argv.indexOf(n); return i > -1 ? argv[i + 1] : d; };
 // 项目目录要早定义: --file 单文件模式在上面就分流了, 而工具发现(requireTool)要用它
 const dir = path.resolve(positional[0] ?? '.');
 
-const KEY = flag('--api-key') || process.env.MINIMAX_API_KEY || '';
+const KEY = flagValue(argv, '--api-key') || process.env.MINIMAX_API_KEY || '';
 const REGION = process.env.MINIMAX_REGION || 'cn';
 // 端点白名单: API Key 只发官方 MiniMax 域; 换端点必须显式 --allow-any-endpoint(危险项)。
 // 防的是环境变量/提示词把 MINIMAX_BASE_URL 偷换成收集器后凭证外发。
 let BASE;
 try {
-  BASE = assertAsrEndpoint(flag('--base-url') || process.env.MINIMAX_BASE_URL
+  BASE = assertAsrEndpoint(flagValue(argv, '--base-url') || process.env.MINIMAX_BASE_URL
     || (REGION === 'global' ? 'https://api.minimax.io' : 'https://api.minimaxi.com'),
   { allowAny: argv.includes('--allow-any-endpoint') });
 } catch (e) {
@@ -42,9 +41,9 @@ try {
   }
   throw e;
 }
-const LANG = flag('--language', '');          // zh / yue / en ... 空=混合识别
-const FORMAT = flag('--format', 'json');
-const TS = flag('--timestamp', '');           // '' | sentence | word
+const LANG = flagValue(argv, '--language', '');          // zh / yue / en ... 空=混合识别
+const FORMAT = flagValue(argv, '--format', 'json');
+const TS = flagValue(argv, '--timestamp', '');           // '' | sentence | word
 
 if (!KEY) {
   console.error([
@@ -107,7 +106,7 @@ async function transcribe(file, { format = FORMAT, ts = TS, language = LANG } = 
 // --from <file.json>: 不打网络, 直接用已有转写结果(JSON: { "part-01-1.mp3": "文本", ... }
 // 或 { "part-01-1": "文本" })做比对与回填 —— 例如你在别的环境用 whisper 转写完再进来核对。
 const FROM = (() => {
-  const f = flag('--from');
+  const f = flagValue(argv, '--from');
   if (!f) return null;
   if (!fs.existsSync(f)) { console.error(`✗ 找不到 --from 文件: ${f}`); process.exit(1); }
   return JSON.parse(fs.readFileSync(f, 'utf8'));
@@ -155,12 +154,12 @@ function checkText(expected, got, lang = 'zh') {
 }
 
 // ── 模式 1: 单文件转写 ──
-if (flag('--file')) {
-  const f = flag('--file');
+if (flagValue(argv, '--file')) {
+  const f = flagValue(argv, '--file');
   if (!fs.existsSync(f)) { console.error(`✗ 不存在: ${f}`); process.exit(1); }
   let r;
   try { r = await transcribe(f); } catch (e) { console.error(`✗ ${e.message}`); process.exit(1); }
-  const out = flag('--out');
+  const out = flagValue(argv, '--out');
   if (out) fs.writeFileSync(out, FORMAT === 'srt' || FORMAT === 'vtt' ? r.text : (r.raw ? JSON.stringify(r.raw, null, 2) : r.text));
   if (FORMAT === 'srt' || FORMAT === 'vtt') console.log(r.text);
   else console.log(r.text + (r.duration ? `\n(duration ${r.duration}s${r.n_speakers ? `, ${r.n_speakers} speakers` : ''})` : ''));

@@ -5,26 +5,25 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { loadPackage, positionalDir, requireFreshCss, safeId, safeOut, safeRel, validateScriptPaths, validateTimingsIds } from './tools.mjs';
+import { flagValue, loadPackage, positionalDir, requireFreshCss, safeId, safeOut, safeRel, validateScriptPaths, validateTimingsIds } from './tools.mjs';
 
 const argv = process.argv.slice(2);
 const dir = positionalDir(argv);
-const flag = (name, dflt) => { const i = argv.indexOf(name); return i > -1 ? argv[i + 1] : dflt; };
 // 参数先验后用: 写错的 --mode/--dsf 以前会一路带到 playwright(page.setViewportSize(scale=NaN) /
 // 走错分支静默出静态图), 报错点离真正的原因很远 —— 这里是"离用户最近"的地方, 直接说清。
-const mode = flag('--mode', 'still');
+const mode = flagValue(argv, '--mode', 'still');
 if (mode !== 'still' && mode !== 'motion') {
   console.error(`✗ --mode ${JSON.stringify(mode)} 非法: 只能是 still(终态图) 或 motion(逐帧序列)`);
   process.exit(1);
 }
-const DSF_RAW = flag('--dsf', '1');
+const DSF_RAW = flagValue(argv, '--dsf', '1');
 const dsf = Number(DSF_RAW);
 if (!Number.isInteger(dsf) || dsf < 1 || dsf > 4) {
   console.error(`✗ --dsf ${JSON.stringify(DSF_RAW)} 非法: 取 1–4 的整数(deviceScaleFactor, 2 = 2 倍图; 过大在 4K 画布上会爆内存)`);
   process.exit(1);
 }
 const SUBS = !argv.includes('--no-subs'); // 字幕默认烧录
-const idsFilter = flag('--ids', '') ? flag('--ids', '').split(',').map(s => s.trim()) : null;
+const idsFilter = flagValue(argv, '--ids', '') ? flagValue(argv, '--ids', '').split(',').map(s => s.trim()) : null;
 
 // 入口闸门: tokens.css 受管块落后就停 —— 旧 CSS 会照常出图, 全程不报错(见 tools.mjs 的说明)
 requireFreshCss(dir, { who: 'capture', allowStale: argv.includes('--allow-stale-css') });

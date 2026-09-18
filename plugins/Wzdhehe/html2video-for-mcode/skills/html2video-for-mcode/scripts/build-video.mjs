@@ -141,9 +141,15 @@ for (const [segIdx, t] of timings.slides.entries()) {
     try { man = JSON.parse(fs.readFileSync(manPath, 'utf8')); } catch { /* 坏清单按无处理 */ }
     const clauseCount = Array.isArray(t.clauses) ? t.clauses.length : 0;
     const durOk = man && Number.isFinite(man.duration) && Math.abs(man.duration - D) <= 0.05;
+    // 清单的 framesCover 必须等于"当前帧序列的实际时长"(无帧序列 = 0)。时长与句序都对、
+    // 但动画窗重截过(帧数变了)的清单, 会把字幕静帧从错误的时刻拼进成片 —— B2 点名的第三项。
+    const nFramesNow = fs.existsSync(fdir) ? fs.readdirSync(fdir).filter(f => /^f\d+\.png$/.test(f)).length : 0;
+    const coverNow = nFramesNow / fps;
+    const coverOk = man && Number.isFinite(man.framesCover) && Math.abs(man.framesCover - coverNow) <= 0.05;
     if (man && !durOk) console.warn(`⚠ ${tid}: 字幕清单时长 ${man.duration}s ≠ 当前 ${D}s — 忽略该清单(重跑 capture 生成)`);
-    if (man && durOk && clauseCount === 0) console.warn(`⚠ ${tid}: 当前没有 clauses 但存在字幕清单 — 忽略(重跑 capture 会清掉)`);
-    if (man && durOk && clauseCount > 0) {
+    if (man && durOk && !coverOk) console.warn(`⚠ ${tid}: 字幕清单帧覆盖 ${man.framesCover}s ≠ 当前 ${coverNow}s — 忽略该清单(重跑 capture 生成)`);
+    if (man && durOk && coverOk && clauseCount === 0) console.warn(`⚠ ${tid}: 当前没有 clauses 但存在字幕清单 — 忽略(重跑 capture 会清掉)`);
+    if (man && durOk && coverOk && clauseCount > 0) {
       subStills = (man.stills ?? []).filter(s2 => Number.isFinite(s2.start) && Number.isFinite(s2.end) &&
         s2.start >= -0.001 && s2.end <= man.duration + 0.05 &&
         s2.end - s2.start > 0.02 && Number.isInteger(s2.k) && s2.k >= 0 && s2.k < clauseCount &&

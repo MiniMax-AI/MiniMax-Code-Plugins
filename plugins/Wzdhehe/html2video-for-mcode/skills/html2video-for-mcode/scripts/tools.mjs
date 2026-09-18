@@ -231,7 +231,7 @@ export function canonicalPath(p) {
 export const VALUE_FLAGS = new Set([
   '--topic', '--mode', '--dsf', '--ids', '--at', '--min', '--max-mb', '--get', '--out', '--out-dir',
   '--file', '--format', '--from', '--url', '--base-url', '--api-key', '--language',
-  '--ratio', '--timestamp', '--anchor', '--transition', '--speed', '--voice',
+  '--ratio', '--timestamp', '--anchor', '--transition',
 ]);
 /** 所有位置参数(跳过取值型 flag 的值)。prep-image 这类"一串文件名"的用法用它 */
 export function positionals(argv) {

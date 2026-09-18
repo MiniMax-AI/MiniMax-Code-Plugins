@@ -27,7 +27,7 @@
 //      提醒确认领域与免责口径(见 references/compliance.md); 用户明确不要免责时可忽略
 import fs from 'node:fs';
 import path from 'node:path';
-import { expectedTokens, inside, positionalDir, readTransition, safeId, safeRel } from './tools.mjs';
+import { expectedTokens, flagValue, inside, positionalDir, readTransition, safeId, safeRel } from './tools.mjs';
 import { kitStatuses } from './css-kit.mjs';
 import { MAX_SCAN_BYTES } from './limits.mjs';   // 对 tokens.css 与 HTML 都生效, 单一来源(见 limits.mjs)
 
@@ -57,9 +57,8 @@ function fxClassKeyframes(css) {
 
 const argv = process.argv.slice(2);
 const dir = positionalDir(argv);
-const flag = (n, d) => { const i = argv.indexOf(n); return i > -1 ? argv[i + 1] : d; };
 const QUIET = argv.includes('--quiet');
-const idsFilter = flag('--ids', '') ? flag('--ids', '').split(',').map(s => s.trim()) : null;
+const idsFilter = flagValue(argv, '--ids', '') ? flagValue(argv, '--ids', '').split(',').map(s => s.trim()) : null;
 
 const scriptPath = path.join(dir, 'script.json');
 if (!fs.existsSync(scriptPath)) { console.error(`✗ 找不到 ${scriptPath}`); process.exit(1); }

@@ -23,7 +23,7 @@
 //   - 下载逐跳过同一策略(maxRedirects=0 手动跟, ≤5 跳), 响应有大小上限(默认 30MB)
 //   - 落盘必须在工作目录内(--out-dir 越界需 --force), 不覆盖已存在文件(需 --force)
 import fs from 'node:fs';
-import { assertContained, canonicalPath as canonical, loadPackage, inside, positionals } from './tools.mjs';
+import { assertContained, canonicalPath as canonical, flagValue, loadPackage, inside, positionals } from './tools.mjs';
 import path from 'node:path';
 import { assertFetchableUrl, assertRedirectTarget, assertResolvedHost, sanitizeFilename, imageNameFromUrl, MAX_REDIRECTS, PolicyError } from './url-policy.mjs';
 
@@ -31,11 +31,10 @@ const argv = process.argv.slice(2);
 // 位置参数与取值型 flag 的清单统一在 tools.mjs: --json 曾在这里被当作取值型, 于是
 // `--json <网址>` 会把网址吃掉、位置参数成空 → 报用法错误(2026-09-18 复查 D3 的成因)。
 const positional = positionals(argv);
-const flag = (n, d) => { const i = argv.indexOf(n); return i > -1 ? argv[i + 1] : d; };
 const FORCE = argv.includes('--force');
 const ALLOW_FILE = argv.includes('--allow-file');
-const MAX_BYTES = Math.max(1, parseFloat(flag('--max-mb', '30')) * 1024 * 1024);
-const URLS = (flag('--url', '') || '').split(',').map(s => s.trim()).filter(Boolean);
+const MAX_BYTES = Math.max(1, parseFloat(flagValue(argv, '--max-mb', '30')) * 1024 * 1024);
+const URLS = (flagValue(argv, '--url', '') || '').split(',').map(s => s.trim()).filter(Boolean);
 const url = positional[0];
 if (!URLS.length && (!url || !/^(https?|file):/.test(url))) {
   console.error('用法: node fetch-official-images.mjs <网址> [--list|--get 1,3] [--out-dir assets] [--min 800] [--max-mb 30] [--allow-file] [--force] [--json]\n    或: node fetch-official-images.mjs --url <图片URL>[,<URL>...] [--out-dir assets] [--max-mb 30] [--force]');
@@ -50,7 +49,7 @@ if (!URLS.length) {
   }
 }
 // --min 支持三种写法: 800(宽≥800) / 800x600(宽高都够) / x600(只限高)
-const MIN_RAW = String(flag('--min', '0') ?? '0').trim().toLowerCase();
+const MIN_RAW = String(flagValue(argv, '--min', '0') ?? '0').trim().toLowerCase();
 const MIN_M = /^(\d*)(?:x(\d+))?$/.exec(MIN_RAW);
 if (!MIN_M || MIN_RAW === '' || (!MIN_M[1] && !MIN_M[2])) {
   console.error(`✗ --min 写法不对: ${MIN_RAW}(支持 800 / 800x600 / x600; 只写数字=只限宽)`);
@@ -61,7 +60,7 @@ const MIN_H = parseInt(MIN_M[2] || '0', 10) || 0;
 // 落盘收监: 默认 assets/ 必须在当前工作目录(项目根)内; 越界要显式 --force。
 // 比较用规范化路径(二审 P2): macOS 上 /var 与 /private/var 是同一目录的两种写法,
 // 纯字符串比较会把"项目内的合法路径"误判成越界(官方 CI 的 macOS 环境实测踩到)。
-const OUT_DIR = path.resolve(flag('--out-dir', 'assets'));
+const OUT_DIR = path.resolve(flagValue(argv, '--out-dir', 'assets'));
 const CWD_REAL = canonical(process.cwd()), OUT_REAL = canonical(OUT_DIR);
 if (!inside(CWD_REAL, OUT_REAL) && OUT_REAL !== CWD_REAL) {
   if (!FORCE) {
@@ -218,7 +217,7 @@ try {
 
   if (!candidates.length) { console.log('没找到符合条件的图片(试试去掉 --min, 或换页面 / 产品页 / 新闻页)'); await context.close(); await browser.close(); process.exit(0); }
 
-  if (flag('--json')) { console.log(JSON.stringify(candidates, null, 2)); await context.close(); await browser.close(); process.exit(0); }
+  if (flagValue(argv, '--json')) { console.log(JSON.stringify(candidates, null, 2)); await context.close(); await browser.close(); process.exit(0); }
 
   console.log(`候选图 ${candidates.length} 张(页面 ${pageHost || url}):\n`);
   candidates.forEach((c, i) => {
@@ -227,7 +226,7 @@ try {
     console.log(`  [${i + 1}] ${size.padEnd(12)} ${c.ext.padEnd(6)} ${c.host}${warn}\n       ${c.alt ? c.alt + ' — ' : ''}${c.src.slice(0, 120)}`);
   });
 
-  const get = flag('--get');
+  const get = flagValue(argv, '--get');
   if (get) {
     const picks = get.split(',').map(x => parseInt(x.trim(), 10)).filter(n => n >= 1 && n <= candidates.length);
     if (!picks.length) { console.error('✗ --get 的序号不在范围内'); process.exit(1); }

@@ -206,6 +206,8 @@ No telemetry, no analytics, no hidden endpoints, no installers, no native binari
   without changing anything.
 - No credentials are stored or embedded: the ASR script reads a key from `MINIMAX_API_KEY` or
   `--api-key` at runtime and never writes it anywhere.
+- `KIT_PROJECT_DIR` is internal plumbing, set automatically by the CLI entry points so shared
+  helpers can locate the project directory; you never need to set it yourself.
 
 ## Verification
 
@@ -219,7 +221,7 @@ node --test "plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/te
 node --test "tests/*.test.mjs"
 ```
 
-235 tests in fourteen files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
+236 tests in fourteen files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
 escapes including a **dangling** link that must be caught rather than skipped), `no-clobber` (refusing to overwrite), `endpoint-allowlist` (key never leaves the official
 hosts — plus a local server that proves the gate sits before the request), `fetch-policy` (SSRF,
 `file://`, redirect and filename rules), `preview-page` (snapshot timing injection, `base` ordering,
@@ -241,9 +243,10 @@ the new mechanism: a live region **plus a stale copy of the generated body outsi
 cascade) or after it (wins)) and `render-smoke` (init → timings → static gate → capture → build, end
 to end, **plus a pixel-level proof that upgrading a stale project really changes the rendered picture**). Two newer suites cover the second review round and the delivery-quality fixes: `review-round2` (canary tests proving output containment, a local server proving a rejected destination receives **zero** requests, single-quoted/unquoted HTML attributes, ASR request errors counted as failures, ffmpeg discovered from the project) and `cover-transition` (cover image present, `attached_pic` stream embedded, first frame not black, no black frame at any cut point in both hard-cut and cross-dissolve modes, total duration unchanged) and `review-round3` (the seven functional defects: `check-timing --calibrate` must not write back half-measured boundaries, `--topic <value> <project>` must not treat the value as the project directory, `--json` is position-independent, `--min WxH`, `--get` all-failed exits non-zero, `capture --mode/--dsf` and `grab-frames --at` reject bad values at the entry point, the subtitle-band gate only fires on positioned elements, `--dry-run` prints the plan and exits 0, and a bare-string `transition` must mean the same thing to the gate and the renderer — plus the stale-CSS gates on `check-slides` / `capture` / `build-video`) and `subtitles-invalidate` (deleting clauses, or `--no-subs`, and rebuilding must remove the old subtitles from the video — asserted at pixel level). Everything runs with ffmpeg, ffprobe and
 Chromium installed (on `PATH`, or in this repo's / your project's `node_modules` — `npm i
-ffmpeg-static ffprobe-static playwright`). Without them the rendering suites **fail rather than
-skip**; the only cases that degrade instead are the ones with a declared reason (a tool is absent,
-or the filesystem forbids creating a junction). The scoped workflow
+ffmpeg-static ffprobe-static playwright`). Without them, every test that needs one of them **skips
+with its stated reason** (a tool is absent, or the filesystem forbids creating a junction) — nothing
+pretends to pass, and the pipeline scripts themselves exit with `找不到 ffmpeg` instead of running
+half a pipeline. The scoped workflow
 `.github/workflows/html2video-for-mcode-smoke.yml` — which lives in the **MiniMax-Code-Plugins
 monorepo** (this standalone repo has no workflows) and runs on the plugin PR and on main —
 installs them and runs everything for real.

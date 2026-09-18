@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.7.1 — 2026-09-18
+
+**Fourth pass over the *published* PR: three claims that were not true of the published tree, and the one test that could redden the host CI**
+
+- **The 1.7.0 CI rewrite had never been pushed.** The PR branch still carried the old scoped workflow — explicit file enumeration (so `cover-transition`, `review-round2`, `review-round3` and `subtitles-invalidate` never ran in any CI), no `permissions:` block, floating `@v4` action tags — while the 1.7.0 entry above already described the corrected form. The corrected workflow (shell glob `tests/*.test.mjs`, `permissions: contents: read`, full-SHA pins with version comments) is what the branch carries now.
+- **The host monorepo's own CI would have gone red.** `npm run check` = validate + a root-level `node --test`, which auto-discovers this plugin's tests — on runners that have neither ffmpeg nor Playwright. Exactly one case lacked the tool guard every other rendering case has (`asr.mjs` exits with `找不到 ffmpeg` at startup, before any request is made): the ASR-503 case now skips with its stated reason like the rest. Verified in a clean sandbox with neither tool resolvable: **236 tests, 0 fail, 22 skipped with stated reasons** — and the pipeline scripts themselves still fail loudly rather than pretend to run.
+- **The 1.7.0 README sentence "the rendering suites fail rather than skip" was itself wrong** — it rested on an observation made where `ffmpeg-static` was silently discoverable through a workspace-level `node_modules`. Both READMEs now state what actually happens: tests that need a tool skip with their stated reason; the scripts exit with `找不到 ffmpeg` instead of running half a pipeline.
+- **Plan B2's third manifest check is implemented.** `build-video` now also compares the subtitle manifest's `framesCover` with the current frame sequence's real duration (it previously checked only the slide duration and the clause indices) — a re-captured animation window no longer splices subtitle stills at stale offsets. New pixel-level case in `subtitles-invalidate`: a stale manifest is ignored with a named warning (measured luma difference 45 against the stale still — it is not in the picture), an aligned one splices it in (difference 0).
+- Smaller findings from the same pass: `VALUE_FLAGS` no longer lists `--speed` / `--voice` (nothing parses them, and a stray `--speed` silently swallowed the next positional), the six per-script `flag()` helpers collapsed into the one `flagValue` in `tools.mjs`, and the internal `KIT_PROJECT_DIR` variable is now documented in both READMEs.
+- Tests **235 → 236 in fourteen files**, all green with 0 skips in the development tree and in both published trees.
+
 ## 1.7.0 — 2026-09-18
 
 **Third review round: the CSS-propagation rewrite, stale-CSS blocking, and six silent-failure paths closed**

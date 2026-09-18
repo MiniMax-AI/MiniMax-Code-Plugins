@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { runSkill, runSkillAsync, mkproj, tmpdir, skill } from './helpers.mjs';
 import { assertResolvedHost, PolicyError } from '../scripts/url-policy.mjs';
 import { SCRIPTS } from './helpers.mjs';
+import { findTool } from '../scripts/tools.mjs';
 const { injectHtmlVars, addNoFx } = await import('file://' + path.join(SCRIPTS, 'preview-page.mjs').replace(/\\/g, '/'));
 
 describe('二审 · 输出收监(项目内目录段是符号链接时, 不得写到/删到项目外)', () => {
@@ -111,7 +112,10 @@ describe('二审 · 放映页属性解析(单引号/无引号不得产生重复�
 });
 
 describe('二审 · ASR 请求错误必须算失败并非零退出', () => {
-  test('转写请求全失败(503) → 退出码非零且不计入通过', async () => {
+  // asr.mjs 启动第一件事就是 requireTool('ffmpeg')(切音频要用), 无 ffmpeg 时走不到请求那一步。
+  // 主仓 CI(npm run check → 根目录 node --test)没有 ffmpeg —— 这条例外必须像其它渲染用例一样
+  // 带原因跳过, 否则整个插件把主仓 CI 染红(第三轮复查实测踩到)。
+  test('转写请求全失败(503) → 退出码非零且不计入通过', { skip: !findTool('ffmpeg') && '无 ffmpeg(asr 启动即需要; 真跑由 scoped smoke workflow 覆盖)' }, async () => {
     // 本地假服务器: 一律 503(不需要真 Key, 也不需要真 ASR)
     const srv = http.createServer((req, res) => { res.statusCode = 503; res.end('{"error":"busy"}'); });
     await new Promise(r => srv.listen(0, '127.0.0.1', r));
