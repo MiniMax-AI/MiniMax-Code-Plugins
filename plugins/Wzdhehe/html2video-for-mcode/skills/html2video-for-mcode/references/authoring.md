@@ -181,7 +181,7 @@ console.log(answer.output_text);</code></pre>
 |---|---|---|---|---|
 | kpi-grid | 一组指标 | 标题(s1) + 3–4 张指标卡,带涨跌与语义色(s2)。**涨跌色用 `var(--up)/var(--down)`,A 股/港股受众要按红涨绿跌覆写(见 compliance.md)** | 25–40 | 2 句 |
 | stat-highlight | 一个数字定生死 | 巨数字(≥200px,可用 .gradient-text)(s1) + 一句说明(s2) | 15–28 | 2 句 |
-| table | 多行对比 | 标题(s1) + ≥3 行数据表,数值右对齐(s2) | 25–40 | 2 句 |
+| table | 多行对比 | 标题(s1) + ≥3 行数据表,数值右对齐(s2)。**用 `.tbl` 原语;五种形态与纪律见"表格工具箱"** | 25–40 | 2 句 |
 | timeline | 发展历程 | 标题(s1) + ≥4 个时间点(横轴 + 标签)(s2) | 25–40 | 2 句 |
 | roadmap | 阶段规划 | 标题(s1) + 3–4 列(NOW/NEXT/LATER 之类)(s2) | 22–35 | 2 句 |
 | comparison | 前后 / 优劣对照 | 标题(s1) + 左右两栏加竖分隔(s2) | 22–35 | 2 句 |
@@ -473,6 +473,73 @@ console.log(answer.output_text);</code></pre>
 ⚠ 整块图表(含图注)要落在**字幕安全区之上**:1080 高度下留给字幕的是底部 84–168px,版面容器请留 `padding-bottom: 190px`。
 
 ---
+
+# 表格工具箱(数据表的五种形态)
+
+表格是最容易做丑的一类:行高不够、数字不右对齐、涨跌色用错、满屏网格线。原语都在 `tokens.css` 里(`.tbl / .kv / .matrix / .rank`),**老项目先 `node scripts/init-project.mjs <项目> --upgrade-css` 补上**(幂等),否则这些类全不生效。
+
+## 表格纪律(七条)
+
+1. **主数据用正文号、行高 ≥72px**:`.tbl`/`.kv`/`.matrix`/`.rank` 的正文已是 `var(--fs-body)`(1080p 与手机上都读得清),表头才降到 `--fs-caption`;行高已内置 72px —— 别为了多塞一行把字号或行高压掉(实测 24px 表格在手机上看不清)。
+2. **一页一表, 最多 6 行**:超了就拆页或只留 top 5 + "其他"。表格页信息密度天然高,再挤就没人看。
+3. **数值右对齐 + 等宽**(`.num`/`.val`):小数点对齐是"专业感"的主要来源;数字用 `tabular-nums`,滚动/切换时不会抖。
+4. **涨跌色走令牌**(`.up`/`.down` → `var(--up)/var(--down)`):财经题材按受众翻转(A 股/港股红涨绿跌),见 compliance.md;非财经题材也别用绿红以外的自造色。
+5. **只画横线,不画竖线,不要斑马纹**:`.tbl` 的表头下边线 + 行间细线就够了;斑马纹和满格线会让画面变脏。
+6. **高亮只给一行**(`.key`:左侧 accent 竖条 + 8% 底色),通常就是"我们/当前阶段";合计行用 `.sum`(上边线加粗)。两者不要同时用在多行上。
+7. **表注写口径与时点**(用 `.chart-cap` 同一套):和图表一样,数字的可信度来自"什么时候、怎么算的"。
+
+## 五种形态与配方
+
+```html
+<!-- ① 数据表(最常用: 多期/多主体对比, 带涨跌) —— 表头弱化, 数值右对齐, 涨跌走令牌 -->
+<table class="tbl fx-fade" data-stage="2">
+  <thead><tr><th>季度</th><th class="num">营收</th><th class="num">同比</th><th class="num">毛利率</th></tr></thead>
+  <tbody>
+    <tr><td>2026 Q1</td><td class="num">3.2 亿</td><td class="num up">+18%</td><td class="num">61.4%</td></tr>
+    <tr class="key"><td>2026 Q2</td><td class="num">4.1 亿</td><td class="num up">+27%</td><td class="num">63.8%</td></tr>
+    <tr><td>2026 Q3</td><td class="num">3.9 亿</td><td class="num down">-4%</td><td class="num">62.1%</td></tr>
+    <tr class="sum"><td>合计</td><td class="num">11.2 亿</td><td class="num up">+14%</td><td class="num">62.4%</td></tr>
+  </tbody>
+</table>
+<p class="chart-cap">口径: 集团合并报表 · 单位: 人民币 · 截至 2026-09-30</p>
+
+<!-- ② 规格表(.kv: 无表头, 左标签右值) —— 参数/条款/清单这类"一对一条目"用它, 比两列表格干净 -->
+<table class="kv fx-fade" data-stage="2">
+  <tr><td>上下文窗口</td><td>10,000,000 token</td></tr>
+  <tr><td>单次最长输出</td><td>128,000 token</td></tr>
+  <tr><td>定价(输入 / 输出)</td><td>¥0.8 / ¥2.4 每百万 token</td></tr>
+  <tr><td>上线时间</td><td>2026-08-15</td></tr>
+</table>
+
+<!-- ③ 对比矩阵(.matrix: 行是维度、列是方案, 只放勾叉; .hi 高亮"我们"那一列) -->
+<table class="matrix fx-fade" data-stage="2">
+  <thead><tr><th>能力</th><th>方案 A</th><th class="hi">方案 B(本方案)</th><th>方案 C</th></tr></thead>
+  <tbody>
+    <tr><td>离线可用</td><td class="no">✗</td><td class="hi yes">✓</td><td class="no">✗</td></tr>
+    <tr><td>成本可控</td><td class="no">✗</td><td class="hi yes">✓</td><td class="yes">✓</td></tr>
+    <tr><td>交付周期 ≤ 2 周</td><td class="yes">✓</td><td class="hi no">✗</td><td class="yes">✓</td></tr>
+  </tbody>
+</table>
+<p class="chart-cap">口径: 内部评测 · 2026-09 · 勾叉按"是否满足该维度硬指标"判定</p>
+
+<!-- ④ 排名表(.rank: 名次 + 微缩条 + 数值) —— 表格里嵌条形, 比纯数字一眼看出差距 -->
+<table class="rank fx-fade" data-stage="2">
+  <tr><td class="no">1</td><td>产品 A</td><td class="bar"><span class="fx-grow-w" data-stage="2" style="--w:100%"></span></td><td class="val">1.86 亿</td></tr>
+  <tr><td class="no">2</td><td>产品 B</td><td class="bar"><span class="dim fx-grow-w" data-stage="2" style="--w:63%;--fx-delay:calc(var(--t2) + 120ms)"></span></td><td class="val">1.17 亿</td></tr>
+  <tr><td class="no">3</td><td>产品 C</td><td class="bar"><span class="dim fx-grow-w" data-stage="2" style="--w:36%;--fx-delay:calc(var(--t2) + 240ms)"></span></td><td class="val">0.67 亿</td></tr>
+</table>
+<!-- 微缩条的宽度同样 = 数值 ÷ 轴上限(见"柱高必须由数值算出来"那条) -->
+
+<!-- ⑤ 时间事件表(时间 × 事件两列) —— 比 timeline 版式更适合"事件多、要点长"的题材 -->
+<table class="kv fx-fade" data-stage="2">
+  <tr><td>2021</td><td>团队成立, 首个原型</td></tr>
+  <tr><td>2023</td><td>产品上线, 首批 1 万用户</td></tr>
+  <tr><td>2026 Q2</td><td>通过聆讯, 递交港股上市申请</td></tr>
+</table>
+
+
+
+选型速查:多期/多主体对比 → ① 数据表;一对一条目 → ② 规格表(或 ⑤ 时间事件表);几套方案打勾叉 → ③ 对比矩阵;排名看差距 → ④ 排名表;要合计/小计 → ① + `.sum`;价格/评分分档 → ① 的 `.key` 高亮当前档。**表格和图表不要放同一页**(一页一件事);表格页的口播照旧要"读表",别把表格当背景。
 
 # 动效开关(三种粒度)
 

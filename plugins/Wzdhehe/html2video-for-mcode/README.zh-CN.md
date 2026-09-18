@@ -50,7 +50,7 @@ my-video/
 - **动画真的进视频**:捕获用逐帧步进而不是录屏,入场动画是渲染出来的,不是冻结在终态。
 - **渲染有闸门**:静态检查会拒绝未定义 CSS 变量、图片缺失、外链资源、入场动画缺动画类的页面,也会拒绝"关键帧从不把 `opacity: 0` 基础态抬回来"的入场动画(那类元素会在成片里静默隐形)—— 这些正是"视频看着坏了但每个脚本都报成功"的元凶。
 - **受监管题材走合规流程**:财经 / 医疗 / 法律 / 政务类片子开工就问免责声明与出处标注,每个数字钉住口径(口径 + 币种 + 时点),涨跌色按受众市场翻转(A 股 / 港股是红涨绿跌)—— 见 `references/compliance.md`。
-- **图表纯 CSS/SVG 自绘,动效可一键关**:不引图表库、不用 canvas(离线取不到,canvas 动画也逐帧 seek 不到);根元素(或任意容器,单张生效)加 `no-fx` 即可关掉全部入场与氛围动效,渲染自动走静态帧、时长不变。图表工具箱还把数据可视化的底线写进模板:条形用动画 `width` 生长(缩放会把数字压扁)、柱高相对绘图区算(保证与数值一致)、网格与柱高共用一把尺子、图表避开字幕带。
+- **图表纯 CSS/SVG 自绘,动效可一键关**:不引图表库、不用 canvas(离线取不到,canvas 动画也逐帧 seek 不到);根元素(或任意容器,单张生效)加 `no-fx` 即可关掉全部入场与氛围动效,渲染自动走静态帧、时长不变。图表工具箱还把数据可视化的底线写进模板:条形用动画 `width` 生长(缩放会把数字压扁)、柱高相对绘图区算(保证与数值一致)、网格与柱高共用一把尺子、图表避开字幕带。表格有四种形态(`.tbl` 数据表 / `.kv` 规格表 / `.matrix` 对比矩阵 / `.rank` 排名表),字号与行高按"手机上也要看清"定死。
 
 ## 安装
 
@@ -139,7 +139,7 @@ Windows / macOS / Linux。脚本全部是 Node ESM,不依赖特定 shell。Windo
 node --test "plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/*.test.mjs"
 ```
 
-八个文件共 114 例:`safe-paths`(恶意 slide id / 路径、canary 完好性、符号链接逃逸)、`no-clobber`(覆盖拒绝)、`endpoint-allowlist`(Key 不离开官方域,并用本地服务器证明闸门在请求之前)、`fetch-policy`(SSRF、`file://`、重定向与文件名规则)、`preview-page`(快照注入实测延迟、`base` 顺序、自包含无外链、越界拒绝、无计时器)、`tokens-fx`(模板里每个入场动画的关键帧必须声明 `opacity`、`no-fx` 必须重置基础态、`--upgrade-css` 幂等)、`chart-kit`(模板里真带着图表工具箱:keyframes / 注册属性 /「关动效 = 终态」不变量)与 `render-smoke`(init → 对时 → 静态闸门 → 截图 → 成片全链)。渲染冒烟与三例依赖 ffmpeg 的路径检查需要 ffmpeg 与 Chromium:缺失时按原因 skip,scoped workflow `.github/workflows/html2video-for-mcode-smoke.yml` 会装齐依赖并把全部用例真跑一遍。
+九个文件共 120 例:`safe-paths`(恶意 slide id / 路径、canary 完好性、符号链接逃逸)、`no-clobber`(覆盖拒绝)、`endpoint-allowlist`(Key 不离开官方域,并用本地服务器证明闸门在请求之前)、`fetch-policy`(SSRF、`file://`、重定向与文件名规则)、`preview-page`(快照注入实测延迟、`base` 顺序、自包含无外链、越界拒绝、无计时器)、`tokens-fx`(模板里每个入场动画的关键帧必须声明 `opacity`、`no-fx` 必须重置基础态、`--upgrade-css` 幂等)、`chart-kit`(模板里真带着图表工具箱:keyframes / 注册属性 /「关动效 = 终态」不变量)、`table-kit`(表格原语的可读性硬指标:正文号、行高 ≥72px、涨跌走令牌)与 `render-smoke`(init → 对时 → 静态闸门 → 截图 → 成片全链)。渲染冒烟与三例依赖 ffmpeg 的路径检查需要 ffmpeg 与 Chromium:缺失时按原因 skip,scoped workflow `.github/workflows/html2video-for-mcode-smoke.yml` 会装齐依赖并把全部用例真跑一遍。
 
 ## 排错
 

@@ -8,7 +8,7 @@
 - **覆盖拒绝**:`init-project.mjs` 对已存在且非空的目录直接拒绝(列出将被覆写的 5 个生成文件),需显式 `--force`;`fetch-official-images.mjs` 的 `--out-dir` 默认收监在工作目录内、已存在文件不覆盖;`prep-image.mjs --crop` 输出已存在需 `--force`。顺带修 `--topic` 未转义即插入模板 HTML 的问题。
 - **ASR 端点白名单**:API Key 只发官方域(`api.minimaxi.com` / `api.minimax.io`);`--base-url` / `MINIMAX_BASE_URL` 指向其他地址一律硬拒绝,自建网关需显式 `--allow-any-endpoint`(打印醒目警告)。此前被偷换的环境变量可把 Key 发往任意端点。
 - **抓图 SSRF 收紧**:新增 `scripts/url-policy.mjs`(纯函数)。拦 loopback / 链路本地(含云元数据 169.254.169.254)/ 私网 / CGNAT / 无点主机名;只允许 http(s),`file://` 需显式 `--allow-file`;禁带 userinfo 的 URL;`maxRedirects:0` 手动跟重定向且**逐跳**复用同一策略;响应大小上限默认 30MB(`--max-mb`);落盘文件名清洗补 Windows 保留名。
-- **可执行测试**:新增 `tests/`(node:test,零依赖,从仓库根 `node --test` 自动发现 → 被 `npm run check` 真实执行)—— `safe-paths`(恶意 id/路径 + canary 完好性 + symlink 逃逸)、`no-clobber`(覆盖拒绝)、`endpoint-allowlist`(白名单拒绝 + 本地假服务器收到 Bearer 假 Key 的正向证据)、`fetch-policy`(host/URL/重定向/文件名 44 例)、`render-smoke`(init → 静音音频 → plan-timings → check-slides → capture → build-video 全链出片)。首轮 72 例(后续又加了 `preview-page` 与 `tokens-fx`,见下,现共 114 例, 8 个文件),本地全绿。另附 scoped workflow `.github/workflows/html2video-for-mcode-smoke.yml`(path-filter 只在本插件变更时跑,装 ffmpeg + playwright 后真实执行,含渲染冒烟)。
+- **可执行测试**:新增 `tests/`(node:test,零依赖,从仓库根 `node --test` 自动发现 → 被 `npm run check` 真实执行)—— `safe-paths`(恶意 id/路径 + canary 完好性 + symlink 逃逸)、`no-clobber`(覆盖拒绝)、`endpoint-allowlist`(白名单拒绝 + 本地假服务器收到 Bearer 假 Key 的正向证据)、`fetch-policy`(host/URL/重定向/文件名 44 例)、`render-smoke`(init → 静音音频 → plan-timings → check-slides → capture → build-video 全链出片)。首轮 72 例(后续又加了 `preview-page` 与 `tokens-fx`,见下,现共 120 例, 9 个文件),本地全绿。另附 scoped workflow `.github/workflows/html2video-for-mcode-smoke.yml`(path-filter 只在本插件变更时跑,装 ffmpeg + playwright 后真实执行,含渲染冒烟)。
 
 **图表与动效**
 
@@ -46,6 +46,16 @@
 - **验收抓到并修掉 7 个真缺陷**(都是"画面明显不对、流水线却报成功"那一类):① `fx-grow-x` 把条内数字**横向拉扁**;② 弱化条上白字**读不出来**;③ 加条外数值后轨道被挤窄 → **同一张图两把尺子**;④ 柱高百分比相对整列算、超出被 `flex-shrink` 压回 → **84% 与 72% 画成一样高**(数据失真);⑤ 网格铺在整列、柱区更矮 → 按网格读数与标注不符;⑥ 内容排进**字幕带**被字幕压住(底部 84–168px、居中 73% 宽);⑦ 弱化条半透明使网格透出、像分段堆叠。
 - 新增图表类型配方:bullet(实际 vs 目标)、slope(前后对比)、sparkline(数字旁迷你趋势),加上原有的横向条形/柱状/折线/环形/进度条,共 7 个配方 + 动效选型表。
 - 测试 +7 例(共 **114** 例 / 8 个文件):`chart-kit`(动效类与关键帧 opacity、`@property`、静态默认=终值、柱状三层结构与网格位置、行三列定宽、`--upgrade-css` 补工具箱且幂等);workflow 显式清单同步。
+
+**表格工具箱(2026-09-18 深夜,用户问"现在有哪几类表格")**
+
+起因:查了一遍 —— 真 `<table>` 版式**只有一种**(一个"季度/营收/同比"示例),`kpi-grid`/`roadmap`/`comparison` 只是卡片化的表格感, 而且 **tokens.css 里根本没有表格原语**, 每页各写一套内联样式。表格是模板系统里最薄的一环, 补上:
+
+- **四个表格原语**(`scripts/table-css.mjs` 唯一来源;init-project 写入 tokens.css, `--upgrade-css` 给老项目补, 幂等):`.tbl`(数据表:表头弱化、只画横线、数值列 `.num` 右对齐等宽、`.up/.down` 涨跌走令牌、`.key` 高亮行、`.sum` 合计行)、`.kv`(规格表 / 时间事件表)、`.matrix`(对比矩阵:勾叉 + `.hi` 高亮列)、`.rank`(排名表:名次 + 内联微缩条 + 数值, 条长同样 = 数值 ÷ 轴上限)。
+- **可读性硬指标写进原语并被测试盯着**:主数据 `var(--fs-body)`(30px)、表头 `--fs-caption`、行高 ≥72px、只画横线不画竖线不要斑马纹。实测教训:最初表格正文用了 `--fs-caption`(24px), 渲出来自己看着都吃力 —— 视频还要在手机上看, 已提到正文号。
+- **文档**:`references/authoring.md` 新增"表格工具箱"章节(七条纪律 + 五个配方 + 选型速查), `table` 版式行指向该章节;SKILL.md 症状表加一行(表格在手机上看不清 → 用原语, 别用 caption 号)。
+- 示例两屏(数据表 + 排名表 / 对比矩阵 + 规格表)在 `_probe/tableproj`(内部验证件);几何断言:行高 80/72、数值列各自右对齐同一竖线、无内容侵入字幕带。
+- 测试 +6 例(共 **120** 例 / 9 个文件):`table-kit`(四种原语存在、主数据是正文号、行高 72、涨跌走令牌、**不得出现竖线或斑马纹**、`--upgrade-css` 补原语且幂等);workflow 清单同步。
 
 **文档**
 

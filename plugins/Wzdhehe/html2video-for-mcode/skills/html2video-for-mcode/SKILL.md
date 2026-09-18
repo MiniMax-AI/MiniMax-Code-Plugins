@@ -229,7 +229,7 @@ audio/*.mp3  assets/(含 MANIFEST.md)  research/notes.md  asr/(校验记录)
 
 ## 参考文件(按需读,别全读)
 
-- `references/authoring.md` — 17 种版式规范(每种画面必含项)+ 内容量表 + 入场系统用法(含 stage 延迟实现原理)+ **图表工具箱**(图表原语、九条优雅纪律、7 个配方与动效选型)+ 主题速查 + 竖版说明 + 可抄的 HTML 片段
+- `references/authoring.md` — 17 种版式规范(每种画面必含项)+ 内容量表 + 入场系统用法(含 stage 延迟实现原理)+ **图表工具箱**(图表原语、九条优雅纪律、7 个配方与动效选型)+ **表格工具箱**(四种原语、七条纪律、五种形态)+ 主题速查 + 竖版说明 + 可抄的 HTML 片段
 - `references/compliance.md` — 领域与合规(受监管题材必读):领域确认问法、财经口播红线、数字三要件、涨跌色按受众翻转、免责声明写法与位置、医疗/法律/广告法要点、收尾检查清单
 - `references/research.md` — 资料搜集(来源分级、交叉验证硬规则、query 设计、矛盾处理、notes 模板)
 - `references/image-sources.md` — 配图与素材 SOP(三条取图路径、query 正/反词、两级筛选、图片框用法、裁切硬限制、视觉验证三件套、常见题材索引)
@@ -264,6 +264,7 @@ audio/*.mp3  assets/(含 MANIFEST.md)  research/notes.md  asr/(校验记录)
 | 柱状图柱高与标注数值不符(高柱子被压矮) | 柱子直接放在 flex 列里按百分比设高: 基准是**整列**高度, 超过剩余空间会被 `flex-shrink` 压回去, 静默失真 | 把柱子包进 `.chart-plot-cell`(1fr 行), 百分比就相对绘图区算; 顺带得到基线与各列等高 |
 | 折线图缩在版面中间一小块 | SVG 的 `viewBox` 宽高比与容器不一致, `preserveAspectRatio` 把内容等比缩小居中 | 满宽用 `width:100%;height:auto`; 半宽/固定高就把 viewBox 改成接近容器的比例 |
 | 图表/图注被字幕压住 | 内容排进了字幕带(底部 84–168px、居中 73% 宽) | 版面容器 `padding-bottom: 190px` 起步; 见 authoring.md 的"字幕安全区" |
+| 表格在手机上看不清 | 表格文字用了 caption 号(24px), 或行高被压到 72px 以下 | 用 `.tbl/.kv/.matrix/.rank` 原语:主数据是正文号(30px)、行高内置 72px;见 authoring.md"表格工具箱" |
 | 放映页里 iframe 是空白/图裂 | 副本的 `<base href>` 被清掉, 或 slides/ 被移动过 | 重跑 `preview-page.mjs` 重新生成快照;原文件不要手改(副本是快照,改 slides 后必须重跑) |
 | 图片显示 broken 图标 | 文件缺失,或 SVG 本身有问题(XML 错/依赖外部资源/缺尺寸) | `check-slides.mjs` 查路径;SVG 改 inline 进 HTML;capture 也会在渲染时点名哪张没加载 |
 | 财经片没免责声明 / 涨跌色反了 / 数字被质疑口径 | 开工没确认领域,默认色与默认措辞直接用了 | 读 `references/compliance.md`:结尾补 `.disclaimer` 行(停留 ≥3s)、指标卡改 `var(--up)/var(--down)` 并按受众市场翻转、每个数字补口径+币种+时点 |

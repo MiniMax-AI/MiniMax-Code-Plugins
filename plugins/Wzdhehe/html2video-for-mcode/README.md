@@ -73,7 +73,9 @@ policy, `no-fx` rules, chart CSS — under `skills/html2video-for-mcode/scripts/
   intact. The chart toolbox enforces the data-viz basics in the template itself: bars grow by
   animating `width` (scaling would squash the numbers), column heights resolve against the plot
   area so they always match their values, the grid shares the bars' scale, and charts stay clear of
-  the subtitle band.
+  the subtitle band. Tables ship four shapes (`.tbl` data table, `.kv` spec list, `.matrix` feature
+  matrix, `.rank` ranking with inline bars) with type and row heights sized to survive being watched
+  on a phone.
 - **Rendering is gated.** A static check refuses to render slides with undefined CSS variables,
   missing images, external resources, or entrance animations without an animation class — the
   failure modes that otherwise ship a video that looks broken while every script reports success.
@@ -201,7 +203,7 @@ The Skill ships an executable test suite (`skills/html2video-for-mcode/tests/`, 
 node --test "plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/*.test.mjs"
 ```
 
-114 tests in eight files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
+120 tests in nine files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
 escapes), `no-clobber` (refusing to overwrite), `endpoint-allowlist` (key never leaves the official
 hosts — plus a local server that proves the gate sits before the request), `fetch-policy` (SSRF,
 `file://`, redirect and filename rules), `preview-page` (snapshot timing injection, `base` ordering,
@@ -210,7 +212,8 @@ the generated `tokens.css` must declare `opacity`, `no-fx` must reset it, `--upg
 idempotent) and `fetch-policy`/`no-clobber` (the `--url` download route obeys the same SSRF,
 redirect, size and no-clobber rules), plus
 `chart-kit` (the chart toolbox is really in the generated `tokens.css`: keyframes, registered
-properties, and "off = final state") and `render-smoke` (init → timings → static gate → capture →
+properties, and "off = final state"), `table-kit` (table primitives keep their legibility rules:
+body-size type, ≥72px rows, token-driven up/down colours) and `render-smoke` (init → timings → static gate → capture →
 build, end to end). The render smoke test and three ffmpeg-dependent path checks need ffmpeg and
 Chromium; where those are missing they skip with a stated reason, and the scoped workflow
 `.github/workflows/html2video-for-mcode-smoke.yml` installs them and runs everything for real.

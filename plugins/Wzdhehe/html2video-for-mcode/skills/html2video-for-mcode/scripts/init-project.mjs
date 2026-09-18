@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { NOFX_CSS, hasNofxRules } from './nofx-css.mjs';
 import { CHART_CSS, hasChartKit } from './chart-css.mjs';
+import { TABLE_CSS, hasTableKit } from './table-css.mjs';
 
 const argv = process.argv.slice(2);
 const dirArg = argv.find(a => !a.startsWith('--'));
@@ -415,6 +416,8 @@ ${NOFX_CSS}
 
 ${CHART_CSS}
 
+${TABLE_CSS}
+
 /* 依次入场容器: 子元素逐个上浮, 基准时刻取 --stagger-base(默认 --t2) */
 .fx-stagger > * { opacity: 0; animation: fx-rise .65s var(--ease-out) both; }
 .fx-stagger > *:nth-child(1) { animation-delay: calc(var(--stagger-base, var(--t2)) + 0ms); }
@@ -497,11 +500,14 @@ if (argv.includes('--upgrade-css')) {
   let css = fs.readFileSync(cssPath, 'utf8');
   const needNofx = !hasNofxRules(css);
   const needChart = !hasChartKit(css);
-  if (!needNofx && !needChart) { console.log(`无需升级: ${cssPath} 已含 no-fx 规则与图表工具箱`); process.exit(0); }
-  if (needNofx) css = css.replace(/\s*$/, '\n') + `\n/* 以下由 init-project --upgrade-css 追加(2026-09-18): 老项目缺这段时 <html class="no-fx"> 失效 */\n${NOFX_CSS}\n`;
-  if (needChart) css = css.replace(/\s*$/, '\n') + `\n/* 以下由 init-project --upgrade-css 追加(2026-09-18): 图表动效与图表原语(缺了则条形不生长/环形不扫出/数字不滚动) */\n${CHART_CSS}\n`;
+  const needTable = !hasTableKit(css);
+  if (!needNofx && !needChart && !needTable) { console.log(`无需升级: ${cssPath} 已含 no-fx 规则、图表工具箱与表格原语`); process.exit(0); }
+  const stamp = '以下由 init-project --upgrade-css 追加(2026-09-18)';
+  if (needNofx) css = css.replace(/\s*$/, '\n') + `\n/* ${stamp}: 老项目缺这段时 <html class="no-fx"> 失效 */\n${NOFX_CSS}\n`;
+  if (needChart) css = css.replace(/\s*$/, '\n') + `\n/* ${stamp}: 图表动效与图表原语(缺了则条形不生长/环形不扫出/数字不滚动) */\n${CHART_CSS}\n`;
+  if (needTable) css = css.replace(/\s*$/, '\n') + `\n/* ${stamp}: 表格原语(缺了则 .tbl/.kv/.matrix/.rank 都不生效) */\n${TABLE_CSS}\n`;
   fs.writeFileSync(cssPath, css);
-  console.log(`✓ 已补:${needNofx ? ' no-fx 规则' : ''}${needChart ? ' 图表工具箱(fx-grow-w/h · fx-sweep · fx-count · fx-dot + .chart 原语)' : ''} → ${cssPath}`);
+  console.log(`✓ 已补:${needNofx ? ' no-fx 规则' : ''}${needChart ? ' 图表工具箱' : ''}${needTable ? ' 表格原语(.tbl/.kv/.matrix/.rank)' : ''} → ${cssPath}`);
   process.exit(0);
 }
 
