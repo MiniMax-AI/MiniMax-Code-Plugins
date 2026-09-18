@@ -1,135 +1,136 @@
 ---
 name: html2video-for-mcode
-description: 把脚本/大纲/主题变成带中文口播的成片 MP4(HTML 幻灯片 + TTS + ffmpeg 渲染),为 mcode 环境定制、也可在其他 Agent 环境用 mmx-cli 跑通。当用户想把内容做成视频、html 转 mp4、幻灯片口播视频、slides video、narrated video、一分钟介绍视频、抖音/视频号竖版视频时触发;**只想先看看做好的 HTML 幻灯片、想自己放映一遍或预览动效(口播还没做也行)时同样触发**——技能会生成自包含放映页,不必先花几分钟渲染成片。财经/财报/投研/医疗/政策等**受监管题材**的视频同样触发(需要免责声明与数据口径处理)。也当症状出现时触发——TTS 念完留白过长、画面只有标题没有细节展开、部分元素 0 秒就入场、入场动画没渲染进视频、音画不同步、图片主体被裁到画面外、字幕糊在深色背景上、拼接后总时长不对、字体闪烁或方框、图表或某个元素入场后永远不出现(关键帧没把 opacity 抬回来)、切了 no-fx 画面反而更空、双击 slides/*.html 看动画发现全挤在开头、财经片忘了写免责声明或涨跌色用反。覆盖全流程:开工对齐(领域与免责/风格/字幕/画布/音色/素材边界)→ 信息搜集 → 脚本 → TTS → 实测对时 → 配图 SOP → HTML 分步入场 → 静态闸门与放映页自检 → 逐帧渲染 → ASR 反向校验。工具分两套:mcode 沙箱用 connector__matrix__*(TTS/ASR/音乐),其他环境用 mmx-cli(注意:mmx-cli 无 ASR 与音乐生成,见文末环境对照表)。
+description: Turn a script/outline/topic into a finished MP4 with Chinese voiceover (HTML slides + TTS + ffmpeg rendering), tailored for the mcode environment and also runnable in other Agent environments with mmx-cli. Trigger when the user wants to turn content into a video, html 转 mp4 (html to mp4), 幻灯片口播视频 (narrated slide video), slides video, narrated video, 一分钟介绍视频 (one-minute intro video), 抖音/视频号竖版视频 (vertical video for Douyin/WeChat Channels); **also trigger when they only want to look at the finished HTML slides first, present them once themselves, or preview the animations (with or without the voiceover yet)** — the skill generates a self-contained play page, so you don't have to spend minutes rendering a finished video first. Also trigger for videos on **受监管题材** (regulated subjects) such as finance/earnings/investment research/healthcare/policy (they need disclaimers and data-scope handling). Also trigger on symptoms — TTS leaves too long a silence after it finishes speaking, the frame has only a title with no detail expansion, some elements enter at 0 seconds, entrance animations aren't rendered into the video, audio and visuals are out of sync, an image's subject is cropped out of frame, subtitles are muddy on a dark background, the total duration after concatenation is wrong, fonts flicker or show as boxes, a chart or some element never appears after entering (the keyframes don't bring opacity back), switching to no-fx makes the frame emptier instead, double-clicking slides/*.html to watch the animation shows everything crammed at the start, or a finance video forgot the disclaimer or has the up/down colors inverted. Covers the whole pipeline — 开工对齐 (kickoff alignment, i.e. domain and disclaimer / style / subtitles / canvas / voice / asset boundaries) → 信息搜集 (research) → 脚本 (script) → TTS → 实测对时 (measured timing sync) → 配图 SOP (image SOP) → HTML 分步入场 (staged entrance) → 静态闸门与放映页自检 (static gate and play-page self-check) → 逐帧渲染 (frame-by-frame rendering) → ASR 反向校验 (reverse ASR verification). Two toolchains — the mcode sandbox uses connector__matrix__* (TTS/ASR/music), other environments use mmx-cli (note that mmx-cli has no ASR or music generation — see the environment comparison table at the end).
 ---
 
-# HTML 2 Video for mcode:脚本 → 口播成片
+# HTML 2 Video for mcode: script → narrated video
 
-把一个主题/大纲变成一条可发布的 MP4(默认 1920×1080,可切 1080×1920 竖版):HTML 幻灯片(分步入场动画)+ 中文 TTS 口播 + ffmpeg 组装 + ASR 反向校验。
+Turn a topic/outline into a publishable MP4 (default 1920×1080, switchable to 1080×1920 vertical): HTML slides (staged entrance animations) + Chinese TTS narration + ffmpeg assembly + reverse ASR verification.
 
-## 四条铁律(违反任何一条,产出必然返工)
+## The four iron rules (violate any one and the output is guaranteed to be reworked)
 
-1. **所有时长只来自 ffprobe 实测,永远不手写。** 每张 slide 的时长 = 该段 TTS 实测时长 + 尾部留白(默认 0.8s)。不估、不凑整、不写死。
-2. **TTS 先于 HTML。** 先出音频、实测时长、算好每个视觉层的入场时刻,再写 HTML。动画延迟全部通过 CSS 变量 `--t1/--t2/--t3` 注入,HTML 里不写死秒数。这是消灭"念完留白过长"和"音画不同步"的根本手段。
-3. **每个 Gate 等用户确认,不跳步。** Gate 清单见下文工作流。
-4. **开工先对齐,不要闷头开跑。** 第一次响应 = 把下面这批问题**以问句形式逐项问出来,然后停下等用户回答**;每项可以附上推荐默认值,但必须是"问、等答",不是"告知默认、不反对就视为同意"。用户明确说"按默认"或某项没答到的,才采用默认值,并在进入下一步前把"最终采用了哪些默认"复述一遍。答案即后续所有 Gate 的验收基线。
+1. **All durations come only from ffprobe measurements; never write them by hand.** Each slide's duration = that segment's measured TTS duration + tail padding (default 0.8s). Don't estimate, don't round, don't hard-code.
+2. **TTS before HTML.** Produce the audio first, measure the real durations, work out the entrance moment of every visual layer, then write the HTML. All animation delays are injected through the CSS variables `--t1/--t2/--t3`; never hard-code seconds in the HTML. This is the fundamental cure for "too much silence after the narration ends" and "audio and visuals out of sync".
+3. **Wait for user confirmation at every Gate; skip no steps.** See the workflow below for the Gate list.
+4. **Align before starting; don't just charge ahead.** The first response = **ask each of the questions below, one by one, in question form, then stop and wait for the user's answers**; each item may come with a recommended default, but it must be "ask, then wait" — not "announce the default and treat silence as consent". Only when the user explicitly says "go with the defaults", or leaves an item unanswered, do you adopt the default, and before moving to the next step, restate which defaults were finally adopted. The answers become the acceptance baseline for every subsequent Gate.
 
-   ⚠ 反例(2026-09-18 实测踩过,不许再犯):一条消息甩出"默认项(不特别说的话就按这个):中文普通话口播 · 中文字幕 · 1920×1080 · 温润男声 · 预计 10–12 张…"然后继续推进 —— 这不是提问,是告知;用户没有逐项表态的机会,等于没对齐。正确做法:列成问题清单(每项给 2–3 个选项 + 推荐默认),明确说"回复确认或改动哪几项",收到回答再动。
+   ⚠ Counter-example (hit for real on 2026-09-18 — never again): firing off one message that reads "默认项(不特别说的话就按这个):中文普通话口播 · 中文字幕 · 1920×1080 · 温润男声 · 预计 10–12 张…" ["Defaults (unless you say otherwise, we use these): Mandarin Chinese narration · Chinese subtitles · 1920×1080 · warm male voice · estimated 10–12 slides…"] and then pressing on — that is not asking, it is informing; the user never gets the chance to take a position on each item, which amounts to no alignment at all. The right way: lay it out as a question list (2–3 options + a recommended default per item), say plainly "reply to confirm, or tell me which ones to change", and only move once the answers come back.
 
-| 要问的 | 选项 / 默认 |
+| What to ask | Options / defaults |
 |---|---|
-| **主题与领域** | 题材一句话 + **属于哪个领域**(财经/商业 · 科技/产品 · 科普/教育 · 品牌/营销 · 文化/历史 · 生活/消费 · 政务/政策),领域决定版式与信息密度;受监管领域的完整约束见下面"敏感内容与免责"行与 `references/compliance.md` |
-| **受众** | 给谁看:**专业从业者 / 泛科技大众 / 管理层汇报 / 客户演示 / 内部培训**(按题材给推荐,但要用户确认)。同一题材给研究员和给大众是两套稿 —— 这一项决定术语密度、信息密度与口吻 |
-| **语言(必问)** | 口播说什么语言:**中文普通话 `zh`**(默认)/ **英语 `en`** / 粤语 `yue` / 其他 BCP-47。这项决定 4 件事:① 口播稿用哪种语言写;② **音色必须匹配语种**(中文用 `Chinese (Mandarin)_*`、英语用 `English_*`,错配会出怪腔调,写完必须 ASR 验语种);③ 字数/语速基准(中文字/秒 vs 英文词/秒,plan-timings 自动切换);④ ASR 识别语言头(zh 强制普通话,能识破粤语) |
-| **风格与配色(主题色)** | 先按受众给 2–3 个候选主题让用户挑(商务 `minimal-white`/`swiss-grid`/`corporate-clean`;编辑杂志 `editorial-serif`/`magazine-bold`;科技深色 `tokyo-night`/`catppuccin-mocha`/`nord`;消费生活 `xiaohongshu-white`/`soft-pastel`)。**再问一句主题色偏好**:直接用主题自带主色,还是有品牌色要指定(给了就按 authoring.md 的"自定义主色"覆写 `--accent` 并跑 check-theme 验对比度) |
-| **数据与图表** | 题材里含关键数字、对比、占比或趋势(财报/产品数据/市场对比/进度类)时**必问**:① 有没有值得单独成张的可视化数据;② 要不要图表张、大约几张(默认建议:有硬数据且版式合适 → 1–2 张,纯叙事题材跳过);③ 样式偏好:横向条形 / 柱状 / 环形 / 折线 / 进度条,或"按数据形态让 agent 选"(选型速查见 authoring.md 图表工具箱,全部纯 CSS/SVG、离线可用);④ 图上的数字同受 Gate 0 约束(≥2 独立来源、带口径与时点)。**就算用户没提图表,涉及数据密集的题材也要主动给这个选项** —— 一串可比数字念成 bullets 不如一张图 |
-| **字幕** | 不要字幕 / 单语(**与口播同语言**,默认)/ **双语**(主行=口播语言,次行 `text2` = 另一语言,如中文口播配英文字幕)——决定要不要写 text2、要不要 `--no-subs` |
-| **敏感内容与免责** | 题材涉及任一项就要问"结尾要不要免责声明 + 信息来源与口径页":财经观点/数字、医疗、法律、政策、**负面事件报道**、个人信息/数据引用 —— 默认**要**。受监管领域(财经投研/医疗健康/法律/政务政策/营销效果宣称)按 `references/compliance.md` 全套:结尾 `.disclaimer` 行(停留 ≥3s)、涨跌色按受众翻转、数字带口径+币种+时点。用户明确说不要才省略 |
-| **画布与平台(长宽比)** | 横屏 1920×1080(默认,适合 B站/官网)或竖版 1080×1920(抖音/视频号/小红书);竖版要换堆叠版式 |
-| 大致时长 | 默认 ~60s(6–10s/张 × 8 张);短视频平台可压到 30s;给区间让用户挑 |
-| **TTS 音色(大致方向)** | 温润男声 / 干练女声 / 活泼 / 磁性 / 其他 —— 说个大致方向即可,Phase 2 给 3 个候选试听再定(见 tts-and-timing.md) |
-| **配图与素材边界** | 先问**要不要配图**:纯排版不出图(数字卡+大字+引语)/ 允许网络取官方图(默认)/ 只用用户提供的素材。**负面事件题材(暴雷/处罚/诉讼/争议)加问:要不要公告或新闻媒体报道截图当配图**(默认建议:要,1–2 张;纪律见 image-sources.md 路径 D)。具体"用哪几张、还要补什么"留给 Gate 3 素材确认时问 |
+| **Topic and domain** | One sentence on the subject + **which domain it belongs to** (finance/business · tech/product · popular science/education · brand/marketing · culture/history · life/consumer · government/policy); the domain decides layout and information density; full constraints for regulated domains are in the "Sensitive content and disclaimer" row below and in `references/compliance.md` |
+| **Audience** | Who it's for: **domain professionals / general tech-savvy public / management briefing / client demo / internal training** (recommend based on the subject, but have the user confirm). The same subject written for researchers and for the general public is two different scripts — this item decides term density, information density and tone of voice |
+| **Language (must ask)** | What language the narration is in: **Mandarin Chinese `zh`** (default) / **English `en`** / Cantonese `yue` / other BCP-47. This decides 4 things: ① which language the narration script is written in; ② **the voice must match the language** (Chinese uses `Chinese (Mandarin)_*`, English uses `English_*`; a mismatch produces a strange accent, so verify the language with ASR after writing); ③ the characters/speech-rate baseline (Chinese characters/sec vs English words/sec — plan-timings switches automatically); ④ the ASR language header (zh forces Mandarin, so it can catch Cantonese) |
+| **Style and colors (theme color)** | First offer 2–3 candidate themes based on the audience (business `minimal-white`/`swiss-grid`/`corporate-clean`; editorial magazine `editorial-serif`/`magazine-bold`; dark tech `tokyo-night`/`catppuccin-mocha`/`nord`; consumer/lifestyle `xiaohongshu-white`/`soft-pastel`). **Then ask one more question about theme-color preference**: use the theme's built-in primary color, or is there a brand color to specify (if given, override `--accent` per the "custom primary color" section of authoring.md and run check-theme to verify contrast) |
+| **Data and charts** | When the subject contains key numbers, comparisons, proportions or trends (earnings/product data/market comparisons/progress), you **must ask**: ① is there any data worth a slide of its own; ② do you want chart slides, and roughly how many (default suggestion: hard data + a suitable layout → 1–2 slides; pure narrative subjects skip this); ③ style preference: horizontal bars / columns / donut / line / progress bar, or "let the agent pick per the data shape" (selection cheat sheet in the authoring.md chart toolkit — all pure CSS/SVG, works offline); ④ numbers on the chart are also bound by Gate 0 (≥2 independent sources, with scope and timestamp). **Even if the user doesn't bring up charts, proactively offer this option for data-dense subjects** — a string of comparable numbers read out as bullets is worse than one chart |
+| **Subtitles** | No subtitles / monolingual (**same language as the narration**, default) / **bilingual** (main line = narration language, second line `text2` = the other language, e.g. Chinese narration with English subtitles) — decides whether to write text2 and whether to use `--no-subs` |
+| **Sensitive content and disclaimer** | If the subject touches any of these, ask "do you want a disclaimer + a sources-and-scope slide at the end": financial opinions/figures, medical, legal, policy, **negative-event reporting**, personal information/data citations — default is **yes**. Regulated domains (financial investment research/healthcare/legal/government policy/marketing performance claims) follow the full `references/compliance.md` set: a closing `.disclaimer` line (on screen ≥3s), up/down colors flipped per audience, numbers carrying scope + currency + timestamp. Omit only if the user explicitly says no |
+| **Canvas and platform (aspect ratio)** | Landscape 1920×1080 (default, suits Bilibili/official sites) or vertical 1080×1920 (Douyin/WeChat Channels/Xiaohongshu); vertical needs a stacked layout |
+| Approximate duration | Default ~60s (6–10s per slide × 8 slides); short-video platforms can compress it to 30s; offer a range for the user to pick |
+| **TTS voice and speed (rough direction)** | ①**Gender/voice direction**: male / female / neutral × warm / crisp / magnetic / lively; ②**speed**: normal (**default 1.1**, ≈5.3 Chinese characters/sec) / a bit slower / a bit faster. A rough direction is enough — Phase 2 auditions 3 candidate voices, and **plays the same sentence at all three speeds (1.05/1.15/1.25) alongside them so the two are decided together** (see tts-and-timing.md); once decided, write it into `speed` in `script.json` and restate it |
+| **Images and asset boundaries** | First ask **whether to use images at all**: pure typography, no images (number cards + large type + quotes) / allow official images pulled from the web (default) / only user-provided assets. **For negative-event subjects (blow-ups/penalties/lawsuits/controversies), add: do you want announcement or news-report screenshots as illustrations** (default suggestion: yes, 1–2; discipline in image-sources.md path D). The specifics — "which ones to use, what still needs to be supplied" — are left to the Gate 3 asset confirmation |
 
-## 目录与工具
+## Contents and tools
 
-技能自带 **12 个命令行脚本 + 6 个内部模块**(直接以本技能目录为路径调用,项目目录作为参数,无需复制;`tests/` 下还有一套 node:test 安全与冒烟测试,从仓库根 `node --test` 自动发现):
+The skill ships with **12 command-line scripts + 6 internal modules** (call them directly by path within the skill directory, passing the project directory as an argument, no copying needed; `tests/` also holds a set of node:test security and smoke tests, auto-discovered from `node --test` at the repo root):
 
-| 脚本 | 作用 |
+| Script | Purpose |
 |---|---|
-| `scripts/init-project.mjs <项目目录> [--topic "主题名"] [--force] [--upgrade-css] [--check-css]` | 生成项目骨架:目录 + tokens.css + slide 模板 + script.json 契约。**目标目录非空时拒绝执行**(会重置 5 个生成文件),要重新初始化必须显式 `--force`。`--upgrade-css` 把项目 tokens.css 的三个工具箱(no-fx / 图表 / 表格)**受管块**更新到技能当前版——按内容 rev 判定并**原地替换**,不再追加重复段;幂等,写前备份 `tokens.css.bak`,受管块之外的规则(含项目端覆写)不动。`--check-css` 只查不改,落后/缺失逐项报出并退出码 1 |
-| `scripts/plan-timings.mjs <项目目录> [--pacing=<每秒字数>]` | ffprobe 实测每段 TTS → 每张时长、各 stage 入场时刻、**每句 clauses 时刻** → `build/timings.json`;`--pacing` 覆写语速基准(语速告警时重估用) |
-| `scripts/check-timing.mjs <项目目录> [--calibrate]` | 静音检测实测每句真实开口, 与估算对比;`--calibrate` 按实测校准 timings 后重渲染。静音段数对不上而没校准的张, 用 `asr.mjs --verify-timing` 拿字级时间戳实测句开口 |
-| `scripts/check-theme.mjs <项目目录>` | 校验全部主题的 WCAG 对比度(正文/次级/字幕/accent-ink), 不达标退出码 1;新增主题必须过闸 |
-| `scripts/check-slides.mjs <项目目录> [--ids 01,02] [--quiet]` | **渲染前静态闸门**:未定义 CSS 变量、缺图/外链资源、`data-stage` 没配 fx 类、fx 关键帧不含 opacity(会永久隐形)、用了无定义的类(静默无样式,提示级)、tokens.css 工具箱落后(提示级)、**`.fx-stagger` 与 `data-stage` 同张共存(会覆盖入场时刻)**、**绝对定位 `bottom` 落进字幕带(成片字幕压图注,still 看不出)**、硬编码颜色、整片级领域自查。有 ✗ 就别截图 |
-| `scripts/prep-image.mjs --check <图...>` / `--crop <in> <out> [--ratio 16:9] [--anchor ...] [--force]` | 配图 SOP 的执行辅助:查尺寸与裁切风险;按锚点裁切(强制"裁掉 ≤20%、不放大补边") |
-| `scripts/fetch-official-images.mjs <页面URL> [--get 1,3] [--out-dir <目录>] [--min WxH] [--json] [--allow-file] [--max-mb N] [--force]` / `--url <图片URL>[,...]` | 从官方页/本地页面列出并下载候选配图(`--json` 只列候选不下载,`--min` 按尺寸过滤);**站点要登录/滚动加载时,用内置浏览器 inspect 出图片 URL,再用 `--url` 直接落盘(不需 Playwright)**。内网与元数据地址一律拒绝(含 IPv4-mapped IPv6 形式), 每跳重定向复核, 默认写在工作目录内 |
-| `scripts/capture.mjs <项目目录> [--mode still\|motion] [--ids 01,02] [--no-subs]` | Playwright 截图。still=终态单帧(会作废该张旧帧目录);motion=逐帧步进入场动画(`--dsf 2` 超采样)。**字幕默认烧录**(内容取自 clauses),`--no-subs` 关闭;**逐句另出字幕静态图**(`build/substills/`),帧序列覆盖不到的字幕窗由 build-video 拼接 —— 动画窗之后的字幕变化否则会冻住 |
-| `scripts/preview-page.mjs <项目目录> [--open] [--no-script]` | 生成**放映页** `preview/play/index.html`(单文件、零依赖、file:// 双击即看):**动效开时 ←→/触屏滑动为逐级入场**——每按一次 → 出下一级(二级标题/小图表当场动画出现),出完才翻页;动效关直接翻页。X 动效开/关、P 口播开/关(开关都在底栏按钮上,文案直接写"动效开/动效关""口播开/口播关",顶栏只留页码)、O 总览、F 全屏。**换帧双缓冲不闪白;UI 文案随 script.json 的 lang 中英自适应**。**只做"放画面"这件事**:没有计时器/进度条/跟读高亮/重播按钮(要看时间就看成片)。快照按 `timings.json` 注入实测延迟(逐级动画与成片同源);口播面板按数据自动决定加不加载,窄窗口/手机上收成底部抽屉且默认收起,画布横竖版自适应 |
-| `scripts/build-video.mjs <项目目录> [--asr] [--dry-run]` | 编码每张 → 拼接 → 音轨对位 → 合成 → 自检 + 出 `out/subs.srt`;`--asr` **按句**切分音频 + 校验清单;`--dry-run` 只打印将要执行的 ffmpeg 命令(排错用)。有字幕静态图时按"帧序列段 + 字幕段"拼接(段长之和必须等于整张时长) |
-| `scripts/grab-frames.mjs <项目目录> [--ids 05,11] [--at 0.5] [--both]` | **成片抽帧核对**:按 `timings.json` 算每张绝对起点,从 `out/final.mp4` 抽帧到 `build/introspect/` —— 图注被字幕压住、末级元素没进画面、收尾静止不够这类"still 看不出、成片里才见"的问题,上片前逐张过一遍 |
-| `scripts/asr.mjs <项目目录> [--api-key K] [--verify-timing] [--from <转写>] [--allow-any-endpoint]` | 调 ASR 转写并按句校验音画是否念的是脚本(数字/繁体字不符判 ✗);`--verify-timing` 用字级时间戳实测句开口。Key 只发官方域 |
+| `scripts/init-project.mjs <project> [--topic "topic name"] [--force] [--upgrade-css] [--check-css]` | Generates the project skeleton: directory + tokens.css + slide templates + the script.json contract. **Refuses to run when the target directory is non-empty** (it would reset 5 generated files); re-initializing requires an explicit `--force`. `--upgrade-css` updates the three toolkits (no-fx / charts / tables) **managed blocks** in the project's tokens.css to the skill's current version — decided by content rev and **replaced in place**, no more duplicate sections appended; idempotent, backs up `tokens.css.bak` before writing, and leaves rules outside the managed blocks (including project-side overrides) untouched. `--check-css` only inspects, never modifies: outdated/missing items are reported one by one, with exit code 1 |
+| `scripts/plan-timings.mjs <project> [--pacing=<chars per second>]` | ffprobe-measures each TTS segment → per-slide duration, each stage's entrance moment, **each sentence's clause timing** → `build/timings.json`; `--pacing` overrides the speech-rate baseline (for re-estimating when the speed warning fires) |
+| `scripts/check-timing.mjs <project> [--calibrate]` | Silence detection measures each sentence's real onset and compares it with the estimate; `--calibrate` calibrates the timings to the measurements and then re-renders. For slides whose silence-segment count doesn't match and which haven't been calibrated, use `asr.mjs --verify-timing` to get character-level timestamps and measure the sentence onset |
+| `scripts/check-theme.mjs <project>` | Verifies WCAG contrast for all themes (body/secondary/subtitle/accent-ink); exit code 1 if any fails; new themes must pass this gate |
+| `scripts/check-slides.mjs <project> [--ids 01,02] [--quiet]` | **Static gate before rendering**: undefined CSS variables, missing images/external resources, `data-stage` without an fx class, fx keyframes that don't include opacity (which would stay invisible forever), use of undefined classes (silently unstyled — info level), tokens.css toolkit out of date (info level), **`.fx-stagger` and `data-stage` on the same slide (which would override entrance timing)**, **absolutely positioned `bottom` falling inside the subtitle band (burned-in subtitles would cover the caption; invisible in a still)**, hard-coded colors, and a whole-video domain self-check. Any ✗ and don't take screenshots |
+| `scripts/prep-image.mjs --check <image...>` / `--crop <in> <out> [--ratio 16:9] [--anchor ...] [--force]` | Execution helper for the image SOP: checks dimensions and crop risk; crops by anchor (enforcing "crop away ≤20%, never upscale to pad") |
+| `scripts/fetch-official-images.mjs <page URL> [--get 1,3] [--out-dir <dir>] [--min WxH] [--json] [--allow-file] [--max-mb N] [--force]` / `--url <image URL>[,...]` | Lists and downloads candidate images from an official page/local page (`--json` lists candidates without downloading; `--min` filters by size); **when the site needs login or lazy-loads on scroll, use the built-in browser to inspect the image URL, then drop it straight to disk with `--url` (no Playwright needed)**. Intranet and metadata addresses are always rejected (including IPv4-mapped IPv6 forms), every redirect hop is re-checked, and output defaults to inside the working directory |
+| `scripts/capture.mjs <project> [--mode still\|motion] [--ids 01,02] [--no-subs]` | Playwright screenshots. still = a single final-state frame (invalidates that slide's old frame directory); motion = frame-by-frame stepping through the entrance animations (`--dsf 2` supersampling). **Subtitles are burned in by default** (content comes from clauses); `--no-subs` turns that off; **each sentence's subtitle is also emitted as a static image** (`build/substills/`), and subtitle windows the frame sequence can't cover are spliced in by build-video — otherwise subtitle changes after the animation window would freeze; **slide 1 additionally emits `preview/cover.png`** (title fully visible, no subtitles — used as the cover and the video's first frame) |
+| `scripts/preview-page.mjs <project> [--open] [--no-script]` | Generates the **play page** `preview/play/index.html` (single file, zero dependencies, double-click to view over file://): **with animations on, ←→/touch swipe step through the entrance level by level** — each press of → reveals the next level (a sub-heading or small chart animates in on the spot), and only after the last level does it turn the page; with animations off it just turns pages. X toggles animations on/off, P toggles narration on/off (all toggles are buttons in the bottom bar, and the label text literally reads "动效开/动效关" "口播开/口播关" — animations on/off, narration on/off; the top bar keeps only the page number), O overview, F fullscreen. **Frame switching is double-buffered with no white flash; UI text adapts between Chinese and English per the `lang` in script.json**. **It does only one thing: "show the frame"** — no timer/progress bar/read-along highlight/replay button (to see timing, watch the finished video). Snapshots inject the measured delays from `timings.json` (the level-by-level animation shares its source with the finished video); the narration panel decides automatically from the data whether to load at all, collapses into a bottom drawer with default-collapsed state in narrow windows/on phones, and the canvas adapts to landscape or vertical |
+| `scripts/build-video.mjs <project> [--asr] [--dry-run] [--transition cut|xfade]` | Encodes each slide → concatenates → aligns the audio track → muxes → self-checks + emits `out/subs.srt`; `--asr` splits the audio **by sentence** + generates a checklist; `--dry-run` only prints the ffmpeg commands that would run (for troubleshooting). **Transitions default to a hard cut** (no black frame between segments; the first segment dissolves in from the cover and the last fades out), and `--transition xfade` or `transition` in `script.json` switches to a 0.4s cross-dissolve (the dissolve eats the extra frames kept at the end of each segment, so the total duration is unchanged). When subtitle stills exist it splices as "frame-sequence segments + subtitle segments" (the segment lengths must sum exactly to the slide's duration) |
+| `scripts/grab-frames.mjs <project> [--ids 05,11] [--at 0.5] [--both]` | **Finished-video frame extraction check**: compute each slide's absolute start from `timings.json` and pull frames from `out/final.mp4` into `build/introspect/` — problems like a caption covered by subtitles, the last-level element missing from the frame, or too little still time at the end are "invisible in a still, only visible in the finished video", so go through them slide by slide before publishing |
+| `scripts/asr.mjs <project> [--api-key K] [--verify-timing] [--from <transcript>] [--allow-any-endpoint]` | Calls ASR to transcribe and verifies sentence by sentence whether the audio says what the script says (mismatched numbers/traditional characters count as ✗); `--verify-timing` uses character-level timestamps to measure sentence onset. The key is only ever sent to official domains |
 
-内部模块(被上面的脚本 import, 不单独运行):`tools.mjs`(ffmpeg/ffprobe 探测 + 路径收监 `safeId/safeRel/inside`)、`url-policy.mjs`(ASR 端点白名单 + SSRF/重定向策略 + 下载文件名)、`nofx-css.mjs`(`no-fx` 规则的唯一来源)、`chart-css.mjs`(图表动效与图表原语的唯一来源)、`table-css.mjs`(表格原语:`.tbl/.kv/.matrix/.rank`)、`css-kit.mjs`(前三个模块的**受管块机制**:rev 定界 + 原地替换 + 落后判定,`--upgrade-css`/`--check-css`/check-slides/preview-page 共用)。三个工具箱以带 rev 定界注释的受管块写进 tokens.css,源模块改动后跑 `--upgrade-css` 即可精确传播到老项目。
+Internal modules (imported by the scripts above, never run on their own): `tools.mjs` (ffmpeg/ffprobe probing + path jail `safeId/safeRel/inside`), `url-policy.mjs` (ASR endpoint allowlist + SSRF/redirect policy + download filenames), `nofx-css.mjs` (single source of truth for the `no-fx` rules), `chart-css.mjs` (single source of truth for chart animations and chart primitives), `table-css.mjs` (table primitives: `.tbl/.kv/.matrix/.rank`), `css-kit.mjs` (the **managed-block mechanism** for the previous three: rev delimiting + in-place replacement + staleness detection, shared by `--upgrade-css`/`--check-css`/check-slides/preview-page). The three toolkits are written into tokens.css as managed blocks with rev delimiter comments, so after a source module changes, running `--upgrade-css` propagates exactly into old projects.
 
-环境要求:Node 18+(脚本用 fileURLToPath 保兼容, 不依赖 Node 20.11 的 import.meta.dirname)、`npm i playwright && npx playwright install chromium`(项目目录内)。ffmpeg/ffprobe 自动探测:PATH → node_modules(ffmpeg-static/ffprobe-static)→ 常见安装位置,找不到会给逐条诊断而不是莫名报错。
+Requirements: Node 18+ (scripts use fileURLToPath for compatibility, so they don't depend on Node 20.11's import.meta.dirname), `npm i playwright && npx playwright install chromium` (inside the project directory). ffmpeg/ffprobe are auto-detected: PATH → node_modules (ffmpeg-static/ffprobe-static) → common install locations; if they can't be found you get item-by-item diagnostics instead of a cryptic error.
 
-## 安装到其他 Agent 环境
+## Installing into other Agent environments
 
-本技能就是「一个文件夹 + 根目录 SKILL.md」的标准形态(frontmatter 的 `name` / `description` 已按规范写好),放到对应技能目录即可被识别:
+This skill is the standard "one folder + SKILL.md at the root" shape (the frontmatter `name` / `description` are already written to spec), so dropping it into the corresponding skills directory is enough for it to be discovered:
 
 ```bash
-# Claude Code(个人级)/ OpenClaw / 其他兼容 AgentSkills 的工具
-cp -r html2video-for-mcode ~/.claude/skills/        # 或 ~/.openclaw/skills/
-# 项目级安装
-cp -r html2video-for-mcode <你的项目>/.claude/skills/
-# 或者把它推到一个 git 仓库后走 skills CLI
+# Claude Code (personal scope) / OpenClaw / other AgentSkills-compatible tools
+cp -r html2video-for-mcode ~/.claude/skills/        # or ~/.openclaw/skills/
+# project-scope install
+cp -r html2video-for-mcode <your project>/.claude/skills/
+# or push it to a git repo and use the skills CLI
 npx skills add <repo-url> --skill html2video-for-mcode
 ```
 
-装完只需再补两件**依赖**(装在你的视频项目里,不是技能目录里):
+After installing, you only need to add two **dependencies** (in your video project, not in the skill directory):
 
 ```bash
-cd <你的视频项目目录>
-npm i playwright && npx playwright install chromium        # 截图用
-# ffmpeg 任选其一: winget install Gyan.FFmpeg / brew install ffmpeg / apt install ffmpeg
-# 或: npm i ffmpeg-static ffprobe-static
+cd <your video project>
+npm i playwright && npx playwright install chromium        # for screenshots
+# ffmpeg, pick one: winget install Gyan.FFmpeg / brew install ffmpeg / apt install ffmpeg
+# or: npm i ffmpeg-static ffprobe-static
 ```
 
-**为什么技能装在别处也能跑**:`scripts/tools.mjs` 按「技能自身位置 → 项目目录 → 调用时的工作目录 → npm 全局」逐个锚点解析 `playwright`;ffmpeg/ffprobe 也是四级探测(PATH → 项目 node_modules → 技能上两级 → 常见安装位置)。所以"技能在 `~/.claude/skills/`、依赖装在项目里"是受支持的用法(已实测:技能放到项目树之外仍能出图)。
+**Why the skill still runs when installed elsewhere**: `scripts/tools.mjs` resolves `playwright` through a list of anchors — "the skill's own location → the project directory → the working directory at call time → npm global"; ffmpeg/ffprobe are likewise probed in four tiers (PATH → the project's node_modules → two levels up from the skill → common install locations). So "skill in `~/.claude/skills/`, dependencies in the project" is a supported setup (measured: the skill still renders images even when it lives outside the project tree).
 
-## 运行环境:两套工具链(同一套脚本,只换工具源)
+## Runtime: two toolchains (same scripts, only the tool source changes)
 
-脚本层(截图 / 渲染 / 合成 / 校验 / 配图)完全环境无关;**只有 TTS、音乐、ASR 三件事依赖平台能力**。
+The script layer (screenshots / rendering / compositing / validation / images) is completely environment-agnostic; **only TTS, music and ASR depend on platform capabilities**.
 
-| 能力 | mcode 沙箱(首选) | 其他 Agent 环境(Claude Code / OpenClaw / Cursor 等) |
+| Capability | mcode sandbox (preferred) | Other Agent environments (Claude Code / OpenClaw / Cursor, etc.) |
 |---|---|---|
-| TTS 合成 | `mcode-tools connector call connector__matrix__batch_text_to_audio --args '{...}'`(≤10 条/批,主用);单条试音用 `connector__matrix__synthesize_speech` | `mmx speech synthesize --text "第一句口播。" --voice <voice_id> --speed 1.0 --out audio/01.mp3`;音色列表 `mmx speech voices` |
-| 结果落盘 | `get_asset_url <node_id>` → 下载到 `audio/<id>.mp3` | `--out` 直接写盘 |
-| BGM 音乐 | `connector__matrix__batch_text_to_music`(≤5 条/批) | ⚠ **mmx-cli 无音乐生成** → 让用户提供音乐文件(确认授权后登记 MANIFEST),或跳过 BGM |
-| ASR 反向校验 | `mcode-tools upload_temp_url` + `connector__matrix__listen_audio` | **`node scripts/asr.mjs <项目目录>`** —— 用同一把 API Key 直调 REST(`/v1/speech_to_text`),不依赖 mcode、也不用装 whisper;**会自动与 checklist 的预期文本比对并回填,数字/繁体字(粤语)不符直接判 ✗**。想用字级时间戳实测句开口:`--verify-timing` |
-| 素材配图 | 内置浏览器 inspect 官网 DOM(首选;取到的图片 URL 用 `scripts/fetch-official-images.mjs --url` 落盘)/ 官方 brand kit | 取图路径同左(本环境用 `fetch-official-images`,它自带 Playwright 无头浏览器渲染页面);抽象配图可用 `mmx image generate --prompt "..." --aspect-ratio 16:9 --n 3`(竖版项目用 `9:16`;**仅限抽象概念图,禁止生成 logo / 截图 / 真人头像**),再按 `image-sources.md` 登记 |
-| 调研 | `web_search` / `web_fetch`(内置);SPA/JS 渲染页用**内置浏览器**打开取正文(使用纪律见 references/research.md) | `mmx search "关键词"` / `mmx text chat`;SPA 页用项目内 Playwright **无头浏览器**渲染取正文(最小命令见 research.md) |
+| TTS synthesis | `mcode-tools connector call connector__matrix__batch_text_to_audio --args '{...}'` (≤10 items per batch, the main path); for a single voice test use `connector__matrix__synthesize_speech` | `mmx speech synthesize --text "第一句口播。" --voice <voice_id> --speed 1.1 --out audio/01.mp3`; voice list via `mmx speech voices` |
+| Writing results to disk | `get_asset_url <node_id>` → download to `audio/<id>.mp3` | `--out` writes straight to disk |
+| BGM music | `connector__matrix__batch_text_to_music` (≤5 items per batch) | ⚠ **mmx-cli has no music generation** → have the user provide a music file (confirm licensing, then register it in MANIFEST), or skip BGM |
+| Reverse ASR verification | `mcode-tools upload_temp_url` + `connector__matrix__listen_audio` | **`node scripts/asr.mjs <project>`** — calls REST (`/v1/speech_to_text`) directly with the same API Key, with no dependency on mcode and no need to install whisper; **it automatically compares against the expected text in the checklist and back-fills it, and mismatched numbers/traditional characters (Cantonese) are marked ✗ outright**. To measure sentence onset with character-level timestamps: `--verify-timing` |
+| Image assets | Built-in browser inspecting the official site's DOM (preferred; take the image URL to disk with `scripts/fetch-official-images.mjs --url`) / official brand kit | Same image paths as on the left (in this environment use `fetch-official-images`, which ships its own Playwright headless browser for rendering pages); for abstract illustrations use `mmx image generate --prompt "..." --aspect-ratio 16:9 --n 3` (use `9:16` for vertical projects; **abstract concept images only — generating logos / screenshots / real people's faces is forbidden**), then register it per `image-sources.md` |
+| Research | `web_search` / `web_fetch` (built in); for SPA/JS-rendered pages open them in the **built-in browser** to read the body text (usage discipline in references/research.md) | `mmx search "<keyword>"` / `mmx text chat`; for SPA pages render the body text with the project's Playwright **headless browser** (minimal command in research.md) |
 
-**mmx-cli 首次配置**(非 mcode 环境):`npm install -g mmx-cli` → `mmx auth login --api-key sk-xxx` → `mmx quota` 验证。401 多半是 region 不匹配:`mmx config set --key region --value cn|global`。脚本侧用 `MINIMAX_API_KEY`(必给)与 `MINIMAX_REGION=cn|global`(可选)对齐同一套身份。
+**First-time mmx-cli setup** (non-mcode environments): `npm install -g mmx-cli` → `mmx auth login --api-key sk-xxx` → verify with `mmx quota`. A 401 is usually a region mismatch: `mmx config set --key region --value cn|global`. On the script side, use `MINIMAX_API_KEY` (required) and `MINIMAX_REGION=cn|global` (optional) to line up with the same identity.
 
-**纪律不因环境而变**:时长仍由 ffprobe 实测、字幕仍来自 `clauses[]`、音色仍要试听并验语种(走上面的 asr.mjs)、Gate 一个都不跳。**搜索与取正文也不限于上表列的工具**:本机装了其他搜索技能/插件(网页搜索、网页阅读类等),或任何无头浏览器(项目内 Playwright 就是),哪个抓得到正文就用哪个 —— 变的只是工具,来源分级、两源交叉、口径标注的纪律一条不能少。
+**Discipline does not change with the environment**: durations still come from ffprobe measurements, subtitles still come from `clauses[]`, voices still have to be auditioned and language-verified (via asr.mjs above), and no Gate is skipped. **Search and body-text extraction are not limited to the tools in the table above either**: if other search skills/plugins are installed locally (web search, web reading, etc.), or any headless browser (the project's Playwright counts), use whichever one can get the body text — only the tool changes; source grading, two-source cross-checking and scope annotation are not negotiable.
 
-## 工作流(7 阶段 · 6 Gate)
+## Workflow (7 phases · 6 Gates)
 
 ```
-开工对齐(铁律 4, 不设 Gate 但必须先做)
-Phase 0 信息搜集   → Gate 0 事实清单
-Phase 1 脚本设计   → Gate 1 逐张口播稿
-Phase 2 TTS + 对时 → Gate 2 试听 + 时长表
-Phase 3 素材收集   → Gate 3 素材清单 + 预览 + 合规确认
-Phase 4 HTML       → Gate 4 终态截图
-Phase 5 渲染 + ASR → Gate 5 成片
-Phase 6 交付
+kickoff alignment (iron rule 4 — no gate, but it must happen first)
+Phase 0 research      → Gate 0 fact list
+Phase 1 script design → Gate 1 per-slide narration script
+Phase 2 TTS + timing  → Gate 2 audition + duration table
+Phase 3 assets        → Gate 3 asset list + preview + compliance check
+Phase 4 HTML          → Gate 4 final-state screenshots
+Phase 5 render + ASR  → Gate 5 finished video
+Phase 6 delivery
 ```
 
-**顺序是脚手架,不是建议。** 口播稿定了才做 TTS;TTS 时长实测了才动素材和 HTML;素材清单过了 Gate 3 才写进页面;HTML 过了终态截图才渲染。改了口播稿 = 从 Phase 2 重跑(TTS 便宜,重做不贵;带着旧时长硬改才是灾难)。每个 Gate 向用户呈现"验收物清单"里明确的东西,没收到 OK 绝不前进——即使看起来显然,也要确认。
+**The order is scaffolding, not advice.** The narration script is final before TTS; TTS durations are measured before you touch assets and HTML; the asset list passes Gate 3 before it goes into the pages; the HTML passes the final-state screenshot before rendering. Changing the narration script = re-run from Phase 2 (TTS is cheap, redoing it costs little; forcing changes onto stale durations is the real disaster). Each Gate presents the user with exactly what its "acceptance-artifact list" specifies, and you never move forward without an OK — even when it looks obvious, confirm.
 
-**恢复/继续一个老项目,动工前先做一件事**:`node <技能>/scripts/init-project.mjs <项目目录> --check-css`。工具箱(no-fx/图表/表格)落后就跑 `--upgrade-css`(按 rev 原地替换受管块,不碰你的覆写,自动备份 `.bak`)。**注意升级只改 tokens.css** —— 已生成的 `preview/*.png`、`build/frames/`、`out/*.mp4` 里还是旧 CSS 的画面:受影响张要重跑 capture(still + motion)、重跑 preview-page,再 build-video。判断项目停在哪个 Phase:有 `research/notes.md` 内容→过 Gate 0;`script.json` clauses 已填→Gate 1;`audio/*.mp3` 齐→Gate 2;`assets/` 齐→Gate 3;`slides/*.html` 齐→Gate 4;`build/frames` 或 `out/*.mp4` 在→Gate 5。
+**To resume/continue an old project, do one thing before starting work**: `node <技能>/scripts/init-project.mjs <project> --check-css`. If the toolkits (no-fx/charts/tables) are outdated, run `--upgrade-css` (replaces the managed blocks in place by rev, doesn't touch your overrides, backs up `.bak` automatically). **Note that the upgrade only changes tokens.css** — already-generated `preview/*.png`, `build/frames/` and `out/*.mp4` still hold frames from the old CSS: affected slides need capture re-run (still + motion), preview-page re-run, then build-video. To tell which Phase a project stopped at: `research/notes.md` has content → past Gate 0; `script.json` clauses filled in → Gate 1; `audio/*.mp3` complete → Gate 2; `assets/` complete → Gate 3; `slides/*.html` complete → Gate 4; `build/frames` or `out/*.mp4` present → Gate 5.
 
-### Phase 0 · 信息搜集(条件执行)
+### Phase 0 · Research (conditional)
 
-**完整方法见 `references/research.md`**(来源分级、query 设计、矛盾处理、notes 模板)。要点:
+**Full method in `references/research.md`** (source grading, query design, handling contradictions, notes template). Key points:
 
-- 判断标准很简单:成片里会出现具体**数字、日期、名称、引语或归属关系** → 必须搜集。通用/抒情/创意题材可跳过,但"看起来像事实"的句子仍要核实。
-- **四条硬规则**:① 关键数字**至少 2 个独立来源**(只有一个就用限定措辞或降级为约数);② **一手优先**(官方公告/财报/技术报告/政府统计),二手转述要回溯原文;③ 标注**口径与日期**(年化还是单季?周活还是月活?币种?);④ **查不到出处或无法判定的,进"不确定项",绝不进口播稿**。
-- **正文怎么取**:先 `web_fetch`;SPA/JS 渲染的官网与投资者关系页常只返回空壳,改用 **mcode 内置浏览器**(mcode 环境的宿主能力)或 **Playwright 无头浏览器**(任一环境,项目内已装)渲染后取正文(最小命令见 references/research.md);招股书/财报是 PDF,以 PDF 原文数字为准。新闻稿与媒体转述冲突时以官方原文为准。本机装了其他搜索技能/插件时同样可用——工具开放,纪律不变。
-- **受监管领域**(财经/医疗/法律/政策/营销宣称 → 读 `references/compliance.md`)另加三道约束:① 财经数字必须带**口径 + 币种 + 时点**("二季度营收"而不是"目前营收");② 口播**不给操作建议、不预测价格、不用绝对化用语**;③ 免责声明与数据出处(要不要、怎么写、放哪)在 Gate 0 就跟用户敲定,不留到成片阶段返工。
-- 输出 `research/notes.md`:每条含 来源 URL + 口径日期 + 等级 + 第二来源;另列"不确定项"与"不该进脚本的内容";受监管题材再记一行**领域 + 免责口径的确认结果**。
-- **Gate 0**:事实清单给用户过 —— 重点让用户确认**数字、名称与口径**;受监管题材把免责声明、数据时点、涨跌色一起确认掉。
+- The test is simple: if the finished video will contain specific **numbers, dates, names, quotes or attributions** → you must research. Generic/lyrical/creative subjects can skip it, but any sentence that "looks like a fact" still has to be verified.
+- **Four hard rules**: ① key numbers need **at least 2 independent sources** (with only one, use hedged wording or downgrade to an approximation); ② **primary sources first** (official announcements/earnings reports/technical reports/government statistics); second-hand retellings must be traced back to the original; ③ label the **scope and date** (annualized or single quarter? weekly active or monthly active? which currency?); ④ **anything with no traceable source or that can't be determined goes into "uncertain items" — never into the narration script**.
+- **How to get the body text**: try `web_fetch` first; SPA/JS-rendered official sites and investor-relations pages often return an empty shell, so switch to the **mcode built-in browser** (a host capability of the mcode environment) or a **Playwright headless browser** (any environment, already installed in the project) and render before reading the body text (minimal command in references/research.md); prospectuses/earnings reports are PDFs — take the numbers from the PDF text itself. When press releases and media retellings conflict, the official text wins. If other search skills/plugins are installed locally, they're equally usable — tools are open, discipline is not.
+- **Regulated domains** (finance/healthcare/legal/policy/marketing claims → read `references/compliance.md`) add three more constraints: ① financial numbers must carry **scope + currency + timestamp** ("Q2 revenue", not "current revenue"); ② the narration **gives no operational advice, does not predict prices, and uses no absolute language**; ③ the disclaimer and data sources (whether, how and where) are settled with the user at Gate 0, not left to cause rework at the finished-video stage.
+- Output `research/notes.md`: each entry has source URL + scope date + grade + second source; also list "uncertain items" and "content that must not go into the script"; for regulated subjects add a line recording **the confirmed domain + disclaimer wording**.
+- **Gate 0**: the fact list goes to the user — focus on having them confirm **numbers, names and scopes**; for regulated subjects, confirm the disclaimer, data timestamps and up/down colors at the same time.
 
-### Phase 1 · 脚本设计(内容量在这里控制)
+### Phase 1 · Script design (content volume is controlled here)
 
-在 `script.json` 里逐张填写(契约文件,后续所有脚本都读它):
+Fill it in slide by slide in `script.json` (the contract file that every later script reads):
 
 ```json
 {
   "topic": "OpenAI 一分钟", "voice": "Chinese (Mandarin)_Gentleman",
-  "speed": {"default": 1.0, "first": 0.95, "last": 0.95},
+  "speed": {"default": 1.1, "first": 1.05, "last": 1.05},   // 试听时与用户定的语速(1.1 ≈ 中文 5.3 字/秒)
+  "transition": {"type": "cut"},                              // 切页方式: cut 硬切(默认) / {"type":"xfade","duration":0.4} 交叉溶解
   "fps": 30, "width": 1920, "height": 1080,
   "bgm": "assets/bgm.mp3",
   "slides": [
@@ -144,145 +145,153 @@ Phase 6 交付
 }
 ```
 
-可选字段:`clauses[].text2` = 双语字幕第二行(不写则纯中文字幕);顶层 `bgm` = `"assets/bgm.mp3"` 或 `{file, volume:0.12, fadeIn:1.5, fadeOut:2.5}`(写了由 build-video 自动循环+淡入淡出垫底)。
+Optional fields: `clauses[].text2` = the second line of bilingual subtitles (omit it for Chinese-only subtitles); top-level `bgm` = `"assets/bgm.mp3"` or `{file, volume:0.12, fadeIn:1.5, fadeOut:2.5}` (when set, build-video loops it + fades it in and out underneath automatically).
 
-**内容量硬规则**(详细版见 `references/authoring.md`):
+**Content-volume hard rules** (detailed version in `references/authoring.md`):
 
-- 中文口播 ≈ 4.8 字/秒。每张目标 6–10 秒 → 口播 25–48 字;首尾张 12–20 字。单张硬上限 60 字,超了拆两张。
-- **每张(除首尾)必须至少两个信息层,映射到不同 stage —— 但层的先后顺序自由**(大数字可以先入、标题后出;设问先出、答案再出;由强同步原则决定:层挂在提到它的那句口播的 stage)。只有标题、没有展开 = 违规,打回。口播也一样:每张至少两句,分别推动不同的层。
-- `clauses` 的每个元素是一句口播,`stage` 声明"这句开口时,哪个视觉层该出现"。stage 数 ≈ clause 数,一一对应。
-- 版式共 17 种(原 8 + 补充 9:kpi-grid / stat-highlight / table / timeline / roadmap / comparison / flow-diagram / terminal / big-quote),每种画面必含项与字数区间见 `references/authoring.md` 的版式表;**图表(条形/柱状/环形/折线/进度)有纯 CSS/SVG 画法速查,不用外链图表库**。
-- **数据密集的题材主动做图**:口播里出现 ≥2 个可比数字、占比或趋势时,优先考虑 `data-viz` 版式 + 图表工具箱,而不是把数字罗成 bullets —— 要不要做、做成什么样式在开工对齐的"数据与图表"里问过;用户当时没提就主动给选项(做图能力是内置的,别让它闲置)。数字必须来自已核实口径(Gate 0),柱高/条长由数值算出(见 authoring.md 九条纪律)。
-- 开工对齐时若用户要**双语字幕**,这里就要给每句写 `text2`(同句翻译,不重排语序,≤60 字符)。
+- Chinese narration ≈ 5.3 characters/sec (speed 1.1; ≈4.8 at speed 1.0). Target 6–10 seconds per slide → 25–48 characters of narration; 12–20 characters for the first and last slides. Hard limit is 60 characters per slide; split into two slides if it goes over.
+- **Every slide (except the first and last) must have at least two information layers, mapped to different stages — but the order of the layers is free** (a big number can enter first and the title later; the question first and the answer after; it's decided by the strong-sync principle: a layer hangs on the stage of the sentence that mentions it). Title only, no expansion = a violation, send it back. Same for the narration: at least two sentences per slide, each driving a different layer.
+- Each element of `clauses` is one narration sentence; `stage` declares "when this sentence starts, which visual layer should appear". The number of stages ≈ the number of clauses, one-to-one.
+- There are 17 layouts in total (the original 8 + 9 added: kpi-grid / stat-highlight / table / timeline / roadmap / comparison / flow-diagram / terminal / big-quote); each one's required frame elements and character-count range are in the layout table in `references/authoring.md`; **charts (bars/columns/donut/line/progress) have a pure CSS/SVG cheat sheet — no external chart library needed**.
+- **For data-dense subjects, proactively make charts**: when the narration contains ≥2 comparable numbers, proportions or a trend, prefer the `data-viz` layout + chart toolkit over listing numbers as bullets — whether to chart and in what style was already asked in the "Data and charts" row of kickoff alignment; if the user didn't raise it then, offer the option proactively (charting is built in, don't leave it idle). Numbers must come from verified scopes (Gate 0), and bar heights/lengths are computed from the values (see the nine disciplines in authoring.md).
+- If the user asked for **bilingual subtitles** during kickoff alignment, write `text2` for every sentence here (a translation of the same sentence, no reordering, ≤60 characters).
 
-**Gate 1**:逐张口播稿 + 版式分配给用户过,呈现格式按「# / 版式 / 画面 / **表格与动效** / 口播逐字稿」逐张列。**表格与动效列是必填的呈现要求**:用到表格原语的张要说明表格形态(几行几列、用什么原语 `.tbl/.matrix/.rank/.kv`、高亮哪行/列);有入场动效的要点名效果与次序(如"三张卡逐张淡入错峰 150ms""数字滚动到 92.4%""条形依次从左生长")—— 用户要能凭这张表在脑内放一遍成片,而不是等 Gate 4 才第一次看到动起来的样子。**未逐张 OK 不进 Phase 2。**
+**Gate 1**: the user reviews the slide-by-slide narration script + layout assignment, presented per slide as "# / layout / frame / **table and animation** / verbatim narration". **The table-and-animation column is a required part of the presentation**: slides that use table primitives must state the table's shape (how many rows and columns, which primitive `.tbl/.matrix/.rank/.kv`, which row/column is highlighted); slides with entrance animations must name the effect and the order (e.g. "three cards fade in one by one, staggered 150ms", "the number counts up to 92.4%", "the bars grow in from the left one after another") — the user has to be able to play the finished video once in their head from this table, instead of seeing it move for the first time at Gate 4. **No Phase 2 until every slide is OK'd.**
 
-### Phase 2 · TTS + 实测对时
+### Phase 2 · TTS + measured timing sync
 
-TTS 走哪套工具见上文"运行环境"对照表(mcode 用 `connector__matrix__*`,其他环境用 `mmx speech synthesize`);命令模板与重试纪律见 `references/tts-and-timing.md`。要点:批量 ≤10 条,部分失败 sleep 10–30s 后**只重试失败项**;首尾张 speed 0.95(但 ≤10 字的短句保持 1.0,见该文件实测坑)。产物落 `audio/<id>.mp3`。
+Which toolchain TTS uses is in the "Runtime" comparison table above (mcode uses `connector__matrix__*`, other environments use `mmx speech synthesize`); command templates and retry discipline are in `references/tts-and-timing.md`. Key points: batches ≤10 items; on partial failure, sleep 10–30s and **retry only the failed items**; first and last slides use speed 1.05 (but keep 1.1 for short sentences ≤10 characters — see the measured pitfalls in that file). Output goes to `audio/<id>.mp3`. **The audition step must ask about voice and speed together** (one sentence each from 3 candidate voices + the top-choice voice at all three speeds); only batch-synthesize once the user has decided.
 
-然后对时:
-
-```bash
-node <技能目录>/scripts/plan-timings.mjs <项目目录>
-```
-
-它会:ffprobe 每段实测时长 → 每张时长 = 实测 + 尾部留白(默认 0.8s,可在 slide 的 `tail` 字段调:紧凑 0.4 / 舒缓 1.2)→ 每个 stage 的入场时刻 = 该句口播按字数占比估算的开口时刻 − 0.2s(视觉略提前于语音,观感同步)→ 每句的开口时刻/时长写入 `clauses[]`(字幕、ASR 按句切分、对时校准共用)→ 写 `build/timings.json`,并输出警告(语速异常、超 15s、末 stage 离收尾太近、单句超 18 字字幕会换行)。
-
-可选但推荐(尤其用户反馈过"音画不同步"时):`node <技能目录>/scripts/check-timing.mjs <项目目录>` 用静音检测实测每句真实开口,输出"估算 vs 实测"对比表;偏差大就 `--calibrate` 校准后删 `build/frames/` 重渲染。注意"体感不同步"也常是设计错位——大数字/主体图必须挂在**提到它的那句**的 stage(强同步原则,见 authoring.md)。
-
-**Gate 2**:全部口播音频逐段试听 + plan-timings 的时长表给用户过。
-
-### Phase 3 · 素材收集(合规在这里把关)
-
-按 `references/image-sources.md` 的配图 SOP 执行(核心原则:**主体不全/半截/比例差的图,先重搜全貌图,别硬裁硬用**),要点:
-
-1. 列需求清单(哪几张要图、要什么)。
-2. **优先级:官方渠道(brand kit / simple-icons / 官方文档截图)→ 内置浏览器或 Playwright 打开官网 inspect DOM 取官方资源(实测成功率最高)→ Wikipedia CC → 纯排版降级(数字卡 + 大字 + 引言,不用图)。负面事件题材(暴雷 / 处罚 / 诉讼 / 争议)官网不会有素材,改走**公告与报道截图**:交易所/监管公告、公司声明,或主流媒体报道页(一线权威与腾讯新闻/新浪这类门户均可,自媒体除外)截图,画面必须保留媒体名与日期(命令与纪律见 image-sources.md 路径 D)。** 旧 image-downloader(Bing)默认不用:中文冷门题材实测 5/5 返回无关图。
-3. 搜图加正向词(全景/全貌/正面/远景),下载前用缩略图筛:主体居中、比例接近、无水印无无关 logo、≥1200px;一张不合适就换,不凑合。
-4. 拿到图先跑 `node <技能>/scripts/prep-image.mjs --check <图>` 看尺寸与裁切风险;主体贴边就换图。
-5. 每张素材查合规:无水印、商标仅限合理引用语境、照片须可授权来源、截图(官方文档或新闻/公告)须保留来源与日期并登记 MANIFEST。
-6. 落盘 `assets/`,每个素材一行登记 `assets/MANIFEST.md`(内容/来源/许可)。
-7. **禁止凭空生成 logo、截图、头像、二维码;禁止带水印图直接入素材;禁止裸放 `<img>`(必须套 `.img-frame`)。**
-
-**Gate 3**(素材收集走完、事实与候选图都到手之后):素材清单表 + 每张素材的预览(缩略图/说明)给用户过,并问三件事:① **用哪些** —— 逐张让用户挑(标注推荐用法,如"02 张配 hero 图"),用户划掉的就不用;② **有没有要补充的素材** —— 链接(官网页/报道页/数据页)、截图、logo、图片、数据文件、参考口播稿都可以直接交给 agent;**用户提供的素材优先级最高**(省搜索且来源可靠):图片落 `assets/` 过 `prep-image --check`、MANIFEST 登记"来源:用户提供",链接按 image-sources.md 路径 A/B/D 落盘或作 Gate 0 事实来源;③ "素材来源与授权没问题吗"。**用户过完才写 HTML。**
-
-### Phase 4 · HTML(分步入场在这里实现)
-
-每张一个文件,放 `slides/`,文件名与 script.json 的 `html` 字段一致。约定:
-
-- 根元素 `<html data-theme="...">` 选主题(初版 `a|b|c`,另有 `minimal-white / swiss-grid / corporate-clean / editorial-serif / magazine-bold / tokyo-night / catppuccin-mocha / nord / xiaohongshu-white / soft-pastel`;选主题速查与对比度校验见 authoring.md);引 `tokens.css`;画面容器 `.stage`,含 `.brand` 角标与 `.slide-num` 页码。
-- **每个要入场的块加 `data-stage="1|2|3"` + 一个 fx 工具类**(`fx-up/fx-fade/fx-grow/fx-blur/fx-rise/fx-pop/fx-spotlight/fx-ripple/fx-glitch/fx-draw`;氛围类 `fx-pulse/fx-shimmer/fx-kenburns` 不加 data-stage);延迟不用写——管线按 `timings.json` 注入 `--t1/--t2/--t3`。同层错峰用容器 `.fx-stagger`(基准 `style="--stagger-base:var(--t3)"`)或内联 `style="animation-delay:calc(var(--t2) + 150ms)"`。
-- ⚠ **`data-stage` 必须与 fx 类同时用**(只有属性没有动画类会永远停在 opacity:0);延迟实现见 authoring.md 的"stage 延迟的实现原理",改动画时不要手写 `animation-delay: var(--tN)`。
-- 图片一律套 `.img-frame`(`.contain` 给截图/图表;`--img-ratio` 定比例;`--img-pos` 保主体;图注 `.img-cap` 写在框外)。
-- 氛围动画(无限循环的呼吸/漂浮)允许,但不能承载信息、不加 `data-stage`。
-- **动效可一键关**:`<html data-theme="..." class="no-fx">` 关整个项目,任何容器加 `no-fx` 关单张,单个元素不给 fx 类即静态。关掉后 motion 捕获自动退化为静态帧出片,时长与音画同步不受影响,字幕照常(详见 authoring.md"动效开关")。
-- 禁用 transition 做入场(截图管线 seek 不到),只用 `@keyframes`。禁外部 Google Fonts(离线不稳),用系统字体栈(tokens.css 已配 CJK fallback)。
-- 素材只用 Gate 3 已确认的 `assets/` 清单,不新增未审素材。
-- 改过项目 `tokens.css`(自定义品牌色、A股涨跌色翻转、字幕钩子 `--sub-bg/--sub-ring`)→ 先跑 `node <技能>/scripts/check-theme.mjs <项目目录>` 验对比度(内置主题未动可跳)。对比度问题拖到 Gate 5 成片才发现是最贵的返工。
-- ⚠ **写完 8 张后先跑静态检查再截图**:`node <技能>/scripts/check-slides.mjs <项目目录>` —— 抓未定义 CSS 变量(会导致文字隐形)、图片缺失/外链资源、data-stage 没配 fx 类、硬编码颜色。有 ✗ 就别截图,画面对但"看不见"是最难查的。
-
-写完终态预览(最快路径,给 Gate 4 看):
+Then sync the timing:
 
 ```bash
-node <技能目录>/scripts/capture.mjs <项目目录> --mode still
-node <技能目录>/scripts/preview-page.mjs <项目目录> --open   # 放映页: 让用户自己过一遍动效
+node <skill>/scripts/plan-timings.mjs <project>
 ```
 
-**Gate 4**:`preview/<id>.png` 逐张给用户过(看版式、字压、素材)+ **放映页 `preview/play/index.html` 交用户自己放一遍**(看动效是不是真的都出现了、快慢能不能接受、这张的画面撑不撑得住)。静态图看不出动画——"元素永远不出现""关动效反而空白""列高塌陷"这类故障恰恰只在动起来或切对照时才露头;放映页是 30 秒的自检手段,不必等 3–6 分钟的 motion 编码。时序与口播对轴不在这一步判(放映页刻意不做计时器),以成片和 `timings.json` 为准。**用户过完再进 Phase 5。**
+It does this: ffprobe measures each segment → per-slide duration = measured + tail padding (default 0.8s, adjustable via the slide's `tail` field: tight 0.4 / relaxed 1.2) → each stage's entrance moment = the onset estimated from that sentence's share of the characters − 0.2s (visuals slightly ahead of the voice, which reads as in sync) → each sentence's onset/duration written into `clauses[]` (shared by subtitles, ASR sentence splitting and timing calibration) → writes `build/timings.json` and prints warnings (abnormal speech rate, over 15s, last stage too close to the ending, sentence over 18 characters so the subtitle will wrap).
 
-### Phase 5 · 渲染 + ASR 校验
+Optional but recommended (especially when the user has reported "audio and visuals out of sync"): `node <skill>/scripts/check-timing.mjs <project>` measures each sentence's true onset with silence detection and prints an "estimate vs measured" comparison table; if the deviation is large, `--calibrate`, then delete `build/frames/` and re-render. Note that "feels out of sync" is often a design misalignment — a big number/hero image must hang on the stage of **the sentence that mentions it** (strong-sync principle, see authoring.md).
+
+**Gate 2**: the user listens through every narration audio segment + reviews the duration table from plan-timings.
+
+### Phase 3 · Asset collection (compliance is enforced here)
+
+Follow the image SOP in `references/image-sources.md` (core principle: **for images with an incomplete subject / cut off halfway / wrong aspect, search again for the full view first — don't force a crop**). Key points:
+
+1. Write the requirements list (which slides need images, and what kind).
+2. **Priority: official channels (brand kit / simple-icons / official documentation screenshots) → open the official site in the built-in browser or Playwright and inspect the DOM for official assets (highest measured success rate) → Wikipedia CC → pure-typography fallback (number cards + large type + quotes, no images). Negative-event subjects (blow-ups / penalties / lawsuits / controversies) won't have assets on the official site, so switch to **announcement and news-report screenshots**: exchange/regulatory announcements, company statements, or screenshots of mainstream media report pages (top-tier authorities and portals like Tencent News/Sina are both fine; self-media excluded), and the frame must keep the outlet name and date (commands and discipline in image-sources.md path D).** The old image-downloader (Bing) is off by default: on niche Chinese-language subjects it returned irrelevant images 5/5 times.
+3. Add positive keywords when searching for images (panorama/full view/front view/wide shot), and screen with thumbnails before downloading: subject centered, aspect close, no watermark, no unrelated logos, ≥1200px; if one doesn't fit, swap it — don't settle.
+4. Once you have an image, first run `node <技能>/scripts/prep-image.mjs --check <图>` to check dimensions and crop risk; if the subject touches the edge, swap the image.
+5. Compliance-check every asset: no watermark, trademarks only in a fair-use context, photos from licensable sources, screenshots (official docs or news/announcements) must keep their source and date and be registered in MANIFEST.
+6. Save to `assets/`, one line per asset in `assets/MANIFEST.md` (content/source/license).
+7. **Generating logos, screenshots, avatars or QR codes out of thin air is forbidden; putting watermarked images into assets is forbidden; dropping a bare `<img>` is forbidden (it must be wrapped in `.img-frame`).**
+
+**Gate 3** (after asset collection is done and both the facts and candidate images are in hand): give the user the asset-list table + a preview of each asset (thumbnail/description), and ask three things: ① **which ones to use** — have the user pick slide by slide (annotate recommended usage, e.g. "slide 02 with the hero image"); whatever they cross out is dropped; ② **is there anything to add** — links (official pages/report pages/data pages), screenshots, logos, pictures, data files, reference narration scripts can all be handed to the agent directly; **user-provided assets have the highest priority** (they save searching and the source is reliable): images go to `assets/`, pass `prep-image --check`, and are registered in MANIFEST as "source: user-provided"; links are saved to disk per image-sources.md paths A/B/D or used as Gate 0 fact sources; ③ "are the asset sources and licensing fine". **Only write the HTML after the user has signed off.**
+
+### Phase 4 · HTML (staged entrance is implemented here)
+
+One file per slide, in `slides/`, with the filename matching the `html` field in script.json. Conventions:
+
+- The root element `<html data-theme="...">` selects the theme (the initial ones `a|b|c`, plus `minimal-white / swiss-grid / corporate-clean / editorial-serif / magazine-bold / tokyo-night / catppuccin-mocha / nord / xiaohongshu-white / soft-pastel`; theme cheat sheet and contrast verification in authoring.md); import `tokens.css`; the frame container is `.stage`, containing the `.brand` corner badge and the `.slide-num` page number.
+- **Every block that should enter gets `data-stage="1|2|3"` + one fx utility class** (`fx-up/fx-fade/fx-grow/fx-blur/fx-rise/fx-pop/fx-spotlight/fx-ripple/fx-glitch/fx-draw`; ambient ones `fx-pulse/fx-shimmer/fx-kenburns` take no data-stage); don't write delays — the pipeline injects `--t1/--t2/--t3` from `timings.json`. For staggering within a level use the `.fx-stagger` container (baseline `style="--stagger-base:var(--t3)"`) or inline `style="animation-delay:calc(var(--t2) + 150ms)"`.
+- ⚠ **`data-stage` must be used together with an fx class** (the attribute alone with no animation class leaves it stuck at opacity:0 forever); for how delays are implemented see "how stage delays work" in authoring.md, and don't hand-write `animation-delay: var(--tN)` when changing animations.
+- Always wrap images in `.img-frame` (`.contain` for screenshots/charts; `--img-ratio` sets the aspect; `--img-pos` protects the subject; the `.img-cap` caption goes outside the frame).
+- Ambient animations (infinite looping breathing/floating) are allowed, but they must not carry information and get no `data-stage`.
+- **Animations can be switched off in one move**: `<html data-theme="..." class="no-fx">` turns them off for the whole project, adding `no-fx` to any container turns them off for a single slide, and an element with no fx class is simply static. With them off, motion capture automatically degrades to producing the video from static frames; durations and audio-visual sync are unaffected and subtitles work as usual (details in authoring.md "animation switch").
+- Do not use transitions for entrances (the screenshot pipeline can't seek to them); use only `@keyframes`. External Google Fonts are banned (unstable offline) — use a system font stack (tokens.css already configures a CJK fallback).
+- Use only the `assets/` list confirmed at Gate 3; add no unreviewed assets.
+- If you changed the project's `tokens.css` (custom brand color, A-share up/down color flip, subtitle hooks `--sub-bg/--sub-ring`) → first run `node <技能>/scripts/check-theme.mjs <project>` to verify contrast (skippable if the built-in themes are untouched). Discovering a contrast problem at Gate 5, in the finished video, is the most expensive rework there is.
+- ⚠ **After writing the 8 slides, run the static check before screenshotting**: `node <技能>/scripts/check-slides.mjs <project>` — it catches undefined CSS variables (which make text invisible), missing images/external resources, data-stage without an fx class, and hard-coded colors. Any ✗ and don't screenshot: a frame that is correct but "invisible" is the hardest thing to debug.
+
+Once the slides are written, produce the final-state preview (the fastest path, for Gate 4):
 
 ```bash
-node <技能目录>/scripts/capture.mjs <项目目录> --mode motion   # 入场动画逐帧进视频
-node <技能目录>/scripts/build-video.mjs <项目目录> --asr
+node <skill>/scripts/capture.mjs <project> --mode still
+node <skill>/scripts/preview-page.mjs <project> --open   # 放映页: 让用户自己过一遍动效
 ```
 
-- `--mode motion`:逐帧步进(暂停全部动画 → 逐帧 seek → 截图 → 编码),动画窗口逐帧渲染、静止段自动补尾帧,时长精确。**字幕默认烧录**(内容取自 clauses、显示窗=该句开口到下句开口,画面底部居中,still 预览里不显示、成片里才有;`--no-subs` 关闭)。成本约 50–200ms/帧,8 张 × 30fps 约 3–6 分钟,预算进超时。赶时间可用 still 模式出片(动画不进视频,只有淡入淡出)。
-- ⚠ **still 复截会作废该张帧目录**(capture 的防旧帧污染设计)。Gate 4 之后改了 HTML 想复看 → `capture --mode still --ids <id>` 看效果,**确认后必须对同 ids 重跑 `--mode motion` 再 build-video**;否则该张会退回静态图出片、动画无声丢失(build-video 遇到这种情况会点名 ⚠)。
-- build-video 自动:每张编码(统一参数)→ concat 拼接(时长漂移自动回退重编码)→ 音轨按每张实测时长 `apad` 对位 → **BGM 垫底(配了 bgm 才走:循环补满、淡入淡出、人声优先;混音失败自动退回纯人声)** → mux → ffprobe 时长校验 + 全量解码自检,不过关退出码非 0;同时输出 `out/subs.srt`(与烧录字幕同源同窗,中英双语按 clauses 的 text2 自动两行,供平台上传)。
-- `--asr`:**按句**切出 `asr/part-<id>-<k>.mp3` + 生成 `asr/checklist.md`。转写与预期文本比对:数字、年份、产品名必须一致;同音字可容忍。**若某段转写混入上一句的开头,说明那句实际开口比估算晚——跑 check-timing 校准。**
-  - mcode:`mcode-tools upload_temp_url` 上传后交 `connector__matrix__listen_audio`。
-  - **其他环境**:`MINIMAX_API_KEY=sk-xxx node scripts/asr.mjs <项目目录>` —— 直调 REST(同一把 Key),自动比对并回填 checklist;失败项(数字不符/繁体字)会以非 0 退出码报出。想拿更准的开口时刻:`--verify-timing`。
-  - 不过关的 slide:改口播或重做该段 TTS → 重跑 plan-timings → 该张重渲染(帧目录删掉对应张即可)。
+**Gate 4**: walk the user through `preview/<id>.png` slide by slide (layout, text pressure, assets) + **hand the play page `preview/play/index.html` over for the user to present themselves** (are the animations really all appearing, is the speed acceptable, does the frame hold up). Static images can't show animation — failures like "the element never appears", "turning animations off leaves a blank frame", "column heights collapse" only surface when it moves or when you toggle between the two; the play page is a 30-second self-check, so there's no need to wait for the 3–6 minute motion encode. Timing and whether the narration lines up are not judged here (the play page deliberately has no timer) — the finished video and `timings.json` are the source of truth.
 
-**Gate 5**:成片 `out/final.mp4` + ASR 校验表给用户过,含字幕可读性检查(静音播放一遍,字幕能否撑起理解)与 BGM 电平(人声是否始终清晰)。**上片前先抽成片实帧逐张看**:`node <技能>/scripts/grab-frames.mjs <项目目录>` → `build/introspect/` —— 图注/落款有没有被字幕压住、末级元素是否都进了画面、收尾静止够不够,这三类 still 与放映页都看不出来。
+**This step must ask the user two questions (since 1.6.0; per iron rule 4, ask as questions + options and stop to wait for answers)** — both can only be decided by "seeing how it moves"; static images and written descriptions can't substitute:
 
-### Phase 6 · 交付
+1. **Slide transition**: hard cut (default, recommended) / 0.4s cross-dissolve / custom dissolve duration. Have the user press `T` in the play page to **compare live** (the play page switches between hard cut and dissolve instantly; the dissolve is a 0.4s blend that never passes through black), and once decided, write it into `transition` in `script.json` (`{"type":"cut"}` or `{"type":"xfade","duration":0.4}`).
+2. **Entrance layering**: should the big title and the sub-information **all appear at once**, or be **revealed level by level** (the current `data-stage` default). For "at once", collapse that slide's `data-stage` levels into a single level (title and sub-items on the same stage, or drop the later stages), then re-run that slide's `capture --mode motion` and rebuild; in the play page, verify the collapsed result level by level with "animations on + →".
+
+Once both are decided, restate "final choices: transition = X / entrance = Y". `check-slides.mjs` prints the measured status of both at the end (the transition value + the level count per slide) — ask based on that, not on impressions. **Only enter Phase 5 after the user has signed off.**
+
+### Phase 5 · Render + ASR verification
+
+```bash
+node <skill>/scripts/capture.mjs <project> --mode motion   # entrance animations rendered frame by frame into the video
+node <skill>/scripts/build-video.mjs <project> --asr
+```
+
+- `--mode motion`: frame-by-frame stepping (pause all animations → seek frame by frame → screenshot → encode); the animation window is rendered frame by frame and still segments get the tail frame automatically, so durations are exact. **Subtitles are burned in by default** (content from clauses; the display window = from that sentence's onset to the next sentence's onset; centered at the bottom of the frame; not shown in still previews, only in the finished video; `--no-subs` turns it off). Cost is about 50–200ms per frame — 8 slides × 30fps is roughly 3–6 minutes, so budget for the timeout. In a hurry you can produce the video in still mode (animations don't make it into the video, only fades).
+- ⚠ **Re-running a still capture invalidates that slide's frame directory** (capture's design to prevent stale-frame contamination). If you changed the HTML after Gate 4 and want another look → `capture --mode still --ids <id>`, and **after confirming, you must re-run `--mode motion` for the same ids before build-video**; otherwise that slide falls back to a static image in the video and its animations are silently lost (build-video calls this out with a ⚠).
+- build-video does this automatically: encode each slide (uniform parameters) → concat (automatic fallback re-encode on duration drift) → align the audio track with `apad` using each slide's measured duration → **bed the BGM underneath (only when bgm is configured: loop to fill, fade in/out, voice first; falls back to voice-only if mixing fails)** → mux → ffprobe duration check + full decode self-check, non-zero exit code if it fails; it also outputs `out/subs.srt` (same source and same windows as the burned-in subtitles; bilingual subtitles are generated automatically as two lines from each clause's text2, for platform upload).
+- `--asr`: splits out `asr/part-<id>-<k>.mp3` **by sentence** + generates `asr/checklist.md`. The transcription is compared with the expected text: numbers, years and product names must match; homophones are tolerable. **If a segment's transcription bleeds in the start of the previous sentence, that sentence actually started later than estimated — run check-timing to calibrate.**
+  - mcode: upload with `mcode-tools upload_temp_url`, then hand off to `connector__matrix__listen_audio`.
+  - **Other environments**: `MINIMAX_API_KEY=sk-xxx node scripts/asr.mjs <project>` — calls REST directly (same Key), compares and back-fills the checklist automatically; failing items (mismatched numbers/traditional characters) are reported with a non-zero exit code. For more accurate onset times: `--verify-timing`.
+  - For a slide that fails: change the narration or redo that segment's TTS → re-run plan-timings → re-render that slide (just delete the corresponding slide's frame directory).
+
+**Gate 5**: the user reviews the finished video `out/final.mp4` + the ASR verification table, including a subtitle readability check (play it once muted — can the subtitles carry the meaning) and the BGM level (is the voice always clear). **Before publishing, pull real frames from the finished video and look at them slide by slide**: `node <技能>/scripts/grab-frames.mjs <project>` → `build/introspect/` — whether captions/credits are covered by subtitles, whether all the last-level elements made it into the frame, and whether the ending holds still long enough; these three are invisible in both stills and the play page.
+
+### Phase 6 · Delivery
 
 ```
-out/final.mp4            # 主交付
-out/slide-*.mp4          # 单段(可单独发布)
-out/subs.srt             # 平台上传用字幕(与烧录字幕同源同窗)
-build/timings.json       # 对时的单一事实源(check-timing/asr/preview-page 都读它)
-build/substills/         # 每句字幕的静态图与窗口清单(帧序列覆盖不到的字幕窗, build-video 拼段用)
-build/audio-timeline.wav # 对位后音轨
+out/final.mp4            # main deliverable
+out/slide-*.mp4          # per-slide segments (publishable on their own)
+out/cover.png            # cover image (canvas size; the video embeds it as attached_pic for thumbnails, this file is for platforms that want a manual upload)
+out/subs.srt             # subtitles for platform upload (same source and windows as the burned-in ones)
+build/timings.json       # single source of truth for timing (read by check-timing / asr / preview-page)
+build/substills/         # one still per subtitle sentence + window manifest (windows the frame sequence cannot cover; build-video concatenates them)
+build/audio-timeline.wav # aligned audio timeline
 preview/*.png  preview/play/index.html   slides/*.html  slides/tokens.css
 audio/*.mp3  assets/(含 MANIFEST.md)  research/notes.md  asr/(校验记录)
 ```
 
-(`slides/tokens.css.bak` 是 `--upgrade-css` 的升级前备份,确认成片无误后可删。)
+(`slides/tokens.css.bak` is the pre-upgrade backup made by `--upgrade-css`; delete it once the finished video checks out.)
 
-## 参考文件(按需读,别全读)
+## Reference files (read on demand, not all of them)
 
-- `references/authoring.md` — 17 种版式规范(每种画面必含项)+ 内容量表 + 入场系统用法(含 stage 延迟实现原理)+ **图表工具箱**(图表原语、九条优雅纪律、7 个配方与动效选型)+ **表格工具箱**(四种原语、七条纪律、五种形态)+ 主题速查 + 竖版说明 + 可抄的 HTML 片段
-- `references/compliance.md` — 领域与合规(受监管题材必读):领域确认问法、财经口播红线、数字三要件、涨跌色按受众翻转、免责声明写法与位置、医疗/法律/广告法要点、收尾检查清单
-- `references/research.md` — 资料搜集(来源分级、交叉验证硬规则、query 设计、矛盾处理、notes 模板)
-- `references/image-sources.md` — 配图与素材 SOP(三条取图路径、query 正/反词、两级筛选、图片框用法、裁切硬限制、视觉验证三件套、常见题材索引)
-- `references/tts-and-timing.md` — mcode TTS connector 命令、重试纪律、对时算法、留白与语速调校、实测音色表
-- `references/render.md` — 渲染原理(为什么逐帧步进、字体怎么等)、字幕系统、BGM 混音、ffmpeg 手工命令、排错表
-- `THIRD-PARTY-NOTICES.md` — 第三方组件许可声明(10 套主题与部分 CSS 原语改编自 html-ppt-skill,MIT)
+- `references/authoring.md` — the 17 layout specs (required frame elements for each) + the content-volume table + how to use the entrance system (including how stage delays work) + the **chart toolkit** (chart primitives, the nine elegance disciplines, 7 recipes and animation selection) + the **table toolkit** (four primitives, seven disciplines, five shapes) + theme cheat sheet + vertical notes + copy-pasteable HTML snippets
+- `references/compliance.md` — domain and compliance (required reading for regulated subjects): how to confirm the domain, red lines for financial narration, the three requirements for numbers, flipping up/down colors by audience, how and where to write the disclaimer, key points for medical/legal/advertising law, and the closing checklist
+- `references/research.md` — research (source grading, hard cross-validation rules, query design, handling contradictions, notes template)
+- `references/image-sources.md` — image and asset SOP (the three image paths, positive/negative query terms, two-stage screening, how to use the image frame, hard crop limits, the three-piece visual verification, and an index of common subjects)
+- `references/tts-and-timing.md` — mcode TTS connector commands, retry discipline, the timing algorithm, tail-padding and speech-rate tuning, and the measured voice table
+- `references/render.md` — how rendering works (why frame-by-frame stepping, how fonts are awaited), the subtitle system, BGM mixing, manual ffmpeg commands, and a troubleshooting table
+- `THIRD-PARTY-NOTICES.md` — third-party component license notices (10 themes and some CSS primitives adapted from html-ppt-skill, MIT)
 
-## 常见症状 → 一句话诊断
+## Common symptoms → one-line diagnosis
 
-| 症状 | 根因 | 动作 |
+| Symptom | Root cause | Action |
 |---|---|---|
-| TTS 念完画面还停很久 | 时长是估的不是实测,或 tail 过大 | 重跑 plan-timings;调该张 `tail` |
-| 画面只有标题没有展开 | 违反内容量硬规则 | 补展开层 + 对应 clause,回 Phase 1 |
-| 动画没进视频 | 用了 still 模式 | motion 模式重出 |
-| 音画不同步(体感) | 三选一:手写了动画延迟 / 估算偏差 / 视觉锚点挂错句(强同步原则) | 先删手写延迟;跑 check-timing 拿实测数据,偏差大就 --calibrate;锚点错句则调 stage 映射 |
-| 音色语种不对(粤语/繁体) | 平台 voice 标签错位,名称不可信 | Phase 1 试听必须带 ASR 验音(见 tts-and-timing.md 实测音色表) |
-| 成片没字幕 | 用了 --no-subs 或 clauses 缺失 | capture 默认烧录;确认 timings.json 有 clauses |
-| 要双语字幕 | — | clause 加 `text2`,画面两行 + SRT 双行自动出;第二行建议 ≤60 字符 |
-| 想要背景音乐 | — | 顶层 `bgm` 配置,build-video 自动循环+淡入淡出垫底(默认音量 0.12);ASR 校验仍走纯人声轨 |
-| 赶时间 / 题材要克制,不要动画 | — | `<html class="no-fx">` 一键关全部动效,或单张容器加 `no-fx`;出片自动走静态帧,时长不变(见 authoring.md) |
-| 拼接后总时长不对 | 混用不同编码器参数的段 | 全部段由 build-video 统一编码;已自动回退重编码 |
-| 中文方框 | 系统无 CJK 字体 | Linux 装 fonts-noto-cjk;或改用已装字体 |
-| 报"找不到 ffprobe/ffmpeg" | 二进制不在 PATH | 脚本已自动探测 PATH→node_modules→常见位置;装 ffmpeg-static 或 winget install Gyan.FFmpeg |
-| **一部分元素 0 秒就入场、一部分按时序** | 旧版 tokens.css 的延迟被 `.fx-*` 简写覆盖 | 换用新版 tokens.css(延迟走 `--fx-delay`);原理见 authoring.md |
-| 图片主体被裁到画面外 / 图片撑破版式 | 裸放 `<img>`,或 cover 配错比例 | 套 `.img-frame` + `--img-pos` 保主体;截图类改 `.contain`;主体贴边按 SOP 重搜图 |
-| 字幕在深色主题下糊在背景里 | 主题没覆写字幕钩子 | 该主题加 `--sub-bg`(更深)+ `--sub-ring: 1px solid rgba(255,255,255,.16)`;跑 check-theme 验 |
-| 要出竖版(抖音/视频号) | — | `script.json` 设 `width:1080, height:1920`,版式改堆叠(见 authoring.md 竖版章节) |
-| 数字/文字明明写了却看不见 | 未定义 CSS 变量 + `-webkit-text-fill-color: transparent`,整条 background 失效 | 跑 `check-slides.mjs` 定位,补定义或写 `var(--x, 默认值)` |
-| 图表/折线/某个元素入场后完全不见 | 该 fx 类的关键帧没声明 opacity —— `[data-stage]` 基础态是 `opacity:0`,只做 transform/描边的动画抬不回来 | 在关键帧的 from/to 里补 `opacity:1`;`check-slides.mjs` 会直接报出来 |
-| 切了 `no-fx` 画面反而更空 | 早期模板只关动画、没恢复 `[data-stage]` 的 `opacity:0` 基础态 | 项目 tokens.css 是旧版:`node scripts/init-project.mjs <项目目录> --upgrade-css` 原地更新受管块(幂等);放映页遇到旧 tokens.css 会在副本里兜底注入并明确提示 |
-| 技能改了 CSS(或用了新类如 `.chart-ticks`),项目里却不生效 | 项目 tokens.css 的工具箱受管块落后于技能单源(旧判定只看"有没有",补过一次就永远报"无需升级") | `node scripts/init-project.mjs <项目> --check-css` 看状态;`--upgrade-css` 按内容 rev 原地替换受管块(不动你的覆写);check-slides 会在渲染前提示落后 |
-| 双击 `slides/*.html` 看动画, 发现全挤在开头 | 动画延迟由管线按 `timings.json` 注入,tokens.css 里只有占位值(`--t2:800ms`) | 别直接开原文件:跑 `preview-page.mjs` 用副本(已注入实测延迟), 或 `--mode motion` 出片 |
-| 柱状图柱高与标注数值不符(高柱子被压矮) | 柱子直接放在 flex 列里按百分比设高: 基准是**整列**高度, 超过剩余空间会被 `flex-shrink` 压回去, 静默失真 | 把柱子包进 `.chart-plot-cell`(1fr 行), 百分比就相对绘图区算; 顺带得到基线与各列等高 |
-| 折线图缩在版面中间一小块 | SVG 的 `viewBox` 宽高比与容器不一致, `preserveAspectRatio` 把内容等比缩小居中 | 满宽用 `width:100%;height:auto`; 半宽/固定高就把 viewBox 改成接近容器的比例 |
-| 图表/图注被字幕压住 | 内容排进了字幕带(底部 84–168px、居中 73% 宽) | 版面容器 `padding-bottom: 190px` 起步; 见 authoring.md 的"字幕安全区" |
-| 表格在手机上看不清 | 表格文字用了 caption 号(24px), 或行高被压到 72px 以下 | 用 `.tbl/.kv/.matrix/.rank` 原语:主数据是正文号(30px)、行高内置 72px;见 authoring.md"表格工具箱" |
-| 放映页里 iframe 是空白/图裂 | 副本的 `<base href>` 被清掉, 或 slides/ 被移动过 | 重跑 `preview-page.mjs` 重新生成快照;原文件不要手改(副本是快照,改 slides 后必须重跑) |
-| 图片显示 broken 图标 | 文件缺失,或 SVG 本身有问题(XML 错/依赖外部资源/缺尺寸) | `check-slides.mjs` 查路径;SVG 改 inline 进 HTML;capture 也会在渲染时点名哪张没加载 |
-| 财经片没免责声明 / 涨跌色反了 / 数字被质疑口径 | 开工没确认领域,默认色与默认措辞直接用了 | 读 `references/compliance.md`:结尾补 `.disclaimer` 行(停留 ≥3s)、指标卡改 `var(--up)/var(--down)` 并按受众市场翻转、每个数字补口径+币种+时点 |
-| 不知道要不要写免责声明 / 算不算受监管 | 领域没确认 | 开工对齐第一批问题里问"领域 + 要不要免责";财经投研、医疗、法律、政策、营销效果宣称默认要。`check-slides.mjs` 命中财经关键词却没见免责行时会提示 |
+| The frame lingers long after TTS finishes speaking | Durations were estimated rather than measured, or the tail is too large | Re-run plan-timings; adjust that slide's `tail` |
+| The frame has only a title, no expansion | Violates the content-volume hard rule | Add an expansion layer + its clause, go back to Phase 1 |
+| Animations aren't in the video | Still mode was used | Re-render in motion mode |
+| Audio and visuals feel out of sync | One of three: hand-written animation delays / estimation drift / the visual anchor hung on the wrong sentence (strong-sync principle) | First remove the hand-written delays; run check-timing for measured data and --calibrate if the drift is large; if the anchor is on the wrong sentence, fix the stage mapping |
+| The voice is in the wrong language (Cantonese/traditional characters) | The platform's voice labels are mismatched; names can't be trusted | The Phase 1 audition must include ASR voice verification (see the measured voice table in tts-and-timing.md) |
+| The finished video has no subtitles | --no-subs was used, or clauses are missing | capture burns them in by default; confirm timings.json has clauses |
+| Bilingual subtitles wanted | — | Add `text2` to the clause; the frame shows two lines + the SRT gets two lines automatically; keep the second line ≤60 characters |
+| Want background music | — | Configure top-level `bgm`; build-video loops it + fades it in/out underneath automatically (default volume 0.12); ASR verification still runs on the voice-only track |
+| In a hurry / the subject calls for restraint, no animation | — | `<html class="no-fx">` turns off all animation in one move, or add `no-fx` to a single slide's container; the video is then produced from static frames with unchanged durations (see authoring.md) |
+| Total duration is wrong after concatenation | Segments mixed from different encoder parameters | Let build-video encode all segments uniformly; it already falls back to re-encoding automatically |
+| Chinese text shows as boxes | No CJK font on the system | On Linux install fonts-noto-cjk; or switch to an installed font |
+| A "can't find ffprobe/ffmpeg" error | The binaries aren't on PATH | The scripts already auto-detect PATH→node_modules→common locations; install ffmpeg-static or run winget install Gyan.FFmpeg |
+| **Some elements enter at 0 seconds, others on schedule** | The delays in an old tokens.css are overridden by the `.fx-*` shorthand | Switch to the new tokens.css (delays go through `--fx-delay`); rationale in authoring.md |
+| The image subject is cropped out of frame / the image breaks the layout | A bare `<img>`, or cover with the wrong aspect | Wrap in `.img-frame` + `--img-pos` to protect the subject; use `.contain` for screenshots; if the subject touches the edge, re-search the image per the SOP |
+| Subtitles blur into the background on dark themes | The theme doesn't override the subtitle hooks | Add `--sub-bg` (darker) + `--sub-ring: 1px solid rgba(255,255,255,.16)` to that theme; run check-theme to verify |
+| Vertical output wanted (Douyin/WeChat Channels) | — | Set `width:1080, height:1920` in `script.json` and switch the layout to stacked (see the vertical section of authoring.md) |
+| Numbers/text are written but invisible | An undefined CSS variable + `-webkit-text-fill-color: transparent` invalidates the whole background declaration | Run `check-slides.mjs` to locate it, then add the definition or write `var(--x, 默认值)` |
+| A chart/line/some element is completely missing after entering | That fx class's keyframes don't declare opacity — the base state of `[data-stage]` is `opacity:0`, and an animation that only does transform/stroke can't bring it back | Add `opacity:1` to the keyframes' from/to; `check-slides.mjs` reports this directly |
+| Turning on `no-fx` makes the frame emptier instead | Early templates only turned animations off without restoring the `[data-stage]` `opacity:0` base state | The project's tokens.css is outdated: `node scripts/init-project.mjs <project> --upgrade-css` updates the managed blocks in place (idempotent); when the play page meets an old tokens.css it injects a fallback into its copy and says so explicitly |
+| The skill's CSS changed (or you used a new class like `.chart-ticks`) but the project doesn't pick it up | The project tokens.css's toolkit managed blocks lag behind the skill's single source (the old check only looked at presence, so after one patch it always reported "no upgrade needed") | `node scripts/init-project.mjs <项目> --check-css` shows the status; `--upgrade-css` replaces the managed blocks in place by content rev (leaving your overrides alone); check-slides flags staleness before rendering |
+| Double-clicking `slides/*.html` shows the animation crammed at the start | Animation delays are injected by the pipeline from `timings.json`; tokens.css only holds placeholder values (`--t2:800ms`) | Don't open the original file directly: run `preview-page.mjs` and use its copy (with the measured delays injected), or produce the video with `--mode motion` |
+| Bar heights don't match the labeled values (tall bars squashed) | Bars placed directly in a flex column with a percentage height: the basis is the **whole column** height, and anything overflowing the remaining space is squeezed back by `flex-shrink`, silently distorting it | Wrap the bars in `.chart-plot-cell` (a 1fr row) so the percentage is computed against the plot area; you also get a baseline and equal-height columns for free |
+| The line chart shrinks into a small patch in the middle | The SVG's `viewBox` aspect doesn't match the container, so `preserveAspectRatio` scales the content down and centers it | For full width use `width:100%;height:auto`; for half width or a fixed height, change the viewBox to a ratio close to the container's |
+| A chart/caption is covered by the subtitles | Content was laid out into the subtitle band (bottom 84–168px, centered, 73% wide) | Start the layout container at `padding-bottom: 190px`; see the "subtitle safe area" section in authoring.md |
+| Tables are unreadable on phones | The table text uses the caption size (24px), or row height was squeezed below 72px | Use the `.tbl/.kv/.matrix/.rank` primitives: main data uses the body size (30px) and row height is 72px built in; see "table toolkit" in authoring.md |
+| The iframe in the play page is blank/broken images | The copy's `<base href>` was stripped, or slides/ was moved | Re-run `preview-page.mjs` to regenerate the snapshot; don't hand-edit the original file (the copy is a snapshot, so you must re-run after changing slides) |
+| Images show a broken icon | The file is missing, or the SVG itself is broken (bad XML / depends on external resources / no dimensions) | Use `check-slides.mjs` to check the path; inline the SVG into the HTML; capture also names which image failed to load at render time |
+| A finance video has no disclaimer / the up-down colors are inverted / numbers are challenged on scope | The domain wasn't confirmed at kickoff, so default colors and default wording were used as-is | Read `references/compliance.md`: add a closing `.disclaimer` line (on screen ≥3s), change metric cards to `var(--up)/var(--down)` flipped for the audience's market, and give every number its scope + currency + timestamp |
+| Not sure whether a disclaimer is needed / whether this counts as regulated | The domain wasn't confirmed | Ask "domain + disclaimer or not" in the first batch of kickoff questions; financial investment research, healthcare, legal, policy and marketing performance claims default to yes. `check-slides.mjs` warns when it hits finance keywords but sees no disclaimer line |

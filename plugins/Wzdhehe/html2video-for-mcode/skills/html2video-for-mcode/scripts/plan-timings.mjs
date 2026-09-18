@@ -33,6 +33,13 @@ const LANG = script.lang ?? 'zh';
 const CFG = langCfg(LANG);
 const pacingArg = argv.find(a => a.startsWith('--pacing='));
 const pacing = pacingArg ? parseFloat(pacingArg.slice(9)) : CFG.pacing;
+// 试听时与用户定的语速(1.6.0): script.speed 此前是纯声明、没有任何脚本读它 → "语速偏慢"只能靠人耳发现。
+// 现在拿它当期望值: 实测语速(字数÷实测音频时长)偏离 期望基准×speed 超过 20% 就告警, 越界也告警。
+const SPEED = (() => {
+  const v = script.speed;
+  const n = Number(typeof v === 'object' && v !== null ? v.default : v);
+  return Number.isFinite(n) && n > 0 ? n : 1.0;
+})();
 
 function probeDur(file) {
   const r = spawnSync(FFPROBE, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file], { encoding: 'utf8', windowsHide: true });
@@ -73,6 +80,11 @@ for (const s of script.slides) {
   const wps = tts > 0 ? total / tts : 0;
 
   if (wps > 0 && (wps < CFG.paceMin || wps > CFG.paceMax)) warns.push(`${s.id}: 语速 ${wps.toFixed(1)} ${CFG.unit}/s (${LANG} 常见 ${CFG.paceMin}–${CFG.paceMax}) — 检查 speed 或字数, 或用 --pacing 重估`);
+  // 与 script.speed 对账(1.6.0): 期望 = 基准 × speed; 实测偏离 >20% 说明该段 TTS 没用这个 speed
+  const expect = CFG.pacing * SPEED;
+  if (wps > 0 && Math.abs(wps - expect) > expect * 0.2) {
+    warns.push(`${s.id}: 实测语速 ${wps.toFixed(1)} ${CFG.unit}/s 与 script.speed=${SPEED} 的期望 ${expect.toFixed(1)} 差 ${(Math.abs(wps - expect) / expect * 100).toFixed(0)}% — 该段 TTS 可能没用这个 speed(试听定的是 ${SPEED}), 或字数估算错了; 复核后重做该段 TTS 或改 script.speed`);
+  }
   if (duration > 15) warns.push(`${s.id}: ${duration.toFixed(1)}s 超过 15s — 建议拆成两张`);
   const stages = Object.keys(stageTime).map(Number);
   const last = stages.length ? Math.max(...stages) : 0;
@@ -98,6 +110,7 @@ fs.writeFileSync(path.join(dir, 'build', 'timings.json'),
 const unitLabel = `量(${CFG.unit})`;
 console.table(rows.map(({ id, tts, duration, chars, wps, stages }) =>
   ({ id, 'TTS(s)': tts, '成片(s)': duration, [unitLabel]: chars, [`${CFG.unit}/s`]: wps, 'stage时刻': JSON.stringify(stages) })));
-console.log(`总时长: ${totalDur.toFixed(1)}s · 语言 ${LANG}(${CFG.unit}基准 ${pacing}/${CFG.unit}·s⁻¹) → build/timings.json`);
+console.log(`总时长: ${totalDur.toFixed(1)}s · 语言 ${LANG}(${CFG.unit}基准 ${pacing}/${CFG.unit}·s⁻¹ · script.speed=${SPEED}) → build/timings.json`);
+if (SPEED < 0.8 || SPEED > 1.4) warns.unshift(`script.speed = ${SPEED} 超出常规区间 0.8–1.4 — 确认是不是写错(或 TTS 调用与它不一致)`);
 if (warns.length) { console.warn('\n⚠ 警告:'); for (const w of warns) console.warn('  - ' + w); }
 console.log('\n下一步可选: node scripts/check-timing.mjs <项目目录>  用静音检测实测每句开口时刻, 对比/校准估算。');

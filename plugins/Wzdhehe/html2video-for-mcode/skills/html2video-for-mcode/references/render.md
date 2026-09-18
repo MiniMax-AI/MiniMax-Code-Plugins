@@ -1,102 +1,125 @@
-# 渲染原理与排错
+# Render Pipeline and Troubleshooting
 
-## 采集为什么不"等几秒再截图"
+## Why capture doesn't "wait a few seconds and then screenshot"
 
-固定 sleep 是最脆的等待:慢机器上动画没跑完、字体没换好就截了;快机器上白白多等。capture.mjs 全部用事件驱动:
+A fixed sleep is the most fragile kind of wait: on a slow machine the shot is taken before the animation has finished and the fonts have swapped; on a fast machine it just waits for nothing. capture.mjs is entirely event-driven:
 
-- **字体**:等每个 `link[rel=stylesheet]` load/error → 对 `document.fonts` 里每个 face 显式 `load()`(`font-display: swap` 会推迟下载,不主动 load 可能永远不取)→ `fonts.ready` → 两次 rAF 让排版落在真实字形上。整体 8s 硬上限。
-- **图片**:等所有 `<img>` complete,单图 4s 上限,加载不动就跳过(所以素材必须先落本地)。
-- **页面加载**:`domcontentloaded`,不等 `load`/`networkidle`(一个挂起的外链资源会把死等烧进结果)。
+- **Fonts**: wait for each `link[rel=stylesheet]` load/error → explicitly `load()` every face in `document.fonts` (`font-display: swap` postpones the download, and without an active load the font may never be fetched) → `fonts.ready` → two rAFs so layout settles on the real glyphs. Hard cap of 8s overall.
+- **Images**: wait for all `<img>` to be complete, 4s cap per image, skip anything that won't load (which is why assets must be local first).
+- **Page load**: `domcontentloaded`, no waiting for `load`/`networkidle` (a single hanging external resource would burn a dead wait into the result).
 
-## still 模式(终态截图)
+## still mode (final-state screenshots)
 
-所有有限动画直接 `Animation.finish()` 跳到终态(fill-mode forwards 保持),无限氛围动画保持自然运行,截图即"这张讲完时观众看到的画面"。速度:每张 1–2s。
+All finite animations jump straight to their final state with `Animation.finish()` (fill-mode forwards holds it), infinite ambient animations keep running naturally, and the screenshot is "what the viewer sees when this slide is finished". Speed: 1–2s per slide.
 
-## motion 模式(动画真正进视频)
+## motion mode (animations really go into the video)
 
-原理 = 确定性逐帧步进:
+Principle = deterministic frame-by-frame stepping:
 
-1. 所有动画 `pause()` 并 pin 到 `currentTime = 0`。
-2. 每帧把**每个动画**的 `currentTime` 统一设为 `i / fps`。CSS 动画自带 `animation-delay`,currentTime 是含延迟的绝对时间,所以各层时序天然正确——这也是为什么 HTML 里不能手写延迟、必须让管线注入 `--t1/--t2/--t3`。
-3. 每帧 `page.screenshot()` 存 PNG 序列。
-4. 编码时 `tpad=stop_mode=clone` 把最后一帧克隆补满整张时长:只有动画窗口逐帧渲染,静止段零成本。
+1. `pause()` all animations and pin them to `currentTime = 0`.
+2. Every frame, set **every animation**'s `currentTime` uniformly to `i / fps`. CSS animations carry their own `animation-delay`, and currentTime is absolute time including the delay, so per-layer timing is naturally correct — which is also why you must not hand-write delays in the HTML and must let the pipeline inject `--t1/--t2/--t3`.
+3. `page.screenshot()` each frame into a PNG sequence.
+4. At encode time `tpad=stop_mode=clone` clones the last frame to fill the whole slide duration: only the animation window is rendered frame by frame, still segments cost nothing.
 
-只拍动画窗口(最长动画 endTime + 0.25s)而不是整张时长,8 张 × 30fps 通常只需 600–1200 帧,约 2–6 分钟(50–200ms/帧)。预算进超时,别中途杀。
+Shoot only the animation window (longest animation endTime + 0.25s) rather than the full slide duration; 8 slides × 30fps usually needs only 600–1200 frames, about 2–6 minutes (50–200ms/frame). Budget it into the timeout, don't kill it midway.
 
-限制(由此决定何时退回 still):页面动作必须全部由 CSS `@keyframes` / WAAPI 驱动。`<video>` 元素、`setTimeout` 编排、rAF 物理无法 seek——本套版式规范已禁用这些,正常不会遇到。
+Limitation (which is what decides when to fall back to still): all page motion must be driven by CSS `@keyframes` / WAAPI. `<video>` elements, `setTimeout` choreography and rAF physics cannot be seeked — this layout spec already disables them, so you normally won't hit this.
 
-## 字幕系统(capture 自动烧录,默认开)
+## Subtitle system (capture burns them in automatically, on by default)
 
-字幕不在 HTML 里写、不需要作者操心:capture 读 `timings.json` 的 `clauses[]`(单一数据源),在页面加载前注入——每句一个 `.kit-sub` 元素,底部居中,胶囊底 + 文字色取自主题钩子(`--sub-bg` / `--sub-fg` / `--sub-ring`,默认深色半透明 + 白字,浅色深色主题都读得清);显示窗 = 该句开口 → 下句开口,做成**全时长百分比关键帧动画**,逐帧 seek 天然工作,still 模式 `finish()` 后自动隐藏(所以 Gate 4 静态预览看不到字幕,字幕验收在 Gate 5 成片)。
+Subtitles are not written in the HTML and are not the author's concern: capture reads `clauses[]` from `timings.json` (single source of truth) and injects them before the page loads — one `.kit-sub` element per sentence, bottom-centered, pill background + text color taken from theme hooks (`--sub-bg` / `--sub-fg` / `--sub-ring`, defaulting to dark translucent + white text, legible on both light and dark themes); display window = this sentence's onset → next sentence's onset, built as a **full-duration percentage keyframe animation** that works naturally under frame-by-frame seeking, and hidden automatically after `finish()` in still mode (so Gate 4 static previews show no subtitles; subtitle acceptance happens at Gate 5 on the final video).
 
-**几何全部跟随画布变量**,横竖版都不用改代码:
-- 位置 `bottom = --stage-h × 0.0778`(1920×1080 下 = 84px,避开 slide-num)
-- 宽度 `max-width = --stage-w × 0.729`(1920 下 = 1400px,竖版自动收窄)
-- 字号/内距 `× --sub-scale`(capture 按画布宽度算,竖版收窄到 0.75 下限保证可读)
+**All geometry follows the canvas variables**, so neither landscape nor portrait needs code changes:
+- position `bottom = --stage-h × 0.0778` (= 84px at 1920×1080, clear of slide-num)
+- width `max-width = --stage-w × 0.729` (= 1400px at 1920, narrows automatically in portrait)
+- font size/padding `× --sub-scale` (capture computes it from canvas width, narrowing to a 0.75 floor in portrait to stay readable)
 
-深色主题务必检查字幕对比:跑 `node scripts/check-theme.mjs <项目>`,它会算"字幕文字 vs 胶囊合成到背景后"的对比度。深色主题建议 `--sub-bg: rgba(0,0,0,.58)` 并加 `--sub-ring: 1px solid rgba(255,255,255,.16)` 做视觉分隔。
+On dark themes always check subtitle contrast: run `node scripts/check-theme.mjs <项目>`, which computes the contrast of "subtitle text vs the pill composited onto the background". Dark themes are advised to use `--sub-bg: rgba(0,0,0,.58)` plus `--sub-ring: 1px solid rgba(255,255,255,.16)` for visual separation.
 
-### 字幕可读性怎么验(三件套,缺一不可)
+### How to verify subtitle readability (the trio, none optional)
 
-1. **数值关** —— 跑 `node scripts/check-theme.mjs <项目>`:它算的是"字幕文字 vs 胶囊合成到背景后"的对比度, <4.5:1 直接判定不通过(这是唯一能自动拦住"字幕糊在深色背景上"的关口)。
-2. **帧关** —— 字幕只在成片里出现(still 预览会 finish 掉), 所以要抽 motion 帧看:
+1. **Numeric gate** — run `node scripts/check-theme.mjs <项目>`: it computes "subtitle text vs the pill composited onto the background" contrast, and <4.5:1 is an immediate fail (this is the only gate that automatically stops "subtitles smeared into a dark background").
+2. **Frame gate** — subtitles only appear in the final video (a still preview finishes them away), so you have to pull motion frames to look:
    ```bash
    node scripts/capture.mjs <项目> --mode motion --ids 01   # 先出帧
    # 抽某句开口之后的一帧(例: 第 2 句 3.4s → 取 3.6s)
    ffmpeg -y -v error -i build/frames/01/f00108.png -vf "crop=iw:0.22*ih:0:0.70*ih" sub-check.png
    ```
-   看三点: 字幕是否出现、有没有被裁掉、底部与页码是否重叠。capture 若发现某张没有 clauses 会直接告警(不会再静默出无字幕片)。
-3. **静音关(Gate 5)** —— 关掉声音整片看一遍: 只靠字幕能不能看懂?这是听障视角,也是平台自动字幕的验收标准。
+   **Subtitle changes after the animation window (1.5.0)**: subtitles are full-duration percentage animations, while the frame sequence only covers the animation window — so the remainder used to be padded with the last frame and **every later subtitle change was frozen in the video** (and on the no-fx/static path, `finish()` parks the subtitle animation at `opacity: 0`, so nothing was burned at all). capture now emits one still per sentence (`build/substills/<id>/s<k>.png`) plus a manifest (`build/substills/<id>.json`, recording `framesCover` and each window), and build-video composes `[frame sequence] + [one still per uncovered window]` — the parts must sum to the slide duration, which the duration self-check enforces.
 
-实现细节(排错时知道去哪看):字幕动画被明确排除在"动画窗"计算之外(`.kit-sub` 不参与 animEnd),否则字幕这个全时长动画会把逐帧捕获拉长到整张时长、白拍几倍帧数。clause 带 `text2` 时自动两行(次行 `.kit-sub-2`,小字号低透明度),无需配置。`build-video` 另输出 `out/subs.srt`,与烧录字幕同源同窗(双语时双行),供平台上传。单句 >18 字、text2 >60 字符 plan-timings 会警告。
+Check three things: whether the subtitles appear, whether they are cropped, and whether the bottom overlaps the page number. If capture finds a slide without clauses it warns outright (it will no longer silently produce a subtitle-less video).
+3. **Mute gate (Gate 5)** — watch the whole video with the sound off: can you follow it on subtitles alone? This is the hearing-impaired viewpoint, and also the acceptance standard for platform auto-captions.
 
-## 视觉验证三件套(改完 HTML 必走)
+Implementation details (so you know where to look when troubleshooting): the subtitle animation is explicitly excluded from the "animation window" computation (`.kit-sub` does not participate in animEnd), otherwise this full-duration animation would stretch frame-by-frame capture to the whole slide duration and waste several times the frames. When a clause carries `text2` it automatically becomes two lines (second line `.kit-sub-2`, smaller size and lower opacity), no configuration needed. `build-video` additionally emits `out/subs.srt`, from the same source and with the same windows as the burned-in subtitles (two lines when bilingual), for platform upload. A single sentence >18 chars, or text2 >60 characters, gets a warning from plan-timings.
 
-不要自欺,三步都要做:
+## The visual verification trio (mandatory after any HTML change)
 
-1. **重新截图**:`node scripts/capture.mjs <项目> --mode still --ids <改动的张>`,看 `preview/<id>.png`。⚠ still 会**作废该张帧目录**(防旧帧污染)—— 确认画面后要重建视频,必须对同 ids 重跑 `--mode motion`,否则 build-video 会退回这张的静态图出片、动画无声丢失(它会点名 ⚠,但要看到警告就已经白跑了一次编码)
-2. **核对主体位置**:图片主体在画面中央偏上吗?有没有被裁掉一半?(配图 SOP 见 `image-sources.md`)
-3. **抽成片实际帧核对**:`ffmpeg -ss <时刻> -i out/final.mp4 -frames:v 1 frame.png` —— **必须核对 final.mp4 的实际帧**,不要只看截图管线的产物(成片的淡入淡出、字幕时机与截图不同)
+Don't fool yourself, all three steps are required:
 
-关于 stage 时序的归因:先用 `check-timing.mjs` 拿实测数据,再抽成片帧确认;如果"一部分元素 0 秒就入场、一部分正常",那是 tokens.css 的延迟被 `.fx-*` 简写覆盖(见 authoring.md 的实现原理),不是估算偏差。
+1. **Re-screenshot**: `node scripts/capture.mjs <项目> --mode still --ids <改动的张>`, look at `preview/<id>.png`. ⚠ still **invalidates that slide's frame directory** (to prevent stale frames from polluting it) — once the visuals are confirmed, if you want to rebuild the video you must re-run `--mode motion` for the same ids, otherwise build-video falls back to this slide's static image and the animation is silently lost (it does call out a ⚠, but by the time you see the warning you have already wasted one encode run)
+2. **Check subject placement**: is the image subject in the upper-center of the frame? Is it cropped in half? (image sourcing SOP in `image-sources.md`)
+3. **Pull actual frames from the final video**: `ffmpeg -ss <时刻> -i out/final.mp4 -frames:v 1 frame.png` — you **must check actual frames from final.mp4**, don't only look at the screenshot pipeline's output (the final video's fades and subtitle timing differ from the screenshots)
 
-## 放映页(把 HTML 画面放一遍,不用等编码)
+On attributing stage timing: first get measured data with `check-timing.mjs`, then pull final-video frames to confirm; if "some elements enter at 0s while others follow the timing", that is tokens.css delays being overridden by the `.fx-*` shorthands (see authoring.md for the implementation principle), not estimation error.
 
-`node scripts/preview-page.mjs <项目> [--open] [--no-script]` → `preview/play/index.html`,单文件、零依赖、file:// 双击即看。
+## Play page (play the HTML visuals through once, without waiting for encoding)
 
-**定位:这个页面只干"看画面"这一件事** —— 逐级入场、翻页、动效开/关对照、总览;口播文案是锦上添花。**刻意没有播放器那套 UI**:计时器(走秒的 `X s / Y s`)、进度条、逐句跟读高亮、重播按钮都不做 —— 要看时间/节奏就直接看成片,预览页里跑计时器只会让人盯着秒表看(实测标签页开着一会儿就变成 `204.2s / 6.3s`,毫无意义)。
+`node scripts/preview-page.mjs <项目> [--open] [--no-script]` → `preview/play/index.html`, a single file, zero dependencies, double-click to view over file://.
 
-| 操作 | 作用 |
+**Positioning: this page does exactly one thing — "look at the visuals"** — level-by-level entrance, slide navigation, motion on/off comparison, overview; the narration text is a bonus. It **deliberately has none of the player UI**: no timer (a ticking `X s / Y s`), no progress bar, no sentence-by-sentence follow-along highlight, no replay button — to see time/rhythm, just watch the final video; running a timer in the preview page only makes people stare at a stopwatch (measured: leave the tab open for a while and it reads `204.2s / 6.3s`, which is meaningless).
+
+| Action | Effect |
 |---|---|
-| `→` / 空格 / 触屏左滑 | **动效开:先逐级揭示** —— 每按一次出下一级入场(二级标题/小图表当场动画出现),出完才翻下一张;动效关:直接翻页。逐级实现:副本头部有一段启动前脚本,按 `?s=k` 把已过级设为终态、当前级 0ms 入场、未来级保持隐藏 |
-| `←` / 触屏右滑 | 动效开:先逐级回退(回退不重播动画,直接终态),到第 1 级再往前一张(前一张整张终态);动效关:直接翻页 |
-| `X`(或底栏"动效开/动效关"按钮) | **动效开 / 动效关 对照**:关动效切到 `preview/play/<name>.nofx.html`(根元素带 `no-fx`,整张全终态)。画面变空 = 有关键帧没把 `opacity:0` 抬回来;两版一致 = 动效设定干净 |
-| `P`(或底栏"口播开/口播关"按钮) | 口播文案面板 开 / 关 |
-| `O` / `F` | 总览(preview/*.png 缩略图,点击跳转,跳过去是整张终态)/ 全屏 |
+| `→` / space / swipe left on touch | **Motion on: reveal level by level first** — each press brings out the next entrance level (a second-level heading or a small chart animates in on the spot), and only once they are all out does it advance to the next slide; motion off: advance directly. Level-by-level implementation: the copy's head carries a pre-boot script that, given `?s=k`, sets passed levels to their final state, the current level entering at 0ms, and future levels staying hidden |
+| `←` / swipe right on touch | Motion on: step back level by level first (stepping back doesn't replay animation, it goes straight to final state), and at level 1 it goes back one slide (the previous slide entirely in final state); motion off: go back directly |
+| `X` (or the bottom bar's "motion on/motion off" button) | **Motion on / motion off comparison**: turning motion off switches to `preview/play/<name>.nofx.html` (root element carrying `no-fx`, the whole slide in final state). A frame going blank = some keyframe never lifted `opacity:0` back up; the two versions matching = the motion setup is clean |
+| `P` (or the bottom bar's "narration on/narration off" button) | Narration text panel on / off |
+| `O` / `F` | Overview (preview/*.png thumbnails, click to jump, landing on the full final state) / fullscreen |
 
-开关都在**底栏按钮条**(桌面也显示,不只触屏):按钮文案直接写当前状态("动效开/动效关"、"口播开/口播关",关态亮警示色),顶栏只留话题与页码。换页/逐级用**双缓冲 iframe**:新帧在隐藏帧里加载完成才对调显示,不会闪白。UI 文案随 `script.json` 的 `lang` 中英自适应(英文项目整套英文按钮,不再混中文)。
+The toggles all live in the **bottom bar button strip** (shown on desktop too, not just touch): the button text states the current status directly ("motion on/motion off", "narration on/narration off", the off state lit in a warning color), while the top bar keeps only the topic and page number. Slide changes and level steps use a **double-buffered iframe**: the new frame only swaps in for display once it has finished loading in the hidden frame, so there is no white flash. UI text adapts between Chinese and English per `script.json`'s `lang` (English projects get a fully English button set, no more mixed Chinese).
 
-**口播 UI 按数据决定加不加载**(不靠用户记得关):
+**The narration UI loads or not based on data** (not on the user remembering to turn it off):
 
-| 情形 | 页面表现 |
+| Case | Page behavior |
 |---|---|
-| 有 clauses + 有 `timings.json` | 右侧(窄屏为底部抽屉)列出该张口播文案 |
-| 有 clauses、还没对时 | 列出文案,标题标"(未对时)" —— 口播还没做时也能先看 HTML |
-| 没有 clauses,或 `--no-script` | 完全不出面板与口播按钮,画面占满整宽 |
+| Has clauses + has `timings.json` | Lists this slide's narration text on the right (a bottom drawer on narrow screens) |
+| Has clauses, not timing-synced yet | Lists the text, with the title marked "(not timing-synced)" — so you can look at the HTML first even before the narration exists |
+| No clauses, or `--no-script` | No panel and no narration button at all, the visuals fill the full width |
 
-**布局随窗口自适应**:顶栏/底栏可换行(话题名过长省略号截断),窄窗口与手机上口播面板收成底部抽屉并**默认收起**(画面优先),底栏按钮条自动占满整行,触屏可左右滑动翻页,总览网格按宽度自动列数。用 `100dvh` 而不是 `100vh`,免得手机被地址栏切掉一截。
+**Layout adapts to the window**: top/bottom bars can wrap (overlong topic names ellipsis-truncated), on narrow windows and phones the narration panel collapses into a bottom drawer and is **collapsed by default** (visuals first), the bottom button strip automatically fills the whole row, touch lets you swipe left/right to change slides, and the overview grid picks its column count from the width. It uses `100dvh` rather than `100vh` so the address bar doesn't cut off a slice on phones.
 
-**为什么要生成副本,而不是直接打开 `slides/*.html`**:动画延迟(`--t1/--t2/--t3`)和画布尺寸由渲染管线按 `timings.json` 注入(capture 走 `addInitScript`),HTML 与 tokens.css 里只有占位默认值。直接双击原文件,`--t2` 是 800ms 而不是实测的 4.9s —— 所有入场动画挤在开头两秒,看到的节奏与成片完全不同(实测:同一张 t=3.0s,副本里第二层还是 opacity 0,原文件里已经可见)。副本把这些值写进 `<html style>`(等价于管线注入,优先级最高),并加 `<base href="../../slides/">` 让 tokens.css 与 `../assets/*` 照常解析。
+**Why generate a copy instead of opening `slides/*.html` directly**: animation delays (`--t1/--t2/--t3`) and canvas size are injected by the render pipeline from `timings.json` (capture goes through `addInitScript`), and the HTML and tokens.css only hold placeholder defaults. Double-click the original file and `--t2` is 800ms instead of the measured 4.9s — every entrance animation crowds into the first two seconds and the rhythm you see is completely different from the final video (measured: on the same slide at t=3.0s, level two is still opacity 0 in the copy while it is already visible in the original file). The copy writes these values into `<html style>` (equivalent to pipeline injection, highest precedence) and adds `<base href="../../slides/">` so tokens.css and `../assets/*` resolve as usual.
 
-**还没有 `timings.json` 时**(口播还没做):副本按 HTML 里实际用到的 stage 等间隔排(0.3 / 1.3 / 2.3s),页面顶部黄条如实标注"不是成片时序"。这样至少能看清入场顺序 —— 占位值会把动画全挤在 2 秒内,那才是真看不懂。
+**When there is no `timings.json` yet** (narration not done): the copy spaces the stages actually used in the HTML at equal intervals (0.3 / 1.3 / 2.3s), and a yellow bar at the top of the page honestly notes "not final-video timing". At least you can see the entrance order clearly — with placeholder values all animations crowd into 2 seconds, which is the truly unreadable version.
 
-副本是**快照**:改完 `slides/` 必须重跑 `preview-page.mjs`,否则放映页还是旧画面(副本头部注释会写明真实文件路径)。放映页不烧字幕、不带声音 —— 字幕验收仍以成片为准。
+The copy is a **snapshot**: after editing `slides/` you must re-run `preview-page.mjs`, otherwise the play page still shows the old visuals (the copy's head comment states the real file path). The play page burns no subtitles and carries no sound — subtitle acceptance is still based on the final video.
 
-项目 tokens.css 落后于技能当前版(缺 `no-fx` / 图表 / 表格任一段,按受管块 rev 判定)时,脚本给副本兜底注入当前版:no-fx 规则只注入关动效副本,图表/表格工具箱注入全部副本(否则旧规则会把新版画法渲染坏),并在页面上如实说明。要根治(让成片与项目文件也用上)跑 `init-project --upgrade-css`。
+When the project's tokens.css lags behind the skill's current version (missing any of the `no-fx` / chart / table blocks, judged by managed-block rev), the script injects the current version into the copy as a fallback: the no-fx rules are injected only into the motion-off copy, while the chart/table toolboxes are injected into all copies (otherwise the old rules would render the new drawing approach broken), and the page says so honestly. To fix it at the root (so the final video and the project files get it too) run `init-project --upgrade-css`.
 
-## BGM 混音(可选)
+## Cover and transitions (1.6.0)
 
-build-video 检测到 script.json 的 `bgm` 配置时,在音轨对位之后、mux 之前插一步混音:
+**Cover (thumbnail)**: `capture.mjs` emits an extra `preview/cover.png` for slide 1 (all base animations at final state, subtitles hidden = the fully revealed title design), and `build-video` does three things:
+
+1. **First-segment cover dissolve** — when encoding segment 1, overlay the cover and fade it out over 0.25s → **frame 0 is the complete cover**, no longer a black frame (previously every segment carried `fade=t=in` and the first frame was fully black; users' measured feedback: "the thumbnail people receive is pure black"). Adds no duration.
+2. **Embedded attached_pic** — at mux time add a track via `-disposition:v:1 attached_pic` (the main video stays `-c:v copy`, no re-encode): file managers / most players / some IMs read it directly as the thumbnail. Note that with an embedded cover you **must not pass `-shortest`** (it would cut the output to that frame's length; the audio track itself is already aligned to the total duration).
+3. **Export `out/cover.png`** (scaled to canvas size) for manual upload to Bilibili/YouTube and similar platforms.
+
+**Transitions (slide changes)**:
+
+| Mode | Effect | Cost |
+|---|---|---|
+| `cut` (default) | **Hard cut** between segments, no black pass; the first segment keeps its cover dissolve and the last segment keeps its fade-out ending | Zero (still `-c copy` concatenation) |
+| `xfade` | 0.4s cross-dissolve between adjacent segments (both frames half-transparent at once, not a black-pass transition) | One full video re-encode |
+
+Usage: `"transition": {"type":"xfade","duration":0.4}` in `script.json`, or CLI `--transition xfade` to override temporarily. **Total duration is unchanged**: under xfade each segment first `tpad`s an extra `duration` seconds of tail frames, the dissolve eats `(n-1)×duration`, and after concatenation it still equals `timings.total` (the self-check verifies this). On the play page, `T` lets you **compare the two slide transitions live** (the dissolve is also a 0.4s overlay in the play page), so the user can decide by feel.
+
+> Previously it was "fade to black 0.3s at the end of each segment + fade in from black 0.25s on the next" ≈ 0.55s of pure black — users' measured feedback: "every big slide change goes through a black screen". Neither hard cut nor dissolve passes through black.
+
+**Three visual gates** (run automatically when build-video finishes; any failure exits non-zero): cover is embedded / first-frame brightness above black level (not a black frame) / no black frames around each slide-change point.
+
+## BGM mixing (optional)
+
+When build-video detects a `bgm` config in script.json, it inserts a mixing step after audio alignment and before mux:
 
 ```
 ffmpeg -y -i build/audio-timeline.wav -stream_loop -1 -i assets/bgm.mp3 \
@@ -106,14 +129,14 @@ afade=t=in:st=0:d=1.5,afade=t=out:st=<total-2.5>:d=2.5[bg];\
   -map "[out]" -c:a pcm_s16le build/audio-mix.wav
 ```
 
-- `-stream_loop -1` 让短 BGM 循环补满全片;`duration=first` 以人声轨长度为准收敛。
-- `normalize=0` 必须带:amix 默认按输入数均分音量,**会把人声减半**;normalize=0 保持人声原电平,BGM 只受 `volume` 控制。
-- `normalize` 选项需 ffmpeg ≥ 4.4;失败时脚本告警并退回纯人声(不中断出片)。
-- 校验方法:`ffmpeg -i out/final.mp4 -af volumedetect -f null -` 看 mean/max 是否比纯人声轨抬高(有 BGM 应抬高);`silencedetect` 在句间空隙处应不再报静音(人声间隙被 BGM 填满)。
+- `-stream_loop -1` loops a short BGM to fill the whole video; `duration=first` converges to the length of the voice track.
+- `normalize=0` is mandatory: amix by default splits the volume by input count, which **halves the voice**; normalize=0 keeps the voice at its original level and BGM is controlled only by `volume`.
+- The `normalize` option requires ffmpeg ≥ 4.4; on failure the script warns and falls back to voice only (it does not abort the render).
+- How to verify: `ffmpeg -i out/final.mp4 -af volumedetect -f null -` to see whether mean/max are raised versus the voice-only track (with BGM they should be); `silencedetect` should no longer report silence in the gaps between sentences (the voice gaps are filled by BGM).
 
-## 编码与拼接参数(手工排错用)
+## Encoding and concatenation parameters (for manual troubleshooting)
 
-单张(帧序列):
+Single slide (frame sequence):
 
 ```bash
 ffmpeg -y -framerate 30 -i build/frames/01/f%05d.png \
@@ -121,44 +144,44 @@ ffmpeg -y -framerate 30 -i build/frames/01/f%05d.png \
   -t <D> -c:v libx264 -pix_fmt yuv420p -preset medium -crf 20 -movflags +faststart out/slide-01.mp4
 ```
 
-- `-framerate` 必须在 `-i` 前(图片序列本身无时间戳,由它定义)。
-- `yuv420p` 必须带,否则部分播放器绿屏/黑屏。
-- `+faststart` 把 moov 挪到文件头,流媒体即点即播。
+- `-framerate` must come before `-i` (an image sequence has no timestamps of its own; this defines them).
+- `yuv420p` is mandatory, otherwise some players show green/black.
+- `+faststart` moves moov to the head of the file, so streaming plays on click.
 
-拼接:所有段由 build-video 统一编码(同编码器同参数),用 concat demuxer `-c copy` 无损秒拼;拼完 ffprobe 校验,总时长偏离 >0.25s 自动回退 concat filter 重编码(混入外来段时时间基不一致会把 8s 拼成 35s,copy 救不回来)。
+Concatenation: all segments are encoded uniformly by build-video (same encoder, same parameters) and stitched losslessly and instantly with the concat demuxer `-c copy`; after stitching ffprobe verifies, and a total-duration deviation >0.25s automatically falls back to concat filter re-encoding (mixing in foreign segments gives inconsistent timebases that turn 8s into 35s, and copy can't rescue it).
 
-音轨对位:每段 `aresample=44100,aformat=channel_layouts=mono,apad=whole_dur=<该张实测时长>` 补齐静音再 concat。**不要用 adelay+concat 的写法**(concat filter 会忽略 adelay 的偏移,所有语音堆到开头)。
+Audio alignment: each segment gets `aresample=44100,aformat=channel_layouts=mono,apad=whole_dur=<该张实测时长>` to pad silence before concat. **Don't use the adelay+concat approach** (the concat filter ignores adelay's offset and all speech piles up at the start).
 
-**先看命令再跑**:`node scripts/build-video.mjs <项目> --dry-run` 会把每一步要执行的 ffmpeg 命令打印出来而不真的执行 —— 想手工验证某张的参数、或怀疑是编码参数问题而不是素材问题时,先跑它,把命令原样拿去命令行改着试。
+**Look at the commands before running**: `node scripts/build-video.mjs <项目> --dry-run` prints every ffmpeg command it would execute without actually executing it — when you want to manually verify a slide's parameters, or suspect an encoding-parameter problem rather than an asset problem, run it first and take the commands as-is to the command line to experiment.
 
-## 自检标准
+## Self-check standards
 
-build-video 结束前强制:成片 ffprobe 时长与 timings 总时长差 ≤0.25s;`ffmpeg -v error -i final.mp4 -f null -` 全量解码零错误。任一不过,退出码非 0——看到非 0 不要交付。
+Before build-video ends it enforces: the final video's ffprobe duration differs from the timings total by ≤0.25s; `ffmpeg -v error -i final.mp4 -f null -` decodes the whole file with zero errors. If either fails, the exit code is non-zero — when you see non-zero, don't deliver.
 
-## 排错表
+## Troubleshooting table
 
-| 现象 | 原因 | 处置 |
+| Symptom | Cause | Action |
 |---|---|---|
-| 成片无声 | 音轨 wav 没生成/mux 失败 | `ffprobe build/audio-timeline.wav` 看时长;重跑 build-video |
-| 语音全堆在开头 | 用了 adelay 写法 | 用本脚本的 apad 写法 |
-| 拼接后时长暴涨 | 混入了外部编码的段 | 全段由 build-video 统一重编码;它已自动回退 |
-| 中文方框 | 系统无 CJK 字体 | Linux: `apt install fonts-noto-cjk`;或字体栈换成已装字体 |
-| 字体先丑后正(FOUT) | 外链字体 + 没走 capture 的字体等待 | 素材/字体本地化;确认用 capture.mjs 而非手工截图 |
-| 动画没进视频 | 用了 still 模式 | `--mode motion` 重跑该张 |
-| 动画层时序不对 | HTML 里手写了动画延迟 | 删掉,靠 --t1/--t2/--t3 注入 |
-| chromium 启动失败 | 未装浏览器 | `npx playwright install chromium`(Linux CI 另加 `--with-deps`) |
-| 某张段长不对 | 帧目录是旧 timings 的 | 删 `build/frames/<id>/` 重跑 capture;改过 TTS 必须重跑 plan-timings |
-| Windows 下路径反斜杠进 concat 失败 | — | build-video 已统一转正斜杠;手工拼 list.txt 时注意 |
-| 一部分元素 0 秒就入场、一部分按时序 | 旧 tokens.css:延迟被 `.fx-*` 简写覆盖 | 换新版 tokens.css(`--fx-delay`);见 authoring.md 实现原理 |
-| 图片主体被裁到画面外 | 裸放 `<img>` 或 cover 配错比例 | 套 `.img-frame` + `--img-pos`;截图类改 `.contain`;主体贴边按 SOP 重搜 |
-| 字幕在深色主题糊底 | 主题没覆写字幕钩子 | 加 `--sub-bg`(更深)+ `--sub-ring`;`check-theme.mjs` 会算这个对比 |
-| PowerShell 下 spawnSync 返回 exit -5 或挂起 | 中文路径 + 复杂参数组合在 PowerShell 里易触发 | 改用 Git Bash / WSL 执行脚本,或先 `$env:PATH` 注入二进制目录(本套脚本走 Bash 一贯正常) |
-| 数字/文字看不见 | 未定义 CSS 变量使整条 background 失效 + transparent 文字 | `check-slides.mjs`(静态)抓未定义变量;capture 会点名没加载出来的图 |
-| 图片 broken 图标 | 文件缺失或 SVG 无效 | 同上;SVG 一律 inline 进 HTML 最稳 |
+| Final video has no sound | Audio wav not generated / mux failed | `ffprobe build/audio-timeline.wav` to check duration; re-run build-video |
+| All speech piled at the start | Used an adelay approach | Use this script's apad approach |
+| Duration explodes after concatenation | Foreign-encoded segments mixed in | Re-encode all segments uniformly with build-video; it already falls back automatically |
+| Chinese renders as boxes | No CJK font on the system | Linux: `apt install fonts-noto-cjk`; or switch the font stack to an installed font |
+| Font ugly first, then correct (FOUT) | External font + font waiting not going through capture | Localize assets/fonts; make sure you use capture.mjs rather than manual screenshots |
+| Animation not in the video | Used still mode | Re-run that slide with `--mode motion` |
+| Animation layer timing wrong | Animation delays hand-written in the HTML | Delete them, rely on --t1/--t2/--t3 injection |
+| chromium fails to launch | Browser not installed | `npx playwright install chromium` (on Linux CI add `--with-deps`) |
+| A slide's segment length is wrong | Frame directory is from old timings | Delete `build/frames/<id>/` and re-run capture; after changing TTS you must re-run plan-timings |
+| Backslash paths break concat on Windows | — | build-video already converts to forward slashes; be careful when hand-assembling list.txt |
+| Some elements enter at 0s, others on time | Old tokens.css: delays overridden by the `.fx-*` shorthands | Switch to the new tokens.css (`--fx-delay`); see authoring.md for the implementation principle |
+| Image subject cropped out of frame | Bare `<img>` or cover with the wrong ratio | Wrap in `.img-frame` + `--img-pos`; for screenshot-type images switch to `.contain`; if the subject hugs the edge, re-search per the SOP |
+| Subtitles smear into the background on dark themes | Theme doesn't override the subtitle hooks | Add `--sub-bg` (darker) + `--sub-ring`; `check-theme.mjs` computes this contrast |
+| spawnSync returns exit -5 or hangs under PowerShell | Chinese paths + complex argument combinations easily trigger this in PowerShell | Run scripts via Git Bash / WSL instead, or inject the binary directory into `$env:PATH` first (this suite's scripts always work fine under Bash) |
+| Numbers/text invisible | Undefined CSS variable voids the whole background + transparent text | `check-slides.mjs` (static) catches undefined variables; capture names the images that failed to load |
+| Broken image icon | Missing file or invalid SVG | Same as above; inlining SVGs into the HTML is always the most reliable |
 
-## 环境差异备忘
+## Environment differences notes
 
-- **ffmpeg/ffprobe 探测**:所有脚本统一走 PATH → 项目/仓库 node_modules(ffmpeg-static/ffprobe-static)→ 常见安装位置(winget Links / scoop / C:\ffmpeg\bin);找不到时逐条列出排查项并以退出码 2 结束(区别于业务错误的 1)。
-- **Windows**:`python`/`node` 命名、路径分隔符——本套脚本全 Node 实现,无 bash 数组、无八进制陷阱,可直接跑。ffmpeg:`winget install Gyan.FFmpeg` 或 `npm i ffmpeg-static ffprobe-static`。
-- **Linux 沙箱(mcode)**:chromium 由 `npx playwright install chromium` 装;需中文字体包;`--with-deps` 补共享库。
-- 超采样:capture `--dsf 2` 出 3840×2160 帧,build-video 检测到尺寸不符自动 lanczos 降采,文字边缘更锐;渲染时间约 ×4,成片母版才用。
+- **ffmpeg/ffprobe detection**: every script uniformly goes PATH → project/repo node_modules (ffmpeg-static/ffprobe-static) → common install locations (winget Links / scoop / C:\ffmpeg\bin); when not found they list the checks one by one and exit with code 2 (distinct from 1 for business errors).
+- **Windows**: `python`/`node` naming, path separators — this whole suite is implemented in Node, no bash arrays, no octal traps, it just runs. ffmpeg: `winget install Gyan.FFmpeg` or `npm i ffmpeg-static ffprobe-static`.
+- **Linux sandbox (mcode)**: chromium is installed by `npx playwright install chromium`; a Chinese font package is needed; `--with-deps` supplies shared libraries.
+- Supersampling: capture `--dsf 2` emits 3840×2160 frames, and build-video detects the size mismatch and auto-downsamples with lanczos, giving sharper text edges; render time is about ×4, so use it only for the final master.

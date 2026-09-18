@@ -26,6 +26,7 @@ const timings = JSON.parse(fs.readFileSync(timingsPath, 'utf8'));
 validateTimingsIds(timings);
 
 const slides = script.slides.filter(s => !idsFilter || idsFilter.includes(s.id));
+const firstId = script.slides[0]?.id;   // 封面图取自成片第 1 段(与 --ids 无关)
 if (!slides.length) { console.error('✗ 没有匹配的 slide'); process.exit(1); }
 
 const playwright = await loadPackage('playwright', { projectDir: dir });
@@ -72,6 +73,25 @@ const context = await browser.newContext({
   deviceScaleFactor: dsf,
 });
 fs.mkdirSync(safeOut(dir, 'preview'), { recursive: true });
+
+// ── 封面图(1.6.0): 第 1 张另出一张"标题全露、无字幕"的终态图 preview/cover.png ──
+// 用途: build-video 把它内嵌为 attached_pic(文件管理器/播放器/多数 IM 的缩略图都读它),
+// 并导出 out/cover.png 供平台手动上传;首段还用它做 0.25s 溶解过渡, 免得成片首帧是黑的。
+async function captureCover(page, { sid, firstId }) {
+  if (sid !== firstId) return false;
+  await page.evaluate(() => {
+    document.getAnimations().forEach(a => {
+      const el = a.effect?.target;
+      try {
+        if (el?.closest?.('.kit-sub')) a.currentTime = 0;   // 字幕不进封面(平台自己会叠字)
+        else a.finish();                                     // 基底走终态
+      } catch { /* 无限氛围动画 finish 会抛, 忽略 */ }
+    });
+  });
+  await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+  await page.screenshot({ path: safeOut(dir, 'preview', 'cover.png') });
+  return true;
+}
 
 // ── 字幕时间轴(二审 P1): 字幕是"全时长百分比动画", 而逐帧只覆盖动画窗, 其余靠 tpad 冻尾帧 ——
 // 动画窗之后的字幕变化永远进不了画面(实测: SRT 第 4 句在 5.3s, 6.0s 的帧还显示第 2 句);
@@ -248,8 +268,9 @@ for (const s of slides) {
     await page.screenshot({ path: safeOut(dir, 'preview', `${sid}.png`) });
     // 静态路径没有帧序列 → 字幕窗口全部覆盖不到, 逐句出静态图交给 build-video 拼
     const nStill = await captureSubStills(page, { sid, t, framesCover: 0 });
+    const cover = await captureCover(page, { sid, firstId });
     invalidateFrames();
-    console.log(`✓ ${sid} 终态截图 → preview/${sid}.png${nStill ? ` + 字幕图 ${nStill} 张(静态路径, 由 build-video 拼时段)` : ''}`);
+    console.log(`✓ ${sid} 终态截图 → preview/${sid}.png${nStill ? ` + 字幕图 ${nStill} 张(静态路径, 由 build-video 拼时段)` : ''}${cover ? ' + 封面 preview/cover.png' : ''}`);
   } else {
     // 逐帧步进: 全部动画暂停在 0, 每帧统一 seek 到 t, 截图。CSS 动画自带 delay, seek 是绝对时间, 时序天然正确。
     await page.evaluate(() => {
@@ -270,8 +291,9 @@ for (const s of slides) {
       // 页面没有任何有限动画: 静态页, 单帧即全部信息, 走 still 路径(字幕同样逐句出图)
       await page.screenshot({ path: safeOut(dir, 'preview', `${sid}.png`) });
       const nStill = await captureSubStills(page, { sid, t, framesCover: 0 });
+      const cover = await captureCover(page, { sid, firstId });
       invalidateFrames();
-      console.log(`✓ ${sid} 无动画, 静态截图 → preview/${sid}.png${nStill ? ` + 字幕图 ${nStill} 张` : ''}`);
+      console.log(`✓ ${sid} 无动画, 静态截图 → preview/${sid}.png${nStill ? ` + 字幕图 ${nStill} 张` : ''}${cover ? ' + 封面 preview/cover.png' : ''}`);
       await page.close(); done++; continue;
     }
     const fps = timings.fps ?? 30;
@@ -293,7 +315,8 @@ for (const s of slides) {
       safeOut(dir, 'preview', `${sid}.png`));
     // 动画窗之后的字幕变化: 逐句出静态图(framesCover = 帧序列实际时长, 这批窗口交给它之后的拼接)
     const nStill = await captureSubStills(page, { sid, t, framesCover: frames / fps });
-    console.log(`✓ ${sid} ${frames} 帧 @${fps}fps (动画窗 ${windowS.toFixed(1)}s / 成片 ${t.duration.toFixed(1)}s) → build/frames/${sid}/${nStill ? ` + 字幕图 ${nStill} 张` : ''} + preview/${sid}.png`);
+    const cover = await captureCover(page, { sid, firstId });
+    console.log(`✓ ${sid} ${frames} 帧 @${fps}fps (动画窗 ${windowS.toFixed(1)}s / 成片 ${t.duration.toFixed(1)}s) → build/frames/${sid}/${nStill ? ` + 字幕图 ${nStill} 张` : ''}${cover ? ' + 封面 preview/cover.png' : ''} + preview/${sid}.png`);
   }
   await page.close();
   done++;

@@ -152,6 +152,7 @@ export function buildPlayPage({
     prevTitle: 'Previous level / slide', nextTitle: 'Next level / slide',
     hintStep: 'reveal level / slide', hintFx: 'motion on / off', hintNarr: 'narration on / off',
     hintOv: 'overview', hintFs: 'fullscreen', level: 'step',
+    cut: 'Cut', xfade: 'Dissolve', transTitle: 'Slide transition: cut / dissolve (compare, then set script.json transition)', hintTrans: 'slide transition',
     gen: 'Snapshots generated', genNote: 'same source as the final video (no audio, no subtitles)',
     noThumbA: 'No thumbnail (preview/', ovH: 'Overview · click any slide to jump (thumbnails from preview/*.png)',
   } : {
@@ -161,6 +162,7 @@ export function buildPlayPage({
     prevTitle: '上一级 / 上一张', nextTitle: '下一级 / 下一张',
     hintStep: '逐级入场 / 翻页', hintFx: '动效开 / 动效关', hintNarr: '口播开 / 口播关',
     hintOv: '总览', hintFs: '全屏', level: '级',
+    cut: '硬切', xfade: '溶解', transTitle: '切页方式:硬切 / 溶解(现场对比后写进 script.json 的 transition)', hintTrans: '切页方式',
     gen: '快照生成于', genNote: '画面与成片同源(无声、无字幕)',
     noThumbA: '无缩略图(preview/', ovH: '总览 · 点任意一张跳转(缩略图来自 preview/*.png)',
   };
@@ -207,6 +209,8 @@ export function buildPlayPage({
   /* 双缓冲: 两张 iframe 叠放, 新帧在隐藏帧里加载完成才对调显示 —— 换页/逐级不再闪白 */
   #fit iframe{position:absolute;left:0;top:0;width:${canvas.w}px;height:${canvas.h}px;border:0;background:#fff;opacity:0}
   #fit iframe.show{opacity:1}
+  /* 溶解对比: 新帧淡入盖住旧帧(硬切时无过渡, 与成片一致) */
+  body.xfade #fit iframe{transition:opacity .4s linear}
   #hit{position:absolute;inset:0;z-index:2;touch-action:none}   /* 触屏左右滑翻页; 画面是纯 CSS 无需交互 */
   #panel{flex:0 0 clamp(240px,22vw,340px);min-width:0;overflow:auto;overscroll-behavior:contain;
     border-left:1px solid var(--c-line);background:var(--c-panel);padding:14px 16px}
@@ -287,11 +291,13 @@ export function buildPlayPage({
     ${narration ? `<span><kbd>P</kbd> ${T.hintNarr}</span>` : ''}
     <span><kbd>O</kbd> ${T.hintOv}</span>
     <span><kbd>F</kbd> ${T.hintFs}</span>
+    <span><kbd>T</kbd> ${T.hintTrans}</span>
   </span>
   <span id="touchbar">
     <button type="button" data-act="prev" title="${T.prevTitle}">‹</button>
     <button type="button" data-act="nofx" id="fxbtn" title="${T.fxTitle}">${T.fxOn}</button>
     ${narration ? `<button type="button" data-act="narr" id="narrbtn" title="${T.narrTitle}">${T.narrOn}</button>` : ''}
+    <button type="button" data-act="trans" id="transbtn" title="${T.transTitle}">${T.cut}</button>
     <button type="button" data-act="overview" title="${T.overview}">${T.overview}</button>
     <button type="button" data-act="next" title="${T.nextTitle}">›</button>
   </span>
@@ -300,8 +306,8 @@ export function buildPlayPage({
 <div id="overlay"><h2>${T.ovH}</h2><div id="grid"></div></div>
 <script>
 var S = ${json};
-var T = ${JSON.stringify({ fxOn: T.fxOn, fxOff: T.fxOff, narrOn: T.narrOn, narrOff: T.narrOff, level: T.level, noThumbA: T.noThumbA })};
-var i = 0, nofx = false, step = 1, animNext = true;
+var T = ${JSON.stringify({ fxOn: T.fxOn, fxOff: T.fxOff, narrOn: T.narrOn, narrOff: T.narrOff, level: T.level, noThumbA: T.noThumbA, cut: T.cut, xfade: T.xfade })};
+var i = 0, nofx = false, step = 1, animNext = true, trans = 'cut';   // trans: 'cut' 硬切(默认) / 'xfade' 溶解 —— 现场对比用
 // step = 动效开时已揭示到第几个 stage; animNext = 揭示该级时是否当场播入场动画
 
 function el(id){ return document.getElementById(id); }
@@ -311,13 +317,17 @@ function cur(){ return S[i]; }
 // 单 iframe 直接改 src 会先卸载旧文档(白屏一瞬)再加载新文档, 换页/逐级都会闪白(实测反馈)
 var FR = [el('frame'), el('frameB')], front = 0, gen = 0;
 function show(src){
-  gen++; var g = gen, back = FR[1 - front];
+  gen++; var g = gen, back = FR[1 - front], prev = FR[front];
   var raf = window.requestAnimationFrame || function(f){ setTimeout(f, 16); };
   back.addEventListener('load', function onl(){
     back.removeEventListener('load', onl);
     if (g !== gen) return;                 // 等待期间又按了下一步: 这次换帧作废
     raf(function(){ raf(function(){ if (g === gen) {
-      back.classList.add('show'); FR[front].classList.remove('show'); front = 1 - front;
+      back.classList.add('show');
+      if (trans === 'xfade') {             // 溶解: 新帧淡入盖住旧帧, 旧帧等过渡结束再撤(绝不经过黑场)
+        setTimeout(function(){ if (g === gen) prev.classList.remove('show'); }, 400);
+      } else { prev.classList.remove('show'); }   // 硬切: 直接换
+      front = 1 - front;
     } }); });
   });
   back.src = './' + src;   // './' 前缀: 强制按相对 URL 解析, 防同名 javascript: 文件名在放映页同源执行
@@ -353,6 +363,7 @@ function paintPanel(){
 function paintToggles(){
   var b = el('fxbtn'); if (b) { b.textContent = nofx ? T.fxOff : T.fxOn; b.className = nofx ? 'on' : ''; }
   var n = el('narrbtn'); if (n) { var off = document.body.classList.contains('narr-off'); n.textContent = off ? T.narrOff : T.narrOn; n.className = off ? 'on' : ''; }
+  var t = el('transbtn'); if (t) t.textContent = trans === 'cut' ? T.cut : T.xfade;
 }
 
 // multi = 本张当前可逐级(动效开 + 多级 + 文件名没带 ?/# —— 带 ?/# 的副本拼 ?s= 查询会失效, 只能整张放)
@@ -360,6 +371,7 @@ function multi(){ var s = cur(); return !nofx && s.steps && s.steps.length > 1 &
 
 function render(){
   var s = cur();
+  document.body.classList.toggle('xfade', trans === 'xfade');
   var lvl = multi() ? (' · ' + T.level + ' ' + step + '/' + s.steps.length) : '';
   el('pageno').textContent = (i + 1) + ' / ' + S.length + lvl;
   var src;
@@ -422,6 +434,7 @@ var ACT = {
   prev: prev,
   next: next,
   nofx: function(){ nofx = !nofx; render(); },
+  trans: function(){ trans = trans === 'cut' ? 'xfade' : 'cut'; render(); },
   narr: toggleNarr,
   overview: function(){ buildGrid(); el('overlay').classList.add('show'); }
 };
@@ -446,6 +459,7 @@ document.addEventListener('keydown', function(e){
   else if (e.key === 'Home') go(0);
   else if (e.key === 'End') go(S.length - 1);
   else if (e.key === 'x' || e.key === 'X') ACT.nofx();
+  else if (e.key === 't' || e.key === 'T') ACT.trans();
   else if (e.key === 'p' || e.key === 'P') toggleNarr();
   else if (e.key === 'o' || e.key === 'O') ACT.overview();
   else if (e.key === 'f' || e.key === 'F') { if (document.fullscreenElement) document.exitFullscreen(); else el('stage').requestFullscreen(); }

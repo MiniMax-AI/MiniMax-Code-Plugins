@@ -1,227 +1,240 @@
 # Changelog
 
+## 1.6.0 — 2026-09-18
+
+**Cover / slide transitions / speech-rate alignment (three field reports from real deliveries)**
+
+- **Cover and a non-black first frame.** Every segment carried `fade=t=in`, so frame 0 of the final video was pure black — the thumbnail people saw when the file was forwarded. Fix: `capture.mjs` now also writes `preview/cover.png` for the first slide (base animations finished, subtitles hidden — the fully revealed design), the first segment dissolves from that cover over 0.25 s (**frame 0 *is* the cover**, no added duration), `build-video.mjs` embeds it as `attached_pic` (main video stream still `-c:v copy`; note `-shortest` must be dropped when a cover is embedded) and exports `out/cover.png` at canvas size for platform uploads.
+- **No more black frames between slides.** Each segment faded to black (0.3 s) and the next faded in from black (0.25 s) ≈ 0.55 s of black at every page change. Now: hard **cut** by default (only the last segment keeps its outro fade; the first gets the cover dissolve above), plus an optional **cross-dissolve** (`script.json` → `"transition": {"type":"xfade","duration":0.4}`, or `--transition xfade`). The dissolve never passes through black: each segment holds `duration` extra tail frames, which the xfade consumes, so the total duration still equals `timings.total`. The play page compares the two live (bottom-bar toggle / `T`).
+- **Speech rate: default 1.1, and the audition now asks.** Default was `speed 1.0` (≈4.8 Chinese chars/sec) — field feedback: "the default pace is a bit slow". Default is now **1.1** (≈5.3 chars/sec; first/last slides 1.05) across SKILL.md, `tts-and-timing.md`, `authoring.md`, the project template and evals. More importantly the **audition step asks two questions at once**: the three candidate voices *and* the same probe line in the chosen voice at three speeds (1.05 / 1.15 / 1.25); the answer is written to `script.json` (`speed`), and `plan-timings.mjs` now **reads that field** (it used to be declarative only) and warns when the measured rate deviates >20% from `baseline × speed`, or when speed is outside 0.8–1.4.
+- **Gate 4 now simulates the preview and asks two more questions.** After the HTML is done: ① slide transition (cut / dissolve / custom duration — comparable live in the play page) ② entrance layering (title + sub-info all at once, or staged as `data-stage` does today). `check-slides.mjs` prints the current transition value and each slide's level count so the agent asks with real numbers instead of impressions. To collapse staging, set the layers to the same stage and re-run `capture --mode motion` for that slide.
+- **Self-check gained three visual gates** (all fail the run non-zero): cover embedded, first-frame luma above black level, and no black frame around any cut point.
+- Tests **171 → 174** (new `cover-transition.test.mjs`: cover present + `attached_pic` stream + non-black first frame + no black at cuts in both cut and xfade modes + duration unchanged + a single-level slide still renders), all green with 0 skips.
+
+**Documentation is now English.** SKILL.md, all six references, CHANGELOG and THIRD-PARTY-NOTICES are written in English so the skill is usable outside Chinese-language teams; `README.zh-CN.md` stays Chinese. Source examples were internationalised at the same time: the announcement/media screenshot path and the source tiering now give **both** international (Reuters, AP, Bloomberg, FT, WSJ, BBC, CNBC) and Chinese (Xinhua, CCTV, The Paper, Caixin, Tencent News, Sina, NetEase) examples, ranked by primary-ness and editorial accountability rather than by country; the regulated-topic guide names jurisdictions (SEC/FTC/FDA, FCA/ESMA/EMA, CSRC/NMPA/SAMR) and states the up/down colour convention per market instead of assuming one.
+
 ## 1.5.0 — 2026-09-18
 
-**第二轮评审整改:输出收监、网络边界的真实请求点、字幕时间轴(3 个 P1 + 4 个 P2)**
+**Round-2 review fixes: output containment, the network boundary at the real request point, the subtitle timeline (3 P1 + 4 P2)**
 
-- **[P1] 字幕时间轴(实测复现的成片缺陷)**:字幕是"全时长百分比动画",而逐帧只覆盖动画窗,其余靠 `tpad` 冻尾帧 —— **动画窗之后的字幕变化永远进不了画面**(实测:SRT 第 4 句在 5.32s,6.0s 的帧仍显示第 2 句);`no-fx`/静态路径更是 `finish()` 把字幕动画跳到 `opacity:0`,整片一帧字幕都没有。现 capture 逐句输出"终态基底 + 该句字幕"静态图(`build/substills/<id>/`,清单 `build/substills/<id>.json` 记 `framesCover` 与每段窗口),build-video 用 `concat` 把"帧序列段 + 各字幕段"拼成整张(段长之和必须等于整张时长,由既有自检背书)。回归测试用**逐像素判据**:成片在第二句窗内的画面必须贴合第二句字幕图(实测 0.93)、远离第一句(7.0);旧行为下这两个数值正好反过来(0.99 / 7.1)——测试会红。
-- **[P1] 输出收监(第二类越界)**:此前只收监输入路径;派生输出(`preview/`、`build/frames/<id>/`)是"项目内固定位置 + 受监 id",但**项目内的目录段本身可能是指向项目外的符号链接**,`rmSync(recursive)` 会穿透它删到项目外而命令报成功。新增 `tools.assertContained/safeOut`(逐段已存在祖先的 realpath 必须仍在 root realpath 内),接到 capture(帧目录递归删除、preview 写入)、build-video(out/build/asr 写入与清理)、preview-page、plan-timings、grab-frames 的全部写删点。canary 回归测试(Windows 用 junction 免管理员建链)断言"命令必须拒绝 + canary 完好"。
-- **[P1] 网络边界落到真实请求点**:原来只校验"最初输入的那个 URL"。现 `url-policy.assertResolvedHost` 对**每个真实请求**做 DNS 解析后再验 IP(页面导航、Chromium 自己跟随的 30x 重定向、浏览器子资源、逐跳图片下载);浏览器侧走 `context.route` 拦截 + 域名级解析缓存。端到端测试断言"被拒目标必须收到 0 个请求",并用可注入的假解析器覆盖 rebinding 场景(无需真 DNS)。
-- **[P2] ASR 请求错误计入失败**:鉴权/限流/网络失败此前只进 `results` 不进统计,`1 通过 / 0 不通过 / 退出 0` 把闸门放过去了。现单独计数、不计入通过、整轮非零退出并点名是哪几段。
-- **[P2] 放映页属性解析认三种写法**:`<html class='theme' style='--t2:800ms'>`(单引号)与无引号属性此前不被识别,会再插一组重复属性,浏览器保留**先出现的那组** → 实测延迟/画布尺寸/no-fx 全部失效。现就地改写且不产生重复属性。
-- **[P2] ffmpeg 发现补 cwd 与项目目录**:README 明说支持把 `ffmpeg-static`/`ffprobe-static` 装在视频项目里,但 `tools.mjs` 不查 `process.cwd()`,且 `prep-image.mjs`/`asr.mjs` 不传项目目录 → "项目里明明装了却报找不到"。现两处都传,并有源码级防回退断言。
-- **[P2] --out-dir 用规范化路径比较**:macOS 上 `/var/...` 与 `/private/var/...` 是同一目录,纯字符串比较会把项目内的合法路径误判成越界(官方 CI 的 macOS 环境实测踩到);现取最深已存在祖先的 realpath 再比。
+- **[P1] Subtitle timeline (a finished-video defect reproduced by measurement)**: subtitles are "full-duration percentage animations", while the frame sequence only covers the animation window and the rest was frozen on the last frame by `tpad` — so **every subtitle change after the animation window never made it into the picture** (measured: SRT clause 4 sits at 5.32s, yet the frame at 6.0s still shows clause 2); on the `no-fx`/static path it is worse — `finish()` jumps the subtitle animation to `opacity:0`, so the whole video carries not one subtitle frame. capture now emits, per clause, a "final-state base + that clause's subtitle" still (`build/substills/<id>/`, with a manifest `build/substills/<id>.json` recording `framesCover` and every clause's window), and build-video uses `concat` to stitch "frame-sequence segments + the subtitle segments" into the whole slide (the segment lengths must sum to the slide duration, backed by the existing self-check). The regression test uses a **pixel-level criterion**: inside clause 2's window the finished video must match clause 2's subtitle still (measured 0.93) and stay far from clause 1's (7.0); under the old behaviour those two numbers invert exactly (0.99 / 7.1) — the test goes red.
+- **[P1] Output containment (the second class of escape)**: only input paths used to be contained; derived output (`preview/`, `build/frames/<id>/`) is "a fixed position inside the project + a validated id", but **a directory segment inside the project can itself be a symlink pointing outside it**, and `rmSync(recursive)` deletes straight through it while the command reports success. New `tools.assertContained/safeOut` (the realpath of every existing ancestor segment must still sit inside the root's realpath), wired into every write/delete site in capture (frame-directory recursive delete, preview writes), build-video (out/build/asr writes and cleanup), preview-page, plan-timings and grab-frames. The canary regression test (on Windows the link is made with a junction, no administrator needed) asserts "the command must refuse + the canary is intact".
+- **[P1] The network boundary now sits at the real request point**: previously only "the one URL supplied at the start" was validated. Now `url-policy.assertResolvedHost` resolves DNS and then validates the IP for **every real request** (page navigation, the 30x redirects Chromium follows on its own, browser subresources, per-hop image downloads); on the browser side it hooks `context.route` with a per-hostname resolution cache. The end-to-end test asserts "a refused target must receive 0 requests", and an injectable fake resolver covers rebinding scenarios (no real DNS needed).
+- **[P2] ASR request errors count as failures**: authentication / rate-limit / network failures used to land in `results` without entering the tally, and `1 通过 / 0 不通过 / 退出 0` slipped the gate through. They are now counted separately, excluded from the pass count, and the whole run exits non-zero naming the affected segments.
+- **[P2] The play page's attribute parsing accepts three quoting styles**: `<html class='theme' style='--t2:800ms'>` (single quotes) and unquoted attributes were not recognised, so a second, duplicate set of attributes was injected — and the browser keeps **the group that appears first** → the measured delay, the canvas size and `no-fx` all failed. The attribute is now rewritten in place and no duplicates are produced.
+- **[P2] ffmpeg discovery gained cwd and the project directory**: the README states that installing `ffmpeg-static`/`ffprobe-static` inside the video project is supported, but `tools.mjs` never looked at `process.cwd()`, and `prep-image.mjs`/`asr.mjs` never passed the project directory → "it is installed in the project, yet it reports not found". Both are now passed, with a source-level assertion against regressions.
+- **[P2] `--out-dir` compares canonical paths**: on macOS `/var/...` and `/private/var/...` are the same directory, and a plain string comparison misread a legitimate in-project path as an escape (hit for real on the official CI's macOS environment); the check now takes the realpath of the deepest existing ancestor before comparing.
 
-**同批并入的审计修复(1.4.0 之后、未单独发版)**
+**Audit fixes folded into the same batch (after 1.4.0, never released on their own)**
 
-- `preview-page`:tokens.css 补 2MB 上限(与 check-slides/init-project 同一道门 —— 6MB 输入实测曾跑 129s)、`script.width/height` 数值校验(误写字符串会直接杀死放映页脚本)、片头/片尾边界的 no-op(末张按 → 不再把该张重置回第 1 级重播)、文件名含 `?`/`#` 时退回整张播放(步进查询串会失效)、子目录 slide 明确跳过并说明。
-- `build-video`:`bgm.volume/fadeIn/fadeOut` 与 `fps` 全部数值校验(与 `width/height` 同一注入面 —— 此前只有 W/H 管了);校验提前到编码之前(坏配置立刻失败,不等渲完几分钟)。
-- `asr`:`String.replace` 改函数替换串(转写文本里的 `$&`/`$1` 会污染 checklist)。
-- **模板根治**:`.fx-stagger` 的九条规则全部加 `:not([data-stage])` —— `nth-child` 延迟特异度(0,2,0)高于 fx 类(0,1,0),此前会静默覆盖容器内带 `data-stage` 子元素的入场时刻(实测提前 3 秒冒头)。
-- `check-slides` 新增两项闸门:**5d** `.fx-stagger` 与 `data-stage` 同张共存(提示确认布局)、**5e** 绝对定位 `bottom` 落在字幕带(实测最贵的一类:still 预览看不出,成片里字幕压图注)。
-- 新增 **`grab-frames.mjs`**(第 12 个 CLI):按 `timings.json` 算每张绝对起点,从 `out/final.mp4` 抽帧核对 —— "still 看不出来、只有成片里才见"那类问题的最终对账手段。
-- 测试 **151 → 171 例**(新增 `review-round2.test.mjs` + 字幕时间轴两条端到端 + grab-frames 冒烟),全绿 0 skip。
+- `preview-page`: a 2MB cap on tokens.css (the same gate as check-slides/init-project — a 6MB input once ran 129s in measurement), numeric validation of `script.width/height` (a string written by mistake kills the play page's script outright), no-ops at the first/last-slide boundaries (pressing → on the last slide no longer resets it to level 1 and replays it), falling back to whole-slide paging when the filename contains `?`/`#` (the stepping query string breaks), and slides in subdirectories are skipped with an explicit explanation.
+- `build-video`: `bgm.volume/fadeIn/fadeOut` and `fps` are now all numerically validated (the same injection surface as `width/height` — previously only W/H was covered); validation moved ahead of encoding (a bad config fails at once instead of after minutes of rendering).
+- `asr`: `String.replace` now uses a function replacement string (a `$&`/`$1` inside the transcript would corrupt the checklist).
+- **Root fix in the template**: all nine `.fx-stagger` rules gained `:not([data-stage])` — the `nth-child` delay's specificity (0,2,0) is higher than the fx class's (0,1,0), and it silently overrode the entrance moment of `data-stage` children inside the container (measured: they popped up 3 seconds early).
+- `check-slides` gained two gates: **5d** `.fx-stagger` and `data-stage` coexisting on one slide (a prompt to confirm the layout), and **5e** an absolutely positioned `bottom` falling inside the subtitle band (the most expensive class in measurement: invisible in the still preview, and in the finished video the subtitles sit on the figure caption).
+- New **`grab-frames.mjs`** (the 12th CLI): computes each slide's absolute start from `timings.json` and pulls frames from `out/final.mp4` to check them — the final reconciliation tool for the class of problem "a still cannot show it, only the finished video reveals it".
+- Tests **151 → 171** (new `review-round2.test.mjs` + two end-to-end subtitle-timeline cases + a grab-frames smoke test), all green with 0 skips.
 
 ## 1.4.0 — 2026-09-18
 
-**放映页交互模型重做:动效开 = 手动逐级入场**
+**Play page interaction model reworked: animations on = manual level-by-level entrance**
 
-- 实测反馈:动效开时 ←/→ 只能切整张,二级小标题/小图表只能干等它们到点自己出现,不符合体感。现**动效开时 → = 先出下一级**(下一级当场动画入场,出完才翻下一张;← 逐级回退,回退不重播动画直接终态);动效关仍是整张切换。
-- **逐级实现**:快照副本 `<head>` 注入一段在 CSS 动画启动前执行的脚本,按 `?s=k` 重设各级 `--tN` 延迟——已过级 `-60s`(终态)、当前级 `0ms`(当场入场)、未来级 `+60s`(保持隐藏等按键);父页只换 iframe src,与快照同一套机制,无跨文档访问(file:// 下 iframe 为独立源)。顶栏页码显示当前级(如 `1 / 8 · 级 2/3`)。
-- **重播按钮与 R 键移除**(逐级步进下重播没有意义);触屏条前后箭头加大(76px 宽、24px 字号,实测反馈太小)。
-- **换帧不再闪白**(实测反馈:切大页白屏一闪):改为双缓冲——两张叠放 iframe,新地址先喂给隐藏帧,`load` 后再等两帧 rAF(新文档首帧已画)才对调显示,旧画面始终在屏;逐级换帧同理受益。
-- **UI 双语**(实测反馈:英文项目整套中文按钮):按钮/提示/面板标题/占位文案随 `script.json` 的 `lang` 中英自适应(`en*` → Motion on / Narration on / Overview…),终端输出仍为中文(agent 视角)。
-- **开关移到底栏且写明状态**(实测反馈:"动效/口播"看不出现在是开还是关,顶部开关多余):底栏按钮直接写"动效开/动效关""口播开/口播关"(关态亮警示色),桌面也常显,顶部动效开关移除。
-- 测试 +5(开关文案与顶部移除/双缓冲结构与等帧顺序/**行为级**用例:?s=1 二级必须还在等、?s=2&anim=1 当场入场、回退直接终态/英文页整套文案不混中文;断言失败也 finally 关浏览器——否则事件循环挂着 runner 永不退出,实测踩过),全套 **151 例**。SKILL.md / render.md 的放映页操作说明同步;另经 Playwright 活体验证(双缓冲稳态恰好一帧可见、X/P 开关翻转、en 页文案)。
+- Measured feedback: with animations on, ←/→ could only turn whole slides, and second-level sub-headings or small charts had to be waited for as they appeared on schedule — that does not match the feel. Now **with animations on, → reveals the next level first** (the next level animates in on the spot, and only once it is out does the page turn; ← steps back level by level, and stepping back does not replay animation but goes straight to the final state); with animations off it still turns whole slides.
+- **How level stepping works**: a script injected into the snapshot copy's `<head>` runs before the CSS animations start and, given `?s=k`, resets each level's `--tN` delay — passed levels at `-60s` (final state), the current level at `0ms` (enters on the spot), future levels at `+60s` (stay hidden until the key is pressed); the parent page only swaps the iframe src, the same mechanism as the snapshot, with no cross-document access (under file:// the iframe is a separate origin). The top bar's page number shows the current level (e.g. `1 / 8 · 级 2/3` — page 1 of 8, level 2 of 3).
+- **Replay button and the `R` key removed** (under level stepping, replay has no meaning); the touch bar's forward/back arrows enlarged (76px wide, 24px type — measured feedback: too small).
+- **Frame switching no longer flashes white** (measured feedback: a big slide change flashed a white screen): now double-buffered — two stacked iframes, the new address is fed to the hidden one first, and only after `load` plus two more rAF frames (the new document's first frame has painted) do they swap for display, so the old picture is always on screen; level stepping benefits from the same.
+- **Bilingual UI** (measured feedback: an English project got a whole set of Chinese buttons): buttons / hints / panel titles / placeholder copy adapt between Chinese and English from `script.json`'s `lang` (`en*` → Motion on / Narration on / Overview…), while terminal output stays Chinese (the agent's view).
+- **Toggles moved to the bottom bar, labelled with their state** (measured feedback: "动效/口播" gives no clue whether it is on or off, and the top-bar toggle is redundant): the bottom-bar buttons read "动效开/动效关" "口播开/口播关" (motion on / motion off, narration on / narration off — the off state lit in a warning colour), shown on desktop too, and the top-bar animation toggle is removed.
+- Tests +5 (the toggle labels and the top-bar removal / the double-buffer structure and frame-wait order / **behaviour-level** cases: at `?s=1` level 2 must still be waiting, at `?s=2&anim=1` it enters on the spot, stepping back goes straight to the final state / an English page's copy contains no Chinese; a failed assertion also closes the browser in `finally` — otherwise the event loop keeps the runner alive forever, hit in measurement), **151 tests** in total. The play-page instructions in SKILL.md / render.md were kept in sync; also verified live through Playwright (in steady state the double buffer shows exactly one frame, the X/P toggles flip, the en page's copy).
 
 ## 1.3.7 — 2026-09-18
 
-**开工对齐清单重排 + Gate 3 补"选素材/补充素材"问**
+**Kickoff alignment checklist reordered + Gate 3 gained the "pick assets / add assets" questions**
 
-- 开工必问清单按用户实测反馈重排为 11 项:**新增"受众"**(专业从业者/泛科技大众/管理层汇报/客户演示/内部培训 —— 决定术语密度与口吻,此前只藏在"主题与领域"里没单列);**新增"敏感内容与免责"**(免责追问从"仅受监管领域"扩展到财经观点/医疗/法律/政策/负面事件报道/个人信息任一命中,默认要);"素材边界"改名"**配图与素材边界**"(先问要不要配图,负面事件加问公告/新闻截图);"音色"标注"大致方向即可";行名补齐"主题色/长宽比"字样。
-- **Gate 3 改为三问**(素材收集走完、事实与候选图到手之后):① 逐张挑"用哪些";② **"有没有要补充的素材"** —— 链接/截图/logo/图片/数据文件/参考口播稿都可以交给 agent,用户提供的素材优先级最高(图片过 `prep-image --check`、MANIFEST 登记"来源:用户提供",链接按路径 A/B/D 落盘);③ 来源与授权确认。此前 Gate 3 只有整体确认,用户没有逐张挑选与补充素材的入口。
+- The must-ask kickoff checklist was reordered into 11 rows per the user's measured feedback: **new "Audience"** (domain professionals / general tech-savvy public / management briefing / client demo / internal training — it decides term density and tone of voice, and previously hid inside "Topic and domain" without a row of its own); **new "Sensitive content and disclaimer"** (the disclaimer question expanded from "regulated domains only" to any hit of financial opinions / medical / legal / policy / negative-event reporting / personal information, default yes); "Asset boundaries" renamed to "**Images and asset boundaries**" (ask whether images are wanted at all first, and for negative-event subjects add the announcement/news-screenshot question); "Voice" annotated "a rough direction is enough"; row titles completed with the "theme color" / "aspect ratio" wording.
+- **Gate 3 became three questions** (once asset collection is done and both the facts and candidate images are in hand): ① pick "which ones to use" slide by slide; ② **"is there anything to add"** — links / screenshots / logos / pictures / data files / a reference voiceover script can all be handed to the agent, and user-provided assets have the highest priority (images pass `prep-image --check` and are registered in MANIFEST as "source: user-provided", links go to disk per paths A/B/D); ③ confirm sources and licensing. Previously Gate 3 had only a blanket confirmation, leaving the user no way in to pick slide by slide or to add assets.
 
 ## 1.3.6 — 2026-09-18
 
-**开工对齐"素材边界"补负面事件加问项**
+**Kickoff alignment's "asset boundaries" gained the negative-event question**
 
-- 实测踩坑:负面新闻稿视频,agent 问了主题/图表/受众,但没问"要不要新闻或媒体平台截图当配图"—— 路径 D(1.3.4)写进了取图 SOP,却没接进开工必问清单,不问就只剩纯排版。现"素材边界"行加注:**负面事件题材(暴雷/处罚/诉讼/争议)必须加问一句"要不要用公告或新闻报道截图当配图"**(默认建议:要,1–2 张,来源分级与截图纪律见 image-sources.md 路径 D)。
+- Hit in measurement: for a negative-news video the agent asked about topic / charts / audience but never "do you want news or media-platform screenshots as illustrations" — path D (1.3.4) had been written into the image SOP, but was never wired into the must-ask kickoff checklist, so without the question nothing was left but pure typography. The "asset boundaries" row now carries a note: **for negative-event subjects (collapse / penalty / lawsuit / controversy) one more question is mandatory — "do you want announcement or news-report screenshots as illustrations"** (default suggestion: yes, 1–2; source tiering and screenshot discipline in image-sources.md path D).
 
 ## 1.3.5 — 2026-09-18
 
-**铁律 4 措辞收紧:开工对齐必须是"问、等答",不许打包告知默认值**
+**Iron rule 4 tightened: kickoff alignment must be "ask, then wait for the answer" — never a packaged announcement of defaults**
 
-- 实测踩坑:mcode 里 agent 把必问清单执行成了"一条消息甩出『默认项(不特别说的话就按这个):中文普通话 · 中文字幕 · 1920×1080 · 温润男声 · 10–12 张…』然后继续推进"—— 用户没有逐项表态的机会,等于没对齐。根因是旧措辞"(用户没答的项可用默认值,但**必须先问**)"留下了"先告知、不反对即同意"的解读空间。
-- 现规则改为:第一次响应 = 把问题**以问句形式逐项问出来,然后停下等回答**;每项可附推荐默认值,但必须是"问、等答";只有用户明确说"按默认"或没答到的项才用默认,且进入下一步前复述"最终采用了哪些默认"。并把实测反例原文写进 SKILL.md 作为禁例。
+- Hit in measurement: inside mcode the agent turned the must-ask checklist into "one message firing out a default block and then pressing on" — the message read 『默认项(不特别说的话就按这个):中文普通话 · 中文字幕 · 1920×1080 · 温润男声 · 10–12 张…』 ("Defaults (unless you say otherwise, these apply): Mandarin Chinese · Chinese subtitles · 1920×1080 · warm male voice · 10–12 slides…") — the user never got the chance to take a position on each item, which amounts to no alignment at all. The root cause was the old wording "(items the user does not answer may take the default, but you **must ask first**)", which left room to read it as "inform first; no objection means consent".
+- The rule now reads: the first response = **ask each question, one by one, in question form, then stop and wait for the answers**; each item may carry a recommended default, but it must be "ask, then wait"; only items the user explicitly answered "go with the defaults" or left unanswered take the default, and before moving to the next step you restate "which defaults were finally adopted". The verbatim counter-example from the field was written into SKILL.md as a prohibited case.
 
 ## 1.3.4 — 2026-09-18
 
-**配图 SOP 新增"路径 D · 公告与权威报道截图"(负面事件题材)**
+**Image SOP gained "path D · announcement and authoritative-coverage screenshots" (negative-event subjects)**
 
-- 暴雷 / 监管处罚 / 诉讼 / 翻车争议类题材,公司官网不可能提供素材(路径 A/B 必然落空)—— 此前 SOP 没有覆盖这条真实路径。新增路径 D:素材取自**事件本身的一手载体**,按"交易所公告 / 监管文书 > 公司官方声明 > 媒体报道"分级;**一线权威(新华社/央视/澎湃)与主流门户(腾讯新闻/新浪/网易/凤凰等)均为合格来源**,排除的只有自媒体、聚合号、内容农场。
-- 截图纪律:画面必须保留媒体名与日期(裁掉来源的截图不可用)、Cookie 横幅先关、只截正文区;落盘 `assets/` + MANIFEST 登记"来源 URL / 发布日期 / 报道性合理引用";入画 `.img-frame.contain` + `.img-cap` 注明来源;负面财经题材同受 compliance.md 约束。附 Playwright 截图最小命令(等懒加载后截 article/main 正文区,内置浏览器 screenshot 同理)。
-- SKILL.md Phase 3 优先级链与合规自查同步;题材索引新增"暴雷 / 监管处罚 / 诉讼 / 翻车争议 → 路径 D"。
+- For collapse / regulatory penalty / lawsuit / scandal subjects the company's official site can never supply the assets (paths A/B are guaranteed to fail) — and the SOP did not cover this real path. New path D: assets come from **the primary carrier of the event itself**, tiered as "exchange filings / regulatory documents > company official statements > media coverage"; **top-tier authorities (Xinhua / CCTV / The Paper) and mainstream portals (Tencent News / Sina / NetEase / Phoenix and the like) are all qualified sources**, and the only things excluded are self-media, aggregator accounts and content farms.
+- Screenshot discipline: the frame must keep the outlet name and date (a screenshot with the source cropped away is unusable), close the cookie banner first, capture the article body only; save to `assets/` + register in MANIFEST with "source URL / publication date / reasonable reporting-based citation"; bring it into the frame with `.img-frame.contain` + `.img-cap` naming the source; negative financial subjects are equally bound by compliance.md. A minimal Playwright screenshot command is included (wait for lazy loading, then capture the article/main body area — the built-in browser's screenshot works the same way).
+- SKILL.md's Phase 3 priority chain and compliance self-check were kept in sync; the subject index gained "collapse / regulatory penalty / lawsuit / scandal → path D".
 
 ## 1.3.3 — 2026-09-18
 
-**工作流:Gate 1 呈现格式补"表格与动效"列**
+**Workflow: Gate 1's presentation format gained the "table and animation" column**
 
-- 实测反馈:Gate 1 给用户过的表此前只有「版式 / 画面 / 口播」,用到表格原语或有入场动效的张没有说明 —— 用户要凭空想象,等 Gate 4 才第一次看到动起来的样子,不满意就返工到最贵的渲染前一步。现 Gate 1 呈现格式定为「# / 版式 / 画面 / **表格与动效** / 口播逐字稿」,**表格与动效列必填**:表格张要说明形态(几行几列、用哪个原语、高亮哪行/列);动效张要点名效果与次序(逐项淡入错峰 / 数字滚动 / 条形依次生长等)。
+- Measured feedback: the table the user reviewed at Gate 1 previously held only "layout / frame / narration", and slides using table primitives or carrying entrance animations were left unexplained — the user had to imagine them, saw them move for the first time only at Gate 4, and dissatisfaction meant rework at the most expensive step before rendering. Gate 1's presentation format is now "# / layout / frame / **table and animation** / verbatim voiceover script", and **the table-and-animation column is mandatory**: table slides must state their shape (how many rows and columns, which primitive, which row/column is highlighted); animation slides must name the effect and the order (staggered fade-in item by item / a rolling number / bars growing one after another).
 
 ## 1.3.2 — 2026-09-18
 
-**工作流:开工对齐新增"数据与图表"必问项**
+**Workflow: kickoff alignment gained the mandatory "data and charts" row**
 
-- 铁律 4 的开工必问清单此前没有图表入口:图表工具箱(1.1–1.2 期间合入)只藏在 Phase 1/4 的文档里,题材含数据时 agent 不一定想到问。现新增一行"**数据与图表**":题材含关键数字 / 对比 / 占比 / 趋势时必问 —— ①有没有值得单独成张的可视化数据;②要不要图表张、大约几张(默认建议:有硬数据且版式合适 → 1–2 张);③样式偏好(横向条形 / 柱状 / 环形 / 折线 / 进度条,或按数据形态让 agent 选);④图上数字同受 Gate 0 约束(≥2 独立来源、带口径与时点)。**就算用户没提图表,数据密集题材也要主动给这个选项**。
-- Phase 1 内容量硬规则新增"**数据密集的题材主动做图**":口播出现 ≥2 个可比数字 / 占比 / 趋势时优先 `data-viz` 版式 + 图表工具箱,而不是把数字罗成 bullets;柱高 / 条长由数值算出(九条纪律)。
+- Iron rule 4's must-ask kickoff checklist had no entry point for charts: the chart toolkit (merged during 1.1–1.2) hid only in the Phase 1/4 documents, so when the subject contained data the agent did not necessarily think to ask. A new row "**Data and charts**" was added: mandatory when the subject contains key numbers / comparisons / proportions / trends — ① is there any data worth a slide of its own as a visualisation; ② do you want chart slides, and roughly how many (default suggestion: hard data + a suitable layout → 1–2 slides); ③ style preference (horizontal bars / columns / donut / line / progress bar, or let the agent pick per the data shape); ④ numbers on the chart are equally bound by Gate 0 (≥2 independent sources, with scope and point in time). **Even if the user does not raise charts, data-dense subjects must be offered this option proactively**.
+- Phase 1's content-volume hard rules gained "**for data-dense subjects, proactively make charts**": when the voiceover contains ≥2 comparable numbers / proportions / trends, prefer the `data-viz` layout + chart toolkit over listing the numbers as bullets; bar heights / bar lengths are computed from the values (the nine disciplines).
 
 ## 1.3.1 — 2026-09-18
 
-**文档:调研链路的环境归属与工具开放性**
+**Docs: which environment owns each research tool, and how open the toolset is**
 
-- 两套工具链对照表的**调研行**此前漏了 mcode 内置浏览器(mcode 列只有 `web_search`/`web_fetch`,而素材配图行却有内置浏览器——同一张表口径不一):现 mcode 列补"SPA/JS 渲染页用**内置浏览器**打开取正文",另一列补"SPA 页用项目内 Playwright **无头浏览器**渲染取正文"。素材配图行的"同上"也改为明确说明(本环境用 `fetch-official-images`,自带 Playwright 无头渲染)。
-- Phase 0"正文怎么取"标注环境归属:**mcode 内置浏览器**(mcode 环境的宿主能力)vs **Playwright 无头浏览器**(任一环境);research.md 的搜索工具表与 SPA 行同步。
-- 明确**工具开放、纪律不变**:本机装了其他搜索技能/插件、或任何无头浏览器,哪个抓得到正文就用哪个(先试一次确认返回质量再依赖);来源分级、两源交叉、口径标注的纪律一条不少。research.md 工具表新增"任一环境 | 本机装的其他搜索技能/插件"一行。
+- The two-toolchain comparison table's **research row** was missing mcode's built-in browser (the mcode cell held only `web_search`/`web_fetch`, while the image row did list the built-in browser — the same table, two different standards): the mcode cell now adds "for SPA/JS-rendered pages, open them in the **built-in browser** to read the body text", and the other cell adds "for SPA pages, render the body text with the project's Playwright **headless browser**". The image row's "same as above" became an explicit statement too (this environment uses `fetch-official-images`, which ships its own Playwright headless rendering).
+- Phase 0's "how to get the body text" now marks each environment's owner: the **mcode built-in browser** (a host capability of the mcode environment) vs the **Playwright headless browser** (any environment); research.md's search-tool table and SPA row were kept in sync.
+- Made explicit that **the tools are open, the discipline is not**: if other search skills/plugins are installed on this machine, or any headless browser, use whichever one can pull the body text (try it once to confirm result quality before depending on it); source tiering, two-source cross-checking and scope labelling lose not one rule. research.md's tool table gained the row "any environment | other search skills/plugins installed on this machine".
 
 ## 1.3.0 — 2026-09-18
 
-**三维审计(文档对齐 / 安全 / 流程)修复:1 个高危 SSRF + 竖版放映页 + 一批流程断点**
+**Three-axis audit fixes (doc alignment / security / process): one high-severity SSRF + the vertical play page + a batch of process breaks**
 
-- **安全 · IPv4-mapped IPv6 十六进制形式绕过出网拦截(高危,实测穿透)**:WHATWG URL 会把 `http://[::ffff:127.0.0.1]/` 的 hostname 规范化成 `::ffff:7f00:1` 再送检,旧的 mapped 处理只剥前缀、剩余 hex 组落不进任何拦截规则 —— loopback / 私网 / 云元数据(`::ffff:a9fe:a9fe`)全部可以借此绕过 `fetch-official-images` 的 SSRF 防线(端到端实测打到了本地服务器)。现换算回点分 IPv4 再判;公网映射形式(`::ffff:808:808` = 8.8.8.8)仍放行。`fetch-policy` 补经 `new URL()` 规范化路径的负例。
-- **放映页 iframe 强制相对解析**:slide 文件名含 `:`(如 `javascript:alert(1).html`,Linux/macOS 合法)时 `iframe.src` 会被当 URL scheme 在放映页同源执行;现在一律加 `./` 前缀。
-- **竖版(1080×1920)放映页修复**:舞台 `#fit/#frame` 尺寸、缩放除数、总览缩略图比例原先写死 1920×1080,竖版 Gate 4 画面被切掉近半;现全部按 `script.json` 画布参数化。authoring.md 补竖版字幕安全区数值(底部约 150–215px、居中约 787px 宽,`padding-bottom: 240px` 起步)。
-- **still 复截静默吞动画**:capture 在 still 路径作废该张帧目录(防旧帧污染)后,build-video 回退静态图出片此前零提示;现在点名 ⚠ 并给出补跑命令(`capture --mode motion --ids <id>`)。render.md"视觉验证三件套"与 SKILL.md Phase 5 同步写明"still 复看后必须对同 ids 重跑 motion"。
-- **受管块机制补强**:① 内容比较统一 LF 归一(git autocrlf 检出的 CRLF 文件此前会误报三段"被手工改过");② 升级动作分两阶段(先全部按 rev 原地替换、再对结果重估补齐)——病态布局下"nofx 裸文本嵌在 chart 旧块内"不再出现"上次报成功、下次又报落后"的自不一致;③ `.bak` 已存在时显式警告再覆盖;④ 超过 2MB 的 tokens.css / slide HTML 拒绝扫描(构造输入会让受管块定位二次方变慢,4MB 实测 39 秒);⑤ `--upgrade-css` 输出末尾点名"已生成的 preview/frames/out 仍是旧 CSS 画面"的重跑清单。
-- **流程补点(SKILL.md)**:工作流新增"恢复老项目先跑 `--check-css`"一步(含 Phase 判定标志与升级后重跑矩阵);Phase 4 检查序列补条件项 check-theme(改过 tokens.css 时,对比度问题不再漏到最贵的 Gate 5);Phase 6 交付清单补 `out/subs.srt` 与 `build/timings.json`;init-project 尾注的 Gate 编号修正(终态预览 = Gate 4);Gate 2 验收物不再写死"8 段音频";check-slides 5c 的 `--check-css` 指引限定为工具箱场景。
-- **文档对齐**:插件包顶层 THIRD-PARTY-NOTICES.md 与技能内副本同步(此前漏同步为旧版);README 验证段改为两种仓库语境(monorepo / 独立技能仓)都成立的命令;authoring.md 图表纪律标题"六条"改"九条"并修正 8/9 顺序;evals 修正 4 处(id24 动效口径更新为 `fx-sweep`/`fx-grow-w`、id0 的 Gate 编号、断号重排、补齐 `files` 字段);SKILL.md 脚本表补列实存开关(`--topic`/`--ids`/`--pacing`/`--min`/`--json`/`--dsf`)。
-- 测试 **132 → 146 例**(fetch-policy +6、css-kit +4、preview-page +3、render-smoke +1),本地全绿。
+- **Security · the hexadecimal IPv4-mapped IPv6 form slipped past the egress block (high severity, penetrated in measurement)**: the WHATWG URL parser normalises `http://[::ffff:127.0.0.1]/`'s hostname to `::ffff:7f00:1` before it reaches the check, while the old mapped-address handling only stripped the prefix and the remaining hex groups matched no block rule — loopback / private networks / cloud metadata (`::ffff:a9fe:a9fe`) could all slip past `fetch-official-images`' SSRF line this way (the end-to-end measurement reached a local server). The address is now converted back to dotted IPv4 before the check; the public mapped form (`::ffff:808:808` = 8.8.8.8) is still allowed through. `fetch-policy` gained negative cases that go through the `new URL()` normalisation path.
+- **The play page's iframe forces relative resolution**: when a slide filename contains `:` (e.g. `javascript:alert(1).html`, legal on Linux/macOS), `iframe.src` was treated as a URL scheme and executed same-origin in the play page; a `./` prefix is now always added.
+- **Vertical (1080×1920) play page fixed**: the stage `#fit/#frame` dimensions, the scale divisor and the overview thumbnail ratio were hard-coded to 1920×1080, so the vertical Gate 4 picture was cut off by nearly half; they are now all parameterised from `script.json`'s canvas. authoring.md gained the vertical subtitle-safe-area numbers (≈150–215px from the bottom, ≈787px wide centred, starting from `padding-bottom: 240px`).
+- **A still re-capture silently swallowed the animations**: after capture invalidates that slide's frame directory on the still path (to prevent stale-frame contamination), build-video's fallback to a static image used to ship with no warning at all; it now names the slide with a ⚠ and gives the command to re-run (`capture --mode motion --ids <id>`). render.md's "three-piece visual verification" and SKILL.md's Phase 5 were updated to state "after re-checking in still mode you must re-run motion for the same ids".
+- **The managed-block mechanism hardened**: ① content comparison is normalised to LF uniformly (a CRLF file checked out by git autocrlf used to false-positive all three blocks as "hand-edited"); ② the upgrade runs in two passes (replace everything in place by rev first, then re-assess the result and fill the gaps) — under a pathological layout, "nofx bare text nested inside an old chart block" no longer produces the self-inconsistency of "reported success last time, reported stale again this time"; ③ an existing `.bak` now warns explicitly before it is overwritten; ④ tokens.css / slide HTML over 2MB is refused a scan (crafted input makes managed-block location quadratic — 4MB measured at 39 seconds); ⑤ `--upgrade-css` ends its output by naming the re-run list for "generated preview/frames/out still show the old CSS".
+- **Process gaps filled (SKILL.md)**: the workflow gained the step "to resume an old project, run `--check-css` first" (including the Phase-detection markers and the post-upgrade re-run matrix); Phase 4's check sequence gained the conditional check-theme item (when tokens.css was changed, contrast problems no longer leak through to the most expensive Gate 5); Phase 6's delivery list gained `out/subs.srt` and `build/timings.json`; init-project's closing note had its Gate number corrected (final-state preview = Gate 4); Gate 2's acceptance artefacts no longer hard-code "8 audio segments"; check-slides 5c's `--check-css` pointer is scoped to the toolkit scenario.
+- **Doc alignment**: the plugin package's top-level THIRD-PARTY-NOTICES.md was resynced with the copy inside the skill (it had been left behind as an old version); the README's verification section now gives commands that hold in both repository contexts (monorepo / standalone skill repo); authoring.md's chart-discipline heading changed from "six" to "nine" and the order of items 8/9 was corrected; evals had 4 fixes (id24's animation wording updated to `fx-sweep`/`fx-grow-w`, id0's Gate number, renumbering after a gap, the missing `files` field filled in); SKILL.md's script table gained the flags that actually exist (`--topic`/`--ids`/`--pacing`/`--min`/`--json`/`--dsf`).
+- Tests **132 → 146** (fetch-policy +6, css-kit +4, preview-page +3, render-smoke +1), all green locally.
 
 ## 1.2.0 — 2026-09-18
 
-**CSS 工具箱受管块:把「改了 CSS 但项目里没生效」连根修掉**
+**CSS toolkit managed blocks: the root fix for "you changed the CSS but the project does not pick it up"**
 
-- 三个工具箱(`nofx-css.mjs` / `chart-css.mjs` / `table-css.mjs`)在项目 `tokens.css` 里改为**带内容 rev 的受管块**(`/* >>> html2video:<id> rev=<sha256> >>> */ … /* <<< html2video:<id> <<< */`),rev 对三段 CSS 内容求哈希 —— 内容变则 rev 变。
-- `init-project --upgrade-css` 从「存在性探针 + 追加」重写为**按 rev 原地替换**:块旧 / 被手工改过 → 原位换新;无定界但内容当前 → 原地包裹(位置不变);缺失 → 文件尾追加并提示旧规则会被后写覆盖。受管块之外的规则(含项目端覆写)一律不动,写前先备份 `tokens.css.bak`。旧实现的两类缺陷由此消除:补过一次就永远报「无需升级」、源模块后续改动永不传播;追加式升级压掉用户覆写并留下整份重复块。
-- 新增 `init-project --check-css`(只查不改,落后 / 缺失逐项报出并以退出码 1 结束);`check-slides` 增加两项提示级检查:tokens.css 工具箱落后(点名哪一段)、`class` 用了 `tokens.css` 与本张 `<style>` 都没有的类(静默无样式,`.grid g4` / `<p class="dim">` 那类坑)。
-- `preview-page` 的兜底注入从只有 no-fx 扩展到三个工具箱:no-fx 规则仍只注入「关动效」副本,图表 / 表格工具箱注入全部副本(否则旧规则会把新版画法渲染坏),页面与终端如实标注落后。
-- 修复 `.matrix` 高亮列不覆盖表头:`.matrix td.hi` → 同时覆盖 `.matrix th.hi`(`<th class="hi">` 此前静默拿不到背景,「我们」那一列看着只亮了一半)。
-- 文档修正:`authoring.md` 版式片段说明(布局骨架类来自每张内联 `<style>` 而非 tokens.css)、comparison 片段的 `<p class="dim">` 未定义类改为 `style="color:var(--muted)"`。
-- 新增 `tests/css-kit.test.mjs`(12 例:块在但 rev 旧 / 被手工改过必须检出并原地修复、项目端覆写不被压掉、老文件原地包裹并去重、`--check-css` 退出码语义),全套 **132 例**全绿。
+- The three toolkits (`nofx-css.mjs` / `chart-css.mjs` / `table-css.mjs`) become **managed blocks carrying a content rev** in the project's `tokens.css` (`/* >>> html2video:<id> rev=<sha256> >>> */ … /* <<< html2video:<id> <<< */`), with the rev hashing the block's CSS content — change the content and the rev changes.
+- `init-project --upgrade-css` was rewritten from "presence probe + append" to **replacement in place by rev**: an old / hand-edited block → swapped for the new one in its original position; undelimited but current content → wrapped in place (position unchanged); missing → appended at the end of the file with a note that the old rules will be overridden by what follows. Rules outside the managed blocks (including project-side overrides) are left untouched, and `tokens.css.bak` is backed up before writing. This removes two classes of defect from the old implementation: after one patch it always reported "no upgrade needed", and later source-module changes never propagated; and the append-style upgrade crushed the user's overrides while leaving a whole duplicate block behind.
+- New `init-project --check-css` (inspect only, never modify: outdated / missing items reported one by one, ending with exit code 1); `check-slides` gained two info-level checks: tokens.css toolkit staleness (naming which block), and a `class` that exists in neither `tokens.css` nor the slide's own `<style>` (silently unstyled — the `.grid g4` / `<p class="dim">` class of trap).
+- `preview-page`'s fallback injection expanded from no-fx alone to all three toolkits: the no-fx rules are still injected only into the "motion off" copy, while the chart / table toolkits are injected into every copy (otherwise the old rules would render the new drawing approach broken), and the page and the terminal report the staleness honestly.
+- Fixed `.matrix`'s highlight column not covering the header row: `.matrix td.hi` → now also covers `.matrix th.hi` (`<th class="hi">` silently got no background, so the 「我们」 ("us") column looked only half lit).
+- Doc corrections: `authoring.md`'s layout-snippet notes (the layout skeleton classes come from each slide's inline `<style>`, not tokens.css), and the comparison snippet's undefined `<p class="dim">` class changed to `style="color:var(--muted)"`.
+- New `tests/css-kit.test.mjs` (12 cases: a block that is present but stale / hand-edited must be detected and repaired in place, project-side overrides are not crushed, legacy files are wrapped in place with duplicates removed, `--check-css` exit-code semantics), **132 tests** in total, all green.
 
 ## 1.1.0 — 2026-09-18
 
-**安全边界(响应 PR #41 评审的五条 Request changes)**
+**Security boundary (answering the five Request changes from the PR #41 review)**
 
-- **路径收监**:`script.json` 是 agent 可编辑文件,其 `slides[].id/html/audio` 与 `bgm.file` 此前被直接拼进文件路径。现于 `tools.mjs` 新增 `safeId / safeRel / inside / validateScriptPaths / validateTimingsIds`,六个消费脚本(capture / build-video / plan-timings / check-timing / check-slides / asr)在 `JSON.parse` 后立即校验:id 走白名单 `^[A-Za-z0-9_-]{1,64}$`,路径拒绝绝对路径、resolve 后必须落在项目目录内、并对符号链接做 realpath 复核。此前 `id="../../victim"` 可触发**项目目录外的递归删除**(`capture.mjs` 的 `rmSync(build/frames/<id>, {recursive:true})`)。
-- **覆盖拒绝**:`init-project.mjs` 对已存在且非空的目录直接拒绝(列出将被覆写的 5 个生成文件),需显式 `--force`;`fetch-official-images.mjs` 的 `--out-dir` 默认收监在工作目录内、已存在文件不覆盖;`prep-image.mjs --crop` 输出已存在需 `--force`。顺带修 `--topic` 未转义即插入模板 HTML 的问题。
-- **ASR 端点白名单**:API Key 只发官方域(`api.minimaxi.com` / `api.minimax.io`);`--base-url` / `MINIMAX_BASE_URL` 指向其他地址一律硬拒绝,自建网关需显式 `--allow-any-endpoint`(打印醒目警告)。此前被偷换的环境变量可把 Key 发往任意端点。
-- **抓图 SSRF 收紧**:新增 `scripts/url-policy.mjs`(纯函数)。拦 loopback / 链路本地(含云元数据 169.254.169.254)/ 私网 / CGNAT / 无点主机名;只允许 http(s),`file://` 需显式 `--allow-file`;禁带 userinfo 的 URL;`maxRedirects:0` 手动跟重定向且**逐跳**复用同一策略;响应大小上限默认 30MB(`--max-mb`);落盘文件名清洗补 Windows 保留名。
-- **可执行测试**:新增 `tests/`(node:test,零依赖,从仓库根 `node --test` 自动发现 → 被 `npm run check` 真实执行)—— `safe-paths`(恶意 id/路径 + canary 完好性 + symlink 逃逸)、`no-clobber`(覆盖拒绝)、`endpoint-allowlist`(白名单拒绝 + 本地假服务器收到 Bearer 假 Key 的正向证据)、`fetch-policy`(host/URL/重定向/文件名 44 例)、`render-smoke`(init → 静音音频 → plan-timings → check-slides → capture → build-video 全链出片)。首轮 72 例(后续又加了 `preview-page` 与 `tokens-fx`,见下,现共 120 例, 9 个文件),本地全绿。另附 scoped workflow `.github/workflows/html2video-for-mcode-smoke.yml`(path-filter 只在本插件变更时跑,装 ffmpeg + playwright 后真实执行,含渲染冒烟)。
+- **Path containment**: `script.json` is an agent-editable file, and its `slides[].id/html/audio` and `bgm.file` used to be spliced straight into file paths. `tools.mjs` now adds `safeId / safeRel / inside / validateScriptPaths / validateTimingsIds`, and the six consuming scripts (capture / build-video / plan-timings / check-timing / check-slides / asr) validate immediately after `JSON.parse`: ids must match the allowlist `^[A-Za-z0-9_-]{1,64}$`, paths reject absolute forms, must resolve inside the project directory, and are re-checked against symlinks via realpath. Previously `id="../../victim"` could trigger a **recursive delete outside the project directory** (`capture.mjs`'s `rmSync(build/frames/<id>, {recursive:true})`).
+- **Clobber refusal**: `init-project.mjs` refuses an existing, non-empty directory outright (listing the 5 generated files that would be overwritten) and needs an explicit `--force`; `fetch-official-images.mjs`'s `--out-dir` defaults to inside the working directory and never overwrites existing files; `prep-image.mjs --crop` needs `--force` when the output exists. Also fixed `--topic` being inserted into the template HTML without escaping.
+- **ASR endpoint allowlist**: the API key is sent only to the official domains (`api.minimaxi.com` / `api.minimax.io`); any other `--base-url` / `MINIMAX_BASE_URL` is rejected outright, and a self-hosted gateway needs an explicit `--allow-any-endpoint` (which prints a prominent warning). A swapped environment variable could previously send the key to any endpoint at all.
+- **Image fetching SSRF tightened**: new `scripts/url-policy.mjs` (pure functions). It blocks loopback / link-local (including cloud metadata 169.254.169.254) / private networks / CGNAT / dotless hostnames; only http(s) is allowed, `file://` needs an explicit `--allow-file`; URLs carrying userinfo are banned; `maxRedirects:0` follows redirects manually and re-uses the same policy at **every hop**; responses are size-capped at 30MB by default (`--max-mb`); and the on-disk filename sanitiser gained Windows reserved names.
+- **Executable tests**: new `tests/` (node:test, zero dependencies, auto-discovered by `node --test` from the repository root → really executed by `npm run check`) — `safe-paths` (malicious ids/paths + canary intactness + symlink escapes), `no-clobber` (clobber refusal), `endpoint-allowlist` (allowlist refusals + positive evidence that a local fake server receives a fake Bearer key), `fetch-policy` (host/URL/redirect/filename, 44 cases), `render-smoke` (init → silent audio → plan-timings → check-slides → capture → build-video, the whole chain through to a finished video). The first round was 72 cases (later `preview-page` and `tokens-fx` were added, see below — 120 cases across 9 files now), all green locally. Also included: the scoped workflow `.github/workflows/html2video-for-mcode-smoke.yml` (path-filtered so it only runs when this plugin changes; it installs ffmpeg + playwright and really executes the suite, including the render smoke test).
 
-**图表与动效**
+**Charts and motion effects**
 
-- `references/authoring.md` 新增 **纯 CSS/SVG 图表**章节:横向条形 / 柱状 / 环形(`conic-gradient`)/ 折线(inline SVG)/ 进度条五种画法与选型速查;三条底线 = 禁外链图表库(离线取不到且 canvas 动画逐帧 seek 不到)、数值必须来自已核实口径、禁止 AI 生图当图表。
-- 新增 `fx-grow-x` / `fx-grow-y`(条形从左、柱状从底生长),折线 `fx-draw` 描边画入;**动效可一键关**:根元素或任意容器加 `no-fx`,关掉后 motion 捕获自动退化为静态帧,时长与音画同步不变(实测动画终态 vs `no-fx` 帧 PSNR 51.7dB,画面一致)。
-- `timeline` 版式改为整轴淡入 + 时间点逐个错峰入场。
+- `references/authoring.md` gained a **plain CSS/SVG charts** section: five drawing methods — horizontal bars / columns / donut (`conic-gradient`) / line (inline SVG) / progress bar — plus a selection cheat sheet; three bottom lines = no external chart libraries (unreachable offline, and canvas animation cannot be seeked frame by frame), numbers must come from a verified scope, and AI-generated images are forbidden as charts.
+- New `fx-grow-x` / `fx-grow-y` (bars growing from the left, columns from the bottom), and the line's `fx-draw` stroke draw-in; **motion can be switched off in one move**: add `no-fx` to the root element or any container, and motion capture automatically degrades to static frames with durations and audio-visual sync unchanged (measured: the animation's final state vs a `no-fx` frame at PSNR 51.7dB — the picture matches).
+- The `timeline` layout became a whole-axis fade-in plus the time points entering one by one, staggered.
 
-**静默故障(继续加闸门)**
+**Silent failures (more gates added)**
 
-- **fx 关键帧不含 opacity → 元素永久隐形**:`[data-stage]` 的基础态是 `opacity:0`,靠动画抬回 1;只做 transform/描边的动画(`fx-grow-x/y`、既有的 `fx-draw`)不改 opacity 就会永远不可见。关键帧已补 `opacity:1`,并在 `check-slides.mjs` 新增 **5b 项**静态拦截(fx 类的关键帧未声明 opacity → ✗)。
-- **旧帧目录污染成片**:切 `no-fx` 或改用 still 后,上一轮 motion 的帧目录仍在,`build-video` 会优先用残留帧把过时动画混进成片;capture 现在在产出静态图的路径上主动作废该张帧目录。
-- **柱状图模板高度塌陷**:外层容器写 `align-items:flex-end` 会让列 wrapper 高度塌成内容高,柱子百分比高度变 0(静默不显示);模板改为默认 stretch + 列内 `justify-content:flex-end`,并在文档里写明这个坑。
+- **fx keyframes without opacity → an element that stays invisible forever**: `[data-stage]`'s base state is `opacity:0` and only the animation lifts it back to 1; animations that only do transform/stroke (`fx-grow-x/y`, the existing `fx-draw`) would never become visible unless they touched opacity. The keyframes now carry `opacity:1`, and `check-slides.mjs` gained **item 5b**, a static block (an fx class whose keyframes do not declare opacity → ✗).
+- **A stale frame directory contaminating the finished video**: after switching to `no-fx` or to still mode, the previous motion run's frame directory was still there, and `build-video` preferred the leftover frames, mixing stale animation into the finished video; capture now actively invalidates that slide's frame directory on every path that produces a static image.
+- **The column-chart template's collapsed height**: writing `align-items:flex-end` on the outer container collapsed the column wrapper to its content height, turning the columns' percentage heights into 0 (silently not drawn); the template now defaults to stretch + `justify-content:flex-end` inside the column, and the trap is documented.
 
-**放映页(可以先放映一遍再渲染)**
+**Play page (you can screen it once before rendering)**
 
-- 新增 `scripts/preview-page.mjs <项目> [--open] [--no-script]` → `preview/play/index.html`:单文件、零依赖、`file://` 双击即看的放映页。**只干「把 HTML 画面放一遍」这一件事**:`←` `→`(触屏左右滑)翻页、`R` 重播入场动画、`X` 动效 / 关动效对照、`P` 口播文案 开 / 关、`O` 总览、`F` 全屏。**刻意不做播放器那套 UI** —— 没有计时器、进度条、逐句跟读高亮:要看时间或节奏就看成片,预览页里跑计时器只会让人盯秒表(实测标签页放着就变成 `204.2s / 6.3s`)。
-- **口播 UI 按数据决定加不加载**:有 clauses + 有 `timings.json` → 列出该张口播文案;有 clauses 但还没对时 → 只列文案并标「(未对时)」(口播还没做也能先看 HTML);没有 clauses 或 `--no-script` → 面板与口播按钮完全不出现,画面占满整宽。
-- **布局随窗口自适应**:顶栏/底栏可换行、话题名过长省略号;窄窗口与手机上口播面板收成底部抽屉并默认收起(画面优先),手机给触摸条按钮 + 左右滑动翻页,总览网格按宽度自动列数,高度用 `100dvh`(免得被手机地址栏切掉)。
-- 为什么不是「直接打开 `slides/*.html`」:延迟 `--t1/--t2/--t3` 与画布尺寸由渲染管线按 `timings.json` 注入,tokens.css 里只有占位值(`--t2:800ms`),直接开原文件会看到「所有动画挤在开头两秒」。放映页生成**快照副本**(`preview/play/<name>.html`),把实测延迟写进 `<html style>`(等价于管线注入,优先级最高)并加 `<base href="../../slides/">` 让主题与素材照常解析。实测:同一张 t=3.0s,副本第二层 `opacity 0`(未入场),原文件 `opacity 1`(已入场)——与成片一致的是副本。**还没对时**则按 HTML 里实际用到的 stage 等间隔排(0.3/1.3/2.3s),页面顶部黄条如实标注「不是成片时序」。
-- 副本是快照,改完 `slides/` 必须重跑;页面与副本头部都写明真实文件路径与生成时间。
-- 老项目没有 `no-fx` 规则时,只给关动效副本兜底注入该规则并在页面提示(否则切过去是空白,会被误判成「关动效 bug」)。
-- 新增 `init-project.mjs --upgrade-css`:给老项目的 `tokens.css` 幂等补上新版 `no-fx` 规则(只动这一个文件,不碰 `script.json` 等其他内容)。此前对所有旧项目的建议「用新版 init-project 重生成」是错的 —— 那需要 `--force`,会重置 `script.json`。
-- 新增 `scripts/nofx-css.mjs`:`no-fx` 规则的唯一来源(`init-project` 写入 tokens.css、`preview-page` 兜底注入共用一份,避免 CSS 漂移)。
-- `fx-spotlight` 的关键帧补 `opacity: 1` —— 它是本技能文档里列为可用的入场类,但只做 `clip-path`,基础态 `opacity:0` 抬不回来 → 用了就永久隐形(被 `check-slides` 的 5b 项拦住,即「文档说能用、闸门说不能用」)。
-- SKILL.md 的 Gate 4 增加「放映页交用户自己放一遍」;`references/render.md` 增放映页章节(定位、键位、口播三态、为什么必须用副本);`authoring.md` 的动效开关一节写明交付前用 `X` 对照验收。
-- 测试 +27 例(共 99):`preview-page`(注入/合并/no-fx/base 顺序/自包含无外链/**不做计时器**/**不得出现「配音」字样**/响应式与触摸、口播三态、等间隔兜底、越界拒绝/幂等升级)、`tokens-fx`(对模板断言**每个非无限 fx 动画的关键帧都声明 opacity**、no-fx 规则含 opacity 重置、`--upgrade-css` 幂等且不碰其他文件)。- `fetch-official-images.mjs` 新增 `--url <图片URL>[,...]`:内置浏览器 inspect 官网 DOM 拿到的**零散图片 URL** 现在有落盘入口(此前文档只写「再下载」却没给手段,而脚本只能"页面 URL + 序号")。走同一套纪律(host 白名单、重定向逐跳复核、30MB 上限、文件名清洗、已存在不覆盖),**且不需要 Playwright** —— 站点要登录/滚动加载、脚本打不开时这是唯一落盘手段。文件名推导(`imageNameFromUrl`:取路径末段,扩展名优先用 URL 的、否则按 content-type,都不行给 `.bin`)与 `sanitizeFilename` 同住 `url-policy.mjs`;新增 8 例测试(4 例文件名推导 + 4 例 CLI 拒绝/用法)。另外把**查重提到读 body 之前**(已存在的图不会白下一遍,网络抖动时也不会把「已存在」报成「下载失败」),并加两道护栏:**0 字节响应直接判失败**(404 错误页/防盗链不许写空文件)、**重定向绕圈/自身跳转**给出可诊断的报错(带跳转链)。
+- New `scripts/preview-page.mjs <项目> [--open] [--no-script]` → `preview/play/index.html`: a single-file, zero-dependency play page you double-click over `file://`. **It does exactly one thing — "play the HTML picture through once"**: `←` `→` (or a touch swipe) turn pages, `R` replays the entrance animations, `X` compares motion on / motion off, `P` toggles the voiceover text, `O` is the overview, `F` fullscreen. **It deliberately has none of the player UI** — no timer, no progress bar, no sentence-by-sentence follow-along highlight: to see time or rhythm, watch the finished video; running a timer in the preview page only makes people stare at a stopwatch (measured: leave the tab open and it turns into `204.2s / 6.3s`).
+- **The voiceover UI loads or not based on the data**: clauses + `timings.json` → it lists that slide's voiceover text; clauses but not timing-synced yet → it lists the text only and marks it 「(未对时)」 ("not timing-synced"), so you can look at the HTML before the voiceover exists; no clauses, or `--no-script` → the panel and the voiceover button do not appear at all, and the picture fills the full width.
+- **Layout adapts to the window**: top/bottom bars wrap and overlong topic names get an ellipsis; in narrow windows and on phones the voiceover panel collapses into a bottom drawer, collapsed by default (picture first); phones get touch-bar buttons + swipe-to-turn pages; the overview grid picks its column count from the width, and the height uses `100dvh` (so the phone's address bar cannot cut it off).
+- Why not "just open `slides/*.html`": the delays `--t1/--t2/--t3` and the canvas size are injected by the render pipeline from `timings.json`, while tokens.css holds only placeholder values (`--t2:800ms`), so opening the original file shows "every animation crammed into the first two seconds". The play page generates a **snapshot copy** (`preview/play/<name>.html`), writes the measured delays into `<html style>` (equivalent to pipeline injection, highest precedence) and adds `<base href="../../slides/">` so themes and assets resolve as usual. Measured: on the same slide at t=3.0s the copy's second level is `opacity 0` (not yet entered) while the original file is `opacity 1` (already in) — the copy is what matches the finished video. **When there is no timing yet** it spaces the stages actually used in the HTML evenly (0.3/1.3/2.3s), and a yellow bar at the top of the page honestly marks it 「不是成片时序」 ("not final-video timing").
+- The copy is a snapshot: after editing `slides/` you must re-run; both the page and the copy's head state the real file path and the generation time.
+- When an old project has no `no-fx` rules, the rule is injected into the motion-off copy alone as a fallback and the page says so (otherwise switching over is blank, which gets misread as a "motion-off bug").
+- New `init-project.mjs --upgrade-css`: idempotently adds the new `no-fx` rules to an old project's `tokens.css` (touching only that one file, never `script.json` or anything else). The previous advice for every old project — "regenerate with the new init-project" — was wrong: that needs `--force` and resets `script.json`.
+- New `scripts/nofx-css.mjs`: the single source of truth for the `no-fx` rules (`init-project` writing them into tokens.css and `preview-page`'s fallback injection share one copy, so the CSS cannot drift).
+- `fx-spotlight`'s keyframes gained `opacity: 1` — it is listed as a usable entrance class in this skill's docs, but it only did `clip-path`, so the `opacity:0` base state never came back up → using it made the element permanently invisible (caught by `check-slides`'s item 5b: "the docs say it works, the gate says it doesn't").
+- SKILL.md's Gate 4 gained "hand the play page over for the user to present themselves"; `references/render.md` gained a play-page section (positioning, keys, the three voiceover states, why the copy is mandatory); `authoring.md`'s motion-switch section states that `X` must be used for the comparison before delivery.
+- Tests +27 (99 in total): `preview-page` (injection / merging / no-fx / base ordering / self-contained with no external links / **no timer** / **the word 「配音」 ("dubbing") must not appear** / responsive and touch, the three voiceover states, the equal-interval fallback, containment refusals / idempotent upgrade), `tokens-fx` (asserts of the template that **every non-infinite fx animation's keyframes declare opacity**, that the no-fx rules reset opacity, and that `--upgrade-css` is idempotent without touching other files).- `fetch-official-images.mjs` gained `--url <图片URL>[,...]`: the **scattered image URLs** picked up by inspecting an official site's DOM with the built-in browser now have a way to disk (the docs previously said "then download it" without giving a means, while the script could only do "page URL + index"). It obeys the same discipline (host allowlist, per-hop redirect re-checks, 30MB cap, filename sanitising, no overwriting existing files) **and needs no Playwright** — when a site requires login or lazy-loads on scroll and the script cannot open it, this is the only way to disk. Filename derivation (`imageNameFromUrl`: take the last path segment, prefer the URL's extension, otherwise use the content-type, and fall back to `.bin`) lives with `sanitizeFilename` in `url-policy.mjs`; 8 new test cases (4 filename derivations + 4 CLI refusals/usage). Also, **the duplicate check moved ahead of reading the body** (an existing image is not downloaded in vain, and network flakiness cannot report "download failed" for something that already exists), plus two guard rails: **a 0-byte response fails outright** (no empty files for 404 error pages / hotlink protection) and **redirect loops / self-redirects** produce a diagnosable error (with the redirect chain).
 
-**图表工具箱 v2(2026-09-18 晚,经视觉验收 7 轮收敛)**
+**Chart toolkit v2 (late 2026-09-18, converged through 7 rounds of visual acceptance)**
 
-起因:用户问"图表模板会不会不够优雅? 捐赠库里有没有更好的?"。审计结论:捐赠库的图表版式是 **Chart.js(CDN + canvas)** —— 我们早已禁用(离线取不到、canvas 动画逐帧 seek 不到),它那份手写柱状图更朴素且用了我们记过的 `align-items:flex-end` 坑;**没有可抄的动效**。于是重做自己的工具箱,每轮渲染 1920×1080 交 judge 视觉闸门判,连续 7 轮收敛。
+Origin: the user asked "are the chart templates not elegant enough? is there anything better in the donated library?". The audit conclusion: the donated library's chart layouts are **Chart.js (CDN + canvas)** — long since banned here (unreachable offline, and canvas animation cannot be seeked frame by frame); its hand-written column chart is plainer still and uses the `align-items:flex-end` trap we had already recorded; **there is no motion worth copying**. So the toolkit was rebuilt in-house, with a 1920×1080 render handed to the visual acceptance gate every round, converging after 7 rounds.
 
-- **三个"以前做不到"的纯 CSS 动效**(靠 `@property` 注册属性驱动,仍然逐帧可 seek):`fx-sweep`(环形**真扫出**,替代硬弹的 `fx-pop`)、`fx-count`(数字**滚动**,整数)、`fx-grow-w/h`(按 `width`/`height` 生长);另加 `fx-dot`(数据点逐个弹出)与整套 `.chart*` 原语(`chart-head/title/note/num/plot/cap/row/track/cell/wrap/target`)。
-- **不变量不变**:静态默认 = 终值(keyframes 从 0 长到终值),关掉动效一律停在完成态,不需要额外复位规则;`--upgrade-css` 现在同时补 no-fx 与**图表工具箱**(幂等,只动 tokens.css)。
-- **优雅纪律写进文档**(`references/authoring.md` 图表章节重写):同类同色 + 一条强调、数值等宽且不放进被缩放的元素、有基线与**看得见**的细网格、一图只讲一件事、零值保底、图注写口径与时点、在**字幕安全区**里垂直居中、数值统一同一列、**柱高 = 数值 ÷ 轴上限且轴从 0 起**。
-- **验收抓到并修掉 7 个真缺陷**(都是"画面明显不对、流水线却报成功"那一类):① `fx-grow-x` 把条内数字**横向拉扁**;② 弱化条上白字**读不出来**;③ 加条外数值后轨道被挤窄 → **同一张图两把尺子**;④ 柱高百分比相对整列算、超出被 `flex-shrink` 压回 → **84% 与 72% 画成一样高**(数据失真);⑤ 网格铺在整列、柱区更矮 → 按网格读数与标注不符;⑥ 内容排进**字幕带**被字幕压住(底部 84–168px、居中 73% 宽);⑦ 弱化条半透明使网格透出、像分段堆叠。
-- 新增图表类型配方:bullet(实际 vs 目标)、slope(前后对比)、sparkline(数字旁迷你趋势),加上原有的横向条形/柱状/折线/环形/进度条,共 7 个配方 + 动效选型表。
-- 测试 +7 例(共 **114** 例 / 8 个文件):`chart-kit`(动效类与关键帧 opacity、`@property`、静态默认=终值、柱状三层结构与网格位置、行三列定宽、`--upgrade-css` 补工具箱且幂等);workflow 显式清单同步。
+- **Three pure-CSS effects that "were not possible before"** (driven by `@property`-registered properties, still frame-seekable): `fx-sweep` (a donut **truly swept out**, replacing the hard-popping `fx-pop`), `fx-count` (a **rolling** number, integers), `fx-grow-w/h` (growing by `width`/`height`); plus `fx-dot` (data points popping out one by one) and the whole set of `.chart*` primitives (`chart-head/title/note/num/plot/cap/row/track/cell/wrap/target`).
+- **The invariant is unchanged**: the static default = the final value (keyframes grow from 0 to the final value), and with motion off everything stops at the completed state, with no extra reset rules needed; `--upgrade-css` now fills in no-fx and the **chart toolkit** together (idempotent, touching only tokens.css).
+- **The elegance disciplines written into the docs** (`references/authoring.md`'s chart section rewritten): same kind, same colour, plus one accent; numbers in a monospaced face and never inside a scaled element; a baseline and **visible** fine gridlines; one chart tells one thing; a zero-value floor; the caption carries the scope and point in time; vertically centred inside the **subtitle safe area**; values in one uniform column; **column height = value ÷ axis maximum, with the axis starting at 0**.
+- **Acceptance caught and fixed 7 real defects** (all of the "the picture is obviously wrong, yet the pipeline reports success" kind): ① `fx-grow-x` **squashed the number inside the bar horizontally**; ② white text on a de-emphasised bar **could not be read**; ③ adding a value outside the bar narrowed the track → **two different rulers in one chart**; ④ the column height percentage was computed against the whole column and anything overflowing was pushed back by `flex-shrink` → **84% and 72% drawn the same height** (data distortion); ⑤ the grid spanned the whole column while the plot area was shorter → readings taken against the grid did not match the labels; ⑥ content was laid out into the **subtitle band** and covered by the subtitles (bottom 84–168px, centred, 73% wide); ⑦ a translucent de-emphasised bar let the gridlines show through, reading as a segmented stack.
+- New chart recipes: bullet (actual vs target), slope (before/after), sparkline (a mini trend beside a number), joining the existing horizontal bars / columns / line / donut / progress bar — 7 recipes in total, plus the motion selection table.
+- Tests +7 (**114** in total / 8 files): `chart-kit` (the motion classes and keyframe opacity, `@property`, "static default = final value", the column chart's three-layer structure and grid position, the row's three fixed-width columns, `--upgrade-css` filling in the toolkit idempotently); the workflow's explicit list was kept in sync.
 
-**表格工具箱(2026-09-18 深夜,用户问"现在有哪几类表格")**
+**Table toolkit (deep into 2026-09-18, after the user asked "what table types are there right now")**
 
-起因:查了一遍 —— 真 `<table>` 版式**只有一种**(一个"季度/营收/同比"示例),`kpi-grid`/`roadmap`/`comparison` 只是卡片化的表格感, 而且 **tokens.css 里根本没有表格原语**, 每页各写一套内联样式。表格是模板系统里最薄的一环, 补上:
+Origin: a survey — a real `<table>` layout **exists only once** (a "quarter / revenue / year-on-year" example), `kpi-grid`/`roadmap`/`comparison` only have a card-based tabular feel, and **tokens.css has no table primitives at all**, with every page writing its own inline styles. Tables were the thinnest part of the template system; filled in:
 
-- **四个表格原语**(`scripts/table-css.mjs` 唯一来源;init-project 写入 tokens.css, `--upgrade-css` 给老项目补, 幂等):`.tbl`(数据表:表头弱化、只画横线、数值列 `.num` 右对齐等宽、`.up/.down` 涨跌走令牌、`.key` 高亮行、`.sum` 合计行)、`.kv`(规格表 / 时间事件表)、`.matrix`(对比矩阵:勾叉 + `.hi` 高亮列)、`.rank`(排名表:名次 + 内联微缩条 + 数值, 条长同样 = 数值 ÷ 轴上限)。
-- **可读性硬指标写进原语并被测试盯着**:主数据 `var(--fs-body)`(30px)、表头 `--fs-caption`、行高 ≥72px、只画横线不画竖线不要斑马纹。实测教训:最初表格正文用了 `--fs-caption`(24px), 渲出来自己看着都吃力 —— 视频还要在手机上看, 已提到正文号。
-- **文档**:`references/authoring.md` 新增"表格工具箱"章节(七条纪律 + 五个配方 + 选型速查), `table` 版式行指向该章节;SKILL.md 症状表加一行(表格在手机上看不清 → 用原语, 别用 caption 号)。
-- 示例两屏(数据表 + 排名表 / 对比矩阵 + 规格表)在 `_probe/tableproj`(内部验证件);几何断言:行高 80/72、数值列各自右对齐同一竖线、无内容侵入字幕带。
-- 测试 +6 例(共 **120** 例 / 9 个文件):`table-kit`(四种原语存在、主数据是正文号、行高 72、涨跌走令牌、**不得出现竖线或斑马纹**、`--upgrade-css` 补原语且幂等);workflow 清单同步。
+- **Four table primitives** (`scripts/table-css.mjs` as the single source; init-project writes them into tokens.css, `--upgrade-css` fills them into old projects, idempotent): `.tbl` (data table: a muted header, horizontal rules only, numeric columns `.num` right-aligned and monospaced, `.up/.down` moves driven by tokens, `.key` for the highlighted row, `.sum` for the total row), `.kv` (spec list / time-and-event table), `.matrix` (comparison matrix: ticks and crosses + a `.hi` highlighted column), `.rank` (ranking table: rank + an inline micro-bar + the value, with the bar length likewise = value ÷ axis maximum).
+- **Legibility hard targets are written into the primitives and watched by the tests**: main data at `var(--fs-body)` (30px), headers at `--fs-caption`, row height ≥72px, horizontal rules only — no vertical rules and no zebra striping. Measured lesson: the table body originally used `--fs-caption` (24px) and was a strain to read even on the author's own screen — and the video will also be watched on a phone, so it was raised to the body size.
+- **Docs**: `references/authoring.md` gained a "table toolkit" section (seven disciplines + five recipes + a selection cheat sheet), and the `table` layout row points at it; SKILL.md's symptom table gained a row (tables unreadable on a phone → use the primitives, not the caption size).
+- Two example screens (data table + ranking / comparison matrix + spec list) live in `_probe/tableproj` (an internal verification artefact); geometric assertions: row heights 80/72, numeric columns each right-aligned to the same vertical line, and no content intruding into the subtitle band.
+- Tests +6 (**120** in total / 9 files): `table-kit` (all four primitives present, main data at the body size, row height 72, up/down driven by tokens, **no vertical rules or zebra striping may appear**, `--upgrade-css` filling in the primitives idempotently); the workflow list kept in sync.
 
-**文档**
+**Docs**
 
-- 开工对齐"主题与受众"→"**主题与领域**"(受监管题材必问免责声明与数据出处标注);新增 `references/compliance.md`(财经口播红线、数字三要件、涨跌色按受众翻转、免责声明写法、医疗/法律/广告法、Gate 清单);`tokens.css` 增 `--up/--down` 与 `.disclaimer`;`check-slides.mjs` 增整片级财经关键词自查。
-- **层的入场顺序不再固定为"标题先行"**:改为"每张至少两个信息层、分属不同 stage,顺序由强同步原则决定"(大数字先入 / 设问先出 / 图先入都合法),要拦的是"只有一个层"。
-- 补 `roadmap` 版式的 HTML 片段(此前表格里有、代码块缺失),并修 kpi-grid 片段使用未定义类 `.grid g4`(会静默竖排)的问题。
+- Kickoff alignment's "topic and audience" → "**topic and domain**" (regulated subjects must be asked about the disclaimer and data-source attribution); new `references/compliance.md` (red lines for financial voiceover, the three requisites for numbers, up/down colours flipped per audience, how to write the disclaimer, medical/legal/advertising law, the Gate list); `tokens.css` gained `--up/--down` and `.disclaimer`; `check-slides.mjs` gained the whole-video finance-keyword self-check.
+- **Layer entrance order is no longer fixed to "title first"**: it became "every slide carries at least two information layers on separate stages, with the order decided by the strong-sync principle" (a big number first / the question first / an image first are all legal); what the gate blocks is "only one layer".
+- Added the `roadmap` layout's HTML snippet (it existed in the table but the code block was missing), and fixed the kpi-grid snippet's use of the undefined class `.grid g4` (which silently stacks vertically).
 
 ## 1.0.1 — 2026-09-17
 
-**新增:领域与合规(受监管题材)**
+**New: domain and compliance (regulated subjects)**
 
-- `references/compliance.md`(新)— 领域确认问法(题材 + 受众 + 是否受监管)、财经口播三条红线(不给操作建议 / 不预测价格 / 不编数据图形)、数字三要件(**口径 + 币种 + 时点**)、涨跌色按受众翻转(A 股/港股 = 红涨绿跌)、免责声明写法与位置(`.disclaimer`,停留 ≥3s,口播不念也不进字幕)、医疗 / 法律 / 政务 / 广告法要点、Gate 收尾检查清单
-- **开工对齐**第一批问题从"主题与受众"升级为"**主题与领域**":受监管题材(财经投研 / 医疗健康 / 法律 / 政务政策 / 营销效果宣称)必须多问一句"要不要免责声明与数据出处标注"(默认要),并把结论记进 Gate 0 与 `research/notes.md`
-- `tokens.css` 新增 `--up` / `--down` 涨跌专用令牌(默认 = `--good` / `--bad`)与 `.disclaimer` / `.disclaimer-box` 原语(纯附加,旧项目与既有主题不受影响)
-- `check-slides.mjs` 新增**整片级领域自查**:命中多个财经/投研关键词却没有免责或出处行 → 给出提示(提示而非错误;用户已明确不要免责可忽略)
-- `research.md` 增"先确认领域"与财经/投研题材坑(同比≠环比、GAAP≠非GAAP、把旧时点当"目前");`authoring.md` 增免责声明片段、kpi-grid 改用 `var(--up)/var(--down)`、主题速查增财经行;`evals` 增 2 条(财经开局确认、涨跌色按受众)
+- `references/compliance.md` (new) — how to confirm the domain (subject + audience + whether it is regulated), the three red lines for financial voiceover (no operational advice / no price predictions / no invented data or graphics), the three requisites for numbers (**scope + currency + point in time**), flipping up/down colours per audience (A-shares/Hong Kong = red up, green down), how and where to write the disclaimer (`.disclaimer`, on screen ≥3s, not read aloud and not in the subtitles), key points for medical / legal / government / advertising law, and the Gate closing checklist
+- **Kickoff alignment**'s first batch of questions was upgraded from "topic and audience" to "**topic and domain**": for regulated subjects (financial investment research / healthcare / legal / government policy / marketing performance claims) one more question is mandatory — "do you want a disclaimer and data-source attribution" (default yes) — and the conclusion is recorded in Gate 0 and `research/notes.md`
+- `tokens.css` gained the `--up` / `--down` tokens dedicated to up/down moves (default = `--good` / `--bad`) and the `.disclaimer` / `.disclaimer-box` primitives (purely additive — old projects and existing themes are unaffected)
+- `check-slides.mjs` gained a **whole-video domain self-check**: hitting several finance/investment-research keywords with no disclaimer or sources line → an info-level prompt (a prompt, not an error; ignore it if the user explicitly declined the disclaimer)
+- `research.md` gained "confirm the domain first" and the finance/investment-research pitfalls (year-on-year ≠ quarter-on-quarter, GAAP ≠ non-GAAP, treating an old as-of date as "current"); `authoring.md` gained the disclaimer snippet, switched kpi-grid to `var(--up)/var(--down)` and added a finance row to the theme cheat sheet; `evals` gained 2 entries (finance kickoff confirmation, up/down colours by audience)
 
 ## 1.0.0 — 2026-09-17
 
-首个公开版本。
+First public release.
 
-**流水线**:开工对齐(语言/风格/字幕/画布/音色/素材边界)→ 信息搜集 → 脚本 → TTS → 实测对时 → 配图 → HTML 分步入场 → 逐帧渲染 → ASR 反向校验,共 7 阶段 6 个确认闸门。
+**Pipeline**: kickoff alignment (language/style/subtitles/canvas/voice/asset boundaries) → research → script → TTS → measured timing → images → staged HTML entrance → frame-by-frame rendering → reverse ASR verification — 7 phases and 6 confirmation gates in total.
 
-**脚本(11 个,纯 Node,无构建步骤)**
+**Scripts (11, plain Node, no build step)**
 
-| 脚本 | 作用 |
+| Script | Purpose |
 |---|---|
-| `init-project.mjs` | 生成项目骨架(目录 + tokens.css + slide 模板 + script.json 契约) |
-| `plan-timings.mjs` | ffprobe 实测每段 TTS → 时长、每层入场时刻、每句开口时刻 |
-| `check-timing.mjs` | 静音检测实测每句真实开口,与估算对比并可校准 |
-| `check-theme.mjs` | 全部主题的 WCAG 对比度闸门(正文/次级/字幕/强调色) |
-| `check-slides.mjs` | 渲染前静态检查(未定义变量/图片缺失/外链/data-stage 未配动画/硬编码颜色) |
-| `capture.mjs` | 终态截图或逐帧步进捕获,字幕默认烧录 |
-| `build-video.mjs` | 编码 → 拼接 → 音轨对位 → BGM 混音 → 合成 → 自检 + SRT |
-| `asr.mjs` | ASR 转写与脚本比对(直调 REST),支持字级时间戳核对开口时刻 |
-| `prep-image.mjs` | 配图检查与受限裁切(裁掉面积上限 20%) |
-| `fetch-official-images.mjs` | 从官方站点列取并下载候选素材图 |
-| `tools.mjs` | ffmpeg/ffprobe 与 Node 包的多锚点探测 |
+| `init-project.mjs` | Generates the project skeleton (directory + tokens.css + slide templates + the script.json contract) |
+| `plan-timings.mjs` | ffprobe-measures each TTS segment → duration, each level's entrance moment, each sentence's onset |
+| `check-timing.mjs` | Silence detection measures each sentence's real onset, compares it with the estimate and can calibrate |
+| `check-theme.mjs` | The WCAG contrast gate for every theme (body/secondary/subtitles/accent) |
+| `check-slides.mjs` | Static checks before rendering (undefined variables / missing images / external resources / `data-stage` without animation / hard-coded colours) |
+| `capture.mjs` | Final-state screenshots or frame-stepping capture, subtitles burned in by default |
+| `build-video.mjs` | Encode → concatenate → align the audio track → mix BGM → mux → self-check + SRT |
+| `asr.mjs` | ASR transcription compared against the script (direct REST calls); character-level timestamps can verify each sentence's onset |
+| `prep-image.mjs` | Image checks and limited cropping (crop up to 20% of the area) |
+| `fetch-official-images.mjs` | List and download candidate asset images from the official site |
+| `tools.mjs` | Multi-anchor discovery of ffmpeg/ffprobe and Node packages |
 
-**设计系统**:13 套主题、17 种版式、图片框原语(`.img-frame`)、14 个入场/氛围动画、分步入场与错峰容器。
+**Design system**: 13 themes, 17 layouts, the image-frame primitive (`.img-frame`), 14 entrance/ambient animations, staged entrance and the stagger container.
 
-**语言**:中文普通话 / 英语 / 粤语,字数与语速基准、字幕行宽、ASR 语言校验随语言切换。
+**Language**: Mandarin Chinese / English / Cantonese — the character-count and speech-rate baselines, the subtitle line width and the ASR language check all switch with the language.
 
-**画布**:1920×1080 横屏与 1080×1920 竖版(字幕几何随画布比例自适应)。
+**Canvas**: 1920×1080 landscape and 1080×1920 vertical (the subtitle geometry adapts to the canvas ratio).
 
-**字幕**:单语或双语烧录,另出 `out/subs.srt`。
+**Subtitles**: monolingual or bilingual, burned in, plus a separate `out/subs.srt`.
 
-**声音**:BGM 垫底(可选,自动循环与淡入淡出)、ASR 反向校验(音色语种、数字与专名一致性)。
+**Sound**: BGM underneath (optional, looped and faded in/out automatically), reverse ASR verification (voice language, consistency of numbers and proper nouns).
 
-**资料搜集**:`references/research.md` —— 来源四级分级、四条硬规则(多源交叉验证/一手优先/标注口径日期/不确定不进脚本)、query 设计、多源矛盾处理、notes 模板、各环境搜索工具差异(含 mmx search 10 条上限)。
+**Research**: `references/research.md` — four-tier source grading, the four hard rules (multi-source cross-checking / primary sources first / labelled scope and date / uncertain items stay out of the script), query design, handling contradictions across sources, the notes template, and the search tools available per environment (including mmx search's 10-result cap).
 
-**两套工具链**:mcode 沙箱用 platform connectors;其他 Agent 环境用 mmx-cli(配 TTS)与本仓 `asr.mjs`(配 ASR)。
+**Two toolchains**: the mcode sandbox uses platform connectors; other Agent environments use mmx-cli (for TTS) and this repo's `asr.mjs` (for ASR).
 
-**已修复的静默故障(均加了闸门)**
+**Silent failures already fixed (all gated)**
 
-- 入场延迟被 `animation` 简写覆盖 → 元素在 0 秒入场(改用变量槽传递延迟)
-- 未定义 CSS 变量 + 透明文字填充 → 文字完全隐形(check-slides 静态拦截)
-- 图片加载失败 → 只出 broken 图标而无报错(capture 运行期点名)
-- 缺少 clauses → 静默出无字幕片(capture 告警)
-- 字幕窗口重叠 → 相邻两句同时可见, 看起来像"重影/错字"(淡出改为在窗口内归零, 并加窗口自检)
-- 主题覆盖被忽略、同名选择器只取首个块(check-theme 合并语义修正)
+- Entrance delays overridden by the `animation` shorthand → elements entered at 0 seconds (delays moved to variable slots)
+- Undefined CSS variable + transparent text fill → the text becomes completely invisible (a static block in check-slides)
+- Image load failure → a broken icon and no error (capture names it at runtime)
+- Missing clauses → a subtitle-less video shipped silently (capture warns)
+- Overlapping subtitle windows → two adjacent sentences visible at once, looking like "ghosting/typos" (the fade-out now reaches zero inside the window, plus a window self-check)
+- Theme overrides ignored and only the first block taken for a selector of the same name (check-theme's merge semantics corrected)

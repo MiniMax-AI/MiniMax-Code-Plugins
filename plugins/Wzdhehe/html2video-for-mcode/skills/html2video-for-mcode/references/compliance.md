@@ -1,83 +1,92 @@
-# 领域与合规(受监管题材必读)
+# Domains and Compliance (required reading for regulated topics)
 
-**什么时候读**:开工对齐时先确认这条片属于**哪个领域**。题材落在**受监管领域**——财经/投研、医疗健康、法律、政务政策、营销效果宣称——就把这一节读完再动笔。
+**When to read this**: at kickoff alignment, first settle **which domain** this video belongs to. If the topic falls in a **regulated domain** — finance/investment, healthcare/medical, legal, government policy, marketing efficacy claims — read this section to the end before you start writing.
 
-它不是法律意见,而是把"这类片子必然被追问的几件事"变成流程里的检查项:免责行要不要出、数字要带什么、涨跌色往哪个方向用。这三件事错了,画面再漂亮也得返工。
+It is not legal advice; it turns "the things this kind of video always gets challenged on" into process checkpoints: whether a disclaimer line is required, what every number must carry, and which way the up/down colours point. Get these three wrong and the picture gets reworked no matter how good it looks.
 
-## 1. 领域确认(开工对齐的第一批问题里就带这条)
+**Name your jurisdiction, then apply its rules.** Regulated domains exist in every market; the specific regulator does not. Illustrative only — US: SEC / FTC / FDA; EU & UK: FCA / ESMA / EMA; China: CSRC / NMPA / SAMR; anywhere else: check the local regulator. So the question to put to the user is never "which regulator?" but **"which market is the audience in?"** — the answer fixes the disclaimer wording, the data rules and the colour convention for the whole video.
 
-**要问的两个问题**(别自己默认,写进 Gate 0 与数字口径一起给用户确认):
+## 1. Domain confirmation (part of the first batch of kickoff questions)
 
-| 问 | 选项 / 默认 |
+**The two questions to ask** (never assume an answer — put both into Gate 0 alongside the data definitions):
+
+| Question | Options / default |
 |---|---|
-| 这条片属于什么领域? | 财经/商业 · 科技/产品 · 科普/教育 · 品牌/营销 · 文化/历史 · 生活/消费 · 政务/政策 —— 领域决定画面要带什么(免责行、数据出处、单位)、口播能说到哪一步、涨跌色怎么用 |
-| 要不要免责声明与出处标注? | 受监管领域**默认要**;纯观点/品牌/生活类可以不要。"不要"也要用户明说,记进 Gate 0 基线与 `research/notes.md` |
+| Which domain is this video in? | Finance/business · Technology/product · Science/education · Brand/marketing · Culture/history · Lifestyle/consumer · Government/policy — the domain decides what the visuals must carry (disclaimer line, data provenance, units), how far the narration may go, and which up/down colour convention applies |
+| Disclaimer and source attribution required? | **Required by default** in regulated domains; pure opinion/brand/lifestyle may skip it. A "no" must still be stated explicitly by the user and recorded in the Gate 0 baseline and `research/notes.md` |
 
-**为什么必须问**:免责声明是**内容属性**不是法律意见 —— 它不能免除责任,但缺了它在财经/医疗语境下几乎一定被要求补上,而且返工点在最贵的 Phase 5(成片)。
+**Why you must ask**: a disclaimer is a **content attribute**, not a legal opinion — it does not remove liability, but when it is missing in a finance or medical context it will almost certainly be demanded later, and the rework lands in Phase 5 (the final cut), the most expensive place for it.
 
-## 2. 财经 / 投研(最容易出事的一类)
+## 2. Finance / investment research (the class that goes wrong most often)
 
-### 2.1 口播三条红线
+### 2.1 Three red lines for the narration
 
-1. **不给操作建议、不预测价格**。"建议关注/逢低买入/有望涨到/稳赚/翻倍空间"一律不写。要表达预期就归给主体:"某机构给出的目标价区间是…",并注明机构与发布日期。
-2. **不把观点说成事实**。"最受欢迎的基金""增长确定性高"必须带主语(公司自己说/机构评级)或改成可核查表述(见 `research.md` 硬规则 5)。
-3. **不编数字、不编图表**。K 线、财报截图、榜单一律来自官方来源;任何数据图形**禁止 AI 生成**(全局铁律,见 `image-sources.md`)。
+1. **No trading recommendations, no price predictions.** Never write "worth watching / buy the dip / could rise to / sure profit / room to double". To express an expectation, attribute it to a subject: "one institution's target-price range is …", with the institution and the publication date.
+2. **Don't state opinions as facts.** "The most popular fund", "growth is a certainty" must carry a subject (the company says so / the agency's rating) or be rewritten as a verifiable statement (see `research.md` hard rule 5).
+3. **Don't invent numbers or charts.** Candlesticks, earnings screenshots and rankings must all come from official sources; **no data graphic may be AI-generated** (global hard rule — see `image-sources.md`).
 
-### 2.2 每个数字必须带三样东西
+### 2.2 Every number must carry three things
 
-| 要件 | 例 |
+| Requirement | Example |
 |---|---|
-| **口径** | 年化 / 单季 / 累计;GAAP / 非 GAAP;同比 / 环比;复权口径 |
-| **币种与单位** | 美元 / 人民币 / 港元;亿 / 万亿 |
-| **时点或期间** | "截至 2026-06-30 收盘""2026 年 Q2 财报(8 月披露)" |
+| **Definition / scope** | annualised / single quarter / cumulative; GAAP / non-GAAP; year-over-year / quarter-over-quarter; adjusted-price basis |
+| **Currency and units** | USD / EUR / CNY / HKD; millions / billions — always state which |
+| **Date or period** | "as of the 2026-06-30 close", "Q2 2026 results (reported in August)" |
 
-财务数据有**披露滞后**:不要写"目前营收 X",要写"公司 8 月披露的二季度营收 X"。股价、汇率这类秒级数据若要出现,必须写"截至 YYYY-MM-DD 收盘"并标来源,同时**在免责行里点明数据时点**(视频会长期留存,数字必然过期)。
+Financial data has a **reporting lag**: don't write "revenue is currently X", write "Q2 revenue of X as reported by the company in August". If second-by-second data such as a share price or an exchange rate must appear, write "as of the YYYY-MM-DD close" and cite the source, and **state the data date in the disclaimer line** (the video stays online for years; the number will be stale).
 
-### 2.3 涨跌色:按受众翻转(我们的默认对 A 股受众是错的)
+**Provenance rule**: at least two independent sources for every key claim, each with its date and its definition/scope; state currency and units; and keep what a source reported separate from your own inference — never let an inference ride along in the same sentence as a reported figure.
 
-`tokens.css` 的语义色默认 `--good` 绿 / `--bad` 红,即欧美读法(绿涨红跌)。**A 股/港股受众是红涨绿跌** —— 这一处用反,整片观感直接颠倒。做法:
+### 2.3 Up/down colours: this convention differs by region
+
+The semantic colours in `tokens.css` default to `--good` green / `--bad` red — the US/EU reading (green up, red down). **Greater China audiences (CN/HK/TW) read the opposite: red up, green down** — flip this one by accident and the whole video reads inverted. What to do:
 
 ```css
 /* 追加在项目 slides/tokens.css 末尾: A股/港股受众 = 红涨绿跌 */
 :root { --up: #D92B2B; --down: #12A150; }
 ```
 
-- 指标卡一律写 **`var(--up)` / `var(--down)`**(别直接写 `var(--good)/var(--bad)`);模板已定义 `--up: var(--good); --down: var(--bad)`,旧项目缺这两个变量就把上面那行补上(`check-slides.mjs` 会报变量未定义)。
-- 美股 / 英语受众保持默认,不要翻转。
-- **Gate 3 素材确认时顺带问一句受众市场**,和涨跌色一起定。
+(That comment means: append to the end of the project's `slides/tokens.css` — A-share / Hong Kong audiences = red up, green down.)
 
-### 2.4 免责声明怎么写、放哪
+- Metric cards always write **`var(--up)` / `var(--down)`** (never `var(--good)` / `var(--bad)` directly); the template already defines `--up: var(--good); --down: var(--bad)`, so an older project missing those two variables just adds the line above (`check-slides.mjs` reports undefined variables).
+- Markets that read green as up (US/EU and others) keep the default — do not flip them.
+- **Ask which market the audience is in while confirming assets at Gate 3**, and settle it together with the colour convention. Default to the audience's own convention, and stay consistent within one video.
 
-- **固定模板,别临场发挥**:"本视频仅为信息分享,不构成任何投资建议。数据来源:<来源>,截至 <日期>。"(医疗同理:不构成医疗建议,诊疗请咨询执业医师。)
-- **位置**:`closing` 张用 `.disclaimer` 小字行(底部或右下),**停留 ≥3 秒**;长片可在 `title-hero` 或第一张数据页再加一条同样的小字。
-- **口播不念免责**(也不烧进字幕):合规文字由画面承载,口播保持节奏;用户坚持要念就照念,但仍不进字幕。
-- 免责声明**不替代核实**:数字错了,加十行免责也救不回来。
+### 2.4 Disclaimer: how to write it, where to put it
 
-## 3. 医疗 / 健康
+- **Use a fixed template, don't improvise.** English: "Not investment advice. Data as of <date>, source: <source>." Chinese: "本视频仅为信息分享,不构成任何投资建议。数据来源:<来源>,截至 <日期>。" (Medical follows the same shape: not medical advice — for diagnosis and treatment consult a licensed physician.)
+- **Placement**: the `closing` slide carries a small `.disclaimer` line (bottom or bottom-right), **on screen ≥3 seconds** and legible; a long video may repeat the same small line on the `title-hero` or on the first data page.
+- **The narration does not read the disclaimer aloud** (and it is not burned into the subtitles): the compliance text is carried by the picture, and the voiceover keeps its pace. If the user insists on reading it, read it — but it stays out of the subtitles.
+- A disclaimer **does not replace verification**: get a number wrong and ten disclaimer lines will not save it.
 
-- 不宣称疗效、不做诊断、不推荐具体药品或治疗;要提就提"权威指南/说明书怎么写",并注明版本与日期。
-- 免责行:"本视频为科普信息,不构成医疗建议,具体诊疗请咨询执业医师。"
-- 数据来源等级同样按财经标准(优先指南、药监局/药典、同行评议论文),**不接受自媒体转述**。
+## 3. Healthcare / medical
 
-## 4. 法律 / 政务 / 政策
+- No efficacy claims, no diagnosis, no recommending a specific drug or treatment; if you must mention one, describe "what the authoritative guideline / the approved label says", with version and date.
+- Disclaimer line: "This video is general information, not medical advice; consult a licensed physician for diagnosis and treatment."
+- Source ranking follows the finance standard (guidelines first, then the drug regulator — FDA / EMA / NMPA — or the pharmacopoeia, then peer-reviewed papers); **second-hand social-media retellings are not acceptable**.
 
-- 引法条要**原文 + 生效日期**;区分"现行有效"与"征求意见稿"。
-- 不做个案解读("你这情况可以这样主张"→ 改为"法条原文为…,个案需咨询执业律师")。
-- 政策/统计只引**官方发布**并注意修订说明(见 `research.md`)。
+## 4. Legal / government / policy
 
-## 5. 品牌 / 营销(广告法)
+- Quote provisions **verbatim + effective date**; distinguish "currently in force" from "draft for comment".
+- No case-specific interpretation ("in your situation you could argue…" → "the provision reads…, individual cases need a licensed lawyer").
+- For policy and statistics cite **official releases only**, and watch for revision notes (see `research.md`).
 
-- **绝对化用语是雷区**:最/第一/顶级/唯一/国家级/100% 有效/永不 —— 除有权威依据或用户提供了依据文件,一律不用。
-- 效果宣称要有依据("效率提升 3 倍"→ 注明测试条件与来源),无依据就改定性。
-- 他人商标、肖像、代言关系**未经授权不用**;比较性宣称必须可核查且注明比较对象与口径。
+## 5. Brand / marketing (advertising claims)
 
-## 6. 收尾检查清单(Gate 0 与 Gate 5 各过一遍)
+- **Absolute wording is a minefield**: best / no.1 / top / only / national-level / 100% effective / never — none of it without an authoritative basis or a substantiation document the user supplies.
+- Efficacy claims need substantiation ("3x more efficient" → state the test conditions and the source); without substantiation, make the claim qualitative.
+- Third-party trademarks, likenesses and endorsement relationships: **never use without authorisation**; comparative claims must be verifiable and must state the comparator and the basis.
 
-- [ ] 领域已确认;**用户明确说了要 / 不要免责声明**(记进 notes)
-- [ ] 每个数字都带口径 + 币种 + 时点(财经)
-- [ ] 无操作建议、无价格预测、无绝对化用语
-- [ ] 涨跌色与受众市场一致(A 股/港股 = 红涨绿跌,且用的是 `var(--up)/var(--down)`)
-- [ ] 若确认要:免责行出现在画面、停留 ≥3s、不进字幕口播
-- [ ] 数据图形全部来自官方来源,无 AI 生成图
+## 6. Closing checklist (run once at Gate 0 and once at Gate 5)
 
-相关:`research.md`(来源分级与口径)、`authoring.md`(版式与 `.disclaimer` 片段)、`image-sources.md`(素材合规)。
+- [ ] Domain confirmed, and the **audience market named** — the rules applied are that market's (US: SEC/FTC/FDA; EU & UK: FCA/ESMA/EMA; China: CSRC/NMPA/SAMR; elsewhere: the local regulator)
+- [ ] **The user explicitly said yes / no to a disclaimer** (recorded in the notes)
+- [ ] Every number carries definition / scope + currency / units + date or period (finance)
+- [ ] No trading recommendations, no price predictions, no absolute wording
+- [ ] Up/down colours match the audience market (Greater China = red up / green down; US/EU = green up / red down) and use `var(--up)` / `var(--down)`
+- [ ] If confirmed: the disclaimer is on screen, stays ≥3s, and is not in the narration or the subtitles
+- [ ] All data graphics come from official sources, none AI-generated
+
+> **Regional example — mainland China** (the market this skill was first written for): regulators CSRC / NMPA / SAMR; financial and medical disclaimers in Chinese, as above; A-share and Hong Kong audiences read red = up, so apply the flip in §2.3; advertising claims fall under the Advertising Law, whose absolute-wording list (best / no.1 / top / only / national-level / 100% effective / never) is treated as a hard prohibition. In any other market, substitute that market's regulator and wording rules — the process above does not change.
+
+Related: `research.md` (source ranking and definitions), `authoring.md` (layout and the `.disclaimer` snippet), `image-sources.md` (asset compliance).

@@ -235,6 +235,31 @@ if (hits.size >= 2 && !hasDisclaimerLine) {
   warns++;
 }
 
+// 8. Gate 4 的预览参数(1.6.0): 切页方式与入场层级 —— 这两项正是"HTML 做完给用户预览模拟"时要问的,
+//    在这里打印出来, 让 agent 拿着实测数字去问, 而不是凭印象。
+const transition = script.transition ?? null;
+const transLabel = (() => {
+  if (transition == null) return '未设置(老项目: 成片按硬切出; 想改就在 script.json 写 transition)';
+  const t = typeof transition === 'string' ? transition : transition.type;
+  if (!['cut', 'xfade'].includes(t)) return `✗ 非法值 ${JSON.stringify(t)}(只支持 cut / xfade)`;
+  return t === 'cut' ? '硬切 cut' : `交叉溶解 xfade ${transition.duration ?? 0.4}s`;
+})();
+const levelLine = slides
+  .map(s => {
+    if (!s.html) return null;
+    const f = safeRel(slidesDir, s.html, { where: `slides[${s.id}].html` });
+    if (!fs.existsSync(f)) return null;
+    const h = fs.readFileSync(f, 'utf8');
+    const stages = new Set([...h.matchAll(/\bdata-stage\s*=\s*["'](\d+)["']/g)].map(m => Number(m[1])));
+    return `${s.id}=${stages.size || 1} 级`;
+  })
+  .filter(Boolean)
+  .join(' · ');
+if (!QUIET) {
+  console.log(`\n预览参数(Gate 4 要问用户的两项): 转场 = ${transLabel}`);
+  console.log(`  入场层级 = ${levelLine}(>1 级 = 逐级揭示; 用户要"大标题与子信息一次性出现"时, 把该张各级 data-stage 收敛为同一级再重跑 capture)`);
+}
+
 if (!QUIET) {
   const bySlide = new Map();
   for (const r of report) { if (!bySlide.has(r.id)) bySlide.set(r.id, []); bySlide.get(r.id).push(r); }

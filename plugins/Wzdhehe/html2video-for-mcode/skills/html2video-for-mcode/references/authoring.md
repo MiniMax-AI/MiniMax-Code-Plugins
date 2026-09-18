@@ -1,106 +1,106 @@
-# HTML 设计与内容量规范
+# HTML Design and Content Volume Guidelines
 
-## 核心原则:每张 slide 是"一句主张 + 一组展开"
+## Core principle: every slide is "one claim + one set of elaboration"
 
-成片最常见的两个败笔,都在authoring阶段就能拦住:
+The two most common failures in a finished video can both be stopped at the authoring stage:
 
-1. **只有标题没有展开** —— 观众 7 秒只看到一行大字,信息量为零。
-2. **文字一次性全糊上屏** —— 没有节奏,口播念到后半句时视觉早已无话可说。
+1. **A title with no elaboration** —— the audience watches one big line for 7 seconds; the information content is zero.
+2. **All the text dumped onto the screen at once** —— no rhythm; by the time the voiceover reaches the second half of the clause, the visuals have long since run out of anything to say.
 
-解法是强制的三层结构:**标题层 + 展开层 + 视觉锚点(可选),三层分属不同 stage**。口播与画面是同一句话的两个声部。
+The fix is a mandatory three-layer structure: **title layer + elaboration layer + visual anchor (optional), with the three layers on different stages**. The voiceover and the frame are two voices of the same sentence.
 
-**层的入场顺序不固定 —— 由叙事决定,标题先行只是默认。** 判据是强同步原则:哪个层被哪句口播提到,就挂在那个 stage。完全合法的变体:
+**The entrance order of the layers is not fixed —— the narrative decides it; title-first is only the default.** The criterion is the strong-sync principle: whichever layer a given voiceover clause mentions is the stage that layer hangs on. Entirely legal variants:
 
-- **大数字先入,标题后出**(stat-highlight 的默认形态):口播第一句就砸数字,数字 s1、说明与标题 s2;
-- **设问先出,答案再出**:问题大字 s1 → 答案/数据 s2 → 标题收拢 s3;
-- **图先入,文字后落**:主体图 s1 → 关键词标注 s2(图片类题材常用)。
+- **Big number in first, title out later** (the default shape of stat-highlight): the first voiceover clause slams the number; number at s1, explanation and title at s2;
+- **Question out first, answer next**: question in large type s1 → answer/data s2 → title gathers it up s3;
+- **Image in first, text lands after**: main image s1 → keyword annotation s2 (common for image-led subjects).
 
-要拦的从来不是"标题不先行",而是**只有一层**:整张停在标题/单块内容上、没有第二个信息层推进。
+What must always be blocked is never "the title does not come first", but **only one layer**: the whole slide stops on the title/a single block of content, with no second information layer pushing it forward.
 
-## 内容量表(硬规则)
+## Content volume table (hard rules)
 
-中文口播 ≈ 4.8 字/秒(speed 1.0),每张目标 6–10s。**英语按 ~14 字符/秒(约 150 词/分)**——下表字数是中文口径;英语项目按"词"折半看:每张 14–26 词、硬上限 34 词(plan-timings 会按 `lang` 自动切换基准与预警区间)。
+Chinese voiceover ≈ 5.3 chars/sec (speed 1.1; 4.8 at 1.0), target 6–10s per slide. **English at ~14 chars/sec (about 150 words/min)** —— the character counts in the table below are the Chinese measure; for English projects read them halved, in "words": 14–26 words per slide, hard ceiling 34 words (plan-timings switches the baseline and the warning band automatically by `lang`).
 
-| 版式 | 用途 | 画面必含(缺一即违规) | 口播字数 | clauses 结构 |
+| Layout | Purpose | Required on the frame (any one missing is a violation) | Voiceover length | clauses structure |
 |---|---|---|---|---|
-| title-hero | 开场主张 | 大标题 + 副题一行 + logo/主题角标 | 12–20 | 1 句 |
-| statement | 单点断言 | 断言大字(s1) + 支撑小字(s2) + 视觉锚点(s3 可选) | 18–28 | 2 句 |
-| bullets | 并列要点 | 标题(s1) + 3–4 条要点,每条 ≤14 字(s2) | 25–40 | 2 句 |
-| compare | 前后对比 | 标题(s1) + 左右两栏各 ≥1 项 + 分隔(s2) | 22–35 | 2 句 |
-| data-viz | 数据说服 | 标题(s1) + ≥2 个数字卡/图表(s2) | 25–40 | 2 句 |
-| code | 演示调用 | 标题(s1) + 代码块 ≥3 行 + 高亮注释(s2) | 25–40 | 2 句 |
-| quote | 引语转场 | 引语大字(s1) + 署名/头衔(s2) | 20–32 | 2 句 |
-| closing | 收束 | 一句收束 + logo/CTA | 12–20 | 1 句 |
+| title-hero | Opening claim | Large title + one subtitle line + logo/theme corner mark | 12–20 | 1 sentence |
+| statement | Single-point assertion | Assertion in large type (s1) + supporting small type (s2) + visual anchor (s3 optional) | 18–28 | 2 sentences |
+| bullets | Parallel points | Title (s1) + 3–4 points, each ≤14 chars (s2) | 25–40 | 2 sentences |
+| compare | Before/after contrast | Title (s1) + left and right columns with ≥1 item each + divider (s2) | 22–35 | 2 sentences |
+| data-viz | Data persuasion | Title (s1) + ≥2 number cards/charts (s2) | 25–40 | 2 sentences |
+| code | Demonstrating a call | Title (s1) + code block ≥3 lines + highlighted comment (s2) | 25–40 | 2 sentences |
+| quote | Quotation transition | Quotation in large type (s1) + attribution/title (s2) | 20–32 | 2 sentences |
+| closing | Close | One closing line + logo/CTA | 12–20 | 1 sentence |
 
-判定规则(写给执行者,自查用):
+Decision rules (written for the executor, for self-check):
 
-- 除 title-hero/closing 外,**画面视觉块 ≥2 个且分属不同 stage**;"光标题 + 页码"直接打回。**层的先后顺序自由**(数字可以先于标题、设问可以先于答案),错的是"只有一个层",不是"标题不在 s1"。
-- **强同步原则(2026-09 实测教训):每个 stage 的视觉锚点(大数字/关键词/主体图)必须写在触发它的那句口播里,不要放在上一句。**反例:口播第一句就是"三亿人在用",但"3 亿"数字卡挂在 stage 2——观众听到"三亿"时画面没反应,数字卡进场时口播已讲到下一句,体感就是"动画对不上"。正例:第一句只铺垫("它有三个你可能用过的产品"),"3 亿"作为第二句开头,数字卡挂 stage 2 → 声画同时砸出"3 亿",强同步。
-- 口播 clauses 与 stage 的映射:**stage k 的视觉在 clause k 开口时入场**。stage 数 ≈ clause 数;多出的视觉层用 script.json 的 `stageTimes` 显式给时刻。
-- 单张口播硬上限 60 字;超了说明这张在干两张的活,拆。字幕场景下单句建议 ≤18 字(capture 烧录字幕单行展示);双语时第二行(text2)≤60 字符。
-- 数字、专有名词在口播里用中文读法(“九亿”而非“900000000”),画面上才出现阿拉伯数字。(英语项目相反:口播写英文数字读法 “nine hundred million”,画面用 900M。)
-- 双语字幕(可选):每句给 `text2` 即自动两行(主行中文 + 次行小字号);text2 是同一句的翻译,不要重排语序。
+- Apart from title-hero/closing, **the frame carries ≥2 visual blocks on different stages**; "just a title + page number" is sent straight back. **The order of the layers is free** (the number may precede the title, the question may precede the answer); what is wrong is "only one layer", not "the title is not at s1".
+- **Strong-sync principle (a lesson measured in 2026-09): the visual anchor of each stage (big number/keyword/main image) must be written into the voiceover clause that triggers it, never left in the previous clause.** Counter-example: the very first voiceover clause is "三亿人在用" ("three hundred million people use it"), but the "3 亿" number card hangs on stage 2 —— when the audience hears "三亿" the frame does not react, and by the time the number card enters, the voiceover has already moved to the next clause; what the viewer feels is "the animation does not line up". Correct example: the first clause only sets up ("它有三个你可能用过的产品" — "it has three products you have probably used"), "3 亿" opens the second clause, and the number card hangs on stage 2 → sound and picture slam "3 亿" down together, strong sync.
+- The mapping between voiceover clauses and stages: **the visuals of stage k enter the moment clause k starts speaking**. Number of stages ≈ number of clauses; any extra visual layers get explicit times via `stageTimes` in script.json.
+- Hard ceiling of 60 characters of voiceover for a single slide; over that means the slide is doing the work of two, so split it. In subtitle scenarios, keep a single sentence to ≤18 characters (capture burns subtitles as a single displayed line); when bilingual, the second line (text2) is ≤60 characters.
+- Numbers and proper nouns are read in Chinese in the voiceover ("九亿", not "900000000"), and only the frame shows Arabic numerals. (English projects are the opposite: the voiceover writes the English reading "nine hundred million" and the frame shows 900M.)
+- Bilingual subtitles (optional): supplying `text2` for each clause automatically produces two lines (main line in Chinese + second line in a smaller size); text2 is the translation of the same clause, so do not reorder the wording.
 
-## 分步入场系统(怎么写 HTML)
+## The staged entrance system (how to write the HTML)
 
-tokens.css 已内置,规则只有四条:
+tokens.css already ships this built in, and there are only four rules:
 
-1. 要入场的块:`data-stage="1|2|3"` + fx 工具类(`fx-up/fx-fade/fx-grow/fx-draw`)。
-2. **不写任何延迟秒数**。`--t1/--t2/--t3` 由渲染管线按 TTS 实测时长注入;浏览器里直接打开时用 tokens 里的占位默认值(0/0.8/2.0s)。
-3. 同层错峰(如三条 bullets 依次出现):内联 `style="animation-delay:calc(var(--t2) + 150ms)"`,第二块 +300ms,以此类推。
-4. 氛围动画(`fx-pulse` 等无限循环)只能用于装饰(光晕、呼吸点),**不加 data-stage、不承载信息**——它们不参与时长计算,静止截图中可能停在任意相位。
+1. A block that should enter: `data-stage="1|2|3"` + an fx utility class (`fx-up/fx-fade/fx-grow/fx-draw`).
+2. **Write no delay in seconds at all**. `--t1/--t2/--t3` are injected by the render pipeline from measured TTS durations; opening the file directly in a browser uses the placeholder defaults in tokens (0/0.8/2.0s).
+3. Staggering within the same layer (e.g. three bullets appearing one after another): inline `style="animation-delay:calc(var(--t2) + 150ms)"`, +300ms for the second block, and so on.
+4. Ambient animations (`fx-pulse` and other infinite loops) may only be decorative (glows, breathing dots); **give them no data-stage and let them carry no information** —— they take no part in duration calculation and may be frozen at an arbitrary phase in a still frame.
 
-禁令:入场效果不要用 transition(管线逐帧 seek 不到 transition 状态);不要用 JS 定时器编排(setTimeout 驱动的分层,帧步进模式下不会发生);字体不要引外部 Google Fonts(离线环境直接方框),用 tokens.css 的系统字体栈。
+Prohibitions: no transition for entrance effects (the pipeline cannot seek to a transition state frame by frame); no orchestrating with JS timers (setTimeout-driven layering never happens in frame-stepping mode); no external Google Fonts for type (they render as plain boxes offline) —— use the system font stack in tokens.css.
 
-### 写 HTML 的三条硬检查(写完立刻跑 `node <技能>/scripts/check-slides.mjs <项目>`)
+### Three hard checks when writing HTML (run `node <skill>/scripts/check-slides.mjs <project>` the moment you finish)
 
-这三条都是 2026-09 实测踩过的静默故障 —— 画面明显不对,但流水线一路报成功:
+All three are silent failures hit during 2026-09 testing —— the frame is visibly wrong, yet the pipeline reports success the whole way through:
 
-1. **变量必须先定义,或带 fallback**。`background: linear-gradient(135deg, var(--coral-a), var(--coral-b))` 里只要有一个变量没定义,整条声明计算为 `none`;若该元素又用了 `-webkit-text-fill-color: transparent`(渐变数字的常规写法),**文字会彻底隐形且不报错**。从别的单页 HTML 抄配色时最容易踩:抄来的变量名(如 `--coral-*`)不在 tokens.css 里。要么在项目 tokens.css 补定义,要么写 `var(--coral-a, #ED3366)` 给默认值。
-2. **图片用相对路径且文件必须存在**;`.svg` 建议 **inline 进 HTML**。实测 file:// 下 `<img src="x.svg">` 能正常加载(400px),所以 broken 图标通常不是协议问题,而是 SVG 本身:XML 有误、依赖外部资源/Web 字体、缺 width/height、或下载失败存成了 HTML。inline 一次解决全部。
-3. **不要把外部单页的配色/变量整套抄进来**。可抄版式结构,配色必须落到 tokens 变量(`--accent` / `--good` / `--grad` …);硬编码 hex/rgb 换主题时会串色。
+1. **Variables must be defined first, or carry a fallback.** In `background: linear-gradient(135deg, var(--coral-a), var(--coral-b))`, if even one variable is undefined the whole declaration computes to `none`; and if that element also uses `-webkit-text-fill-color: transparent` (the standard way to write gradient numbers), **the text becomes completely invisible without raising any error**. This is easiest to hit when borrowing colours from another single-page HTML: the borrowed variable names (e.g. `--coral-*`) are not in tokens.css. Either add the definitions to the project tokens.css, or write `var(--coral-a, #ED3366)` to supply a default.
+2. **Images use relative paths and the files must exist**; for `.svg` it is best to **inline it into the HTML**. Measured: under file://, `<img src="x.svg">` loads fine (400px), so a broken icon is usually not a protocol problem but the SVG itself: malformed XML, a dependency on external resources/web fonts, missing width/height, or a failed download saved as HTML. Inlining solves all of it at once.
+3. **Do not copy an external single page's colours/variables over wholesale.** Copying the layout structure is fine, but colours must land on tokens variables (`--accent` / `--good` / `--grad` …); hard-coded hex/rgb bleeds through when you switch theme.
 
-## 主题与视觉基调
+## Theme and visual tone
 
 `<html data-theme="...">`:
 
-- **a · 米白+暖橙**(默认,通用商务):bg `#FAFAF7`,accent `#FF5B2E`,衬线大标题。讲述、观点、人物向。
-- **b · 深色+绿**(科技感):bg `#0E0F12`,accent `#10A37F`,高对比数据。产品、AI、开发者向。
-- **c · 黑白+蓝**(极简高端):bg `#FFFFFF`,accent `#1F6FEB`。财务、报告、严肃向。
+- **a · off-white + warm orange** (default, general business): bg `#FAFAF7`, accent `#FF5B2E`, serif large titles. Narrative, opinion, people-oriented.
+- **b · dark + green** (tech feel): bg `#0E0F12`, accent `#10A37F`, high-contrast data. Product, AI, developer-oriented.
+- **c · black-and-white + blue** (minimal and premium): bg `#FFFFFF`, accent `#1F6FEB`. Finance, reports, serious material.
 
-字号纪律:一张 slide 上最多两个层级同屏(标题 + 一个次级);正文 ≥30px,再小就是给审查者找茬。安全边距:内容离边缘 ≥96px(brand/slide-num 除外)。
+Type discipline: at most two levels on screen at once per slide (title + one secondary); body text ≥30px —— anything smaller is inviting a reviewer's complaint. Safe margin: content ≥96px from the edge (except brand/slide-num).
 
-⚠ **字幕安全区(1080 高度下)**:字幕胶囊占**底部 84–168px、居中约 73% 宽**(字号 40px + 上下 padding 12px,距底 7.8%);**这一带不要放正文、数值、图表或图注** —— 否则成片里字幕会直接压在内容上,两个都读不清(2026-09-18 由视觉验收抓到:示例页把图注排在底部,字幕盖上去成了"文字重影")。做法:版面容器 `padding-bottom: 190px` 起步,底部只留 brand/slide-num。**竖版(1080×1920)**:几何同一套公式按画布算 —— 距底 ≈149px(7.8%×1920)、字号被 `--sub-scale` 压到 30px,胶囊带约在**底部 150–215px、居中约 787px 宽**,版面容器 `padding-bottom: 240px` 起步,且字幕行更窄,单句字数要比横屏再收。
+⚠ **Subtitle safe area (at 1080 height)**: the subtitle pill occupies **the bottom 84–168px, centred, about 73% wide** (40px type + 12px padding top and bottom, 7.8% from the bottom); **do not put body text, values, charts or figure captions in this band** —— otherwise the subtitles land directly on top of the content in the finished video and neither can be read (caught by visual acceptance on 2026-09-18: an example page had its figure caption at the bottom and the subtitle covered it, producing "ghosted text"). The fix: start from `padding-bottom: 190px` on the layout container and keep only brand/slide-num at the bottom. **Portrait (1080×1920)**: the same formulas computed against the canvas —— ≈149px from the bottom (7.8% × 1920), type squeezed to 30px by `--sub-scale`, the pill band at roughly **150–215px from the bottom and about 787px wide centred**; start from `padding-bottom: 240px` on the layout container, and since subtitle lines are narrower, keep the per-sentence character count tighter than in landscape.
 
-## 素材获取(Phase 3 · Gate 3)
+## Asset acquisition (Phase 3 · Gate 3)
 
-流程:列需求清单(哪几张要图、要什么)→ 按下面的优先级取材 → 合规自查 → 落盘 `assets/` 并登记 `MANIFEST.md` → **Gate 3 给用户过**。
+Process: list the requirements (which slides need images, and what) → source by the priority order below → compliance self-check → write to disk under `assets/` and register in `MANIFEST.md` → **present Gate 3 to the user**.
 
-**获取优先级(逐级降级,不硬找):**
+**Sourcing priority (step down level by level, never force it):**
 
-1. **官方渠道(首选)**:logo 用官方 brand kit 或 simple-icons(可直接 curl);产品截图截官方 help/文档;数据用官方报告。合规性最强,事实性题材尽量停在这级。
-2. **内置浏览器 / Playwright 访问官网提取(2026-09 实测推荐)**:用 agent 的内置浏览器或 Playwright 打开官网/官方新闻页,inspect DOM 提取 `<img>`/`<source>` 资源(校验 src 是官方 CDN 域名,再 `fetch-official-images.mjs --url <URL> --out-dir assets` 落盘 —— 同一套 host/大小/文件名校验)。实测中国 AI 公司题材 6/6 全相关,远好于搜索引擎图搜。开工对齐时用户选了"只用官方素材/纯排版"则整级跳过。
-3. **纯排版降级(永远可用的兜底)**:大字 + 数字卡 + 配色 + 版式本身的表现力。宁缺毋假——没有合适素材就用这级,画面依然成立。
+1. **Official channels (first choice)**: logos from the official brand kit or simple-icons (curl-able); product screenshots taken from official help/docs; data from official reports. Strongest compliance; for factual subjects try to stop at this level.
+2. **Extract from the official site with a built-in browser / Playwright (measured and recommended, 2026-09)**: open the official site or official news page with the agent's built-in browser or Playwright, inspect the DOM and extract `<img>`/`<source>` assets (verify the src is an official CDN domain, then write to disk with `fetch-official-images.mjs --url <URL> --out-dir assets` —— the same host/size/filename validation set). Measured on Chinese AI-company subjects: 6/6 all relevant, far better than image-search engines. If the user chose "official assets only / pure layout" during kickoff alignment, skip this whole level.
+3. **Pure-layout fallback (the fallback that is always available)**: large type + number cards + colour + the expressive power of the layout itself. Better to omit than to fake —— when no suitable asset exists, use this level; the frame still holds up.
 
-> ⚠ **image-downloader(Bing 搜图)默认不用。** 2026-09-17 实测:中文 AI 公司题材 5/5 关键词返回的全部是无关图(Bing 端返回"猜你喜欢"推荐卡,脚本正则照单全收)。除非题材是英文大众品牌且愿意逐张人工筛,否则不要走这条路。
+> ⚠ **image-downloader (Bing image search) is off by default.** Measured 2026-09-17: for Chinese AI-company subjects, 5/5 keywords returned entirely irrelevant images (Bing returned "猜你喜欢" (recommended-for-you) cards and the script's regex swallowed the lot). Unless the subject is an English-language mass-market brand and you are willing to filter every image by hand, do not take this route.
 
-**合规自查(每个素材过一遍):**
+**Compliance self-check (run through it for every asset):**
 
-- 无水印。有水印的候选:换一张,或裁到水印外;裁不掉就不用。
-- 商标/logo 只在"谈论该品牌"的合理引用语境使用,不做装饰滥用。
-- 照片须来自可授权来源(官方新闻图、CC 授权、免费图库);查不到授权的明星/人物照宁可用纯文字引语卡。
-- 截图注明出处(官方文档名 + 日期)。
+- No watermarks. For a watermarked candidate: use a different image, or crop inside the watermark; if you cannot crop it out, do not use it.
+- Trademarks/logos are used only in the legitimate reference context of "talking about that brand", never as decorative filler.
+- Photos must come from licensable sources (official press images, CC-licensed, free stock libraries); for celebrity/people photos with no verifiable licence, prefer a text-only quotation card.
+- Screenshots state their source (official doc name + date).
 
-**登记与使用:**
+**Registration and use:**
 
-- `assets/MANIFEST.md` 每个素材一行:文件名 / 内容 / 来源 URL 或渠道 / 许可。Gate 3 连同素材预览一起给用户,明确问"来源与授权没问题吗"。
-- **禁止凭空生成 logo、截图、头像、二维码;禁止带水印图入素材。**
-- **图片必须套框,禁止裸放 `<img>`**:用 `.img-frame`(比例与裁切归框)/ `.img-frame.contain`(截图、图表、带文字的图必须用,不裁切居中留白)/ `--img-ratio`(框比例,不必强求 16:9)/ `--img-pos: top|center|bottom`(控制主体可见区,**替代硬裁的首选**)/ `.img-scrim`(压暗垫白字)/ `.img-cap`(图注,写在框外)/ `.img-tag`(角标)。选图与裁切的完整 SOP 见 `references/image-sources.md`。
-- 图片入 HTML 用相对路径 `../assets/xxx.png`;capture 会等图片加载完(每张上限 4s,加载不动就跳过——所以素材必须先落本地,绝不引外链图)。
+- `assets/MANIFEST.md` gets one line per asset: filename / content / source URL or channel / licence. Present Gate 3 to the user together with the asset previews and ask explicitly "are the sources and licences OK?".
+- **Never generate logos, screenshots, avatars or QR codes out of thin air; never let a watermarked image into the assets.**
+- **Images must be framed; never place a bare `<img>`**: use `.img-frame` (ratio and cropping belong to the frame) / `.img-frame.contain` (mandatory for screenshots, charts and images containing text; no cropping, centred with letterboxing) / `--img-ratio` (frame ratio; 16:9 is not required) / `--img-pos: top|center|bottom` (controls the visible part of the subject, **the preferred replacement for hard cropping**) / `.img-scrim` (darken to carry white text) / `.img-cap` (figure caption, written outside the frame) / `.img-tag` (corner tag). The full SOP for choosing and cropping images is in `references/image-sources.md`.
+- Reference images in HTML with a relative path `../assets/xxx.png`; capture waits for images to finish loading (4s cap each, skipped if they do not load —— so assets must be local first; never link an external image).
 
-## 版式片段(可抄)
+## Layout snippets (copy-ready)
 
-以下片段基于 tokens.css + 每张自己的 `<style>`(布局骨架 `.layout/.cols/.cards/.num/.cap` 这类每张内联自定,不来自 tokens.css);只列 `<main>` 内部结构;外层 `.stage`、`.brand`、`.slide-num` 照 `_template.html`。
+The snippets below build on tokens.css plus each slide's own `<style>` (layout skeletons such as `.layout/.cols/.cards/.num/.cap` are defined inline per slide and do not come from tokens.css); they list only the structure inside `<main>`; the outer `.stage`, `.brand`, `.slide-num` follow `_template.html`.
 
 **bullets**
 ```html
@@ -167,27 +167,27 @@ console.log(answer.output_text);</code></pre>
 </main>
 ```
 
-**title-hero / closing**:大标题居中 + 一行副题/CTA,单 stage 即可;closing 可加 logo `fx-grow`。
+**title-hero / closing**: large title centred + one line of subtitle/CTA, a single stage is enough; closing may add a logo with `fx-grow`.
 
-布局 CSS(`.layout/.cols/.cards/.num/.cap` 等)每张 slide 内联在 `<style>` 里自定,共用值(色、字号、缓动)必须取 tokens 变量,不许硬编码。
+Layout CSS (`.layout/.cols/.cards/.num/.cap` etc.) is defined inline in each slide's `<style>`; shared values (colours, type sizes, easing) must come from tokens variables and must never be hard-coded.
 
 ---
 
-# 补充版式(2026-09-17 新增 9 个)
+# Additional layouts (9 added 2026-09-17)
 
-原有 8 个版式名不变(老项目的 `layout` 值继续有效),以下是增量选项。**相邻两张不要用同一版式。**
+The original 8 layout names are unchanged (existing projects' `layout` values stay valid); the following are incremental options. **Do not use the same layout on two adjacent slides.**
 
-| 版式 | 用途 | 画面必含(缺一即违规) | 口播字数 | clauses |
+| Layout | Purpose | Required on the frame (any one missing is a violation) | Voiceover length | clauses |
 |---|---|---|---|---|
-| kpi-grid | 一组指标 | 标题(s1) + 3–4 张指标卡,带涨跌与语义色(s2)。**涨跌色用 `var(--up)/var(--down)`,A 股/港股受众要按红涨绿跌覆写(见 compliance.md)** | 25–40 | 2 句 |
-| stat-highlight | 一个数字定生死 | 巨数字(≥200px,可用 .gradient-text)(s1) + 一句说明(s2) | 15–28 | 2 句 |
-| table | 多行对比 | 标题(s1) + ≥3 行数据表,数值右对齐(s2)。**用 `.tbl` 原语;五种形态与纪律见"表格工具箱"** | 25–40 | 2 句 |
-| timeline | 发展历程 | 标题(s1) + ≥4 个时间点(横轴 + 标签)(s2) | 25–40 | 2 句 |
-| roadmap | 阶段规划 | 标题(s1) + 3–4 列(NOW/NEXT/LATER 之类)(s2) | 22–35 | 2 句 |
-| comparison | 前后 / 优劣对照 | 标题(s1) + 左右两栏加竖分隔(s2) | 22–35 | 2 句 |
-| flow-diagram | 流程 / 链路 | 标题(s1) + 3–5 个节点 + 箭头(s2) | 22–35 | 2 句 |
-| terminal | 命令行演示 | 标题(s1) + 终端窗口(灯头 + ≥3 行)(s2) | 25–40 | 2 句 |
-| big-quote | 大引语转场 | 引语大字(s1) + 署名(s2) | 20–32 | 2 句 |
+| kpi-grid | A set of metrics | Title (s1) + 3–4 metric cards with change and semantic colour (s2). **Use `var(--up)/var(--down)` for change; for A-share/HK audiences override to red-up/green-down (see compliance.md)** | 25–40 | 2 sentences |
+| stat-highlight | One number decides everything | Huge number (≥200px, `.gradient-text` allowed) (s1) + one line of explanation (s2) | 15–28 | 2 sentences |
+| table | Multi-row comparison | Title (s1) + ≥3-row data table with right-aligned values (s2). **Use the `.tbl` primitive; the five forms and disciplines are in "table toolkit"** | 25–40 | 2 sentences |
+| timeline | Development history | Title (s1) + ≥4 time points (axis + labels) (s2) | 25–40 | 2 sentences |
+| roadmap | Phase planning | Title (s1) + 3–4 columns (NOW/NEXT/LATER and the like) (s2) | 22–35 | 2 sentences |
+| comparison | Before/after, pros/cons | Title (s1) + left and right columns with a vertical divider (s2) | 22–35 | 2 sentences |
+| flow-diagram | Process / pipeline | Title (s1) + 3–5 nodes + arrows (s2) | 22–35 | 2 sentences |
+| terminal | Command-line demo | Title (s1) + terminal window (traffic lights + ≥3 lines) (s2) | 25–40 | 2 sentences |
+| big-quote | Large quotation transition | Quotation in large type (s1) + attribution (s2) | 20–32 | 2 sentences |
 
 ```html
 <!-- kpi-grid: 指标卡 + 语义色涨跌(涨跌一律走 --up/--down, 财经题材按受众翻转这两个即可, 见 compliance.md)
@@ -298,45 +298,45 @@ console.log(answer.output_text);</code></pre>
 
 ---
 
-# 图表工具箱(data-viz 的画法)
+# Chart toolkit (how to draw data-viz)
 
-图表**全部自绘**,三条底线不变:
+Charts are **all hand-drawn**, and three bottom lines never change:
 
-1. **禁外链图表库**(Chart.js / ECharts 等 CDN):离线沙箱取不到、违反禁外链铁律,而且 canvas 动画逐帧 seek 不到(会渲染成静止/空白)。
-2. **数值必须来自 research/notes.md 里已核实的口径** —— 图表是"把核实过的数字画出来",不是装饰;画不了的口径(缺时点/混币种)先回 Phase 0。
-3. **禁止用 AI 生图当图表**(`image generate` 只限抽象概念图):数据图形必须可追溯到来源,生成图不可核查。
+1. **No external chart libraries** (Chart.js / ECharts etc. via CDN): unreachable in the offline sandbox, a violation of the no-external-links iron rule, and canvas animation cannot be seeked frame by frame (it renders static/blank).
+2. **The numbers must come from a measure already verified in research/notes.md** —— a chart "draws numbers that have been verified", it is not decoration; a measure you cannot draw (missing as-of point / mixed currencies) goes back to Phase 0 first.
+3. **Never use AI-generated images as charts** (`image generate` is limited to abstract concept images): data graphics must be traceable to a source, and generated images cannot be audited.
 
-图表原语与动效都在 `tokens.css` 里(`.chart*` 与 `fx-grow-w/h · fx-sweep · fx-count · fx-dot`)。**老项目先跑 `node scripts/init-project.mjs <项目> --upgrade-css` 补上**(幂等),否则新配方会静默半死:条形不生长、环形不扫出、数字不滚动。
+The chart primitives and motion effects all live in `tokens.css` (`.chart*` plus `fx-grow-w/h · fx-sweep · fx-count · fx-dot`). **For existing projects run `node scripts/init-project.mjs <project> --upgrade-css` first to add them** (idempotent), otherwise the new recipes half-die silently: bars do not grow, rings do not sweep, numbers do not roll up.
 
-## 优雅的九条纪律(比加特效重要)
+## The nine disciplines of elegance (more important than adding effects)
 
-1. **同类同色 + 一条强调**:同一序列的条/柱**同一个颜色**,要突出的那条用 `--accent`(`.chart-bar` 默认),其余加 `.dim`(自动 `color-mix` 弱化成同色系)。彩虹色条形图是最典型的"业余感"来源。**弱化条上的数值不要用白字**——半透明填充配白字读不出来(实测被视觉验收判为"读不清");要么靠 `.chart-bar.dim .chart-val` 自动改用墨色,要么把数值放条外:`<span class="chart-val out chart-num">`(轨道之后,右对齐,墨色)。
-2. **别把数字放进被缩放的元素里**:`fx-grow-x` 用 `scaleX`,条内数字会被**横向拉扁**(实测);带标签的条用 `fx-grow-w`(动画 `width`,不变形)。数值一律套 `.chart-num`(等宽 + `tabular-nums`),多位数字滚动时才不抖。
-3. **有基线、有细网格**:柱状图靠 `.chart-plot-cell` 的底边做基线(柱子必须待在 plot 容器里 —— 百分比高度若相对整列算,超出剩余空间会被 `flex-shrink` 压回去,**柱高就不再等于数值**,实测 84% 与 72% 画成一样高)+ 网格画在绘图区里、**且要在页面上看得见**(用 `--line-strong`; 网格线若太浅、或只在被柱子盖住的地方显影, 读者读不出刻度, 实测被判 fail),顶边线即轴上限。**柱状图的目标值写在标题行 note 里就行** —— 顶部再画一条虚线会跟最高的柱顶数值标签挤在一起, 被读成负号(实测被判缺陷);bullet 那种轨道图才用 `.chart-target` 竖刻度线。横向条形图给每条轨道加 `.chart-track.grid`(共享 25/50/75% 竖刻度),轨道左缘自带零轴竖线。**行用 `.chart-row` 的 grid 三列(标签/轨道/数值位)定宽** —— 否则"有条外数值的行"轨道会被挤窄,同一张图里出现两把尺子、条长不可比(实测被视觉验收抓到)。轴标签用 `--fs-tiny` + `--fg-3`。图表的精致度大半来自这些"看不见的线"。
-4. **一张图只讲一件事**:用 `.chart-note` 把那句话写在标题行右侧(「同比 +38%」「距目标 0.2pp」),别让观众自己算。
-5. **零值和极小值要保底**:给 `.chart-bar` 加 `min-height:4px`(或让 `.chart-target` 虚线兜住),否则"0"看起来像"没数据"。
-6. **图注写口径与时点**(`.chart-cap`):受监管题材必写(见 compliance.md),其他题材也建议 —— 数字的可信度来自"什么时候、怎么算的"。
-7. **标题固定在安全区顶部同一位置, 图表块在剩余空间居中**:图表块应占住安全区(1080 高度下可用约 825px),做法:`h1` 之前留固定上边距、用 `.layout{display:flex;flex-direction:column}` + 图表块外面套一层 `flex:1;display:flex;align-items:center` —— 这样每页标题的 y 位置一致(连播时标题不跳), 图表又在剩余空间里居中(实测两页标题差 170px 会被判 fail)。条形行距/条高可以放大(条高用 `--bar-h`,56–64px 更好看)。上半部挤满、下半部大片空白,成片里就是"整页失衡"(视觉验收实测两次判到)。
-8. **数值对齐到同一列**:同一张图的所有数值右对齐在同一列(都用 `.chart-val.out`);条内白字只用"只有一条强调条、不与其它行并列"的情形,否则四条数值会分成两列,一眼看出没对齐(视觉验收实测)。
-9. **柱高必须由数值算出来, 轴从 0 起**:凭手感写 `height:58%` 会让柱高与标注数字不成比例 —— 这不是审美问题, 是**数据失真**(截断纵轴是同一类错)。做法:先定轴上限(如 4.0%),柱高 = 数值 ÷ 轴上限(3.1/4.0 = 77.5%),并把轴上限写进标题或 note("轴 0–4.0%"), 并在左侧用 `.chart-ticks` 标出刻度数值 —— 只写"轴 0–4.0%"却没有任何刻度, 观众无法核验柱高(实测被判为缺陷)。视觉验收实测:三根柱的画法与标注对不上,直接被判 fail。
+1. **Same kind, same colour + one emphasis**: bars/columns in the same series get **the same colour**; the one to highlight uses `--accent` (the `.chart-bar` default) and the rest get `.dim` (automatically weakened into the same hue by `color-mix`). A rainbow bar chart is the most typical source of "amateur feel". **Do not use white text for the value on a dimmed bar** —— a translucent fill with white text cannot be read (measured: judged "unreadable" by visual acceptance); either rely on `.chart-bar.dim .chart-val` switching to ink automatically, or put the value outside the bar: `<span class="chart-val out chart-num">` (after the track, right-aligned, ink colour).
+2. **Never put the number inside an element that gets scaled**: `fx-grow-x` uses `scaleX`, so a number inside the bar is **squashed horizontally** (measured); for bars with labels use `fx-grow-w` (animates `width`, no distortion). Always wrap values in `.chart-num` (monospace + `tabular-nums`) so multi-digit numbers do not jitter while rolling up.
+3. **Have a baseline and fine gridlines**: a column chart takes its baseline from the bottom edge of `.chart-plot-cell` (columns must stay inside the plot container —— if a percentage height is computed against the whole column, anything exceeding the remaining space gets pushed back by `flex-shrink`, and **the column height no longer equals the value**; measured: 84% and 72% were drawn the same height) + the grid is drawn inside the plot area **and must be visible on the page** (use `--line-strong`; if the gridlines are too faint, or only show up where a column covers them, the reader cannot read the scale —— measured: judged fail), and the top edge line is the axis maximum. **For a column chart the target value is fine written in the note on the title line** —— drawing another dashed line at the top crowds the value label on the tallest column and gets read as a minus sign (measured: flagged as a defect); only track charts like bullet use the `.chart-target` vertical tick line. Horizontal bar charts give every track `.chart-track.grid` (shared 25/50/75% vertical ticks); the left edge of the track already carries the zero-axis vertical line. **Make the rows fixed-width using the three grid columns of `.chart-row` (label / track / value slot)** —— otherwise the track of a "row with an outside value" gets squeezed narrower, and one chart ends up with two different rulers and bar lengths that cannot be compared (measured: caught by visual acceptance). Axis labels use `--fs-tiny` + `--fg-3`. Most of a chart's refinement comes from these "invisible lines".
+4. **One chart tells one thing**: use `.chart-note` to write that sentence on the right of the title line ("同比 +38%" = YoY +38%, "距目标 0.2pp" = 0.2pp from target); do not make the audience do the arithmetic.
+5. **Give zero and tiny values a floor**: add `min-height:4px` to `.chart-bar` (or let the `.chart-target` dashed line catch it), otherwise "0" looks like "no data".
+6. **The figure caption states the measure and the as-of date** (`.chart-cap`): mandatory for regulated subjects (see compliance.md), and recommended for other subjects too —— the credibility of a number comes from "when and how it was calculated".
+7. **Pin the title to the same position at the top of the safe area and centre the chart block in the remaining space**: the chart block should occupy the safe area (about 825px usable at 1080 height); do it by keeping a fixed top margin before the `h1`, using `.layout{display:flex;flex-direction:column}` and wrapping the chart block in a layer with `flex:1;display:flex;align-items:center` —— that way the title sits at the same y on every page (the title does not jump when the video plays through) while the chart is centred in the leftover space (measured: titles 170px apart across two pages was judged fail). Bar spacing/height can be enlarged (use `--bar-h` for bar height; 56–64px looks better). A packed top half and a large empty bottom half reads as "the whole page is unbalanced" in the finished video (measured twice by visual acceptance).
+8. **Align values into a single column**: every value in a chart is right-aligned in the same column (all using `.chart-val.out`); white text inside a bar is only for the case where "there is exactly one emphasis bar and it is not side by side with other rows", otherwise the four values split into two columns and the misalignment is obvious at a glance (visual acceptance measurement).
+9. **Column height must be computed from the value, and the axis starts at 0**: writing `height:58%` by feel makes the column height out of proportion to the labelled number —— this is not an aesthetic issue, it is **data distortion** (truncating the vertical axis is the same class of error). Do it this way: fix the axis maximum first (e.g. 4.0%), column height = value ÷ axis maximum (3.1/4.0 = 77.5%), write the axis maximum into the title or the note ("axis 0–4.0%"), and mark the tick values on the left with `.chart-ticks` —— writing only "axis 0–4.0%" with no ticks at all leaves the audience unable to verify the column heights (measured: flagged as a defect). Visual acceptance measurement: the drawing of three columns did not match their labels and was judged fail outright.
 
-其余照旧:颜色走令牌(涨跌 `var(--up)/var(--down)`,财经按受众翻转),网格 `var(--line)`,数值 `var(--fg)`,图例 `--muted`。**动效是图表的一部分**,且**全套可一键关**(见"动效开关")。
+Everything else is as before: colours go through tokens (up/down `var(--up)/var(--down)`, flipped by audience for financial subjects), grid `var(--line)`, values `var(--fg)`, legend `--muted`. **Motion is part of the chart**, and **the whole set switches off with one flag** (see "Motion switches").
 
-## 动效选型(逐帧 seek 确定性不变,仍是纯 @keyframes)
+## Choosing motion effects (frame-by-frame seek determinism unchanged, still pure @keyframes)
 
-| 图形 | 用哪个 | 为什么 |
+| Graphic | Which one | Why |
 |---|---|---|
-| 条形(带标签) | `fx-grow-w` + 内联 `--w:86%` | 动画 `width`,数字不被拉扁 |
-| 条形(纯色块) | `fx-grow-x` | transform 更省,反正没文字 |
-| 柱状(标签在柱外) | `fx-grow-y` | 标签是兄弟节点,不受缩放影响 |
-| 柱状(标签在柱内) | `fx-grow-h` + 内联 `--h:70%` | 同上,避免数字被拉扁 |
-| 折线 | `fx-draw`(元素自设 `stroke-dasharray:800`)+ `fx-dot` 落点 | 描边画入天然可 seek;数据点逐个弹出 |
-| 环形 / 仪表 | `fx-sweep` + 内联 `--p-to:62` | 锥面渐变随注册属性逐帧重算,**真的扫出来**(不必用 `fx-pop` 硬弹) |
-| 大数字 | `fx-count` + 内联 `--n-to:924` | 纯 CSS 计数器滚动;**只支持整数**(小数请拆字段或保持静态) |
+| Bar (with label) | `fx-grow-w` + inline `--w:86%` | animates `width`, the number is not squashed |
+| Bar (flat colour block) | `fx-grow-x` | transform is cheaper, and there is no text anyway |
+| Column (label outside) | `fx-grow-y` | the label is a sibling node, unaffected by scaling |
+| Column (label inside) | `fx-grow-h` + inline `--h:70%` | as above, avoids squashing the number |
+| Line | `fx-draw` (set `stroke-dasharray:800` on the element) + `fx-dot` for the points | stroke drawing is inherently seekable; data points pop in one by one |
+| Donut / gauge | `fx-sweep` + inline `--p-to:62` | the conic gradient recomputes frame by frame from the registered property, so it **really sweeps** (no need for a hard `fx-pop`) |
+| Big number | `fx-count` + inline `--n-to:924` | pure CSS counter roll-up; **integers only** (for decimals split the fields or keep it static) |
 
-错峰一律 `--fx-delay:calc(var(--t2) + N×120ms)`(数据条之间 120–150ms 最好看,超过 200ms 观众会等)。
+Staggering is always `--fx-delay:calc(var(--t2) + N×120ms)` (120–150ms between data bars looks best; past 200ms the audience starts waiting).
 
-## 配方
+## Recipes
 
 ```html
 <!-- ① 横向条形图(排名/对比首选): 标签在条外, 数值统一右对齐到同一列(都用 .chart-val.out); 关键一条用默认色, 其余 .dim;
@@ -475,27 +475,27 @@ console.log(answer.output_text);</code></pre>
 </span>
 ```
 
-选型速查:排名/对比 → 横向条形;时间趋势(≤5 点)→ 柱状,(>5 点)→ 折线;占比(≤3 块)→ 环形;实际 vs 目标 → bullet;前后对照 → slope;数字旁的趋势 → sparkline。**一张 slide 只放一个图**(非放两个就必须分主次或拆张),图注永远要写。
+Quick selection guide: ranking/comparison → horizontal bars; time trend (≤5 points) → columns, (>5 points) → line; share (≤3 slices) → donut; actual vs target → bullet; before/after → slope; trend beside a number → sparkline. **Only one chart per slide** (if you place two, you must rank them or split the slide), and the figure caption is always required.
 
-⚠ 整块图表(含图注)要落在**字幕安全区之上**:1080 高度下留给字幕的是底部 84–168px,版面容器请留 `padding-bottom: 190px`。
+⚠ The whole chart block (including the figure caption) must land **above the subtitle safe area**: at 1080 height the bottom 84–168px is reserved for subtitles, so leave `padding-bottom: 190px` on the layout container.
 
 ---
 
-# 表格工具箱(数据表的五种形态)
+# Table toolkit (the five forms of a data table)
 
-表格是最容易做丑的一类:行高不够、数字不右对齐、涨跌色用错、满屏网格线。原语都在 `tokens.css` 里(`.tbl / .kv / .matrix / .rank`),**老项目先 `node scripts/init-project.mjs <项目> --upgrade-css` 补上**(幂等),否则这些类全不生效。
+Tables are the easiest thing to make ugly: not enough row height, numbers not right-aligned, change colours used wrongly, gridlines everywhere. The primitives all live in `tokens.css` (`.tbl / .kv / .matrix / .rank`); **for existing projects run `node scripts/init-project.mjs <project> --upgrade-css` first** (idempotent), otherwise none of these classes take effect.
 
-## 表格纪律(七条)
+## Table disciplines (seven)
 
-1. **主数据用正文号、行高 ≥72px**:`.tbl`/`.kv`/`.matrix`/`.rank` 的正文已是 `var(--fs-body)`(1080p 与手机上都读得清),表头才降到 `--fs-caption`;行高已内置 72px —— 别为了多塞一行把字号或行高压掉(实测 24px 表格在手机上看不清)。
-2. **一页一表, 最多 6 行**:超了就拆页或只留 top 5 + "其他"。表格页信息密度天然高,再挤就没人看。
-3. **数值右对齐 + 等宽**(`.num`/`.val`):小数点对齐是"专业感"的主要来源;数字用 `tabular-nums`,滚动/切换时不会抖。
-4. **涨跌色走令牌**(`.up`/`.down` → `var(--up)/var(--down)`):财经题材按受众翻转(A 股/港股红涨绿跌),见 compliance.md;非财经题材也别用绿红以外的自造色。
-5. **只画横线,不画竖线,不要斑马纹**:`.tbl` 的表头下边线 + 行间细线就够了;斑马纹和满格线会让画面变脏。
-6. **高亮只给一行**(`.key`:左侧 accent 竖条 + 8% 底色),通常就是"我们/当前阶段";合计行用 `.sum`(上边线加粗)。两者不要同时用在多行上。
-7. **表注写口径与时点**(用 `.chart-cap` 同一套):和图表一样,数字的可信度来自"什么时候、怎么算的"。
+1. **Body type size for the main data, row height ≥72px**: the body of `.tbl`/`.kv`/`.matrix`/`.rank` is already `var(--fs-body)` (readable on both 1080p and phones), and only the table header drops to `--fs-caption`; row height is built in at 72px —— do not shrink the type size or row height just to squeeze in one more row (measured: a 24px table is unreadable on a phone).
+2. **One table per page, 6 rows maximum**: beyond that, split the page or keep only the top 5 + "others". A table page is naturally dense in information; squeeze it further and nobody reads it.
+3. **Right-aligned values + monospace** (`.num`/`.val`): decimal-point alignment is the main source of "professional feel"; numbers use `tabular-nums` so they do not jitter when rolling or switching.
+4. **Change colours go through tokens** (`.up`/`.down` → `var(--up)/var(--down)`): financial subjects flip them by audience (A-shares/HK: red up, green down), see compliance.md; and for non-financial subjects do not invent colours other than green/red.
+5. **Horizontal rules only, no vertical rules, no zebra striping**: the header underline of `.tbl` plus thin lines between rows is enough; zebra stripes and a full grid make the frame dirty.
+6. **Highlight exactly one row** (`.key`: accent vertical bar on the left + 8% background), usually "us / the current phase"; the total row uses `.sum` (thicker top border). Do not use either on several rows at once.
+7. **The table caption states the measure and the as-of date** (the same `.chart-cap` treatment as charts): as with charts, the credibility of a number comes from "when and how it was calculated".
 
-## 五种形态与配方
+## The five forms and their recipes
 
 ```html
 <!-- ① 数据表(最常用: 多期/多主体对比, 带涨跌) —— 表头弱化, 数值右对齐, 涨跌走令牌 -->
@@ -543,42 +543,41 @@ console.log(answer.output_text);</code></pre>
   <tr><td>2023</td><td>产品上线, 首批 1 万用户</td></tr>
   <tr><td>2026 Q2</td><td>通过聆讯, 递交港股上市申请</td></tr>
 </table>
+```
 
+Quick selection guide: multi-period/multi-entity comparison → ① data table; one-to-one entries → ② spec table (or ⑤ time-event table); ticking options across several plans → ③ comparison matrix; ranking to show the gap → ④ ranking table; totals/subtotals → ① + `.sum`; price/score tiers → ① with `.key` highlighting the current tier. **Do not put a table and a chart on the same page** (one thing per page); the voiceover for a table page must still "read the table" —— never treat the table as a backdrop.
 
+## Motion switches (three granularities)
 
-选型速查:多期/多主体对比 → ① 数据表;一对一条目 → ② 规格表(或 ⑤ 时间事件表);几套方案打勾叉 → ③ 对比矩阵;排名看差距 → ④ 排名表;要合计/小计 → ① + `.sum`;价格/评分分档 → ① 的 `.key` 高亮当前档。**表格和图表不要放同一页**(一页一件事);表格页的口播照旧要"读表",别把表格当背景。
-
-# 动效开关(三种粒度)
-
-| 粒度 | 做法 | 效果 |
+| Granularity | How | Effect |
 |---|---|---|
-| **整个项目** | `<html data-theme="..." class="no-fx">`(或 `.stage.no-fx`) | 全部入场/氛围动效关闭,元素直接呈终态;motion 捕获检测不到动画窗,自动按静态帧出片,时长与音画同步不受影响;字幕照常烧录 |
-| **单张** | 该张根元素加 `no-fx`(tokens.css 的规则按后代匹配,任何容器加都行) | 只有这张无动效,其余张正常 |
-| **单个元素** | 不给它 fx 类和 data-stage | 该元素静态呈现 |
+| **Whole project** | `<html data-theme="..." class="no-fx">` (or `.stage.no-fx`) | all entrance/ambient motion off, elements go straight to their final state; motion capture detects no animation window and outputs static frames automatically, with duration and A/V sync unaffected; subtitles are still burned in |
+| **Single slide** | add `no-fx` to that slide's root element (tokens.css rules match by descendant, so any container works) | only this slide has no motion, the rest behave normally |
+| **Single element** | give it no fx class and no data-stage | that element renders statically |
 
-适用:赶时间要快速出片、题材要求克制(政务/法律/讣告类)、或用户明确说"不要动画"。开工对齐时可当作一个问题问出去;默认全开。
+When to use: you need a quick output under time pressure, the subject calls for restraint (government/legal/obituary material), or the user explicitly says "no animation". It can be put to the user as one of the kickoff alignment questions; the default is everything on.
 
-**图表动效也在开关范围内**:关掉后条形/柱状直接是终值宽度、环形是完整扇形、数字是最终值(它们的静态默认值就写成终值,所以不需要额外复位规则)。
+**Chart motion is inside the switch range too**: with it off, bars/columns are directly at their final width, the donut is a complete sector, and numbers are at their final value (their static defaults are written as the final value, so no extra reset rules are needed).
 
-**交付前验一下**:`preview-page.mjs` 的放映页按 `X` 就是"动效 / 关动效"对照 —— 关掉后**变空**说明有关键帧没把 `opacity:0` 抬回来;两版画面一致才算干净。老项目(本规则加上之前生成的 tokens.css)没有 `no-fx` 规则:先跑 `node scripts/init-project.mjs <项目目录> --upgrade-css` 补上(幂等),否则 `<html class="no-fx">` 会静默失效、页面反而全空。
+**Verify before delivery**: on the screening page from `preview-page.mjs`, pressing `X` gives the "motion / motion off" comparison —— if it **goes blank** when switched off, some keyframes failed to lift `opacity:0` back; the two versions must look identical to be clean. Older projects (tokens.css generated before this rule) have no `no-fx` rules: run `node scripts/init-project.mjs <project dir> --upgrade-css` first (idempotent), otherwise `<html class="no-fx">` silently stops working and the page goes completely blank instead.
 
 ---
 
-# 主题速查(受众 → 主题)
+# Theme quick reference (audience → theme)
 
-| 场景 | 主题 |
+| Scenario | Theme |
 |---|---|
-| 商务汇报 / 融资 / 财报 | `minimal-white` `swiss-grid` `corporate-clean`(另有初版 `a` 米白暖橙) |
-| 财经 / 投研(受监管) | 同上三套(数据密度高、色彩克制);**选定后按 `compliance.md` 处理免责行与涨跌色,别只挑主题就开跑** |
-| 编辑 / 杂志 / 讲述 | `editorial-serif` `magazine-bold` |
-| 科技 / AI / 开发者(深色) | `tokyo-night` `catppuccin-mocha` `nord`(另有初版 `b` 深色科技绿) |
-| 消费 / 小红书 / 生活 | `xiaohongshu-white` `soft-pastel`(另有初版 `c` 极简蓝,白底通用) |
+| Business reporting / fundraising / earnings | `minimal-white` `swiss-grid` `corporate-clean` (plus the original `a`, off-white with warm orange) |
+| Finance / investment research (regulated) | the same three (high data density, restrained colour); **once chosen, handle the disclaimer line and the change colours per `compliance.md` —— do not just pick a theme and start running** |
+| Editorial / magazine / narrative | `editorial-serif` `magazine-bold` |
+| Tech / AI / developer (dark) | `tokyo-night` `catppuccin-mocha` `nord` (plus the original `b`, dark tech green) |
+| Consumer / Xiaohongshu / lifestyle | `xiaohongshu-white` `soft-pastel` (plus the original `c`, minimal blue, a general white-background option) |
 
-选定主题前先跑 `node <技能>/scripts/check-theme.mjs <项目>`:它会算每套主题的对比度,不过闸的主题不要用(尤其深色主题的字幕胶囊对比)。
+Before settling on a theme, run `node <skill>/scripts/check-theme.mjs <project>`: it computes the contrast of every theme; do not use a theme that fails the gate (especially the subtitle pill contrast on dark themes).
 
-## 自定义主色(用户给了品牌色时)
+## Custom accent colour (when the user supplies a brand colour)
 
-主题的主色是令牌,直接覆写即可 —— 在 **项目自己的** `slides/tokens.css` 末尾追加(改项目副本,不动技能模板):
+A theme's accent colour is a token, so just override it —— append to the end of the **project's own** `slides/tokens.css` (edit the project copy, never the skill template):
 
 ```css
 /* 品牌色覆写: 以 software 主题为底, 只换强调色三兄弟 */
@@ -591,27 +590,27 @@ console.log(answer.output_text);</code></pre>
 }
 ```
 
-**硬要求**:改完立刻跑 `node <技能>/scripts/check-theme.mjs <项目>` —— `--accent-ink` 对 `--accent` 必须 ≥3:1(低于 4.5:1 就只能用于大字/图形, 不能放小字)。深色主题另需顺手看一眼 `--sub-bg`(字幕胶囊)是否仍与背景分得开。
+**Hard requirement**: run `node <skill>/scripts/check-theme.mjs <project>` immediately after the change —— `--accent-ink` against `--accent` must be ≥3:1 (below 4.5:1 it may only be used for large type/graphics, never small text). For dark themes also take a quick look at whether `--sub-bg` (the subtitle pill) still separates from the background.
 
-# 竖版画布(1080×1920)
+# Vertical canvas (1080×1920)
 
-`script.json` 的 `width/height` 决定画布,渲染管线会把 `--stage-w/--stage-h` 注入页面,字幕几何随之自动收窄。**但版式必须重排**:横屏的左右分栏到竖屏会挤,改成上下堆叠。
+The `width/height` in `script.json` decides the canvas; the render pipeline injects `--stage-w/--stage-h` into the page and the subtitle geometry narrows with it automatically. **But the layout must be reflowed**: left/right columns that work in landscape get cramped in portrait, so switch to vertical stacking.
 
-- 内容边距从 96px 提到 ~90px(竖屏更窄,可用区更小)
-- 标题字号降到 `--fs-h2`(44px)量级 —— 竖屏里 44px 相当于横屏 ~78px 的观感
-- 每屏信息量减一档:横屏 3 条 bullets → 竖屏 2 条
-- 图片框用 `--img-ratio:3/4` 或 `1/1`,比 16/9 更贴合竖屏构图
-- 字幕位置由 `--stage-h` 自动决定,不用手调
+- Content margin goes from 96px to ~90px (portrait is narrower, so the usable area is smaller)
+- Title size drops to the `--fs-h2` (44px) order of magnitude —— in portrait, 44px reads like ~78px in landscape
+- Reduce the information per screen by one notch: 3 bullets in landscape → 2 in portrait
+- Use `--img-ratio:3/4` or `1/1` for image frames; they fit portrait composition better than 16/9
+- The subtitle position is decided automatically by `--stage-h`; no manual tuning needed
 
-# ⚠ 必知:stage 延迟的实现原理(改动前务必读)
+# ⚠ Must-know: how stage delay is implemented (read before changing anything)
 
-入场延迟**不是**独立的 `animation-delay: var(--tN)` 声明,而是写进 `.fx-*` 的 `animation` shorthand 变量槽:
+The entrance delay is **not** a standalone `animation-delay: var(--tN)` declaration; it is written into the variable slot of the `animation` shorthand on `.fx-*`:
 
 ```css
 [data-stage="2"] { --fx-delay: var(--t2); }                                    /* 只设变量 */
 .fx-rise { animation: fx-rise .9s var(--ease-out) var(--fx-delay, 0ms) both; } /* 变量进 shorthand */
 ```
 
-**为什么**:`[data-stage="2"]` 与 `.fx-rise` 同为 (0,1,0) 优先级;若拆成两条声明,文件里更靠后的 `.fx-*` 简写会把 `animation-delay` 重置回 0 —— 所有 stage 都在 0 秒入场,而写了内联 `calc(var(--t2)+150ms)` 的元素又是对的,表现为"一部分元素时序诡异、一部分正常"的难查故障(2026-09-17 实测确认)。
+**Why**: `[data-stage="2"]` and `.fx-rise` both have (0,1,0) specificity; if you split this into two declarations, the `.fx-*` shorthand that appears later in the file resets `animation-delay` back to 0 —— every stage then enters at 0 seconds, while elements carrying an inline `calc(var(--t2)+150ms)` are still correct, producing a hard-to-diagnose failure where "some elements have weird timing and some are fine" (confirmed by measurement on 2026-09-17).
 
-**因此**:①不要手写 `animation-delay: var(--tN)`(改用 `--fx-delay` 或内联 calc);②自定义入场动画时,延迟槽必须写 `var(--fx-delay, 0ms)`;③容器要指定基准时刻用 `style="--stagger-base:var(--t3)"`。
+**Therefore**: ① do not hand-write `animation-delay: var(--tN)` (use `--fx-delay` or an inline calc instead); ② when defining a custom entrance animation, the delay slot must be written as `var(--fx-delay, 0ms)`; ③ to pin a container's base time, use `style="--stagger-base:var(--t3)"`.

@@ -1,100 +1,102 @@
-# TTS 对接与对时算法
+# TTS Integration and the Timing Sync Algorithm
 
-## 为什么 TTS 在 HTML 之前(本流水线与常见做法的最大差异)
+## Why TTS comes before the HTML (the biggest difference between this pipeline and common practice)
 
-常见顺序是"先写 HTML 再配音",这会逼你**估算**每张时长、**猜**动画延迟,产出的典型症状就是:TTS 念完画面还傻等好几秒(估长了)、展开层在口播已经讲到别处时才出现(猜错了)。
+The common order is "write the HTML first, then dub it", which forces you to **estimate** each slide's duration and **guess** the animation delays; the typical symptoms it produces are: TTS finishes speaking and the visuals sit there dumbly for several seconds (over-estimated), or an unfolding layer appears only when the narration has already moved elsewhere (guessed wrong).
 
-本流水线反过来:脚本定稿 → 立刻出 TTS → ffprobe 实测 → 算好每个 stage 的入场时刻 → 才动 HTML。HTML 里没有任何写死的秒数,所有延迟通过 `--t1/--t2/--t3` 由 capture 注入。改音色、改语速、改一个字,只需重跑 TTS 和 plan-timings,HTML 通常一个字不用动。
+This pipeline goes the other way: script finalized → run TTS immediately → ffprobe measurement → compute every stage's entrance moment → only then touch the HTML. There are no hard-coded seconds anywhere in the HTML; all delays are injected by capture through `--t1/--t2/--t3`. Change the voice, change the speech rate, change one word, and you only need to re-run TTS and plan-timings — the HTML usually needs not a single character changed.
 
-## 对时算法(plan-timings.mjs 内部逻辑)
+## Timing sync algorithm (plan-timings.mjs internal logic)
 
-对每张 slide:
+For each slide:
 
-1. `D` = ffprobe 实测该段 TTS 时长。
-2. 第 k 句口播的开口时刻 ≈ `D × (前 k−1 句字数和 ÷ 总字数)`(中文语速在句间分布足够均匀,误差通常 <0.3s)。
-3. stage s 的入场时刻 = 映射到该层的最早一句的开口时刻 − 0.2s(视觉略提前,观感同步;广播惯例)。
-4. 成片时长 = `ceil((D + tail) × fps) / fps`,对齐帧网格;`tail` 默认 0.8s。
+1. `D` = the segment's TTS duration measured by ffprobe.
+2. The k-th narration sentence's onset ≈ `D × (character count of the first k−1 sentences ÷ total character count)` (Chinese speech rate is distributed evenly enough across sentences; the error is usually <0.3s).
+3. Stage s's entrance moment = the onset of the earliest sentence mapped to that level − 0.2s (the visuals lead slightly, which reads as synced; broadcast convention).
+4. Final video duration = `ceil((D + tail) × fps) / fps`, aligned to the frame grid; `tail` defaults to 0.8s.
 
-字数统计忽略空白,标点计入(TTS 遇标点会自然停顿,计入反而更准)。
+Character counting ignores whitespace and includes punctuation (TTS pauses naturally at punctuation, so including it is actually more accurate).
 
-对时数据有三层,层层可实测回查,怀疑音画脱节时**先拿数据再动手**:
+Timing data has three layers, each one measurable and traceable; when you suspect audio-visual desync, **get the data first, then act**:
 
-1. **估算**(plan-timings):上表的字数占比估算。对正常语速样本误差通常 <0.3s。
-2. **静音实测**(`node scripts/check-timing.mjs <项目目录>`):TTS 句间有 0.2s+ 停顿,脚本用 ffmpeg silencedetect 直接测出每句真实开口,输出"估算 vs 实测"对比表;`--calibrate` 把实测边界写回 timings.json(只校准静音段数与句数完全匹配的 slide),之后删 `build/frames/` 重跑 capture 与 build-video。
-3. **ASR 复核**(build-video `--asr`):按句切出音频逐段转写,既验内容(数字/专名),也验边界——某段转写混入上一句的开头,说明那句实际开口比估算晚,回第 2 层校准。
+1. **Estimate** (plan-timings): the character-share estimate above. For normal speech-rate samples the error is usually <0.3s.
+2. **Silence measurement** (`node scripts/check-timing.mjs <项目目录>`): TTS has 0.2s+ pauses between sentences, and the script uses ffmpeg silencedetect to measure each sentence's real onset directly, outputting an "estimate vs measured" comparison table; `--calibrate` writes the measured boundaries back into timings.json (it only calibrates slides where the silence-segment count and the sentence count match exactly), after which delete `build/frames/` and re-run capture and build-video.
+3. **ASR review** (build-video `--asr`): cut the audio by sentence and transcribe each part, verifying both content (numbers/proper nouns) and boundaries — if a part's transcript bleeds in the start of the previous sentence, that sentence's real onset is later than the estimate, so go back to layer 2 and calibrate.
 
-另注意"体感不同步"常是**设计层错位**而非算法误差:大数字/主体图必须挂在**提到它的那句**的 stage 上(见 authoring.md 强同步原则),把第一句的亮点画在 stage 2 里,算法再准观众也觉得脱节。
+Also note that "it feels out of sync" is often a **design-level misplacement** rather than algorithmic error: a big number / hero image must be attached to the stage of **the sentence that mentions it** (see the strong-sync principle in authoring.md); draw the first sentence's highlight inside stage 2 and no matter how accurate the algorithm is, the audience feels the disconnect.
 
-## 留白调校
+## Whitespace tuning
 
-留白 = 每张的 `tail`(口播结束到切页)。默认 **0.8s**:低于 0.5s 观众有被追赶感,高于 1.5s 就是"念完发呆"。
+Whitespace = each slide's `tail` (narration end to slide change). Default **0.8s**: below 0.5s the audience feels chased, above 1.5s it is "finished speaking, staring blankly".
 
-- 整片节奏紧凑(快消风格):script.json 每张加 `"tail": 0.4`。
-- 讲述舒缓(品牌片):`"tail": 1.2`,首尾张 1.5。
-- 单张微调:只改那一张的 `tail`,重跑 plan-timings 即可,不用重做 TTS。
+- Tight overall pacing (fast-consumption style): add `"tail": 0.4` to each slide in script.json.
+- Unhurried delivery (brand film): `"tail": 1.2`, with 1.5 for the first and last slides.
+- Per-slide tweak: change only that slide's `tail` and re-run plan-timings; no need to redo TTS.
 
-语速:整体 1.0;首尾张 0.95 略慢有仪式感。如果 plan-timings 警告语速偏离 3–6.5 字/s,先检查是不是 speed 设错或字数超限,不要急着 --pacing 重估。
+Speech rate: **1.1** overall (≈5.3 Chinese chars/sec; ≈4.8 at 1.0); the first and last slides at 1.05 are slightly slower for a sense of ceremony. **This must be asked of the user together with the voice during the audition step** (see below); don't just decide it yourself and move on. If plan-timings warns that the speech rate deviates from 3–6.5 chars/s, first check whether speed is set wrong or the character count exceeds the limit — don't rush to re-estimate with --pacing.
 
-⚠ **实测坑:`speed=0.95` 对短句(≤10 字)可能不降反升** —— TTS 引擎在短句上似乎会补静音,导致时长反而变长(2026-09-17 端到端实测发现)。所以:首尾张若要 0.95,该张口播别太短;或者短句直接保持 1.0。
+⚠ **Measured gotcha: `speed<1` (e.g. 0.95) on short sentences (≤10 chars) may increase rather than decrease the duration** — the TTS engine appears to pad silence on short sentences, making the duration longer instead (found in end-to-end measurement on 2026-09-17). So: if you want 0.95 for the first/last slides, don't make that slide's narration too short; or just keep short sentences at 1.0.
 
-⚠ **stage 时序的前提**:入场延迟依赖 `--fx-delay` 机制(见 authoring.md 实现原理)。若页面用了旧版 tokens.css(把延迟写成独立的 `animation-delay: var(--tN)`),延迟会被 `.fx-*` 简写覆盖,表现为"部分元素 0 秒就入场"——这比估算偏差(通常 <0.3s)更影响体感,排查音画不同步时先排除它。
+⚠ **Precondition for stage timing**: entrance delays rely on the `--fx-delay` mechanism (see authoring.md for the implementation principle). If the page uses an old tokens.css (one that writes delays as a separate `animation-delay: var(--tN)`), the delay is overridden by the `.fx-*` shorthands, showing up as "some elements enter at 0s" — this affects the feel more than estimation error (usually <0.3s) does, so rule it out first when troubleshooting audio-visual desync.
 
-## mcode 环境的 TTS 命令
+## TTS commands in the mcode environment
 
-单条合成 / 批量合成(≤10 条/批):
+Single synthesis / batch synthesis (≤10 per batch):
 
 ```bash
 mcode-tools connector call connector__matrix__batch_text_to_audio --args '{"requests": [
-  {"text": "第一句口播。", "voice_id": "Chinese (Mandarin)_Gentleman", "speed": 1.0, "output_file": "01.mp3"},
-  {"text": "……", "voice_id": "…", "speed": 0.95, "output_file": "08.mp3"}
+  {"text": "第一句口播。", "voice_id": "Chinese (Mandarin)_Gentleman", "speed": 1.1, "output_file": "01.mp3"},
+  {"text": "……", "voice_id": "…", "speed": 1.05, "output_file": "08.mp3"}
 ]}'
 ```
 
-结果取 `success_items[].node_id`,逐条拿下载链接落盘到 `audio/`:
+Take `success_items[].node_id` from the result and fetch each download link to disk under `audio/`:
 
 ```bash
 mcode-tools get_asset_url <node_id>   # 得到 URL 后 curl 下载为 audio/<id>.mp3
 ```
 
-音色候选用 `connector__matrix__get_voice_list` 查;开工对齐时先问用户音色倾向(温润男声/干练女声/其他)。
+Look up voice candidates with `connector__matrix__get_voice_list`; when aligning at kickoff, first ask the user about the **voice direction (gender + timbre: warm male / crisp female / neutral, magnetic, lively)** — a rough direction is enough, the audition fixes the rest.
 
-**⚠ 音色名称不可信,试听必须带 ASR 验音(2026-09 实测教训)**:平台标签会错位——`Chinese (Mandarin)_News_Anchor` 标着普通话新闻女声,实际生成**粤语**(ASR 转写出"來自/從"等繁体)。只看名字选声 = 盲选。正确流程:
+**⚠ One audition, two questions (1.6.0): pitch AND pace.** The audition must ask the user *both* which voice to use *and* whether the pace is right — the pace is the complaint users actually report ("the default is a bit slow"), and it cannot be judged from written settings. So besides the three candidate voices, synthesize **the same probe line in the chosen voice at three speeds (1.05 / 1.15 / 1.25)** and hand over all of them with the list. After the user answers, write the decision into `script.json` (`speed.default` = the chosen one, first/last slides 1.05) and restate "voice = X / speed = Y" before moving on. `plan-timings` then checks the measured rate against that value and warns if the two disagree.
 
-1. 取 3 个候选音色,各自单条 TTS 一句固定探针文案(含数字与专名,如"三家科技公司,去年营收三点五亿美元。")——**单条**生成,避免批量配对错位;
-2. 每段转写验证(mcode 用 `listen_audio`;其他环境用 `node scripts/asr.mjs --file probe.mp3 --language zh`),检查:转写是**简体**普通话(出现繁体字 = 粤语/其他语种,弃)、数字念对、无明显吞字;
-3. 把"实测语种"标注进试听清单,连同音频给用户三选一(阶段在 Phase 1,别跳过)。
+**⚠ Voice names are not trustworthy, the audition must verify the voice with ASR (2026-09 measured lesson)**: platform labels get mismatched — `Chinese (Mandarin)_News_Anchor` is labeled a Mandarin news female voice but actually generates **Cantonese** (ASR transcripts show traditional characters such as "來自/從"). Picking a voice by name alone = picking blind. The correct flow:
 
-**强制普通话的窍门**:调用时带 `language: zh` 头(脚本的 `--language zh`),模型会按普通话解码;若结果里仍出现繁体字(如 來/從/聲/畫),基本可判定该音色实际输出的是粤语。反向确认粤语可用 `--language yue`。
+1. Take 3 candidate voices, each synthesizing one fixed probe line as a single TTS call (containing numbers and proper nouns, e.g. "三家科技公司,去年营收三点五亿美元。") — generate them **individually**, to avoid batch pairing mismatches (the three speed variants are also single calls);
+2. Transcribe and verify each part (on mcode use `listen_audio`; in other environments `node scripts/asr.mjs --file probe.mp3 --language zh`), checking: the transcript is **Simplified** Mandarin (traditional characters appearing = Cantonese/another language, discard), numbers read correctly, no obvious swallowed characters;
+3. Annotate the "measured language" and the speed of each sample into the audition list, hand the audio to the user, and ask the two questions together: **"① which voice? ② which pace — 1.05 / 1.15 / 1.25 (or none of them, give me a direction)"** (this step is in Phase 1, don't skip it).
 
-实测可用的普通话音色(2026-09-17,mcode matrix):
+**Trick to force Mandarin**: pass the `language: zh` header in the call (the script's `--language zh`) and the model decodes as Mandarin; if traditional characters still appear in the result (e.g. 來/從/聲/畫), you can basically conclude that this voice actually outputs Cantonese. To confirm Cantonese in the opposite direction, use `--language yue`.
 
-| voice_id | 标签名 | 实测 |
+Measured usable Mandarin voices (2026-09-17, mcode matrix):
+
+| voice_id | label name | measured |
 |---|---|---|
-| `Chinese (Mandarin)_Gentle_Senior` | 温柔学姐 | ✅ 普通话,干练 |
-| `Chinese (Mandarin)_Sweet_Lady` | 甜美女声 | ✅ 普通话,亲和(**2026-09-17 实测主用**) |
-| `Chinese (Mandarin)_Crisp_Girl` | 清脆少女 | ✅ 普通话,清澈 |
-| `Chinese (Mandarin)_Mature_Woman` | 傲娇御姐 | ✅ 普通话,讲述感 |
-| `Chinese (Mandarin)_Wise_Women` | 阅历姐姐 | ✅ 普通话 |
-| `Chinese (Mandarin)_Male_Announcer` | 播报男声 | ✅ 普通话(可用) |
+| `Chinese (Mandarin)_Gentle_Senior` | 温柔学姐 (gentle senior) | ✅ Mandarin, crisp |
+| `Chinese (Mandarin)_Sweet_Lady` | 甜美女声 (sweet female voice) | ✅ Mandarin, friendly (**the primary choice in the 2026-09-17 measurement**) |
+| `Chinese (Mandarin)_Crisp_Girl` | 清脆少女 (crisp young girl) | ✅ Mandarin, clear |
+| `Chinese (Mandarin)_Mature_Woman` | 傲娇御姐 (tsundere mature sister) | ✅ Mandarin, storytelling feel |
+| `Chinese (Mandarin)_Wise_Women` | 阅历姐姐 (worldly-wise sister) | ✅ Mandarin |
+| `Chinese (Mandarin)_Male_Announcer` | 播报男声 (announcer male voice) | ✅ Mandarin (usable) |
 
-| voice_id | 标签名 | 实测 |
+| voice_id | label name | measured |
 |---|---|---|
-| `Chinese (Mandarin)_News_Anchor` | 新闻女声 | ❌ 实际输出**粤语**,勿用 |
+| `Chinese (Mandarin)_News_Anchor` | 新闻女声 (news female voice) | ❌ actually outputs **Cantonese**, do not use |
 
-(音色库会漂移,此表只是起点;每次开新项目仍要走上面的 ASR 验音三步。)
+(The voice library drifts, so this table is only a starting point; every new project still goes through the three-step ASR voice verification above.)
 
-## 语种与音色(开工对齐必问)
+## Language and voice (must ask at kickoff alignment)
 
-**口播语言在开工对齐时定死**,写进 `script.json` 的 `lang`(默认 `zh`)。它牵动四件事:
+**The narration language is fixed at kickoff alignment**, written into `script.json`'s `lang` (default `zh`). It drives four things:
 
-1. **口播稿**用什么语言写(`clauses[].text`);双语时 `text2` 放**另一语言**(主行=口播语言)。
-2. **音色必须匹配语种** —— 中文用 `Chinese (Mandarin)_*`,英语用 `English_*`,粤语用对应粤语音色。错配的表现是"带口音/念错/语种漂移",写完必须用 ASR 验。
-3. **字数与语速基准**:`plan-timings` 按 `lang` 自动切换 —— 中文 4.8 字/s(常见 3–6.5),英文 ~14 字符/s(常见 9–18,约 150 词/分);字幕单行上限中文 18 字 / 英文 42 字符。
-4. **ASR 识别语言头**:`asr.mjs` 读 `lang` 自动带 `language: zh|en|yue`。中文项目会检查"是否冒出繁体字"(=粤语),英文项目会检查"是否混入中文字符"。
+1. **What language the narration script** is written in (`clauses[].text`); when bilingual, `text2` holds the **other language** (main line = narration language).
+2. **The voice must match the language** — Chinese uses `Chinese (Mandarin)_*`, English uses `English_*`, Cantonese uses the corresponding Cantonese voices. A mismatch shows up as "accented / mispronounced / language drift", and must be verified with ASR once written.
+3. **Character-count and speech-rate baselines**: `plan-timings` switches automatically by `lang` — Chinese 5.3 chars/s @speed 1.1 (4.8 at 1.0; typically 3–6.5), English ~14 chars/s (typically 9–18, about 150 words/min); the single-line subtitle limit is 18 chars for Chinese / 42 characters for English.
+4. **The ASR language header**: `asr.mjs` reads `lang` and automatically passes `language: zh|en|yue`. Chinese projects check "whether traditional characters show up" (= Cantonese), English projects check "whether Chinese characters are mixed in".
 
-**换语言只需三步**:改 `script.json` 的 `lang` → 换匹配语种的 `voice_id` 重做 TTS → 若开双语,给每句补/换 `text2`。排版与脚本逻辑都不用动。
+**Changing language takes only three steps**: change `script.json`'s `lang` → swap in a matching `voice_id` and redo TTS → if bilingual, add/replace `text2` for each sentence. Neither the layout nor the script logic needs to change.
 
-英语音色示例(mcode 与 mmx-cli 都会随平台更新,以实测为准):
+English voice examples (both mcode and mmx-cli track platform updates, so measured results are authoritative):
 
 ```bash
 # mcode: 列全部音色后挑 English_* 前缀的
@@ -102,58 +104,58 @@ mcode-tools connector call connector__matrix__get_voice_list --args '{}'
 # mmx-cli: 同样先列再选
 mmx speech voices
 # mmx-cli 示例(官方文档中出现过的英语男声)
-mmx speech synthesize --text "Three companies, three point five billion dollars." --voice English_magnetic_voiced_man --speed 1.0 --out audio/probe.mp3
+mmx speech synthesize --text "Three companies, three point five billion dollars." --voice English_magnetic_voiced_man --speed 1.1 --out audio/probe.mp3
 ```
 
-验音同样要带语言头:`--language en`(英语)/ `--language zh`(普通话)/ `--language yue`(粤语)。
+Voice verification must also carry the language header: `--language en` (English) / `--language zh` (Mandarin) / `--language yue` (Cantonese).
 
 
 
-## BGM(可选,默认不开)
+## BGM (optional, off by default)
 
-配置一次即可,全片自动垫底:script.json 顶层加 `"bgm": "assets/bgm.mp3"`(或对象形式 `{file, volume, fadeIn, fadeOut}`)。build-video 会:循环补满全片、淡入 1.5s、尾部淡出 2.5s、按 `volume`(默认 **0.12**,即 -18.4dB)压在人声之下;混音失败自动退回纯人声并告警。**ASR 校验始终切纯人声轨**,BGM 不干扰转写。
+Configure once and it beds the whole video automatically: add `"bgm": "assets/bgm.mp3"` at the top level of script.json (or the object form `{file, volume, fadeIn, fadeOut}`). build-video will: loop it to fill the whole video, fade in over 1.5s, fade out over 2.5s at the tail, and hold it under the voice per `volume` (default **0.12**, i.e. -18.4dB); if mixing fails it automatically falls back to voice only and warns. **ASR verification always switches to the voice-only track**, so BGM doesn't interfere with transcription.
 
-- 音量校准:0.08(极克制,讲述向)~ 0.15(活泼,快消向);听感标准 = 人声每个字都清楚,关掉画面只听音轨也不费劲。成片验收时留意 Gate 5。
-- BGM 来源:① `connector__matrix__batch_text_to_music`(mcode 平台生成,≤5 条/批,无版权风险,首选);② 用户自备音乐(须确认授权,登记进 assets/MANIFEST.md)。不要从视频网站扒音乐。**⚠ mmx-cli 没有音乐生成命令**,非 mcode 环境只能走 ②(或跳过 BGM)。
-- 生成建议:风格按题材选(科技/温暖/轻快),**要求"无人声、无强旋律记忆点、可循环"**;拿到的文件放 `assets/bgm.mp3`,先单独听一遍确认没有突兀的段落切换(循环点要干净)。
-- 需要 ffmpeg ≥ 4.4(amix 的 normalize 选项);老版本会自动跳过 BGM 而不是报错中断。
+- Volume calibration: 0.08 (very restrained, storytelling) ~ 0.15 (lively, fast-consumption); the listening standard = every word of the voice is clear, and listening to the audio track alone with the picture off is effortless. Watch Gate 5 during final-video acceptance.
+- BGM sources: ① `connector__matrix__batch_text_to_music` (generated on the mcode platform, ≤5 per batch, no copyright risk, the first choice); ② music the user provides (licensing must be confirmed, registered in assets/MANIFEST.md). Don't rip music off video sites. **⚠ mmx-cli has no music generation command**, so non-mcode environments can only use ② (or skip BGM).
+- Generation advice: pick the style per subject matter (tech / warm / light), and **require "no vocals, no strong melodic hook, loopable"**; put the resulting file at `assets/bgm.mp3`, and listen to it once on its own to confirm there are no jarring section changes (the loop point must be clean).
+- Requires ffmpeg ≥ 4.4 (amix's normalize option); older versions automatically skip BGM rather than erroring out.
 
-## 双语字幕(可选)
+## Bilingual subtitles (optional)
 
-script.json 的 clause 里加 `text2` 即自动生效:画面字幕变两行(中文主行 + 第二行小字号)、`out/subs.srt` 同步双行。不需要改 HTML、不需要额外参数。
+Adding `text2` to a clause in script.json takes effect automatically: the on-screen subtitles become two lines (Chinese main line + second line in a smaller size), and `out/subs.srt` becomes two lines in sync. No HTML changes and no extra parameters needed.
 
-- `text2` 规则:同一句的翻译,**不要重排语序**;第二行 ≤60 字符(plan-timings 超限预警);标点用目标语言习惯。
-- 只做部分句子也可以(逐句独立);交付前确认双语字幕的语种组合(Gate 1 对齐时问清是"中英"还是其他)。
+- `text2` rules: it is the translation of the same sentence, **do not reorder the words**; second line ≤60 characters (plan-timings warns when exceeded); use the target language's punctuation conventions.
+- Doing only some sentences is also fine (each sentence is independent); before delivery confirm the language pairing of the bilingual subtitles (ask clearly at Gate 1 alignment whether it is "Chinese-English" or something else).
 
-**部分失败的重试纪律**:上游对失败重发整批很敏感(rate limit)。失败后 sleep 10–30s,**只重试失败的条目**(从 requests 里摘出失败的重新组一个小批),不要重发整批。
+**Retry discipline for partial failures**: the upstream is very sensitive to resending an entire failed batch (rate limit). After a failure, sleep 10–30s and **retry only the failed entries** (pick the failures out of requests and form a small new batch); don't resend the whole batch.
 
-TTS 落盘后立刻:
+Immediately after TTS is written to disk:
 
 ```bash
 node scripts/plan-timings.mjs <项目目录>
 ```
 
-把输出的时长表和警告一起给用户过 Gate 2。此时若某张语速警告,优先改口播字数(回 Phase 1)或调该张 speed 重做该段——不要放着警告往下走。
+Give the user the output duration table and warnings together for Gate 2. If a slide gets a speech-rate warning at this point, prefer changing the narration word count (back to Phase 1) or adjusting that slide's speed and redoing that segment — don't move on with warnings left standing.
 
-## ASR 反向校验流程
+## ASR reverse verification flow
 
-build-video `--asr` 会**按句**切出 `asr/part-<id>-<k>.mp3`(第 id 张第 k 句),并生成 `checklist.md`。两条路任选:
+build-video `--asr` cuts `asr/part-<id>-<k>.mp3` **by sentence** (sentence k of slide id) and generates `checklist.md`. Pick either path:
 
-**路 A · mcode 沙箱**
-1. `mcode-tools upload_temp_url asr/part-01-1.mp3` 取公网 URL。
-2. `mcode-tools connector call connector__matrix__listen_audio --args '{"audio_info": {"url": "<URL>"}}'`。
-3. 转写文本与 checklist 里"预期口播"比对:数字、年份、产品名必须完全一致;同音字/标点差异可接受。
+**Path A · mcode sandbox**
+1. `mcode-tools upload_temp_url asr/part-01-1.mp3` to get a public URL.
+2. `mcode-tools connector call connector__matrix__listen_audio --args '{"audio_info": {"url": "<URL>"}}'`.
+3. Compare the transcript against the "expected narration" in the checklist: numbers, years and product names must match exactly; homophone/punctuation differences are acceptable.
 
-**路 B · 直调 REST(任何环境,只同一把 API Key;mmx-cli 无 ASR 子命令)**
+**Path B · direct REST (any environment, the same single API Key; mmx-cli has no ASR subcommand)**
 
 ```bash
 export MINIMAX_API_KEY=sk-xxx          # 与 mmx-cli 同一把; 海外套餐加 MINIMAX_REGION=global
 node scripts/asr.mjs <项目目录>          # 逐句转写 → 自动比对 → 回填 asr/checklist.md
 ```
 
-- 脚本自动做**比对判定**:数字对不上、或出现繁体字(疑似粤语)→ ✗ 并让进程以非 0 退出;相似度偏低 → ⚠ 待复核。
-- 音频超接口限制(>500s 或 >50MB)时会用 ffmpeg 自动转单声道 16k mp3 再传,不用手工处理。
-- 已有转写结果(如别的环境用 whisper 跑的)可直接喂进来比对:`node scripts/asr.mjs <项目> --from transcripts.json`(JSON 形如 `{"part-01-1": "文本"}`)。
-- 想要**字级时间戳实测每句开口**(比静音检测更准,接口支持 `timestamp_level: word`):`node scripts/asr.mjs <项目> --verify-timing`,输出"估算 vs ASR 实测"对比表,偏差大就按结果调整 `timings.json` 的 `clauses[].start` 后重渲染。
+- The script performs the **comparison verdict** automatically: numbers mismatched, or traditional characters appearing (suspected Cantonese) → ✗ and the process exits non-zero; low similarity → ⚠ pending review.
+- If the audio exceeds the API limits (>500s or >50MB) it is automatically transcoded with ffmpeg to mono 16k mp3 before upload; no manual handling needed.
+- If you already have transcripts (e.g. produced with whisper in another environment) you can feed them straight in for comparison: `node scripts/asr.mjs <项目> --from transcripts.json` (JSON shaped like `{"part-01-1": "文本"}`).
+- If you want **word-level timestamps to measure each sentence's onset** (more accurate than silence detection; the API supports `timestamp_level: word`): `node scripts/asr.mjs <项目> --verify-timing`, which outputs an "estimate vs ASR-measured" comparison table; if the deviation is large, adjust `clauses[].start` in `timings.json` per the results and re-render.
 
-不过关的 slide:改口播或重做该段 TTS → 重跑 plan-timings → 删 `build/frames/<id>/` 与 `out/slide-<id>.mp4` → 重跑 capture(该张)与 build-video。不要整片重做。
+For slides that don't pass: change the narration or redo that segment's TTS → re-run plan-timings → delete `build/frames/<id>/` and `out/slide-<id>.mp4` → re-run capture (that slide) and build-video. Don't redo the whole video.

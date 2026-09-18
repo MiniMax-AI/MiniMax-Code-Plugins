@@ -477,11 +477,12 @@ const TEMPLATE_HTML = `<!doctype html>
 `;
 
 const scriptJson = {
-  _readme: 'html2video-for-mcode 脚本契约。clauses 每个元素=一句口播; stage=这句开口时该入场的视觉层(1/2/3); 可选 text2=双语字幕第二行。tail=收尾留白秒数(默认0.8)。改口播必须过 Gate 1, 之后从 Phase 2 重跑。可选顶层 bgm: "assets/bgm.mp3" 或 {file,volume:0.12,fadeIn:1.5,fadeOut:2.5}。width/height 决定画布: 1920×1080 横屏 / 1080×1920 竖屏。lang 决定口播语种与音色: zh(默认)/en/yue/其他 BCP-47 — 语种必须与音色匹配, 且影响语速基准与字幕行宽校验。',
+  _readme: 'html2video-for-mcode 脚本契约。clauses 每个元素=一句口播; stage=这句开口时该入场的视觉层(1/2/3); 可选 text2=双语字幕第二行。tail=收尾留白秒数(默认0.8)。改口播必须过 Gate 1, 之后从 Phase 2 重跑。可选顶层 bgm: "assets/bgm.mp3" 或 {file,volume:0.12,fadeIn:1.5,fadeOut:2.5}。width/height 决定画布: 1920×1080 横屏 / 1080×1920 竖屏。lang 决定口播语种与音色: zh(默认)/en/yue/其他 BCP-47 — 语种必须与音色匹配, 且影响语速基准与字幕行宽校验。speed=试听时与用户定的语速(Gate 4 可复核); transition=切页方式: cut 硬切(默认, 段间不经过黑场) 或 {type:"xfade",duration:0.4} 交叉溶解。',
   topic,
   lang: "zh",
   voice: 'Chinese (Mandarin)_Gentleman',
-  speed: { default: 1.0, first: 0.95, last: 0.95 },
+  speed: { default: 1.1, first: 1.05, last: 1.05 },
+  transition: { type: 'cut' },
   fps: 30, width: 1920, height: 1080,
   slides: [
     { id: '01', layout: 'title-hero', html: '01-title.html', audio: '01.mp3', title: '', clauses: [{ stage: 1, text: '' }] },

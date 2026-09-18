@@ -96,7 +96,7 @@
       "id": 13,
       "name": "non-mcode-environment-via-mmx",
       "prompt": "我在 Claude Code 里, 没有 mcode 的 connector。这个技能还能跑吗? TTS 和 ASR 怎么办?",
-      "expected_output": "能跑 —— 脚本层(截图/渲染/合成/校验/配图)完全环境无关, 只有 TTS/音乐/ASR 依赖平台。TTS 用 mmx-cli: mmx speech synthesize --text ... --voice <id> --speed 1.0 --out audio/01.mp3(音色 mmx speech voices); ASR 用技能自带 node scripts/asr.mjs <项目>(同一把 API Key 直调 /v1/speech_to_text, 自动比对 checklist, 数字/繁体字不符判 ✗); 音乐生成 mmx-cli 没有 → 用户自备或跳过; 配图可用 mmx image(仅限抽象图, 禁生成 logo/截图/真人头像)。首次配置 npm i -g mmx-cli + mmx auth login, 401 时设 region。纪律不变: 时长实测、字幕来自 clauses、音色要试听验语种、Gate 不跳。",
+      "expected_output": "能跑 —— 脚本层(截图/渲染/合成/校验/配图)完全环境无关, 只有 TTS/音乐/ASR 依赖平台。TTS 用 mmx-cli: mmx speech synthesize --text ... --voice <id> --speed 1.1 --out audio/01.mp3(音色 mmx speech voices); ASR 用技能自带 node scripts/asr.mjs <项目>(同一把 API Key 直调 /v1/speech_to_text, 自动比对 checklist, 数字/繁体字不符判 ✗); 音乐生成 mmx-cli 没有 → 用户自备或跳过; 配图可用 mmx image(仅限抽象图, 禁生成 logo/截图/真人头像)。首次配置 npm i -g mmx-cli + mmx auth login, 401 时设 region。纪律不变: 时长实测、字幕来自 clauses、音色要试听验语种、Gate 不跳。",
       "files": []
     },
     {

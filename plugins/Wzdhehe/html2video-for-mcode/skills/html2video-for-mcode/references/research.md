@@ -1,120 +1,118 @@
-# 资料搜集(Phase 0 参考)
+# Research and fact collection (Phase 0 reference)
 
-事实类内容出错的方式很集中:**数字口径混用、二手转述失真、引语张冠李戴、时效过期**。这一节把"查资料"从"搜一下"变成可复核的流程。
+Factual content goes wrong in a very concentrated set of ways: **mixed definitions/metric bases, distortion through second-hand retelling, quotes attributed to the wrong person or occasion, stale information**. This section turns "looking something up" from a single search into a reviewable process.
 
-## 何时必须搜集
+## When research is mandatory
 
-**判断标准很简单**:成片里会出现具体**数字、日期、名称、引语或归属关系** → 必须搜集。
+**The test is simple**: if the finished video contains specific **numbers, dates, names, quotes or attribution relationships** → research is mandatory.
 
-- 公司 / 产品 / 融资 / 数据 / 历史 / 人物 / 政策:**必须**
-- 通用、抒情、创意、纯观点:可跳过,但"看起来像事实"的句子仍要核实
-- 用户已经给定稿脚本:仍要过一遍,标出"可能被误解或被质疑"的事实点
+- Companies / products / funding / data / history / people / policy: **mandatory**
+- Generic, lyrical, creative or purely opinion pieces: can be skipped, but any sentence that *looks like a fact* still has to be verified
+- The user has already supplied a final script: still review it and mark the factual points that "could be misread or challenged"
 
-## 来源分级(决定能不能进脚本)
+## Source tiering (decides whether a source can enter the script)
 
-| 等级 | 例子 | 用法 |
+| Tier | Examples | Use |
 |---|---|---|
-| **一手** | 官方公告、财报、招股书、官方博客与技术报告、政府/国际组织统计、原始论文 | 直接用;口径与数字以它为准 |
-| **权威二手** | 主流财经媒体、行业研究报告、Wikipedia **引用的原始来源** | 可用,但关键数字尽量回溯到一手 |
-| **弱来源** | 自媒体、聚合站、AI 摘要页、无署名"资料整理" | **只能当线索**,必须回溯一手;回溯不到就丢弃 |
-| **不可用** | 论坛帖、无出处截图、来源不明的图/表 | 不进脚本 |
+| **Primary** | Official announcements, financial reports, prospectuses, official blogs and technical reports, government / international-organisation statistics, original papers | Use directly; definitions and numbers defer to it |
+| **Authoritative secondary** | Mainstream financial media, industry research reports, the **original sources cited by** Wikipedia | Usable, but key numbers should be traced back to primary wherever possible |
+| **Weak sources** | Self-media, aggregator sites, AI summary pages, unsigned "compiled materials" | **Leads only**, must be traced back to primary; discard if it cannot be |
+| **Unusable** | Forum posts, unsourced screenshots, images/tables of unknown origin | Do not enter the script |
 
-## 硬规则(缺一条就回炉)
+## Hard rules (miss one and it goes back)
 
-1. **关键数字至少 2 个独立来源**。只有一个来源时,脚本里用限定措辞("官方口径为…")或降级为约数。
-2. **一手优先**。二手转述的数字要回溯原文 —— 转述链越长,越容易被加工。
-3. **标注口径与日期**。"营收"是年化还是季度?什么币种?"用户"是周活还是月活?来源是哪个时点的?notes 里写清,脚本里该带就带("今年上半年")。
-4. **时效**:优先最近 12 个月的来源;"最快/第一/最大/首个"这类断言尤其要用新来源。
-5. **区分事实与叙事**:"九亿周活"(可核查)vs"最受欢迎"(观点)。观点要有主语("公司自己说…")或用引语。
-6. **引语逐字 + 标明身份与场合**;翻译的引语注明"(译)"。
-7. **不确定的不进脚本**:查不到出处,或多源冲突无法判定 → 写进 notes 的"不确定项",不进口播稿。
-8. **来源可回查**:每条带 URL 或文档名 + 日期,方便 Gate 0 与事后复核。
+1. **Every key number needs at least 2 independent sources.** With only one source, use hedged wording in the script ("per the official figure…") or downgrade it to an approximation.
+2. **Primary first.** Numbers taken from secondary retellings must be traced back to the original text — the longer the retelling chain, the more the number gets processed.
+3. **Label the definition and the date.** Is "revenue" annualised or quarterly? In what currency? Is "users" weekly actives or monthly actives? As of when? Write it clearly in the notes, and carry it into the script where it belongs ("in the first half of this year").
+4. **Recency**: prefer sources from the last 12 months; assertions like "fastest / first / largest / the first ever" especially need a recent source.
+5. **Separate fact from narrative**: "900M weekly actives" (checkable) vs "most popular" (an opinion). Opinions need a subject ("the company itself says…") or must be a quote.
+6. **Quotes verbatim + name and occasion stated**; translated quotes marked "(translated)".
+7. **Anything uncertain stays out of the script**: if the source cannot be found, or sources conflict irreconcilably → write it into the notes as an "uncertain item", keep it out of the narration.
+8. **Sources must be re-checkable**: every item carries a URL or document name + date, so Gate 0 and later review can trace it.
 
-## query 设计
+## Query design
 
-- **实体 + 指标 + 时间**:`MiniMax 2026 上半年 营收 招股书`
-- **中英双查**:中文题材查官方中文公告;国际题材查英文原文(避免二手翻译失真)
-- **直奔载体词**:找数字就搜"财报 / 招股书 / 年报 / 技术报告 / 统计公报",比搜实体名更快命中一手
-- **优先官方域**:先猜官方文档路径或官网新闻页,拿到一手再补二手解读
+- **Entity + metric + time**: `MiniMax 2026 H1 revenue prospectus`; for a Chinese-market entity, the same query in Chinese — `MiniMax 2026 上半年 营收 招股书`
+- **Query in both Chinese and English**: for Chinese-language topics look for the official Chinese announcement; for international topics go to the English original (second-hand translation distorts)
+- **Go straight for the carrier word**: to find numbers, search "financial report / prospectus / annual report / technical report / statistical bulletin" — that hits primary sources faster than searching the entity name
+- **Prefer official domains**: guess the official document path or the official news page first, get the primary source and only then look for secondary interpretation
 
-## 多源矛盾怎么办
+## What to do when sources conflict
 
-1. 先比**口径与日期** —— 多数"矛盾"其实是口径不同(周活 vs 月活、年化 vs 单季)
-2. 再比**来源等级**(一手 > 权威二手 > 弱来源)
-3. 仍冲突:取一手/较新的那个,并在 notes 里记下分歧
-4. 现场无法判定:**脚本里不用这个数字**,或改成定性表述
+1. Compare **definition and date** first — most "conflicts" are actually different definitions (weekly vs monthly actives, annualised vs single quarter)
+2. Then compare **source tier** (primary > authoritative secondary > weak)
+3. Still conflicting: take the primary / more recent one, and record the disagreement in the notes
+4. Cannot decide on the spot: **do not use that number in the script**, or turn it into a qualitative statement
 
-## 各环境的搜索工具
+## Search tools by environment
 
-| 环境 | 搜索 | 注意 |
+| Environment | Search | Notes |
 |---|---|---|
-| mcode | `web_search` / `web_fetch`(内置) | `web_fetch` 能抓正文,适合回溯一手页 |
-| 其他宿主 | `mmx search "关键词"` / `mmx text chat` | **返回上限约 10 条、无分页** —— 适合"找一手入口",深入核实仍需抓页面或打开官方页 |
-| mcode 通用兜底 | 内置浏览器打开官方页 | 与配图路径 B 同一手法;官方页永远最可靠 |
-| 任一环境 | **本机装的其他搜索技能/插件** | 哪个抓得到正文就用哪个(工具开放,纪律不变);先用一次确认返回质量与条数,再决定是否依赖;来源分级、两源交叉、口径标注照旧 |
+| mcode | `web_search` / `web_fetch` (built in) | `web_fetch` pulls the body text, good for tracing primary pages |
+| Other hosts | `mmx search "keyword"` / `mmx text chat` | **~10 results max, no pagination** — good for "finding a primary entry point"; deeper verification still needs fetching the page or opening the official page |
+| mcode general fallback | built-in browser, open the official page | The same technique as image path B; the official page is always the most reliable |
+| Any environment | **other search skills/plugins installed on this machine** | Use whichever one can actually pull the body text (the tools are open, the discipline is not); try it once to confirm result quality and count before depending on it; source tiering, two-source cross-checking and definition labelling all still apply |
 
-## 抓取方法:官网 / 新闻稿 / 招股书怎么真正拿到手
+## Fetching: how to actually get official sites / press releases / prospectuses
 
-搜索工具只负责"找到入口",**正文要自己取**。按页面的渲染方式选方法:
+Search tools only "find the entry point" — **you fetch the body text yourself**. Choose the method by how the page renders:
 
-| 页面类型 | 方法 | 说明 |
+| Page type | Method | Notes |
 |---|---|---|
-| 静态页 / 文档 / 公告页 | `web_fetch <URL>` | 直接拿正文,最快 |
-| **SPA / JS 渲染页**(很多企业官网、投资者关系页) | **mcode 内置浏览器**(mcode 环境)或 **Playwright 无头浏览器**(任一环境)渲染后取正文 | `web_fetch` 常只拿到空壳 HTML(有壳无文)。技能本来就依赖 Playwright,直接复用(无头渲染,不用人盯);本机有其他无头浏览器自动化技能也可,能拿到正文就行。用 **mcode 内置浏览器**时:别用 `navigate(replaceCurrentTab)` 当刷新(会开新 tab),连续点击 15+ 次要节流(会触发人机验证),拿到图片 URL 走 `fetch-official-images.mjs --url` 落盘。命令: |
+| Static pages / documents / announcement pages | `web_fetch <URL>` | Gets the body text directly, fastest |
+| **SPA / JS-rendered pages** (many corporate sites, investor relations pages) | **mcode built-in browser** (mcode environment) or a **headless Playwright browser** (any environment), render first then take the body text | `web_fetch` often returns nothing but an empty shell HTML (a shell with no text). This skill already depends on Playwright, so reuse it (headless render, nobody has to watch it); any other headless browser automation skill installed on the machine also works, as long as it gets the body text. When using the **mcode built-in browser**: do not use `navigate(replaceCurrentTab)` as a refresh (it opens a new tab), throttle when clicking 15+ times in a row (it triggers human verification), and when you have image URLs, write them to disk via `fetch-official-images.mjs --url`. Command: |
 
 ```bash
-# 渲染后取正文文本(SPA/懒加载官网通用)
+# render, then take the body text (works for SPA / lazy-loaded official sites)
 node -e "const {chromium}=require('playwright');(async()=>{
   const b=await chromium.launch(); const p=await b.newPage();
   await p.goto(process.argv[1],{waitUntil:'domcontentloaded'});
-  await p.waitForTimeout(2500);                       // 等异步内容
+  await p.waitForTimeout(2500);                       // wait for async content
   console.log(await p.evaluate(()=>document.body.innerText));
-  await b.close();})()" "https://官网/新闻中心/某条"
+  await b.close();})()" "https://company.example/newsroom/some-post"
 ```
 
-- 取**图片/图表**用同一个页面:`node <技能>/scripts/fetch-official-images.mjs <URL>`(它已打开并渲染页面,列候选图)
-- **PDF**(招股书、财报、年报、白皮书):直接下载,再从 PDF 提文本;**数字以 PDF 原文为准**,不要用媒体转述的版本
-- 需要登录/验证码的页面:不要在自动化里硬闯,换官方公开页或让用户提供文件
+- For **images/charts** on the same page: `node <skill>/scripts/fetch-official-images.mjs <URL>` (it already opens and renders the page and lists candidate images)
+- **PDF** (prospectuses, financial reports, annual reports, white papers): download directly, then extract the text from the PDF; **numbers defer to the PDF original text**, never to a media retelling
+- Pages that need login / captcha: do not force your way through automation — switch to a public official page or ask the user for the file
 
-## 新闻稿 / 公告的取用纪律
+## Discipline for using press releases / announcements
 
-**去哪找**:`/news`、`/newsroom`、`/press`、`/investor`、`/ir`、`/announcements`;中文公司常在"新闻中心 / 投资者关系 / 公告"栏目。交易所公告(如港交所 HKEXnews、巨潮资讯)比公司官网更权威。
+**Where to look**: `/news`, `/newsroom`, `/press`, `/investor`, `/ir`, `/announcements`; Chinese companies usually keep columns named "news centre / investor relations / announcements". Exchange announcements — SEC EDGAR for US filings, HKEXnews for Hong Kong, SSE / SZSE (CNINFO) for mainland China, plus regulator decisions such as FDA / FTC — are more authoritative than the company's own site.
 
-**四条纪律**
+**Four rules of discipline**
 
-1. **认发布主体**:官方原文(公司/交易所/机构)≠ 媒体转述。冲突时**以官方原文为准**。
-2. **认发布日期与口径**:新闻稿里的数字几乎都带口径("截至 2026 年 6 月""年化""未经审计")→ **原样抄口径**,别简写成裸数字。
-3. **警惕标题夸大**:"首个/最大/颠覆"多出现在媒体标题而非原文;写进口播前回原文核对是否真有这个说法。
-4. **转发稿要溯源**:同一篇通稿被多家转载时,找到最初发布方;引用时引原文而不是转载页。
-
-
+1. **Identify the publishing entity**: the official original text (company / exchange / institution) ≠ a media retelling. On conflict, **the official original text wins**.
+2. **Identify the publication date and the definition**: numbers in a press release almost always carry a definition ("as of June 2026", "annualised", "unaudited") → **copy the definition verbatim**, never shorten it to a bare number.
+3. **Beware headline exaggeration**: "first / largest / disruptive" mostly appears in media headlines rather than the original text; before writing it into the narration, go back to the original and check whether it really says that.
+4. **Trace syndicated copies**: when the same wire story is republished by several outlets, find the original publisher; quote the original text, not the republished page.
 
 ```markdown
-## 核心事实
-| 事实 | 数值/表述 | 来源(URL 或文档名) | 口径日期 | 等级 | 第二来源 |
+## Core facts
+| Fact | Value/wording | Source (URL or document name) | Definition date | Tier | Second source |
 |---|---|---|---|---|---|
-| 周活用户 | 9 亿 | openai.com/… (官方公告) | 2026-02 | 一手 | 路透 2026-03 |
+| Weekly active users | 900M | openai.com/… (official announcement) | 2026-02 | Primary | Reuters 2026-03 |
 
-## 不确定项(不进脚本)
-- 估值口径在不同报道中不一致(800B / 852B), 且无一手来源 → 不用
+## Uncertain items (not entering the script)
+- Valuation definitions disagree across reports (800B / 852B), and there is no primary source → do not use
 
-## 不该进脚本的内容
-- 未经证实的传闻、争议性评价、无法核实的人物关系
+## Content that must not enter the script
+- Unconfirmed rumours, controversial evaluations, unverifiable personal relationships
 ```
 
-Gate 0 呈现时,**重点让用户确认数字、名称与口径**,而不是通读全表。
+When presenting at Gate 0, **focus the user on confirming the numbers, names and definitions**, rather than reading through the whole table.
 
-## 先确认领域(受监管题材的额外动作)
+## Confirm the domain first (extra step for regulated topics)
 
-开工对齐时若题材属于**财经/投研、医疗健康、法律、政务政策、营销效果宣称**,除了本节的口径纪律,还要走 `compliance.md`:确认**要不要免责声明与数据出处标注**(默认要)、数字补齐"口径 + 币种 + 时点"三要件、涨跌色按受众市场(红涨绿跌 / 绿涨红跌)确定。这一步在 Gate 0 就要有结论,不要留到成片。
+At kickoff alignment, if the topic falls under **finance/investment research, healthcare, legal, government policy, or marketing performance claims**, then in addition to the definition discipline in this section you must also follow `compliance.md`: confirm **whether a disclaimer and data attribution are required** (by default they are), complete every number with the three requisites "definition + currency + point in time", and settle up/down colours by the audience's market (red-up/green-down vs green-up/red-down). This step must reach a conclusion at Gate 0 — do not leave it to the finished video.
 
-## 常见题材的坑
+## Pitfalls by topic
 
-| 题材 | 坑 | 做法 |
+| Topic | Pitfall | What to do |
 |---|---|---|
-| 公司 / 融资 / IPO | 媒体把"估值/营收/融资额"混用;币种与年化口径不明 | 认招股书或官方公告口径;写清币种与区间 |
-| 财经 / 投研(股票、基金、宏观数据) | 把观点写成事实、拿旧时点当"目前"、口径混用(同比≠环比、GAAP≠非GAAP);涨跌色用错受众读法 | 每个数字带**口径 + 币种 + 时点**,股价类写"截至 YYYY-MM-DD 收盘";不给操作建议与价格预测;免责与涨跌色见 `compliance.md` |
-| 模型 / 技术指标 | 榜单版本不同,分数不可比 | 认官方技术报告 + 明确榜单名称与版本 |
-| 历史 / 人物 | 引语出处不明、二手转述走形 | 认权威传记/档案;引语必须有原文出处 |
-| 政策 / 统计 | 用旧版数据,忽略修订 | 认政府或国际组织原始发布,注意修订说明 |
-| 产品功能 | 把"内测/灰度"说成"已上线" | 认官方文档当前状态,标注时间 |
+| Company / funding / IPO | Media mix up "valuation / revenue / funding amount"; currency and annualisation basis unclear | Defer to the prospectus or official announcement; state the currency and the period |
+| Finance / investment research (stocks, funds, macro data) | Opinions written as facts, stale points in time presented as "currently", mixed definitions (YoY ≠ QoQ, GAAP ≠ non-GAAP); wrong up/down colours for the audience | Every number carries **definition + currency + point in time**; price figures say "as of the YYYY-MM-DD close"; no trading advice and no price predictions; disclaimer and up/down colours per `compliance.md` |
+| Models / technical benchmarks | Leaderboard versions differ, scores are not comparable | Defer to the official technical report + state the leaderboard name and version |
+| History / people | Quote sources unclear, second-hand retellings distort | Defer to authoritative biographies/archives; every quote must have an original source |
+| Policy / statistics | Using old-version data, ignoring revisions | Defer to the original government or international-organisation release, watch for revision notes |
+| Product features | Calling a "beta / gated rollout" a "live feature" | Defer to the current state in the official documentation, and date it |
