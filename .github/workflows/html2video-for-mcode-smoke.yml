@@ -3,6 +3,15 @@
 # 本 workflow 按 CONTRIBUTING/ci.yml 注释给出的"单插件 scoped workflow"模式,
 # 装齐依赖后真实执行全部测试 —— 这是 PR #41 评审要求的可执行测试证据。
 # 触发条件: 仅本插件目录(.github/workflows/ 本文件除外)或本文件自身变更。
+#
+# 第三轮 review 修正(2026-09-18, 1.7.1 才真正推上来 —— 1.7.0 时这份修正只改了本地没推送,
+# PR 分支上一直是旧枚举版, 漏跑 cover-transition / review-round2 / review-round3 / subtitles-invalidate):
+#   ① 测试文件不再逐个枚举, 改用 shell glob `tests/*.test.mjs` —— 枚举写法每加一个测试文件就要
+#      手工记得改这里, 历史上已经漏过 css-kit / tokens-fx / chart-kit / table-kit 与上述四个文件。
+#   ② 补 permissions: contents: read(与本仓库其余 scoped workflow 一致, 只读仓库)。
+#   ③ actions 按仓库主 ci.yml 的同一批版本做**完整 SHA pin**(附版本注释), 不用浮动 tag;
+#      SHA 由 gh api repos/<owner>/<repo>/commits/<tag> 解析得到, 40 位整(主 ci.yml 的 checkout
+#      那行多了一位字符, 那是宿主仓库自己的笔误, 不去动它 —— 见 PR comment)。
 name: html2video-for-mcode smoke
 
 on:
@@ -17,14 +26,20 @@ on:
       - '.github/workflows/html2video-for-mcode-smoke.yml'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   smoke:
+    name: smoke (ubuntu-latest · ffmpeg + chromium)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v4
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
 
@@ -36,22 +51,10 @@ jobs:
           npm install --no-save --no-package-lock playwright
           npx playwright install --with-deps chromium
 
-      - name: Security, policy & template tests (containment / overwrite refusal / endpoint allowlist / SSRF / play page / fx keyframes)
+      # 一条命令跑完 tests/ 下的**全部** *.test.mjs(安全 / 策略 / 模板 / 受管块 / 渲染冒烟)。
+      # glob 交给 shell 展开: 以后新增测试文件自动进 CI, 不需要改这里(旧枚举写法漏过 8 个文件)。
+      # 单测超时 300s: 渲染冒烟里的 capture / build-video 在 CI 上要几十秒。
+      - name: All tests (security · policy · templates · css blocks · render smoke)
         run: |
-          node --test \
-            plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/safe-paths.test.mjs \
-            plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/no-clobber.test.mjs \
-            plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/endpoint-allowlist.test.mjs \
-            plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/fetch-policy.test.mjs \
-            plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/preview-page.test.mjs \
-            plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/tokens-fx.test.mjs \
-            plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/chart-kit.test.mjs \
-            plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/table-kit.test.mjs \
-            plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/css-kit.test.mjs \
-            --test-timeout=60000
-
-      - name: Render smoke (init → timings → static gate → capture → build)
-        run: |
-          node --test \
-            plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/render-smoke.test.mjs \
-            --test-timeout=300000
+          node --test --test-timeout=300000 \
+            plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/*.test.mjs
