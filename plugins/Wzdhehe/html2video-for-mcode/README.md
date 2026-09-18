@@ -30,7 +30,7 @@ my-video/
 
 ## Pipeline
 
-One Skill drives an 11-script pipeline (`skills/html2video-for-mcode/scripts/`):
+One Skill drives a 13-script pipeline (`skills/html2video-for-mcode/scripts/`):
 
 | Stage | What happens |
 |---|---|
@@ -102,12 +102,22 @@ node <skill>/scripts/init-project.mjs ./my-video --topic "My topic"
 # synthesize audio/01.mp3 … audio/08.mp3
 node <skill>/scripts/plan-timings.mjs ./my-video     # measure audio → timings.json
 node <skill>/scripts/check-slides.mjs ./my-video     # static gate before rendering
+node <skill>/scripts/capture.mjs ./my-video --mode still
+node <skill>/scripts/preview-page.mjs ./my-video --open   # play page: screen it yourself first
 node <skill>/scripts/capture.mjs ./my-video --mode motion
 node <skill>/scripts/build-video.mjs ./my-video --asr
 ```
 
 `SKILL.md` carries the full workflow (7 phases, 6 confirmation gates); `references/` holds the
 authoring rules, asset-sourcing SOP, TTS/timing notes, and rendering internals.
+
+`preview-page.mjs` writes a self-contained play page to `preview/play/index.html` (open it from
+disk, no server): arrow keys page through the slides, `R` replays the entrance animations,
+`P` shows the narration lines for the current slide, `O` is an overview, and `X` switches to a
+`no-fx` copy of the same slide — if the picture goes blank, some keyframes never lift the
+`opacity: 0` base state. The page loads snapshots with the **measured** stage delays injected
+from `timings.json`, so what you see in the browser matches the timing of the final video
+(opening `slides/*.html` directly does not — those files carry placeholder delays).
 
 ## Supported platforms
 
@@ -120,9 +130,16 @@ ffmpeg and Chromium paths are auto-detected.
 Nothing is contacted unless you invoke the step that needs it:
 
 - `scripts/asr.mjs` — HTTPS `POST` to `https://api.minimaxi.com/v1/speech_to_text`
-  (or `https://api.minimax.io` when `MINIMAX_REGION=global`). Only when you run it.
-- `scripts/fetch-official-images.mjs` — opens the URL **you** pass (an official site or a local
-  `file://` page) to list and download candidate images.
+  (or `https://api.minimax.io` when `MINIMAX_REGION=global`). Only when you run it. **The API key
+  is sent to these two official hosts only**: any other `--base-url` / `MINIMAX_BASE_URL` is
+  rejected before the request is made, unless you explicitly pass `--allow-any-endpoint`
+  (self-hosted gateway / testing, at your own risk).
+- `scripts/fetch-official-images.mjs` — opens the URL **you** pass (an official site, or a local
+  `file://` page with `--allow-file`) to list and download candidate images. Targets are checked
+  before any request: loopback, link-local (including cloud metadata `169.254.169.254`), private
+  and CGNAT ranges, dotless hostnames, URLs with embedded credentials, and non-HTTP(S) schemes are
+  all refused, every redirect hop is re-checked the same way, and responses are size-capped
+  (30 MB by default, `--max-mb`).
 - Voice synthesis happens through mcode connectors or `mmx-cli`, which contact MiniMax.
 - Everything else (timing, static checks, capture, encoding, theme validation) is fully offline.
 
@@ -134,10 +151,36 @@ No telemetry, no analytics, no hidden endpoints, no installers, no native binari
   to the ASR service only if you run `scripts/asr.mjs`.
 - Assets you fetch are downloaded into your project's `assets/` directory and must be recorded in
   `assets/MANIFEST.md` with source and license.
-- Everything else stays on disk inside your project directory. The Skill writes only inside the
-  project directory you pass to it.
+- **Writes stay inside the project directory you pass in.** Every path derived from `script.json`
+  (slide `id` / `html` / `audio`, `bgm.file`) is validated first: ids must match
+  `^[A-Za-z0-9_-]{1,64}$`, paths must resolve inside the project, and symlink escapes are refused —
+  a hand-edited or prompt-injected `script.json` cannot make the pipeline read, write, or
+  recursively delete anything outside your project.
+- **Nothing is overwritten silently.** `init-project.mjs` refuses a non-empty target directory
+  (re-initialising needs `--force`, which only resets its own five generated files);
+  `fetch-official-images.mjs` and `prep-image.mjs` do not clobber existing files without `--force`
+  and keep downloads inside your working directory by default.
 - No credentials are stored or embedded: the ASR script reads a key from `MINIMAX_API_KEY` or
   `--api-key` at runtime and never writes it anywhere.
+
+## Verification
+
+The Skill ships an executable test suite (`skills/html2video-for-mcode/tests/`, plain
+`node:test` — no extra dependencies). From the repository root:
+
+```bash
+node --test "plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/*.test.mjs"
+```
+
+93 tests in seven files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
+escapes), `no-clobber` (refusing to overwrite), `endpoint-allowlist` (key never leaves the official
+hosts — plus a local server that proves the gate sits before the request), `fetch-policy` (SSRF,
+`file://`, redirect and filename rules), `preview-page` (snapshot timing injection, `base` ordering,
+self-containment, containment refusals) and `tokens-fx` (every entrance animation in the generated
+`tokens.css` must declare `opacity`, `no-fx` must reset it, `--upgrade-css` is idempotent), plus
+`render-smoke` (init → timings → static gate → capture → build, end to end). The render smoke test and three ffmpeg-dependent path checks need ffmpeg and
+Chromium; where those are missing they skip with a stated reason, and the scoped workflow
+`.github/workflows/html2video-for-mcode-smoke.yml` installs them and runs everything for real.
 
 ## Troubleshooting
 

@@ -164,6 +164,13 @@
       "prompt": "财务页要画营收对比图和一条三年趋势线, 要有点动效; 但老板说这版赶时间, 最好能一个开关把动画全关掉, 画面别变。",
       "expected_output": "图表全部纯 CSS/SVG 自绘(禁外链 Chart.js/ECharts: 离线取不到 + canvas 动画逐帧 seek 不到)。动效走现成 fx 类且逐帧可 seek: 条形 fx-grow-x 从左长出、柱状 fx-grow-y 从底长出、折线 fx-draw 描边画入(SVG 自设 stroke-dasharray:800)、环形/进度条 fx-pop 与 fx-grow-x; 错峰用 --fx-delay:calc(var(--t2)+N×120ms)。开关: 根元素加 class=\"no-fx\" 一键全关(单张容器加则只关该张), 关掉后 motion 捕获检测不到动画窗、自动按静态帧出片, 时长与音画同步不变, 字幕照常烧录; 实测动画终态与 no-fx 帧 PSNR 51.7dB(画面一致)。⚠ 两个必踩的坑: ① 只做 transform/描边的关键帧必须显式写 opacity:1, 否则 [data-stage] 的 opacity:0 基础态抬不回来 → 元素永久隐形(check-slides 5b 项会报); ② 柱状图外层容器不能写 align-items:flex-end(列 wrapper 高度塌陷 → 柱子百分比高度变 0), 要用默认 stretch + 列内 justify-content:flex-end。见 references/authoring.md 的\"纯 CSS/SVG 图表\"与\"动效开关\"两节。",
       "files": []
+    },
+    {
+      "id": 25,
+      "name": "preview-before-render",
+      "prompt": "片子渲染要等好几分钟, 我想先自己把八张连着放一遍看看动效节奏对不对, 别每次都等出片。",
+      "expected_output": "跑 node <技能>/scripts/preview-page.mjs <项目目录> --open → 生成自包含放映页 preview/play/index.html(file:// 双击即看, 零依赖、不需起服务): ←→ 翻页、R 重播当前张入场动画、P 提词面板(该张 clauses 按播放时间高亮, 并标出'成片 X s · 最后一层入场 ≈ Y s', 收尾静止不足 1.2s 标红)、O 总览、F 全屏、X 切'关动效'副本对照。⚠ 关键: 不要直接双击 slides/*.html —— 动画延迟 --t1/--t2/--t3 是渲染管线按 timings.json 注入的, 原文件里只有占位值(--t2:800ms), 看到的是'所有动画挤在开头两秒'的假象; 放映页的副本把实测延迟写进 <html style> 并加 <base href=\"../../slides/\">, 浏览器里的时序才等于成片时序(实测同一张 t=3.0s: 副本第二层 opacity 0 未入场, 原文件已入场)。副本是快照, 改完 slides 必须重跑; 缺 build/timings.json 时页面会明确警告时序不是成片的。X 键切过去若画面变空, 说明有关键帧没把 opacity:0 基础态抬回来; 老项目(没有 no-fx 规则)先跑 init-project.mjs <项目> --upgrade-css 补规则(幂等, 不碰 script.json)。",
+      "files": []
     }
   ]
 }

@@ -27,16 +27,17 @@ description: 把脚本/大纲/主题变成带中文口播的成片 MP4(HTML 幻�
 
 ## 目录与工具
 
-技能自带 12 个脚本(直接以本技能目录为路径调用,项目目录作为参数,无需复制;`tests/` 下还有一套 node:test 安全与冒烟测试,从仓库根 `node --test` 自动发现):
+技能自带 13 个脚本(直接以本技能目录为路径调用,项目目录作为参数,无需复制;`tests/` 下还有一套 node:test 安全与冒烟测试,从仓库根 `node --test` 自动发现):
 
 | 脚本 | 作用 |
 |---|---|
-| `scripts/init-project.mjs <项目目录> [--force]` | 生成项目骨架:目录 + tokens.css + slide 模板 + script.json 契约。**目标目录非空时拒绝执行**(会重置 5 个生成文件),要重新初始化必须显式 `--force` |
+| `scripts/init-project.mjs <项目目录> [--force] [--upgrade-css]` | 生成项目骨架:目录 + tokens.css + slide 模板 + script.json 契约。**目标目录非空时拒绝执行**(会重置 5 个生成文件),要重新初始化必须显式 `--force`;`--upgrade-css` 只给老项目的 tokens.css 补新版 no-fx 规则(幂等) |
 | `scripts/plan-timings.mjs <项目目录>` | ffprobe 实测每段 TTS → 每张时长、各 stage 入场时刻、**每句 clauses 时刻** → `build/timings.json` |
 | `scripts/check-timing.mjs <项目目录> [--calibrate]` | 静音检测实测每句真实开口, 与估算对比;`--calibrate` 按实测校准 timings 后重渲染 |
 | `scripts/check-theme.mjs <项目目录>` | 校验全部主题的 WCAG 对比度(正文/次级/字幕/accent-ink), 不达标退出码 1;新增主题必须过闸 |
 | `scripts/prep-image.mjs --check <图...>` / `--crop <in> <out> [--ratio 16:9] [--anchor ...]` | 配图 SOP 的执行辅助:查尺寸与裁切风险;按锚点裁切(强制"裁掉 ≤20%、不放大补边") |
 | `scripts/capture.mjs <项目目录> [--mode still\|motion] [--no-subs]` | Playwright 截图。still=终态单帧;motion=逐帧步进入场动画。**字幕默认烧录**(内容取自 clauses),`--no-subs` 关闭 |
+| `scripts/preview-page.mjs <项目目录> [--open]` | 生成**放映页** `preview/play/index.html`(单文件、零依赖、file:// 双击即看):←→ 翻页、R 重播动画、X 关动效对照、P 提词面板、O 总览、F 全屏。快照按 `timings.json` **注入实测延迟**, 所以浏览器里的动画时序 = 成片时序 |
 | `scripts/build-video.mjs <项目目录> [--asr]` | 编码每张 → 拼接 → 音轨对位 → 合成 → 自检 + 出 `out/subs.srt`;`--asr` **按句**切分音频 + 校验清单 |
 
 环境要求:Node 18+(脚本用 fileURLToPath 保兼容, 不依赖 Node 20.11 的 import.meta.dirname)、`npm i playwright && npx playwright install chromium`(项目目录内)。ffmpeg/ffprobe 自动探测:PATH → node_modules(ffmpeg-static/ffprobe-static)→ 常见安装位置,找不到会给逐条诊断而不是莫名报错。
@@ -190,9 +191,10 @@ node <技能目录>/scripts/plan-timings.mjs <项目目录>
 
 ```bash
 node <技能目录>/scripts/capture.mjs <项目目录> --mode still
+node <技能目录>/scripts/preview-page.mjs <项目目录> --open   # 放映页: 让用户自己过一遍动效
 ```
 
-**Gate 4**:`preview/<id>.png` 逐张给用户过(看版式、字压、素材,不看动画时序——时序由 timings 保证)。
+**Gate 4**:`preview/<id>.png` 逐张给用户过(看版式、字压、素材)+ **放映页 `preview/play/index.html` 交用户自己放一遍**(看动效节奏、口播与入场是否对得上、收尾静止够不够)。静态图看不出动画——而"元素永远不出现""关动效反而空白""列高塌陷"这类故障恰恰只在动起来或切对照时才露头;放映页是 30 秒的自检手段,不必等 3–6 分钟的 motion 编码。**用户过完再进 Phase 5。**
 
 ### Phase 5 · 渲染 + ASR 校验
 
@@ -216,7 +218,7 @@ node <技能目录>/scripts/build-video.mjs <项目目录> --asr
 out/final.mp4            # 主交付
 out/slide-*.mp4          # 单段(可单独发布)
 build/audio-timeline.wav # 对位后音轨
-preview/*.png  slides/*.html  slides/tokens.css
+preview/*.png  preview/play/index.html   slides/*.html  slides/tokens.css
 audio/*.mp3  assets/(含 MANIFEST.md)  research/notes.md  asr/(校验记录)
 ```
 
@@ -252,7 +254,9 @@ audio/*.mp3  assets/(含 MANIFEST.md)  research/notes.md  asr/(校验记录)
 | 要出竖版(抖音/视频号) | — | `script.json` 设 `width:1080, height:1920`,版式改堆叠(见 authoring.md 竖版章节) |
 | 数字/文字明明写了却看不见 | 未定义 CSS 变量 + `-webkit-text-fill-color: transparent`,整条 background 失效 | 跑 `check-slides.mjs` 定位,补定义或写 `var(--x, 默认值)` |
 | 图表/折线/某个元素入场后完全不见 | 该 fx 类的关键帧没声明 opacity —— `[data-stage]` 基础态是 `opacity:0`,只做 transform/描边的动画抬不回来 | 在关键帧的 from/to 里补 `opacity:1`;`check-slides.mjs` 会直接报出来 |
-| 切了 `no-fx` 画面反而更空 | 早期模板只关动画、没恢复 `[data-stage]` 的 `opacity:0` 基础态 | 用新版 tokens.css(no-fx 规则含 `opacity:1 !important`);截图脚本已同时作废旧帧目录 |
+| 切了 `no-fx` 画面反而更空 | 早期模板只关动画、没恢复 `[data-stage]` 的 `opacity:0` 基础态 | 项目 tokens.css 是旧版:`node scripts/init-project.mjs <项目目录> --upgrade-css` 补上(幂等);放映页遇到旧 tokens.css 会在关动效副本里兜底注入并明确提示 |
+| 双击 `slides/*.html` 看动画, 发现全挤在开头 | 动画延迟由管线按 `timings.json` 注入,tokens.css 里只有占位值(`--t2:800ms`) | 别直接开原文件:跑 `preview-page.mjs` 用副本(已注入实测延迟), 或 `--mode motion` 出片 |
+| 放映页里 iframe 是空白/图裂 | 副本的 `<base href>` 被清掉, 或 slides/ 被移动过 | 重跑 `preview-page.mjs` 重新生成快照;原文件不要手改(副本是快照,改 slides 后必须重跑) |
 | 图片显示 broken 图标 | 文件缺失,或 SVG 本身有问题(XML 错/依赖外部资源/缺尺寸) | `check-slides.mjs` 查路径;SVG 改 inline 进 HTML;capture 也会在渲染时点名哪张没加载 |
 | 财经片没免责声明 / 涨跌色反了 / 数字被质疑口径 | 开工没确认领域,默认色与默认措辞直接用了 | 读 `references/compliance.md`:结尾补 `.disclaimer` 行(停留 ≥3s)、指标卡改 `var(--up)/var(--down)` 并按受众市场翻转、每个数字补口径+币种+时点 |
 | 不知道要不要写免责声明 / 算不算受监管 | 领域没确认 | 开工对齐第一批问题里问"领域 + 要不要免责";财经投研、医疗、法律、政策、营销效果宣称默认要。`check-slides.mjs` 命中财经关键词却没见免责行时会提示 |

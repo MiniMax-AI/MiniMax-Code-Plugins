@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // html2video-for-mcode · 生成项目骨架
-// 用法: node init-project.mjs <项目目录> [--topic "主题名"] [--force]
+// 用法: node init-project.mjs <项目目录> [--topic "主题名"] [--force] [--upgrade-css]
 // 目标目录已存在且非空时拒绝执行(会重置 script.json 等 5 个生成文件), 需显式 --force。
+// --upgrade-css: 不生成任何文件, 只给已有项目的 tokens.css 补新版 no-fx 规则(幂等可重复跑)。
 import fs from 'node:fs';
 import path from 'node:path';
+import { NOFX_CSS, hasNofxRules } from './nofx-css.mjs';
 
 const argv = process.argv.slice(2);
 const dirArg = argv.find(a => !a.startsWith('--'));
@@ -373,15 +375,7 @@ html, body { width: var(--stage-w, 1920px); height: var(--stage-h, 1080px); over
 .fx-grow-x { transform-origin: left center; animation: fx-grow-x-kf .9s var(--ease-out) var(--fx-delay, 0ms) both; }  /* 图表: 条形从左长出 */
 .fx-grow-y { transform-origin: bottom center; animation: fx-grow-y-kf .9s var(--ease-out) var(--fx-delay, 0ms) both; } /* 图表: 柱状从底长出 */
 
-/* 一键关全部动效: <html class="no-fx"> 或 .stage.no-fx。
-   注意必须同时把 [data-stage] 的基础态 opacity:0 拉回来 —— 入场效果靠 animation 的 both
-   填充从 0 拉到 1, 只关动画不管基础态 = 元素全部隐形(2026-09-18 实测踩过)。
-   关掉后 motion 捕获自动退化为静态帧, 成片照常出; 字幕(.kit-sub)不受影响。 */
-.no-fx [class*="fx-"], .no-fx .fx-stagger > *, .no-fx .fx-shimmer::after { animation: none !important; }
-.no-fx [data-stage], .no-fx .fx-stagger > * {
-  opacity: 1 !important; transform: none !important; filter: none !important; clip-path: none !important;
-}
-.no-fx .fx-draw { stroke-dasharray: none !important; stroke-dashoffset: 0 !important; }
+${NOFX_CSS}
 
 @keyframes fx-up   { from { opacity: 0; transform: translateY(32px); } to { opacity: 1; transform: none; } }
 @keyframes fx-fade { from { opacity: 0; } to { opacity: 1; } }
@@ -389,7 +383,7 @@ html, body { width: var(--stage-w, 1920px); height: var(--stage-h, 1080px); over
 @keyframes fx-blur { from { opacity: 0; filter: blur(18px); } to { opacity: 1; filter: none; } }
 @keyframes fx-rise { from { opacity: 0; transform: translateY(60px) scale(.97); filter: blur(6px); } to { opacity: 1; transform: none; filter: none; } }
 @keyframes fx-pop  { 0% { opacity: 0; transform: scale(.6); } 60% { transform: scale(1.04); } 100% { opacity: 1; transform: scale(1); } }
-@keyframes fx-spotlight { from { clip-path: circle(0% at 50% 50%); } to { clip-path: circle(140% at 50% 50%); } }
+@keyframes fx-spotlight { from { clip-path: circle(0% at 50% 50%); opacity: 1; } to { clip-path: circle(140% at 50% 50%); opacity: 1; } }
 @keyframes fx-ripple    { from { clip-path: circle(0% at 20% 80%); opacity: .4; } to { clip-path: circle(160% at 20% 80%); opacity: 1; } }
 @keyframes fx-glitch {
   0% { opacity: 0; transform: translateX(0); clip-path: inset(0 0 0 0); }
@@ -490,6 +484,21 @@ const scriptJson = {
 // 全部进度, 所以必须显式 --force。
 const FORCE = argv.includes('--force');
 const GENERATED = ['script.json', 'slides/tokens.css', 'slides/_template.html', 'assets/MANIFEST.md', 'research/notes.md'];
+
+// --upgrade-css: 只给已有项目补新版 tokens.css 里新增的 no-fx 规则(幂等, 不碰其他文件)。
+// 老项目没有这段, <html class="no-fx"> 会静默失效 —— 只关动画不把 opacity 抬回来, 页面反而是空白。
+if (argv.includes('--upgrade-css')) {
+  const cssPath = path.join(dir, 'slides', 'tokens.css');
+  if (!fs.existsSync(cssPath)) { console.error(`✗ 找不到 ${cssPath}`); process.exit(1); }
+  const css = fs.readFileSync(cssPath, 'utf8');
+  if (hasNofxRules(css)) { console.log(`无需升级: ${cssPath} 已含 no-fx 规则`); process.exit(0); }
+  const block = `\n/* 以下由 init-project --upgrade-css 追加(2026-09-18): 老项目缺这段时 <html class="no-fx"> 失效 */\n${NOFX_CSS}\n`;
+  fs.writeFileSync(cssPath, css.replace(/\s*$/, '\n') + block);
+  console.log(`✓ 已补：no-fx 规则 → ${cssPath}`);
+  console.log('  其余新版组件(图表类 fx-grow-x/fx-grow-y 等)未自动补: 需要就在 references/authoring.md 里照抄对应块。');
+  process.exit(0);
+}
+
 if (fs.existsSync(dir)) {
   const existing = fs.readdirSync(dir).filter(e => !GENERATED.includes(e));
   const wouldOverwrite = GENERATED.filter(f => fs.existsSync(path.join(dir, f)));

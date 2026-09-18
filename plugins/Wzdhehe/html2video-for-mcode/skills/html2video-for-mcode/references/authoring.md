@@ -389,6 +389,8 @@ console.log(answer.output_text);</code></pre>
 
 适用:赶时间要快速出片、题材要求克制(政务/法律/讣告类)、或用户明确说"不要动画"。开工对齐时可当作一个问题问出去;默认全开。
 
+**交付前验一下**:`preview-page.mjs` 的放映页按 `X` 就是"动效 / 关动效"对照 —— 关掉后**变空**说明有关键帧没把 `opacity:0` 抬回来;两版画面一致才算干净。老项目(本规则加上之前生成的 tokens.css)没有 `no-fx` 规则:先跑 `node scripts/init-project.mjs <项目目录> --upgrade-css` 补上(幂等),否则 `<html class="no-fx">` 会静默失效、页面反而全空。
+
 ---
 
 # 主题速查(受众 → 主题)

@@ -28,7 +28,7 @@ my-video/
 
 ## 流水线
 
-一个技能驱动 11 个脚本(`skills/html2video-for-mcode/scripts/`):
+一个技能驱动 13 个脚本(`skills/html2video-for-mcode/scripts/`):
 
 | 阶段 | 做什么 |
 |---|---|
@@ -88,11 +88,18 @@ node <skill>/scripts/init-project.mjs ./my-video --topic "我的主题"
 # 合成 audio/01.mp3 … audio/08.mp3
 node <skill>/scripts/plan-timings.mjs ./my-video     # 实测音频 → timings.json
 node <skill>/scripts/check-slides.mjs ./my-video     # 渲染前静态闸门
+node <skill>/scripts/capture.mjs ./my-video --mode still
+node <skill>/scripts/preview-page.mjs ./my-video --open   # 放映页: 用户自己先过一遍
 node <skill>/scripts/capture.mjs ./my-video --mode motion
 node <skill>/scripts/build-video.mjs ./my-video --asr
 ```
 
 工作流全文(7 阶段、6 个确认闸门)在 `SKILL.md`;`references/` 放着编写规范、配图 SOP、TTS/对时说明与渲染内幕。
+
+`preview-page.mjs` 生成一个自包含的**放映页** `preview/play/index.html`(双击即看,不需要起服务):
+`←` `→` 翻页、`R` 重播入场动画、`P` 看当前张的口播、`O` 总览、`X` 切到同张的 `no-fx` 副本 ——
+切过去画面**变空**就说明有关键帧没把 `opacity:0` 的基础态抬回来。放映页的副本按 `timings.json`
+**注入实测延迟**,所以浏览器里看到的时序就是成片时序(直接打开 `slides/*.html` 不是:那些文件里是占位延迟)。
 
 ## 支持平台
 
@@ -102,8 +109,8 @@ Windows / macOS / Linux。脚本全部是 Node ESM,不依赖特定 shell。Windo
 
 **只有你主动执行的那一步才会联网**:
 
-- `scripts/asr.mjs` —— HTTPS `POST` 到 `https://api.minimaxi.com/v1/speech_to_text`(海外套餐设 `MINIMAX_REGION=global` 时走 `https://api.minimax.io`)。仅在你运行时。
-- `scripts/fetch-official-images.mjs` —— 打开**你传入的**网址(官方网站或本地 `file://` 页面)以列出并下载候选配图。
+- `scripts/asr.mjs` —— HTTPS `POST` 到 `https://api.minimaxi.com/v1/speech_to_text`(海外套餐设 `MINIMAX_REGION=global` 时走 `https://api.minimax.io`)。仅在你运行时。**API Key 只发这两个官方域**:其他 `--base-url` / `MINIMAX_BASE_URL` 取值会在发起请求之前被拒绝,确需自定义网关要显式加 `--allow-any-endpoint`(自担风险)。
+- `scripts/fetch-official-images.mjs` —— 打开**你传入的**网址(官方网站,或加 `--allow-file` 的本地 `file://` 页面)以列出并下载候选配图。**请求之前先过目标校验**:loopback、链路本地(含云元数据 `169.254.169.254`)、私网与 CGNAT 段、无点主机名、带内嵌凭据的 URL、非 HTTP(S) 协议一律拒绝;重定向**逐跳**复用同一策略;响应大小有上限(默认 30MB,`--max-mb` 可调)。
 - 配音合成经由 mcode connector 或 `mmx-cli`,它们会访问 MiniMax。
 - 其余全部离线:对时、静态检查、截图、编码、主题对比度校验。
 
@@ -113,8 +120,19 @@ Windows / macOS / Linux。脚本全部是 Node ESM,不依赖特定 shell。Windo
 
 - 你写的口播文本会送到你选择的语音服务;产物音频只在你运行 `scripts/asr.mjs` 时才送到 ASR 服务。
 - 抓取的素材下载到项目的 `assets/` 目录,并需在 `assets/MANIFEST.md` 登记来源与许可。
-- 其余数据全部留在你传入的项目目录内 —— 技能只往这个目录里写东西。
+- **写入只发生在你传入的项目目录内。** `script.json` 派生出的每个路径(slide 的 `id` / `html` / `audio`、`bgm.file`)都先过校验:id 必须匹配 `^[A-Za-z0-9_-]{1,64}$`,路径必须 resolve 在项目目录内,符号链接逃逸同样拒绝 —— 手改或被注入的 `script.json` 无法让流水线读写或递归删除项目目录之外的东西。
+- **不会静默覆盖任何东西。** `init-project.mjs` 对非空目标目录直接拒绝(重新初始化需 `--force`,且只重置它自己生成的 5 个文件);`fetch-official-images.mjs` 与 `prep-image.mjs` 覆盖已存在文件需 `--force`,下载默认收在工作目录内。
 - **不存储、不内嵌任何凭据**:ASR 脚本运行时从 `MINIMAX_API_KEY` 或 `--api-key` 读取,且从不写出到任何文件。
+
+## 验证
+
+技能自带可执行测试(`skills/html2video-for-mcode/tests/`,纯 `node:test`,无额外依赖)。在仓库根执行:
+
+```bash
+node --test "plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/*.test.mjs"
+```
+
+七个文件共 93 例:`safe-paths`(恶意 slide id / 路径、canary 完好性、符号链接逃逸)、`no-clobber`(覆盖拒绝)、`endpoint-allowlist`(Key 不离开官方域,并用本地服务器证明闸门在请求之前)、`fetch-policy`(SSRF、`file://`、重定向与文件名规则)、`preview-page`(快照注入实测延迟、`base` 顺序、自包含无外链、越界拒绝)、`tokens-fx`(模板里每个入场动画的关键帧必须声明 `opacity`、`no-fx` 必须重置基础态、`--upgrade-css` 幂等)与 `render-smoke`(init → 对时 → 静态闸门 → 截图 → 成片全链)。渲染冒烟与三例依赖 ffmpeg 的路径检查需要 ffmpeg 与 Chromium:缺失时按原因 skip,scoped workflow `.github/workflows/html2video-for-mcode-smoke.yml` 会装齐依赖并把全部用例真跑一遍。
 
 ## 排错
 
