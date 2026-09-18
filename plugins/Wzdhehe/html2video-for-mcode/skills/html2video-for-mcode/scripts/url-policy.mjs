@@ -120,3 +120,22 @@ export function sanitizeFilename(name, { maxLen = 30, fallback = 'official' } = 
   if (!s || WIN_RESERVED.test(s)) s = fallback;
   return s;
 }
+
+// 图片 URL → 落盘文件名(下载零散 URL 时用): 取路径末段, 扩展名优先用 URL 自己的,
+// 没有/不像扩展名就按 content-type 推, 都不行给 .bin(交给人眼确认后再登记)。
+const EXT_BY_TYPE = {
+  'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp',
+  'image/gif': '.gif', 'image/svg+xml': '.svg', 'image/avif': '.avif',
+};
+
+export function imageNameFromUrl(raw, contentType = '') {
+  let pathname = '', base = '';
+  try {
+    pathname = new URL(raw).pathname;
+    base = decodeURIComponent(pathname.split('/').filter(Boolean).pop() || '');
+  } catch { /* 非法 URL: 走 fallback */ }
+  const extInPath = /^\.[a-z0-9]{1,5}$/i.test(pathname.slice(pathname.lastIndexOf('.'))) ? pathname.slice(pathname.lastIndexOf('.')).toLowerCase() : '';
+  const ext = extInPath || EXT_BY_TYPE[String(contentType).split(';')[0].trim().toLowerCase()] || '.bin';
+  const stem = base.replace(/\.[a-z0-9]{1,5}$/i, '');
+  return sanitizeFilename(stem, { maxLen: 30, fallback: 'official' }) + ext;
+}

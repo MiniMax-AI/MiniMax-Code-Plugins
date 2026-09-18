@@ -3,7 +3,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  isBlockedHost, assertFetchableUrl, assertRedirectTarget, sanitizeFilename, MAX_REDIRECTS, PolicyError,
+  isBlockedHost, assertFetchableUrl, assertRedirectTarget, sanitizeFilename, imageNameFromUrl, MAX_REDIRECTS, PolicyError,
 } from '../scripts/url-policy.mjs';
 
 describe('isBlockedHost(内网/本地/元数据/裸主机名)', () => {
@@ -85,5 +85,28 @@ describe('sanitizeFilename(页面控制的 alt → 落盘名)', () => {
   });
   test('长度有上限', () => {
     assert.ok(sanitizeFilename('x'.repeat(500)).length <= 30);
+  });
+});
+
+describe('imageNameFromUrl(零散图片 URL → 落盘文件名)', () => {
+  test('URL 自己的扩展名优先', () => {
+    assert.equal(imageNameFromUrl('https://cdn.x/img/hero-2026.png'), 'hero-2026.png');
+    assert.equal(imageNameFromUrl('https://cdn.x/a/CEO%20photo.jpg?v=2'), 'CEO-photo.jpg');
+  });
+  test('没有扩展名 → 按 content-type 推', () => {
+    assert.equal(imageNameFromUrl('https://cdn.x/image', 'image/webp; charset=binary'), 'image.webp');
+    assert.equal(imageNameFromUrl('https://cdn.x/image', 'image/svg+xml'), 'image.svg');
+    assert.equal(imageNameFromUrl('https://cdn.x/image', 'text/html'), 'image.bin');
+  });
+  test('路径穿越 / 保留名 / 空路径都不会逃出 out-dir', () => {
+    assert.equal(imageNameFromUrl('https://cdn.x/../../etc/passwd'), 'passwd.bin');
+    assert.equal(imageNameFromUrl('https://cdn.x/CON.png'), 'official.png');
+    assert.equal(imageNameFromUrl('https://cdn.x/', 'image/png'), 'official.png');
+    assert.ok(!imageNameFromUrl('https://cdn.x/%2e%2e%2fescape.png').includes('/'));
+  });
+  test('长度有上限且不含路径分隔符', () => {
+    const n = imageNameFromUrl('https://cdn.x/' + 'a'.repeat(300) + '.png');
+    assert.ok(n.length <= 34, n);
+    assert.ok(!/[\/:*?"<>|]/.test(n), n);
   });
 });

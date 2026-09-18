@@ -73,6 +73,38 @@ describe('fetch-official-images: 参数校验在打开浏览器之前完成', ()
   });
 });
 
+describe('fetch-official-images --url: 零散图片 URL 也走同一套策略(不看页面、不需 playwright)', () => {
+  const proj = () => { const d = tmpdir(); fs.mkdirSync(path.join(d, 'assets'), { recursive: true }); return d; };
+  test('内网 / 元数据 / 裸主机名 / IPv6 → 退出 1, 且 assets/ 里不落任何文件', () => {
+    for (const u of ['http://169.254.169.254/a.png', 'http://127.0.0.1/a.png', 'http://192.168.1.10/logo.svg',
+      'http://10.0.0.5/a.png', 'http://[::1]/a.png', 'http://localhost/x.png', 'http://intranet-app/x.png']) {
+      const d = proj();
+      const r = runSkill('fetch-official-images.mjs', ['--url', u, '--out-dir', path.join(d, 'assets')], { cwd: d });
+      assert.equal(r.status, 1, `${u} 必须拒绝`);
+      assert.deepEqual(fs.readdirSync(path.join(d, 'assets')), [], `${u} 不得落盘`);
+    }
+  });
+  test('只收 http(s): ftp:// 与 file:// 直接跳过', () => {
+    const d = proj();
+    for (const u of ['ftp://example.com/a.png', 'file:///D:/x.png']) {
+      const r = runSkill('fetch-official-images.mjs', ['--url', u, '--out-dir', path.join(d, 'assets')], { cwd: d });
+      assert.equal(r.status, 1);
+      assert.ok((r.stdout + r.stderr).includes('只收 http(s)'), r.stdout + r.stderr);
+    }
+  });
+  test('--out-dir 越界且无 --force → 退出 1(与页面模式同一道门)', () => {
+    const outside = tmpdir();
+    const r = runSkill('fetch-official-images.mjs', ['--url', 'https://example.com/a.png', '--out-dir', path.join(outside, 'assets')], { cwd: tmpdir() });
+    assert.equal(r.status, 1);
+    assert.ok(r.stderr.includes('--out-dir'), r.stderr);
+  });
+  test('没有 --url 也没有页面 URL → 打印用法并退出 1', () => {
+    const r = runSkill('fetch-official-images.mjs', []);
+    assert.equal(r.status, 1);
+    assert.ok(r.stderr.includes('--url'), '用法里要提到 --url');
+  });
+});
+
 describe('prep-image --crop: 输出已存在 → 拒绝(校验在 ffmpeg 之前)', () => {
   test('dst 已存在且无 --force → 退出 1 且文件内容不变', () => {
     const proj = tmpdir();

@@ -59,7 +59,7 @@
 | 页面类型 | 方法 | 说明 |
 |---|---|---|
 | 静态页 / 文档 / 公告页 | `web_fetch <URL>` | 直接拿正文,最快 |
-| **SPA / JS 渲染页**(很多企业官网、投资者关系页) | **内置浏览器或 Playwright 渲染后取正文** | `web_fetch` 常只拿到空壳 HTML(有壳无文)。技能本来就依赖 Playwright,直接复用: |
+| **SPA / JS 渲染页**(很多企业官网、投资者关系页) | **内置浏览器或 Playwright 渲染后取正文** | `web_fetch` 常只拿到空壳 HTML(有壳无文)。技能本来就依赖 Playwright,直接复用;用**内置浏览器**时:别用 `navigate(replaceCurrentTab)` 当刷新(会开新 tab),连续点击 15+ 次要节流(会触发人机验证),拿到图片 URL 走 `fetch-official-images.mjs --url` 落盘。命令: |
 
 ```bash
 # 渲染后取正文文本(SPA/懒加载官网通用)

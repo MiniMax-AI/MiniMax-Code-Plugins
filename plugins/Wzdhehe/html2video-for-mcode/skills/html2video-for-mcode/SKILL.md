@@ -37,7 +37,7 @@ description: 把脚本/大纲/主题变成带中文口播的成片 MP4(HTML 幻�
 | `scripts/check-theme.mjs <项目目录>` | 校验全部主题的 WCAG 对比度(正文/次级/字幕/accent-ink), 不达标退出码 1;新增主题必须过闸 |
 | `scripts/check-slides.mjs <项目目录> [--quiet]` | **渲染前静态闸门**:未定义 CSS 变量、缺图/外链资源、`data-stage` 没配 fx 类、fx 关键帧不含 opacity(会永久隐形)、硬编码颜色、整片级领域自查。有 ✗ 就别截图 |
 | `scripts/prep-image.mjs --check <图...>` / `--crop <in> <out> [--ratio 16:9] [--anchor ...] [--force]` | 配图 SOP 的执行辅助:查尺寸与裁切风险;按锚点裁切(强制"裁掉 ≤20%、不放大补边") |
-| `scripts/fetch-official-images.mjs <页面URL> [--out-dir <目录>] [--allow-file] [--max-mb N] [--force]` | 从官方页/本地页面列出并下载候选配图。内网与元数据地址一律拒绝, 每跳重定向复核, 默认写在工作目录内 |
+| `scripts/fetch-official-images.mjs <页面URL> [--get 1,3] [--out-dir <目录>] [--allow-file] [--max-mb N] [--force]` / `--url <图片URL>[,...]` | 从官方页/本地页面列出并下载候选配图;**站点要登录/滚动加载时,用内置浏览器 inspect 出图片 URL,再用 `--url` 直接落盘(不需 Playwright)**。内网与元数据地址一律拒绝, 每跳重定向复核, 默认写在工作目录内 |
 | `scripts/capture.mjs <项目目录> [--mode still\|motion] [--no-subs]` | Playwright 截图。still=终态单帧;motion=逐帧步进入场动画。**字幕默认烧录**(内容取自 clauses),`--no-subs` 关闭 |
 | `scripts/preview-page.mjs <项目目录> [--open] [--no-script]` | 生成**放映页** `preview/play/index.html`(单文件、零依赖、file:// 双击即看):←→ 或触屏左右滑翻页、R 重播动画、X 动效/关动效对照、P 口播文案开/关、O 总览、F 全屏。**只做"放画面"这件事**:没有计时器/进度条/跟读高亮(要看时间就看成片)。快照按 `timings.json` **注入实测延迟**,所以浏览器里的动画时序 = 成片时序;还没对时则按等间隔预览并如实标注。口播面板按数据自动决定加不加载,窄窗口/手机上收成底部抽屉且默认收起 |
 | `scripts/build-video.mjs <项目目录> [--asr] [--dry-run]` | 编码每张 → 拼接 → 音轨对位 → 合成 → 自检 + 出 `out/subs.srt`;`--asr` **按句**切分音频 + 校验清单;`--dry-run` 只打印将要执行的 ffmpeg 命令(排错用) |
@@ -81,7 +81,7 @@ npm i playwright && npx playwright install chromium        # 截图用
 | 结果落盘 | `get_asset_url <node_id>` → 下载到 `audio/<id>.mp3` | `--out` 直接写盘 |
 | BGM 音乐 | `connector__matrix__batch_text_to_music`(≤5 条/批) | ⚠ **mmx-cli 无音乐生成** → 让用户提供音乐文件(确认授权后登记 MANIFEST),或跳过 BGM |
 | ASR 反向校验 | `mcode-tools upload_temp_url` + `connector__matrix__listen_audio` | **`node scripts/asr.mjs <项目目录>`** —— 用同一把 API Key 直调 REST(`/v1/speech_to_text`),不依赖 mcode、也不用装 whisper;**会自动与 checklist 的预期文本比对并回填,数字/繁体字(粤语)不符直接判 ✗**。想用字级时间戳实测句开口:`--verify-timing` |
-| 素材配图 | 内置浏览器 inspect 官网 DOM(首选)/ 官方 brand kit | 同上;抽象配图可用 `mmx image generate --prompt "..." --aspect-ratio 16:9 --n 3`(**仅限抽象概念图,禁止生成 logo / 截图 / 真人头像**),再按 `image-sources.md` 登记 |
+| 素材配图 | 内置浏览器 inspect 官网 DOM(首选;取到的图片 URL 用 `scripts/fetch-official-images.mjs --url` 落盘)/ 官方 brand kit | 同上;抽象配图可用 `mmx image generate --prompt "..." --aspect-ratio 16:9 --n 3`(**仅限抽象概念图,禁止生成 logo / 截图 / 真人头像**),再按 `image-sources.md` 登记 |
 | 调研 | `web_search` / `web_fetch` | `mmx search "关键词"` / `mmx text chat` |
 
 **mmx-cli 首次配置**(非 mcode 环境):`npm install -g mmx-cli` → `mmx auth login --api-key sk-xxx` → `mmx quota` 验证。401 多半是 region 不匹配:`mmx config set --key region --value cn|global`。脚本侧用 `MINIMAX_API_KEY`(必给)与 `MINIMAX_REGION=cn|global`(可选)对齐同一套身份。

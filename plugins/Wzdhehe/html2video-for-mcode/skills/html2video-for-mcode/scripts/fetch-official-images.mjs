@@ -7,6 +7,10 @@
 //   node fetch-official-images.mjs <网址> --get 1,3,5 [--out-dir assets]  按序号下载
 //   node fetch-official-images.mjs <网址> --min 800                       只看宽度 ≥800px 的
 //   node fetch-official-images.mjs <网址> --json                          输出 JSON(供程序处理)
+//   node fetch-official-images.mjs --url <图片URL>[,<URL>...] [--out-dir assets]
+//                                                                         直接下载给定图片 URL
+//   (内置浏览器 inspect 官网 DOM 拿到零散图片 URL 时用 --url: 走同一套 host/重定向/大小/文件名
+//    校验, 且**不需要 playwright** —— 站点要登录/滚动加载、脚本打不开时, 这是唯一落盘手段)
 //   本地页(file://)加 --allow-file; 覆盖已存在文件 / out-dir 出项目 加 --force
 //
 // 纪律(与 image-sources.md 一致): 只取官方域名的资源; 列出的每一项都要人眼过一遍
@@ -20,10 +24,10 @@
 import fs from 'node:fs';
 import { loadPackage, inside } from './tools.mjs';
 import path from 'node:path';
-import { assertFetchableUrl, assertRedirectTarget, sanitizeFilename, MAX_REDIRECTS, PolicyError } from './url-policy.mjs';
+import { assertFetchableUrl, assertRedirectTarget, sanitizeFilename, imageNameFromUrl, MAX_REDIRECTS, PolicyError } from './url-policy.mjs';
 
 const argv = process.argv.slice(2);
-const VALUE_FLAGS = new Set(['--get', '--out-dir', '--min', '--max-mb']);
+const VALUE_FLAGS = new Set(['--get', '--out-dir', '--min', '--max-mb', '--url']);
 const positional = [];
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
@@ -34,16 +38,19 @@ const flag = (n, d) => { const i = argv.indexOf(n); return i > -1 ? argv[i + 1] 
 const FORCE = argv.includes('--force');
 const ALLOW_FILE = argv.includes('--allow-file');
 const MAX_BYTES = Math.max(1, parseFloat(flag('--max-mb', '30')) * 1024 * 1024);
+const URLS = (flag('--url', '') || '').split(',').map(s => s.trim()).filter(Boolean);
 const url = positional[0];
-if (!url || !/^(https?|file):/.test(url)) {
-  console.error('用法: node fetch-official-images.mjs <网址> [--list|--get 1,3] [--out-dir assets] [--min 800] [--max-mb 30] [--allow-file] [--force] [--json]');
+if (!URLS.length && (!url || !/^(https?|file):/.test(url))) {
+  console.error('用法: node fetch-official-images.mjs <网址> [--list|--get 1,3] [--out-dir assets] [--min 800] [--max-mb 30] [--allow-file] [--force] [--json]\n    或: node fetch-official-images.mjs --url <图片URL>[,<URL>...] [--out-dir assets] [--max-mb 30] [--force]');
   process.exit(1);
 }
-try {
-  assertFetchableUrl(url, { allowFile: ALLOW_FILE, where: '页面 URL' });
-} catch (e) {
-  if (e instanceof PolicyError) { console.error(`✗ ${e.message}`); process.exit(1); }
-  throw e;
+if (!URLS.length) {
+  try {
+    assertFetchableUrl(url, { allowFile: ALLOW_FILE, where: '页面 URL' });
+  } catch (e) {
+    if (e instanceof PolicyError) { console.error(`✗ ${e.message}`); process.exit(1); }
+    throw e;
+  }
 }
 const MIN = parseInt(flag('--min', '0'), 10) || 0;
 // 落盘收监: 默认 assets/ 必须在当前工作目录(项目根)内; 越界要显式 --force
@@ -54,6 +61,54 @@ if (!inside(process.cwd(), OUT_DIR) && OUT_DIR !== path.resolve(process.cwd())) 
     process.exit(1);
   }
   console.warn(`⚠ --force: 下载将写到工作目录之外 ${OUT_DIR}`);
+}
+
+// ── 单张图片 URL 直下模式(内置浏览器 inspect 出零散 URL 时用; 不需要 playwright) ──
+// 与 --get 同一套纪律: 逐跳复核 host 策略、响应大小上限、文件名清洗、已存在不覆盖。
+async function downloadUrl(src) {
+  let current = src, res = null;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    assertFetchableUrl(current, { allowFile: false, where: `下载(第 ${hop + 1} 跳)` });
+    res = await fetch(current, { redirect: 'manual', headers: { 'user-agent': 'html2video-for-mcode/image-fetch' } });
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get('location');
+      if (!loc) throw new Error(`HTTP ${res.status} 无 Location`);
+      current = new URL(loc, current).href;
+      continue;
+    }
+    break;
+  }
+  if (!res || res.status >= 300) throw new Error(`重定向超过 ${MAX_REDIRECTS} 跳`);
+  if (res.status >= 400) throw new Error(`HTTP ${res.status}`);
+  const declared = parseInt(res.headers.get('content-length') || '0', 10);
+  if (declared > MAX_BYTES) throw new Error(`响应 ${(declared / 1048576).toFixed(0)}MB 超过上限 ${Math.round(MAX_BYTES / 1048576)}MB(--max-mb 可调)`);
+  const body = Buffer.from(await res.arrayBuffer());
+  if (body.length > MAX_BYTES) throw new Error(`响应 ${(body.length / 1048576).toFixed(0)}MB 超过上限 ${Math.round(MAX_BYTES / 1048576)}MB(--max-mb 可调)`);
+  const type = String(res.headers.get('content-type') || '').split(';')[0].trim();
+  if (!/^image\//.test(type) && !/octet-stream/.test(type)) console.warn(`  ⚠ content-type 不是图片(${type || '未知'})—— 人眼确认一下再登记`);
+  return { body, type };
+}
+
+if (URLS.length) {
+  fs.mkdirSync(OUT_DIR, { recursive: true });
+  let ok = 0;
+  for (const src of URLS) {
+    if (!/^https?:/.test(src)) { console.error(`  ✗ 跳过(只收 http(s)): ${src}`); continue; }
+    try {
+      const { body, type } = await downloadUrl(src);
+      const out = path.join(OUT_DIR, imageNameFromUrl(src, type));
+      if (fs.existsSync(out) && !FORCE) { console.error(`  ✗ 已存在, 不覆盖: ${out}(要覆盖加 --force)`); continue; }
+      fs.writeFileSync(out, body);
+      console.log(`  ✓ ${path.relative(process.cwd(), out)}  (${(body.length / 1024).toFixed(0)}KB, ${type || '未知类型'})`);
+      ok++;
+    } catch (e) {
+      if (e instanceof PolicyError) console.error(`  ✗ ${src}\n     ${e.message}`);
+      else console.error(`  ✗ ${src}\n     下载失败: ${e.message}`);
+    }
+  }
+  console.log(`\n已下载 ${ok}/${URLS.length} 张 → ${path.relative(process.cwd(), OUT_DIR)}`);
+  console.log('下一步(必做): ① node scripts/prep-image.mjs --check <图...>  ② 人眼确认主体居中无水印  ③ 登记 assets/MANIFEST.md(来源 = 图片所在官方页 URL)');
+  process.exit(ok ? 0 : 1);
 }
 
 const playwright = await loadPackage('playwright', { projectDir: process.cwd() });

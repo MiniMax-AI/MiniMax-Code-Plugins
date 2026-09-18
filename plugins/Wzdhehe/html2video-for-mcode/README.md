@@ -160,7 +160,8 @@ Nothing is contacted unless you invoke the step that needs it:
   rejected before the request is made, unless you explicitly pass `--allow-any-endpoint`
   (self-hosted gateway / testing, at your own risk).
 - `scripts/fetch-official-images.mjs` — opens the URL **you** pass (an official site, or a local
-  `file://` page with `--allow-file`) to list and download candidate images. Targets are checked
+  `file://` page with `--allow-file`) to list and download candidate images, or downloads the exact
+  image URLs you hand it with `--url` (what the in-app browser route uses; no Playwright needed). Targets are checked
   before any request: loopback, link-local (including cloud metadata `169.254.169.254`), private
   and CGNAT ranges, dotless hostnames, URLs with embedded credentials, and non-HTTP(S) schemes are
   all refused, every redirect hop is re-checked the same way, and responses are size-capped
@@ -197,12 +198,14 @@ The Skill ships an executable test suite (`skills/html2video-for-mcode/tests/`, 
 node --test "plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/*.test.mjs"
 ```
 
-99 tests in seven files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
+107 tests in seven files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
 escapes), `no-clobber` (refusing to overwrite), `endpoint-allowlist` (key never leaves the official
 hosts — plus a local server that proves the gate sits before the request), `fetch-policy` (SSRF,
 `file://`, redirect and filename rules), `preview-page` (snapshot timing injection, `base` ordering,
-self-containment, containment refusals) and `tokens-fx` (every entrance animation in the generated
-`tokens.css` must declare `opacity`, `no-fx` must reset it, `--upgrade-css` is idempotent), plus
+self-containment, containment refusals, the no-timer rule), `tokens-fx` (every entrance animation in
+the generated `tokens.css` must declare `opacity`, `no-fx` must reset it, `--upgrade-css` is
+idempotent) and `fetch-policy`/`no-clobber` (the `--url` download route obeys the same SSRF,
+redirect, size and no-clobber rules), plus
 `render-smoke` (init → timings → static gate → capture → build, end to end). The render smoke test and three ffmpeg-dependent path checks need ffmpeg and
 Chromium; where those are missing they skip with a stated reason, and the scoped workflow
 `.github/workflows/html2video-for-mcode-smoke.yml` installs them and runs everything for real.

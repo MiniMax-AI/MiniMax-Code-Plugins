@@ -8,7 +8,7 @@
 - **覆盖拒绝**:`init-project.mjs` 对已存在且非空的目录直接拒绝(列出将被覆写的 5 个生成文件),需显式 `--force`;`fetch-official-images.mjs` 的 `--out-dir` 默认收监在工作目录内、已存在文件不覆盖;`prep-image.mjs --crop` 输出已存在需 `--force`。顺带修 `--topic` 未转义即插入模板 HTML 的问题。
 - **ASR 端点白名单**:API Key 只发官方域(`api.minimaxi.com` / `api.minimax.io`);`--base-url` / `MINIMAX_BASE_URL` 指向其他地址一律硬拒绝,自建网关需显式 `--allow-any-endpoint`(打印醒目警告)。此前被偷换的环境变量可把 Key 发往任意端点。
 - **抓图 SSRF 收紧**:新增 `scripts/url-policy.mjs`(纯函数)。拦 loopback / 链路本地(含云元数据 169.254.169.254)/ 私网 / CGNAT / 无点主机名;只允许 http(s),`file://` 需显式 `--allow-file`;禁带 userinfo 的 URL;`maxRedirects:0` 手动跟重定向且**逐跳**复用同一策略;响应大小上限默认 30MB(`--max-mb`);落盘文件名清洗补 Windows 保留名。
-- **可执行测试**:新增 `tests/`(node:test,零依赖,从仓库根 `node --test` 自动发现 → 被 `npm run check` 真实执行)—— `safe-paths`(恶意 id/路径 + canary 完好性 + symlink 逃逸)、`no-clobber`(覆盖拒绝)、`endpoint-allowlist`(白名单拒绝 + 本地假服务器收到 Bearer 假 Key 的正向证据)、`fetch-policy`(host/URL/重定向/文件名 44 例)、`render-smoke`(init → 静音音频 → plan-timings → check-slides → capture → build-video 全链出片)。首轮 72 例(后续又加了 `preview-page` 与 `tokens-fx`,见下,现共 99 例),本地全绿。另附 scoped workflow `.github/workflows/html2video-for-mcode-smoke.yml`(path-filter 只在本插件变更时跑,装 ffmpeg + playwright 后真实执行,含渲染冒烟)。
+- **可执行测试**:新增 `tests/`(node:test,零依赖,从仓库根 `node --test` 自动发现 → 被 `npm run check` 真实执行)—— `safe-paths`(恶意 id/路径 + canary 完好性 + symlink 逃逸)、`no-clobber`(覆盖拒绝)、`endpoint-allowlist`(白名单拒绝 + 本地假服务器收到 Bearer 假 Key 的正向证据)、`fetch-policy`(host/URL/重定向/文件名 44 例)、`render-smoke`(init → 静音音频 → plan-timings → check-slides → capture → build-video 全链出片)。首轮 72 例(后续又加了 `preview-page` 与 `tokens-fx`,见下,现共 99 例;再加 `--url` 的 8 例, 现共 107 例),本地全绿。另附 scoped workflow `.github/workflows/html2video-for-mcode-smoke.yml`(path-filter 只在本插件变更时跑,装 ffmpeg + playwright 后真实执行,含渲染冒烟)。
 
 **图表与动效**
 
@@ -34,7 +34,8 @@
 - 新增 `scripts/nofx-css.mjs`:`no-fx` 规则的唯一来源(`init-project` 写入 tokens.css、`preview-page` 兜底注入共用一份,避免 CSS 漂移)。
 - `fx-spotlight` 的关键帧补 `opacity: 1` —— 它是本技能文档里列为可用的入场类,但只做 `clip-path`,基础态 `opacity:0` 抬不回来 → 用了就永久隐形(被 `check-slides` 的 5b 项拦住,即「文档说能用、闸门说不能用」)。
 - SKILL.md 的 Gate 4 增加「放映页交用户自己放一遍」;`references/render.md` 增放映页章节(定位、键位、口播三态、为什么必须用副本);`authoring.md` 的动效开关一节写明交付前用 `X` 对照验收。
-- 测试 +27 例(共 99):`preview-page`(注入/合并/no-fx/base 顺序/自包含无外链/**不做计时器**/**不得出现「配音」字样**/响应式与触摸、口播三态、等间隔兜底、越界拒绝/幂等升级)、`tokens-fx`(对模板断言**每个非无限 fx 动画的关键帧都声明 opacity**、no-fx 规则含 opacity 重置、`--upgrade-css` 幂等且不碰其他文件)。
+- 测试 +27 例(共 99):`preview-page`(注入/合并/no-fx/base 顺序/自包含无外链/**不做计时器**/**不得出现「配音」字样**/响应式与触摸、口播三态、等间隔兜底、越界拒绝/幂等升级)、`tokens-fx`(对模板断言**每个非无限 fx 动画的关键帧都声明 opacity**、no-fx 规则含 opacity 重置、`--upgrade-css` 幂等且不碰其他文件)。- `fetch-official-images.mjs` 新增 `--url <图片URL>[,...]`:内置浏览器 inspect 官网 DOM 拿到的**零散图片 URL** 现在有落盘入口(此前文档只写「再下载」却没给手段,而脚本只能"页面 URL + 序号")。走同一套纪律(host 白名单、重定向逐跳复核、30MB 上限、文件名清洗、已存在不覆盖),**且不需要 Playwright** —— 站点要登录/滚动加载、脚本打不开时这是唯一落盘手段。文件名推导(`imageNameFromUrl`:取路径末段,扩展名优先用 URL 的、否则按 content-type,都不行给 `.bin`)与 `sanitizeFilename` 同住 `url-policy.mjs`;新增 8 例测试(4 例文件名推导 + 4 例 CLI 拒绝/用法)。
+
 **文档**
 
 - 开工对齐"主题与受众"→"**主题与领域**"(受监管题材必问免责声明与数据出处标注);新增 `references/compliance.md`(财经口播红线、数字三要件、涨跌色按受众翻转、免责声明写法、医疗/法律/广告法、Gate 清单);`tokens.css` 增 `--up/--down` 与 `.disclaimer`;`check-slides.mjs` 增整片级财经关键词自查。

@@ -117,7 +117,7 @@ Windows / macOS / Linux。脚本全部是 Node ESM,不依赖特定 shell。Windo
 **只有你主动执行的那一步才会联网**:
 
 - `scripts/asr.mjs` —— HTTPS `POST` 到 `https://api.minimaxi.com/v1/speech_to_text`(海外套餐设 `MINIMAX_REGION=global` 时走 `https://api.minimax.io`)。仅在你运行时。**API Key 只发这两个官方域**:其他 `--base-url` / `MINIMAX_BASE_URL` 取值会在发起请求之前被拒绝,确需自定义网关要显式加 `--allow-any-endpoint`(自担风险)。
-- `scripts/fetch-official-images.mjs` —— 打开**你传入的**网址(官方网站,或加 `--allow-file` 的本地 `file://` 页面)以列出并下载候选配图。**请求之前先过目标校验**:loopback、链路本地(含云元数据 `169.254.169.254`)、私网与 CGNAT 段、无点主机名、带内嵌凭据的 URL、非 HTTP(S) 协议一律拒绝;重定向**逐跳**复用同一策略;响应大小有上限(默认 30MB,`--max-mb` 可调)。
+- `scripts/fetch-official-images.mjs` —— 打开**你传入的**网址(官方网站,或加 `--allow-file` 的本地 `file://` 页面)以列出并下载候选配图;也可以 `--url <图片URL>` 直接下载你指定的图片(内置浏览器取图那条路走的就是它,不需要 Playwright)。**请求之前先过目标校验**:loopback、链路本地(含云元数据 `169.254.169.254`)、私网与 CGNAT 段、无点主机名、带内嵌凭据的 URL、非 HTTP(S) 协议一律拒绝;重定向**逐跳**复用同一策略;响应大小有上限(默认 30MB,`--max-mb` 可调)。
 - 配音合成经由 mcode connector 或 `mmx-cli`,它们会访问 MiniMax。
 - 其余全部离线:对时、静态检查、截图、编码、主题对比度校验。
 
@@ -139,7 +139,7 @@ Windows / macOS / Linux。脚本全部是 Node ESM,不依赖特定 shell。Windo
 node --test "plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/*.test.mjs"
 ```
 
-七个文件共 99 例:`safe-paths`(恶意 slide id / 路径、canary 完好性、符号链接逃逸)、`no-clobber`(覆盖拒绝)、`endpoint-allowlist`(Key 不离开官方域,并用本地服务器证明闸门在请求之前)、`fetch-policy`(SSRF、`file://`、重定向与文件名规则)、`preview-page`(快照注入实测延迟、`base` 顺序、自包含无外链、越界拒绝)、`tokens-fx`(模板里每个入场动画的关键帧必须声明 `opacity`、`no-fx` 必须重置基础态、`--upgrade-css` 幂等)与 `render-smoke`(init → 对时 → 静态闸门 → 截图 → 成片全链)。渲染冒烟与三例依赖 ffmpeg 的路径检查需要 ffmpeg 与 Chromium:缺失时按原因 skip,scoped workflow `.github/workflows/html2video-for-mcode-smoke.yml` 会装齐依赖并把全部用例真跑一遍。
+七个文件共 107 例:`safe-paths`(恶意 slide id / 路径、canary 完好性、符号链接逃逸)、`no-clobber`(覆盖拒绝)、`endpoint-allowlist`(Key 不离开官方域,并用本地服务器证明闸门在请求之前)、`fetch-policy`(SSRF、`file://`、重定向与文件名规则)、`preview-page`(快照注入实测延迟、`base` 顺序、自包含无外链、越界拒绝、无计时器)、`tokens-fx`(模板里每个入场动画的关键帧必须声明 `opacity`、`no-fx` 必须重置基础态、`--upgrade-css` 幂等)与 `render-smoke`(init → 对时 → 静态闸门 → 截图 → 成片全链)。渲染冒烟与三例依赖 ffmpeg 的路径检查需要 ffmpeg 与 Chromium:缺失时按原因 skip,scoped workflow `.github/workflows/html2video-for-mcode-smoke.yml` 会装齐依赖并把全部用例真跑一遍。
 
 ## 排错
 
