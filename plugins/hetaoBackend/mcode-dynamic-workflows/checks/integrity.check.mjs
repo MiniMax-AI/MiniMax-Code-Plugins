@@ -176,3 +176,25 @@ test('full broken-repair-approve-finish flow keeps both chains verified and hone
  assert.equal(v.events.unchained,0);assert.equal(v.repair.unchained,0);
  }finally{await f.cleanup();}
 });
+
+test('a row restored into an older sequence gap fails closed on both surfaces',async()=>{
+ const f=await fixture(async s=>({output:s.id}));try{
+  // Seed rows at seq 1 and 3 directly (legacy, pre-ledger), then anchor 1,3,4 via API writes.
+  const ins=(seq,runId)=>f.store.db.prepare('INSERT INTO events(seq,runId,body) VALUES(?,?,?)').run(seq,runId,JSON.stringify({type:'seed',seq}));
+  ins(1,'run-a');ins(3,'run-a');f.store.event('run-a','anchor',{});
+  assert.equal(f.store.db.prepare('SELECT COUNT(*) n FROM events').get().n,3,'anchored set is 1,3,4');
+  // Simulate a restore/import that fills the gap at seq 2.
+  ins(2,'run-b');
+  const v=f.store.verifyIntegrity().events;
+  assert.equal(v.verified,false,'gap row inside the anchored range must fail closed');
+  assert.deepEqual(v.firstDivergence,{key:'run-b:2',expectedHead:null,actualHead:null});
+  f.store.db.prepare('DELETE FROM events WHERE seq=2').run();
+  assert.equal(f.store.verifyIntegrity().events.verified,true,'restoring the anchored set heals');
+  // Same shape on repair_cache: legacy rows at rowid 1 and 3, anchor, then fill rowid 2.
+  const insr=(rowid,runId,id)=>f.store.db.prepare('INSERT INTO repair_cache(rowid,runId,id,body) VALUES(?,?,?,?)').run(rowid,runId,id,JSON.stringify({id,kind:'agent'}));
+  insr(1,'run-a','a');insr(3,'run-a','c');f.store.saveRepairCandidate('run-a',{id:'d',kind:'agent'});
+  insr(2,'run-b','b');
+  const r=f.store.verifyIntegrity().repair;
+  assert.equal(r.verified,false);assert.equal(r.firstDivergence.key,'run-b/b');
+  }finally{await f.cleanup();}
+});

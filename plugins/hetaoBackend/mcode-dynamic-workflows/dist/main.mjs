@@ -7890,6 +7890,11 @@ var Store = class {
         if (!firstDivergence && (!row || key !== r.key || actual !== r.hash)) firstDivergence = { key: r.key, expectedHead: r.hash, actualHead: actual };
         prev = r.hash;
       }
+      if (!firstDivergence) {
+        const anchored = new Set(rows.map((r) => r.pos));
+        const gap = this.db.prepare(`SELECT ${posCol} AS __pos, * FROM ${table} WHERE ${posCol}<=? ORDER BY ${posCol}`).all(rec.upto).find((r) => !anchored.has(r.__pos));
+        if (gap) firstDivergence = { key: keyOf(gap, gap.__pos), expectedHead: null, actualHead: null };
+      }
       const verified = !firstDivergence && prev === rec.head && unchained === 0;
       return { head: rec.head, upto: rec.upto, verified, checked: rows.length, unchained, firstDivergence };
     };

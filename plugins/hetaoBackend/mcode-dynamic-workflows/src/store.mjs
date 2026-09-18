@@ -76,6 +76,12 @@ export class Store {
       const actual=row?this.rowHash(prev,kind,key,row.body):null;
       if(!firstDivergence&&(!row||key!==r.key||actual!==r.hash))firstDivergence={key:r.key,expectedHead:r.hash,actualHead:actual};
       prev=r.hash;}
+    // Coverage: every source row inside the anchored range must carry a ledger
+    // link. A row restored into an older sequence gap (pos<=upto, no link) would
+    // otherwise be invisible to both the walk above and the unchained tail count.
+    if(!firstDivergence){const anchored=new Set(rows.map(r=>r.pos));
+      const gap=this.db.prepare(`SELECT ${posCol} AS __pos, * FROM ${table} WHERE ${posCol}<=? ORDER BY ${posCol}`).all(rec.upto).find(r=>!anchored.has(r.__pos));
+      if(gap)firstDivergence={key:keyOf(gap,gap.__pos),expectedHead:null,actualHead:null};}
     // Verification covers the anchored prefix; any unanchored row fails closed.
     const verified=!firstDivergence&&prev===rec.head&&unchained===0;
     return {head:rec.head,upto:rec.upto,verified,checked:rows.length,unchained,firstDivergence};};
