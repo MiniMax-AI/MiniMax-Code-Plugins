@@ -112,12 +112,17 @@ node <skill>/scripts/build-video.mjs ./my-video --asr
 authoring rules, asset-sourcing SOP, TTS/timing notes, and rendering internals.
 
 `preview-page.mjs` writes a self-contained play page to `preview/play/index.html` (open it from
-disk, no server): arrow keys page through the slides, `R` replays the entrance animations,
-`P` shows the narration lines for the current slide, `O` is an overview, and `X` switches to a
-`no-fx` copy of the same slide — if the picture goes blank, some keyframes never lift the
-`opacity: 0` base state. The page loads snapshots with the **measured** stage delays injected
-from `timings.json`, so what you see in the browser matches the timing of the final video
-(opening `slides/*.html` directly does not — those files carry placeholder delays).
+disk, no server) whose only job is **screening the HTML**: arrows (or a swipe) page through the
+slides, `R` replays the entrance animations, `O` is an overview, and `X` switches to a `no-fx`
+copy — if the picture goes blank, some keyframes never lift the `opacity: 0` base state. There is
+deliberately no timer, progress bar, or karaoke-style highlight: for timing, watch the finished
+video. The narration panel is data-driven (`P` toggles it): it lists the slide's script lines when
+they exist, is skipped entirely when they do not, and `--no-script` hides it outright — so a deck
+whose voiceover is not written yet still previews fine. The layout adapts down to phones (panel
+becomes a collapsible bottom drawer, touch buttons appear). The page loads snapshots with the
+**measured** stage delays injected from `timings.json`, so what you see in the browser matches the
+timing of the final video (opening `slides/*.html` directly does not — those files carry
+placeholder delays; without `timings.json` the page spreads the stages evenly and says so).
 
 ## Supported platforms
 

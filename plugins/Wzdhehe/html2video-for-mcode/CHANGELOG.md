@@ -24,16 +24,17 @@
 
 **放映页(可以先放映一遍再渲染)**
 
-- 新增 `scripts/preview-page.mjs <项目> [--open]` → `preview/play/index.html`:单文件、零依赖、`file://` 双击即看的放映页。`←` `→` 翻页、`R` 重播入场动画、`P` 提词面板(该张 clauses 按播放时间高亮,并标出"成片 X s · 最后一层入场 ≈ Y s",收尾静止不足 1.2s 标红)、`O` 总览(渲 `preview/*.png`)、`F` 全屏、`X` **动效 / 关动效对照**。
-- 为什么不是"直接打开 `slides/*.html`":延迟 `--t1/--t2/--t3` 与画布尺寸由渲染管线按 `timings.json` 注入,tokens.css 里只有占位值(`--t2:800ms`),直接开原文件会看到"所有动画挤在开头两秒"。放映页生成**快照副本**(`preview/play/<name>.html`),把实测延迟写进 `<html style>`(等价于管线注入,优先级最高)并加 `<base href="../../slides/">` 让主题与素材照常解析。实测:同一张 t=3.0s,副本第二层 `opacity 0`(未入场),原文件 `opacity 1`(已入场)——与成片一致的是副本。
-- 副本是快照,改完 `slides/` 必须重跑;页面与副本头部都写明真实文件路径与生成时间。找不到 `build/timings.json` 时照常出页,但会明确警告"时序不是成片的"。
-- 老项目没有 `no-fx` 规则时,只给关动效副本兜底注入该规则并在页面提示(否则 `X` 切过去是空白,会被误判成"关动效 bug")。
-- 新增 `init-project.mjs --upgrade-css`:给老项目的 `tokens.css` 幂等补上新版 `no-fx` 规则(只动这一个文件,不碰 `script.json` 等其他内容)。此前对所有旧项目的建议"用新版 init-project 重生成"是错的 —— 那需要 `--force`,会重置 `script.json`。
+- 新增 `scripts/preview-page.mjs <项目> [--open] [--no-script]` → `preview/play/index.html`:单文件、零依赖、`file://` 双击即看的放映页。**只干「把 HTML 画面放一遍」这一件事**:`←` `→`(触屏左右滑)翻页、`R` 重播入场动画、`X` 动效 / 关动效对照、`P` 口播文案 开 / 关、`O` 总览、`F` 全屏。**刻意不做播放器那套 UI** —— 没有计时器、进度条、逐句跟读高亮:要看时间或节奏就看成片,预览页里跑计时器只会让人盯秒表(实测标签页放着就变成 `204.2s / 6.3s`)。
+- **口播 UI 按数据决定加不加载**:有 clauses + 有 `timings.json` → 列出该张口播文案;有 clauses 但还没对时 → 只列文案并标「(未对时)」(口播还没做也能先看 HTML);没有 clauses 或 `--no-script` → 面板与口播按钮完全不出现,画面占满整宽。
+- **布局随窗口自适应**:顶栏/底栏可换行、话题名过长省略号;窄窗口与手机上口播面板收成底部抽屉并默认收起(画面优先),手机给触摸条按钮 + 左右滑动翻页,总览网格按宽度自动列数,高度用 `100dvh`(免得被手机地址栏切掉)。
+- 为什么不是「直接打开 `slides/*.html`」:延迟 `--t1/--t2/--t3` 与画布尺寸由渲染管线按 `timings.json` 注入,tokens.css 里只有占位值(`--t2:800ms`),直接开原文件会看到「所有动画挤在开头两秒」。放映页生成**快照副本**(`preview/play/<name>.html`),把实测延迟写进 `<html style>`(等价于管线注入,优先级最高)并加 `<base href="../../slides/">` 让主题与素材照常解析。实测:同一张 t=3.0s,副本第二层 `opacity 0`(未入场),原文件 `opacity 1`(已入场)——与成片一致的是副本。**还没对时**则按 HTML 里实际用到的 stage 等间隔排(0.3/1.3/2.3s),页面顶部黄条如实标注「不是成片时序」。
+- 副本是快照,改完 `slides/` 必须重跑;页面与副本头部都写明真实文件路径与生成时间。
+- 老项目没有 `no-fx` 规则时,只给关动效副本兜底注入该规则并在页面提示(否则切过去是空白,会被误判成「关动效 bug」)。
+- 新增 `init-project.mjs --upgrade-css`:给老项目的 `tokens.css` 幂等补上新版 `no-fx` 规则(只动这一个文件,不碰 `script.json` 等其他内容)。此前对所有旧项目的建议「用新版 init-project 重生成」是错的 —— 那需要 `--force`,会重置 `script.json`。
 - 新增 `scripts/nofx-css.mjs`:`no-fx` 规则的唯一来源(`init-project` 写入 tokens.css、`preview-page` 兜底注入共用一份,避免 CSS 漂移)。
-- `fx-spotlight` 的关键帧补 `opacity: 1` —— 它是本技能文档里列为可用的入场类,但只做 `clip-path`,基础态 `opacity:0` 抬不回来 → 用了就永久隐形(被 `check-slides` 的 5b 项拦住,即"文档说能用、闸门说不能用")。
-- SKILL.md 的 Gate 4 增加"放映页交用户自己放一遍";`references/render.md` 增放映页章节(键位、为什么要副本、快照纪律);`authoring.md` 的动效开关一节写明交付前用 `X` 对照验收。
-- 测试 +21 例(共 93):`preview-page`(注入/合并/no-fx/base 顺序/自包含无外链/越界拒绝/幂等升级)、`tokens-fx`(对模板断言**每个非无限 fx 动画的关键帧都声明 opacity**、no-fx 规则含 opacity 重置、`--upgrade-css` 幂等且不碰其他文件)。
-
+- `fx-spotlight` 的关键帧补 `opacity: 1` —— 它是本技能文档里列为可用的入场类,但只做 `clip-path`,基础态 `opacity:0` 抬不回来 → 用了就永久隐形(被 `check-slides` 的 5b 项拦住,即「文档说能用、闸门说不能用」)。
+- SKILL.md 的 Gate 4 增加「放映页交用户自己放一遍」;`references/render.md` 增放映页章节(定位、键位、口播三态、为什么必须用副本);`authoring.md` 的动效开关一节写明交付前用 `X` 对照验收。
+- 测试 +27 例(共 99):`preview-page`(注入/合并/no-fx/base 顺序/自包含无外链/**不做计时器**/**不得出现「配音」字样**/响应式与触摸、口播三态、等间隔兜底、越界拒绝/幂等升级)、`tokens-fx`(对模板断言**每个非无限 fx 动画的关键帧都声明 opacity**、no-fx 规则含 opacity 重置、`--upgrade-css` 幂等且不碰其他文件)。
 **文档**
 
 - 开工对齐"主题与受众"→"**主题与领域**"(受监管题材必问免责声明与数据出处标注);新增 `references/compliance.md`(财经口播红线、数字三要件、涨跌色按受众翻转、免责声明写法、医疗/法律/广告法、Gate 清单);`tokens.css` 增 `--up/--down` 与 `.disclaimer`;`check-slides.mjs` 增整片级财经关键词自查。

@@ -37,7 +37,7 @@ description: 把脚本/大纲/主题变成带中文口播的成片 MP4(HTML 幻�
 | `scripts/check-theme.mjs <项目目录>` | 校验全部主题的 WCAG 对比度(正文/次级/字幕/accent-ink), 不达标退出码 1;新增主题必须过闸 |
 | `scripts/prep-image.mjs --check <图...>` / `--crop <in> <out> [--ratio 16:9] [--anchor ...]` | 配图 SOP 的执行辅助:查尺寸与裁切风险;按锚点裁切(强制"裁掉 ≤20%、不放大补边") |
 | `scripts/capture.mjs <项目目录> [--mode still\|motion] [--no-subs]` | Playwright 截图。still=终态单帧;motion=逐帧步进入场动画。**字幕默认烧录**(内容取自 clauses),`--no-subs` 关闭 |
-| `scripts/preview-page.mjs <项目目录> [--open]` | 生成**放映页** `preview/play/index.html`(单文件、零依赖、file:// 双击即看):←→ 翻页、R 重播动画、X 关动效对照、P 提词面板、O 总览、F 全屏。快照按 `timings.json` **注入实测延迟**, 所以浏览器里的动画时序 = 成片时序 |
+| `scripts/preview-page.mjs <项目目录> [--open] [--no-script]` | 生成**放映页** `preview/play/index.html`(单文件、零依赖、file:// 双击即看):←→ 或触屏左右滑翻页、R 重播动画、X 动效/关动效对照、P 口播文案开/关、O 总览、F 全屏。**只做"放画面"这件事**:没有计时器/进度条/跟读高亮(要看时间就看成片)。快照按 `timings.json` **注入实测延迟**,所以浏览器里的动画时序 = 成片时序;还没对时则按等间隔预览并如实标注。口播面板按数据自动决定加不加载,窄窗口/手机上收成底部抽屉且默认收起 |
 | `scripts/build-video.mjs <项目目录> [--asr]` | 编码每张 → 拼接 → 音轨对位 → 合成 → 自检 + 出 `out/subs.srt`;`--asr` **按句**切分音频 + 校验清单 |
 
 环境要求:Node 18+(脚本用 fileURLToPath 保兼容, 不依赖 Node 20.11 的 import.meta.dirname)、`npm i playwright && npx playwright install chromium`(项目目录内)。ffmpeg/ffprobe 自动探测:PATH → node_modules(ffmpeg-static/ffprobe-static)→ 常见安装位置,找不到会给逐条诊断而不是莫名报错。
