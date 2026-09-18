@@ -54,7 +54,7 @@
 
 不要自欺,三步都要做:
 
-1. **重新截图**:`node scripts/capture.mjs <项目> --mode still`,看 `preview/<id>.png`
+1. **重新截图**:`node scripts/capture.mjs <项目> --mode still --ids <改动的张>`,看 `preview/<id>.png`。⚠ still 会**作废该张帧目录**(防旧帧污染)—— 确认画面后要重建视频,必须对同 ids 重跑 `--mode motion`,否则 build-video 会退回这张的静态图出片、动画无声丢失(它会点名 ⚠,但要看到警告就已经白跑了一次编码)
 2. **核对主体位置**:图片主体在画面中央偏上吗?有没有被裁掉一半?(配图 SOP 见 `image-sources.md`)
 3. **抽成片实际帧核对**:`ffmpeg -ss <时刻> -i out/final.mp4 -frames:v 1 frame.png` —— **必须核对 final.mp4 的实际帧**,不要只看截图管线的产物(成片的淡入淡出、字幕时机与截图不同)
 

@@ -8,10 +8,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { runSkill, mkproj, tmpdir, SCRIPTS } from './helpers.mjs';
 
-const { KITS, KIT_REV, wrapKit, findBlock, kitStatuses, applyKitUpgrade } =
+const { KITS, KIT_REV, wrapKit, findBlock, kitStatuses, applyKitUpgrade, MAX_SCAN_BYTES } =
   await import('file://' + path.join(SCRIPTS, 'css-kit.mjs').replace(/\\/g, '/'));
 const { TABLE_CSS } =
   await import('file://' + path.join(SCRIPTS, 'table-css.mjs').replace(/\\/g, '/'));
+const { NOFX_CSS } =
+  await import('file://' + path.join(SCRIPTS, 'nofx-css.mjs').replace(/\\/g, '/'));
+const { CHART_CSS } =
+  await import('file://' + path.join(SCRIPTS, 'chart-css.mjs').replace(/\\/g, '/'));
 
 const initProj = () => {
   const p = tmpdir();
@@ -190,5 +194,47 @@ describe('--check-css CLI 语义', () => {
     assert.ok(bad.stderr.includes('--upgrade-css'), '要给出修复动作');
     runSkill('init-project.mjs', [p, '--upgrade-css']);
     assert.equal(runSkill('init-project.mjs', [p, '--check-css']).status, 0);
+  });
+});
+
+describe('受管块 · 行尾与病态输入(2026-09-18 三维审计补的回归)', () => {
+  test('CRLF 文件(git autocrlf 检出)不误报: check 绿; 升级后受管块统一为 LF 并如实说明', () => {
+    const p = initProj();
+    const fresh = read(p);
+    write(p, fresh.replace(/\n/g, '\r\n'));
+    assert.equal(runSkill('init-project.mjs', [p, '--check-css']).status, 0, '只换了行尾, 不该判"被手工改过"');
+    write(p, withStaleRev(read(p)).replace(/\n/g, '\r\n'));   // 行尾 + 旧 rev 一起, 走真升级路径
+    const r = runSkill('init-project.mjs', [p, '--upgrade-css']);
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(r.stdout.includes('行尾已统一为 LF'), r.stdout);
+    assert.ok(!findBlock(read(p), 'chart').body.includes('\r'), '受管块内不得再残留 CRLF');
+    assert.equal(runSkill('init-project.mjs', [p, '--check-css']).status, 0);
+  });
+
+  test('.bak 已存在 → 显式警告后再覆盖(旧备份无声丢是不对的)', () => {
+    const p = initProj();
+    const stale = withStaleRev(read(p));
+    write(p, stale);
+    fs.writeFileSync(tokensOf(p) + '.bak', 'OLD PRECIOUS BACKUP');
+    const r = runSkill('init-project.mjs', [p, '--upgrade-css']);
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok((r.stdout + r.stderr).includes('将被本次升级前的备份覆盖'), '必须警告');
+    assert.ok(fs.readFileSync(tokensOf(p) + '.bak', 'utf8').includes('0000dead'), '.bak 应是升级前的内容');
+  });
+
+  test('病态互踩: nofx 裸文本嵌在 chart 旧受管块内 → 一次升级全部到位(不再"上次成功这次又落后")', () => {
+    const hostile = `:root{--a:1}\n${wrapKit('chart', CHART_CSS + '\n' + NOFX_CSS, 'a'.repeat(64))}\n`;
+    const p = mkproj(tmpdir(), { tokens: hostile });
+    const r = runSkill('init-project.mjs', [p, '--upgrade-css']);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(runSkill('init-project.mjs', [p, '--check-css']).status, 0, '一次升级后三段必须全部就位');
+    for (const k of KITS) assert.ok(findBlock(read(p), k.id), `缺 ${k.id} 受管块`);
+  });
+
+  test('超大 tokens.css → 拒绝扫描(构造输入会让受管块定位二次方变慢, 4MB 实测 39s)', () => {
+    const p = mkproj(tmpdir(), { tokens: '/* >>> html2video:nofx rev=aaaaaaaa >>> */\n' + '/* '.repeat(MAX_SCAN_BYTES / 3 + 10) });
+    const r = runSkill('init-project.mjs', [p, '--check-css']);
+    assert.equal(r.status, 1);
+    assert.ok((r.stdout + r.stderr).includes('拒绝扫描'), '要说明是拒绝扫描而不是慢慢算');
   });
 });

@@ -237,3 +237,33 @@ describe('预览放映页 · 落到磁盘', () => {
     assert.equal(r.status, 1);
   });
 });
+
+describe('预览放映页 · 竖版画布与 iframe 安全(2026-09-18 流程/安全审计补)', () => {
+  const SLIDES_ARG = [{ id: '01', name: 'a.html', copy: 'a.html', copyNofx: 'a.nofx.html', clauses: [] }];
+
+  test('buildPlayPage: 画布参数化 — 竖版尺寸/缩放除数/缩略图比例都按 1080×1920', () => {
+    const page = buildPlayPage({ topic: 'T', canvas: { w: 1080, h: 1920 }, slides: SLIDES_ARG.map(s => ({ ...s })) });
+    assert.ok(page.includes('width:1080px;height:1920px'), '舞台与 iframe 要用竖版尺寸');
+    assert.ok(page.includes('r.width / 1080, r.height / 1920'), '缩放除数要按竖版算');
+    assert.ok(page.includes('aspect-ratio:1080/1920'), '总览缩略图比例要跟画布');
+    assert.ok(!page.includes('aspect-ratio:16/9'), '不得残留横屏写死比例');
+  });
+
+  test('iframe src 一律加 ./ 前缀: javascript: 文件名不会被当 scheme 在放映页同源执行', () => {
+    const page = buildPlayPage({ topic: 'T', slides: SLIDES_ARG.map(s => ({ ...s })) });
+    assert.match(page, /src\s*=\s*'\.\/'\s*\+\s*\(nofx/, '必须强制相对解析');
+  });
+
+  test('竖版项目落盘: script.json 1080×1920 → index.html 用竖版画布', () => {
+    const proj = tmpdir();
+    mkproj(proj, { slides: [{ id: '01', layout: 'statement', html: '01-title.html', audio: '01.mp3', title: '竖版', clauses: [{ stage: 1, text: '一句。' }] }] });
+    const j = JSON.parse(fs.readFileSync(path.join(proj, 'script.json'), 'utf8'));
+    j.width = 1080; j.height = 1920;
+    fs.writeFileSync(path.join(proj, 'script.json'), JSON.stringify(j));
+    fs.writeFileSync(path.join(proj, 'slides', '01-title.html'), SLIDE);
+    const r = runSkill('preview-page.mjs', [proj]);
+    assert.equal(r.status, 0, r.stderr);
+    const page = fs.readFileSync(path.join(proj, 'preview', 'play', 'index.html'), 'utf8');
+    assert.ok(page.includes('width:1080px;height:1920px'), '放映页要按竖版渲染, 否则 Gate 4 画面被切掉近半');
+  });
+});

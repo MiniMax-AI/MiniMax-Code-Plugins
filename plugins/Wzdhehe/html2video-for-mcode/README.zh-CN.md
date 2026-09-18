@@ -133,13 +133,16 @@ Windows / macOS / Linux。脚本全部是 Node ESM,不依赖特定 shell。Windo
 
 ## 验证
 
-技能自带可执行测试(`skills/html2video-for-mcode/tests/`,纯 `node:test`,无额外依赖)。在仓库根执行:
+技能自带可执行测试(`skills/html2video-for-mcode/tests/`,纯 `node:test`,无额外依赖):
 
 ```bash
+# MiniMax-Code-Plugins monorepo(插件 PR 语境), 在仓库根执行:
 node --test "plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/*.test.mjs"
+# 本技能仓的独立 clone, 在仓库根执行:
+node --test "tests/*.test.mjs"
 ```
 
-十个文件共 132 例:`safe-paths`(恶意 slide id / 路径、canary 完好性、符号链接逃逸)、`no-clobber`(覆盖拒绝)、`endpoint-allowlist`(Key 不离开官方域,并用本地服务器证明闸门在请求之前)、`fetch-policy`(SSRF、`file://`、重定向与文件名规则)、`preview-page`(快照注入实测延迟、`base` 顺序、自包含无外链、越界拒绝、无计时器)、`tokens-fx`(模板里每个入场动画的关键帧必须声明 `opacity`、`no-fx` 必须重置基础态、`--upgrade-css` 幂等)、`chart-kit`(模板里真带着图表工具箱:keyframes / 注册属性 /「关动效 = 终态」不变量)、`table-kit`(表格原语的可读性硬指标:正文号、行高 ≥72px、涨跌走令牌、矩阵高亮列覆盖表头)、`css-kit`(工具箱受管块:块在但 rev 旧 / 被手工改过必须检出并原地修复、项目端覆写不被压掉、老文件原地包裹去重、`--check-css` 退出码)与 `render-smoke`(init → 对时 → 静态闸门 → 截图 → 成片全链)。渲染冒烟与三例依赖 ffmpeg 的路径检查需要 ffmpeg 与 Chromium:缺失时按原因 skip,scoped workflow `.github/workflows/html2video-for-mcode-smoke.yml` 会装齐依赖并把全部用例真跑一遍。
+十个文件共 146 例:`safe-paths`(恶意 slide id / 路径、canary 完好性、符号链接逃逸)、`no-clobber`(覆盖拒绝)、`endpoint-allowlist`(Key 不离开官方域,并用本地服务器证明闸门在请求之前)、`fetch-policy`(SSRF、`file://`、重定向与文件名规则、**IPv4-mapped IPv6 十六进制形式**)、`preview-page`(快照注入实测延迟、`base` 顺序、自包含无外链、越界拒绝、无计时器、**竖版画布、iframe 强制相对解析**)、`tokens-fx`(模板里每个入场动画的关键帧必须声明 `opacity`、`no-fx` 必须重置基础态、`--upgrade-css` 幂等)、`chart-kit`(模板里真带着图表工具箱:keyframes / 注册属性 /「关动效 = 终态」不变量)、`table-kit`(表格原语的可读性硬指标:正文号、行高 ≥72px、涨跌走令牌、矩阵高亮列覆盖表头)、`css-kit`(工具箱受管块:块在但 rev 旧 / 被手工改过必须检出并原地修复、项目端覆写不被压掉、老文件原地包裹去重、`--check-css` 退出码、**CRLF 不误报、病态互踩一次到位、超大输入拒绝**)与 `render-smoke`(init → 对时 → 静态闸门 → 截图 → 成片全链,**still 复截后静态回退必须点名警告**)。渲染冒烟与三例依赖 ffmpeg 的路径检查需要 ffmpeg 与 Chromium:缺失时按原因 skip;scoped workflow `.github/workflows/html2video-for-mcode-smoke.yml`(**位于 MiniMax-Code-Plugins monorepo,本独立仓没有 workflow**)会在插件 PR 与 main 上装齐依赖并把全部用例真跑一遍。
 
 ## 排错
 

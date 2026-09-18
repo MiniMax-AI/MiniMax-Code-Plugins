@@ -11,7 +11,7 @@ import path from 'node:path';
 import { NOFX_CSS } from './nofx-css.mjs';
 import { CHART_CSS } from './chart-css.mjs';
 import { TABLE_CSS } from './table-css.mjs';
-import { KIT_REV, wrapKit, applyKitUpgrade, kitStatuses } from './css-kit.mjs';
+import { KIT_REV, wrapKit, applyKitUpgrade, kitStatuses, MAX_SCAN_BYTES } from './css-kit.mjs';
 
 const argv = process.argv.slice(2);
 const dirArg = argv.find(a => !a.startsWith('--'));
@@ -507,6 +507,7 @@ if (argv.includes('--upgrade-css') || argv.includes('--check-css')) {
   const cssPath = path.join(dir, 'slides', 'tokens.css');
   if (!fs.existsSync(cssPath)) { console.error(`✗ 找不到 ${cssPath}`); process.exit(1); }
   const css = fs.readFileSync(cssPath, 'utf8');
+  if (css.length > MAX_SCAN_BYTES) { console.error(`✗ tokens.css 有 ${Math.round(css.length / 1e4) / 100}MB, 超过 ${MAX_SCAN_BYTES / 1e6}MB 上限拒绝扫描(正常项目 ≈15KB; 构造的超大输入会让受管块定位二次方变慢)`); process.exit(1); }
 
   if (argv.includes('--check-css')) {
     const bad = kitStatuses(css).filter(s => s.status !== 'ok');
@@ -516,12 +517,16 @@ if (argv.includes('--upgrade-css') || argv.includes('--check-css')) {
     process.exit(1);
   }
 
-  const { css: next, actions } = applyKitUpgrade(css);
+  const { css: next, actions, normalizedLineEndings } = applyKitUpgrade(css);
   if (!actions.length) { console.log(`无需升级: ${cssPath} 工具箱已是最新(kit rev ${KIT_REV.slice(0, 8)})`); process.exit(0); }
+  if (fs.existsSync(cssPath + '.bak')) console.warn('⚠ 已存在 tokens.css.bak, 将被本次升级前的备份覆盖(旧备份会丢, 需要留就先改名)');
   fs.writeFileSync(cssPath + '.bak', css);   // 覆盖前备份: 升级只应动受管块, 万一不对可整文件回退
   fs.writeFileSync(cssPath, next);
   for (const a of actions) console.log(`✓ ${a.label}: ${a.reason}`);
+  if (normalizedLineEndings) console.log('  行尾已统一为 LF(与 rev 哈希同一标准; CSS 语义不变)');
   console.log(`  备份 → ${cssPath}.bak;受管块之外的内容(含你的覆写)未动`);
+  // 升级只改 tokens.css —— 已渲染产物里还是旧 CSS 的画面, 必须点名要重跑什么(流程审计 P3)
+  console.log('  ⚠ 已生成的 preview/*.png 与 build/frames 仍是旧 CSS 画面: 受影响张重跑 capture(--mode still + --mode motion), 放映页重跑 preview-page.mjs, 再 build-video');
   process.exit(0);
 }
 
@@ -557,6 +562,6 @@ console.log(`
    node scripts/plan-timings.mjs "${dir.replace(/\\/g, '/')}"
 4. 每张 HTML 参照 slides/_template.html 写到 slides/(主题见 tokens.css 顶部注释), 然后:
    node scripts/check-theme.mjs "${dir.replace(/\\/g, '/')}"            # 主题对比度校验
-   node scripts/capture.mjs "${dir.replace(/\\/g, '/')}" --mode still    # Gate 3 终态预览
+   node scripts/capture.mjs "${dir.replace(/\\/g, '/')}" --mode still    # Gate 4 终态预览
    node scripts/capture.mjs "${dir.replace(/\\/g, '/')}" --mode motion   # 动画帧
    node scripts/build-video.mjs "${dir.replace(/\\/g, '/')}" --asr`);

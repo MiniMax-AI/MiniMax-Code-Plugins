@@ -44,7 +44,18 @@ export function isBlockedHost(hostname) {
     if (h === '::' || h === '::1') return true;                    // unspecified / loopback
     if (/^f[cd][0-9a-f]{2}:/.test(h)) return true;                 // fc00::/7 私网(ULA)
     if (/^fe[89ab][0-9a-f]:/.test(h)) return true;                 // fe80::/10 链路本地
-    if (/^::ffff:/.test(h)) return isBlockedHost(h.replace(/^::ffff:/, '')); // IPv4-mapped
+    if (/^::ffff:/.test(h)) {                                   // IPv4-mapped
+      const rest = h.replace(/^::ffff:/, '');
+      // WHATWG URL 会把点分 mapped 地址规范化成十六进制(127.0.0.1 → ::ffff:7f00:1),
+      // 两个 hex 组就是 IPv4 的 32 位 —— 必须换算回点分再判; 不换算的话 loopback/
+      // 私网/云元数据(169.254.169.254 → ::ffff:a9fe:a9fe)全部能借此穿透(2026-09-18 实测)
+      const m = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(rest);
+      if (m) {
+        const hi = parseInt(m[1], 16) >>> 0, lo = parseInt(m[2], 16) >>> 0;
+        return isBlockedHost(`${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`);
+      }
+      return isBlockedHost(rest);
+    }
     return false;
   }
   const ipv4 = ipv4ToLong(h);

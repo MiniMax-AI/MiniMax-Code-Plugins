@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.0 — 2026-09-18
+
+**三维审计(文档对齐 / 安全 / 流程)修复:1 个高危 SSRF + 竖版放映页 + 一批流程断点**
+
+- **安全 · IPv4-mapped IPv6 十六进制形式绕过出网拦截(高危,实测穿透)**:WHATWG URL 会把 `http://[::ffff:127.0.0.1]/` 的 hostname 规范化成 `::ffff:7f00:1` 再送检,旧的 mapped 处理只剥前缀、剩余 hex 组落不进任何拦截规则 —— loopback / 私网 / 云元数据(`::ffff:a9fe:a9fe`)全部可以借此绕过 `fetch-official-images` 的 SSRF 防线(端到端实测打到了本地服务器)。现换算回点分 IPv4 再判;公网映射形式(`::ffff:808:808` = 8.8.8.8)仍放行。`fetch-policy` 补经 `new URL()` 规范化路径的负例。
+- **放映页 iframe 强制相对解析**:slide 文件名含 `:`(如 `javascript:alert(1).html`,Linux/macOS 合法)时 `iframe.src` 会被当 URL scheme 在放映页同源执行;现在一律加 `./` 前缀。
+- **竖版(1080×1920)放映页修复**:舞台 `#fit/#frame` 尺寸、缩放除数、总览缩略图比例原先写死 1920×1080,竖版 Gate 4 画面被切掉近半;现全部按 `script.json` 画布参数化。authoring.md 补竖版字幕安全区数值(底部约 150–215px、居中约 787px 宽,`padding-bottom: 240px` 起步)。
+- **still 复截静默吞动画**:capture 在 still 路径作废该张帧目录(防旧帧污染)后,build-video 回退静态图出片此前零提示;现在点名 ⚠ 并给出补跑命令(`capture --mode motion --ids <id>`)。render.md"视觉验证三件套"与 SKILL.md Phase 5 同步写明"still 复看后必须对同 ids 重跑 motion"。
+- **受管块机制补强**:① 内容比较统一 LF 归一(git autocrlf 检出的 CRLF 文件此前会误报三段"被手工改过");② 升级动作分两阶段(先全部按 rev 原地替换、再对结果重估补齐)——病态布局下"nofx 裸文本嵌在 chart 旧块内"不再出现"上次报成功、下次又报落后"的自不一致;③ `.bak` 已存在时显式警告再覆盖;④ 超过 2MB 的 tokens.css / slide HTML 拒绝扫描(构造输入会让受管块定位二次方变慢,4MB 实测 39 秒);⑤ `--upgrade-css` 输出末尾点名"已生成的 preview/frames/out 仍是旧 CSS 画面"的重跑清单。
+- **流程补点(SKILL.md)**:工作流新增"恢复老项目先跑 `--check-css`"一步(含 Phase 判定标志与升级后重跑矩阵);Phase 4 检查序列补条件项 check-theme(改过 tokens.css 时,对比度问题不再漏到最贵的 Gate 5);Phase 6 交付清单补 `out/subs.srt` 与 `build/timings.json`;init-project 尾注的 Gate 编号修正(终态预览 = Gate 4);Gate 2 验收物不再写死"8 段音频";check-slides 5c 的 `--check-css` 指引限定为工具箱场景。
+- **文档对齐**:插件包顶层 THIRD-PARTY-NOTICES.md 与技能内副本同步(此前漏同步为旧版);README 验证段改为两种仓库语境(monorepo / 独立技能仓)都成立的命令;authoring.md 图表纪律标题"六条"改"九条"并修正 8/9 顺序;evals 修正 4 处(id24 动效口径更新为 `fx-sweep`/`fx-grow-w`、id0 的 Gate 编号、断号重排、补齐 `files` 字段);SKILL.md 脚本表补列实存开关(`--topic`/`--ids`/`--pacing`/`--min`/`--json`/`--dsf`)。
+- 测试 **132 → 146 例**(fetch-policy +6、css-kit +4、preview-page +3、render-smoke +1),本地全绿。
+
 ## 1.2.0 — 2026-09-18
 
 **CSS 工具箱受管块:把「改了 CSS 但项目里没生效」连根修掉**

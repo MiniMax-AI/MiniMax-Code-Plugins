@@ -78,6 +78,9 @@ for (const t of timings.slides) {
     run(FFMPEG, ['-y', '-framerate', String(fps), '-i', path.join(fdir, 'f%05d.png'),
       '-vf', vf.join(','), '-t', D.toFixed(4), ...common, seg], `编码 ${tid} (帧序列)`);
   } else if (fs.existsSync(png)) {
+    // still 复截会把该张帧目录作废(capture 的防旧帧污染设计), 回退静态图 = 该张动画不进视频;
+    // "改完 HTML 跑 still 复看再直接 build-video"极易踩进且此前零提示, 必须点名怎么补
+    console.warn(`⚠ ${tid} 无帧序列, 用 preview/${tid}.png 静态图出片(该张动画不进视频) — 若应有动画: node scripts/capture.mjs <项目目录> --mode motion --ids ${tid} 后重建`);
     let vf = [fades];
     const sz = probeSize(png);
     if (sz && (sz[0] !== W || sz[1] !== H)) vf.unshift(`scale=${W}:${H}:flags=lanczos`);

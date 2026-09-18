@@ -15,6 +15,11 @@ import { NOFX_CSS, hasNofxRules } from './nofx-css.mjs';
 import { CHART_CSS, hasChartKit } from './chart-css.mjs';
 import { TABLE_CSS, hasTableKit } from './table-css.mjs';
 
+// 受管块定位的惰性正则对"无闭合定界符 × N"的构造输入是二次方复杂度 —— 入口统一拒绝超大
+// 输入(正常 tokens.css ≈15KB、单张 slide ≈10KB, 2MB 只可能是构造的; 2026-09-18 审计实测
+// 4MB 恶意文件会让 --check-css 跑 39s)。check-slides / preview-page / init-project 共用此上限。
+export const MAX_SCAN_BYTES = 2_000_000;
+
 export const KITS = [
   { id: 'nofx', label: 'no-fx 规则', css: NOFX_CSS, probe: hasNofxRules },
   { id: 'chart', label: '图表工具箱', css: CHART_CSS, probe: hasChartKit },
@@ -55,7 +60,9 @@ function indicesOf(hay, needle) {
 //   stale   受管块存在但 rev 落后, 或块内容与 rev 不符(被手工改过) → 原地替换
 //   missing 既无受管块也无当前内容(可能有旧版残留) → 追加受管块
 export function kitStatuses(css, { rev = KIT_REV } = {}) {
-  const src = String(css ?? '');
+  // 行尾先归一: KIT_REV 哈希是按 LF 算的, 内容比较必须同一标准 —— 否则 git autocrlf 检出的
+  // CRLF 文件会被误报三段"被手工改过"(2026-09-18 实测)
+  const src = String(css ?? '').replace(/\r\n/g, '\n');
   return KITS.map(k => {
     const block = findBlock(src, k.id);
     if (block) {
@@ -80,38 +87,42 @@ export function kitStatuses(css, { rev = KIT_REV } = {}) {
 }
 
 // 计划(并执行)升级。只动受管块与工具箱内容, 其他字符一律原样保留:
-//   replaced  受管块存在但旧/被改 → 原位换成本次的新块
+//   replaced  受管块存在但旧/被改 → 原位换成本次的新块(第一阶段, 块级重写互不影响)
 //   wrapped   无受管块但内容已是当前版 → 原地把这段文本包上定界符(位置不变, 重复副本一并去重)
 //   appended  缺失 → 文件尾追加受管块(CSS 后写覆盖, 残留旧规则不再生效)
+// wrapped/appended 放第二阶段并对第一阶段的结果重估: 单趟里 wrapped 的插入点可能恰好落在
+// 另一个待替换的旧受管块内部, 随后的 replaced 会把刚包进去的块一起清掉(2026-09-18 审计抓到)。
 export function applyKitUpgrade(css, { rev = KIT_REV } = {}) {
-  const statuses = kitStatuses(css, { rev });
-  let out = String(css ?? '');
+  const raw = String(css ?? '');
+  let out = raw.replace(/\r\n/g, '\n');   // 与 KIT_REV/kitStatuses 同标准; 写回即统一为 LF
   const actions = [];
+  let statuses = kitStatuses(out, { rev });
+  for (const [i, k] of KITS.entries()) {
+    if (statuses[i].status !== 'stale') continue;
+    const block = findBlock(out, k.id);
+    out = out.slice(0, block.start) + wrapKit(k.id, k.css, rev) + out.slice(block.end);
+    actions.push({ id: k.id, label: k.label, action: 'replaced', reason: statuses[i].detail });
+  }
+  statuses = kitStatuses(out, { rev });
   for (const [i, k] of KITS.entries()) {
     const st = statuses[i];
-    if (st.status === 'ok' && !st.detail) continue;         // 受管块已就位且最新
+    if (st.status === 'ok' && !st.detail) continue;           // 受管块已就位且最新
     const fresh = wrapKit(k.id, k.css, rev);
-    if (st.status === 'ok') {                                // 内容当前但无定界符 → 原地包裹
+    if (st.status === 'ok') {                                  // 内容当前但无定界符 → 原地包裹
       const text = k.css.trim();
       const at = out.lastIndexOf(text);
-      const before = out.slice(0, at).split(text).join('');  // 顺带清掉旧追加时代留下的重复副本
+      const before = out.slice(0, at).split(text).join('');    // 顺带清掉旧追加时代留下的重复副本
       out = before + fresh + out.slice(at + text.length);
       actions.push({ id: k.id, label: k.label, action: 'wrapped', reason: '内容已是当前版, 原地补上受管块定界符(位置不变)' });
-      continue;
-    }
-    const block = findBlock(out, k.id);
-    if (block) {
-      out = out.slice(0, block.start) + fresh + out.slice(block.end);
-      actions.push({ id: k.id, label: k.label, action: 'replaced', reason: st.detail });
       continue;
     }
     out = out.replace(/\s*$/, '\n') + '\n' + fresh + '\n';
     actions.push({
       id: k.id, label: k.label, action: 'appended',
-      reason: k.probe(String(css ?? ''))
+      reason: k.probe(out)
         ? '旧版残留与当前版不同, 新块已追加在文件尾 —— CSS 后写覆盖, 旧规则不再生效(若你在文件尾覆写过这段的规则, 请把覆写挪到受管块之后)'
         : '原本缺失, 已在文件尾补上受管块',
     });
   }
-  return { css: out, actions };
+  return { css: out, actions, normalizedLineEndings: /\r\n/.test(raw) };
 }

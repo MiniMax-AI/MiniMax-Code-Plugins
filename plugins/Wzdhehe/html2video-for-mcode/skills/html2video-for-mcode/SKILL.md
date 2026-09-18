@@ -31,14 +31,14 @@ description: 把脚本/大纲/主题变成带中文口播的成片 MP4(HTML 幻�
 
 | 脚本 | 作用 |
 |---|---|
-| `scripts/init-project.mjs <项目目录> [--force] [--upgrade-css] [--check-css]` | 生成项目骨架:目录 + tokens.css + slide 模板 + script.json 契约。**目标目录非空时拒绝执行**(会重置 5 个生成文件),要重新初始化必须显式 `--force`。`--upgrade-css` 把项目 tokens.css 的三个工具箱(no-fx / 图表 / 表格)**受管块**更新到技能当前版——按内容 rev 判定并**原地替换**,不再追加重复段;幂等,写前备份 `tokens.css.bak`,受管块之外的规则(含项目端覆写)不动。`--check-css` 只查不改,落后/缺失逐项报出并退出码 1 |
-| `scripts/plan-timings.mjs <项目目录>` | ffprobe 实测每段 TTS → 每张时长、各 stage 入场时刻、**每句 clauses 时刻** → `build/timings.json` |
-| `scripts/check-timing.mjs <项目目录> [--calibrate]` | 静音检测实测每句真实开口, 与估算对比;`--calibrate` 按实测校准 timings 后重渲染 |
+| `scripts/init-project.mjs <项目目录> [--topic "主题名"] [--force] [--upgrade-css] [--check-css]` | 生成项目骨架:目录 + tokens.css + slide 模板 + script.json 契约。**目标目录非空时拒绝执行**(会重置 5 个生成文件),要重新初始化必须显式 `--force`。`--upgrade-css` 把项目 tokens.css 的三个工具箱(no-fx / 图表 / 表格)**受管块**更新到技能当前版——按内容 rev 判定并**原地替换**,不再追加重复段;幂等,写前备份 `tokens.css.bak`,受管块之外的规则(含项目端覆写)不动。`--check-css` 只查不改,落后/缺失逐项报出并退出码 1 |
+| `scripts/plan-timings.mjs <项目目录> [--pacing=<每秒字数>]` | ffprobe 实测每段 TTS → 每张时长、各 stage 入场时刻、**每句 clauses 时刻** → `build/timings.json`;`--pacing` 覆写语速基准(语速告警时重估用) |
+| `scripts/check-timing.mjs <项目目录> [--calibrate]` | 静音检测实测每句真实开口, 与估算对比;`--calibrate` 按实测校准 timings 后重渲染。静音段数对不上而没校准的张, 用 `asr.mjs --verify-timing` 拿字级时间戳实测句开口 |
 | `scripts/check-theme.mjs <项目目录>` | 校验全部主题的 WCAG 对比度(正文/次级/字幕/accent-ink), 不达标退出码 1;新增主题必须过闸 |
-| `scripts/check-slides.mjs <项目目录> [--quiet]` | **渲染前静态闸门**:未定义 CSS 变量、缺图/外链资源、`data-stage` 没配 fx 类、fx 关键帧不含 opacity(会永久隐形)、用了无定义的类(静默无样式,提示级)、tokens.css 工具箱落后(提示级)、硬编码颜色、整片级领域自查。有 ✗ 就别截图 |
+| `scripts/check-slides.mjs <项目目录> [--ids 01,02] [--quiet]` | **渲染前静态闸门**:未定义 CSS 变量、缺图/外链资源、`data-stage` 没配 fx 类、fx 关键帧不含 opacity(会永久隐形)、用了无定义的类(静默无样式,提示级)、tokens.css 工具箱落后(提示级)、硬编码颜色、整片级领域自查。有 ✗ 就别截图 |
 | `scripts/prep-image.mjs --check <图...>` / `--crop <in> <out> [--ratio 16:9] [--anchor ...] [--force]` | 配图 SOP 的执行辅助:查尺寸与裁切风险;按锚点裁切(强制"裁掉 ≤20%、不放大补边") |
-| `scripts/fetch-official-images.mjs <页面URL> [--get 1,3] [--out-dir <目录>] [--allow-file] [--max-mb N] [--force]` / `--url <图片URL>[,...]` | 从官方页/本地页面列出并下载候选配图;**站点要登录/滚动加载时,用内置浏览器 inspect 出图片 URL,再用 `--url` 直接落盘(不需 Playwright)**。内网与元数据地址一律拒绝, 每跳重定向复核, 默认写在工作目录内 |
-| `scripts/capture.mjs <项目目录> [--mode still\|motion] [--no-subs]` | Playwright 截图。still=终态单帧;motion=逐帧步进入场动画。**字幕默认烧录**(内容取自 clauses),`--no-subs` 关闭 |
+| `scripts/fetch-official-images.mjs <页面URL> [--get 1,3] [--out-dir <目录>] [--min WxH] [--json] [--allow-file] [--max-mb N] [--force]` / `--url <图片URL>[,...]` | 从官方页/本地页面列出并下载候选配图(`--json` 只列候选不下载,`--min` 按尺寸过滤);**站点要登录/滚动加载时,用内置浏览器 inspect 出图片 URL,再用 `--url` 直接落盘(不需 Playwright)**。内网与元数据地址一律拒绝(含 IPv4-mapped IPv6 形式), 每跳重定向复核, 默认写在工作目录内 |
+| `scripts/capture.mjs <项目目录> [--mode still\|motion] [--ids 01,02] [--no-subs]` | Playwright 截图。still=终态单帧(会作废该张旧帧目录);motion=逐帧步进入场动画(`--dsf 2` 超采样)。**字幕默认烧录**(内容取自 clauses),`--no-subs` 关闭 |
 | `scripts/preview-page.mjs <项目目录> [--open] [--no-script]` | 生成**放映页** `preview/play/index.html`(单文件、零依赖、file:// 双击即看):←→ 或触屏左右滑翻页、R 重播动画、X 动效/关动效对照、P 口播文案开/关、O 总览、F 全屏。**只做"放画面"这件事**:没有计时器/进度条/跟读高亮(要看时间就看成片)。快照按 `timings.json` **注入实测延迟**,所以浏览器里的动画时序 = 成片时序;还没对时则按等间隔预览并如实标注。口播面板按数据自动决定加不加载,窄窗口/手机上收成底部抽屉且默认收起 |
 | `scripts/build-video.mjs <项目目录> [--asr] [--dry-run]` | 编码每张 → 拼接 → 音轨对位 → 合成 → 自检 + 出 `out/subs.srt`;`--asr` **按句**切分音频 + 校验清单;`--dry-run` 只打印将要执行的 ffmpeg 命令(排错用) |
 | `scripts/asr.mjs <项目目录> [--api-key K] [--verify-timing] [--from <转写>] [--allow-any-endpoint]` | 调 ASR 转写并按句校验音画是否念的是脚本(数字/繁体字不符判 ✗);`--verify-timing` 用字级时间戳实测句开口。Key 只发官方域 |
@@ -81,7 +81,7 @@ npm i playwright && npx playwright install chromium        # 截图用
 | 结果落盘 | `get_asset_url <node_id>` → 下载到 `audio/<id>.mp3` | `--out` 直接写盘 |
 | BGM 音乐 | `connector__matrix__batch_text_to_music`(≤5 条/批) | ⚠ **mmx-cli 无音乐生成** → 让用户提供音乐文件(确认授权后登记 MANIFEST),或跳过 BGM |
 | ASR 反向校验 | `mcode-tools upload_temp_url` + `connector__matrix__listen_audio` | **`node scripts/asr.mjs <项目目录>`** —— 用同一把 API Key 直调 REST(`/v1/speech_to_text`),不依赖 mcode、也不用装 whisper;**会自动与 checklist 的预期文本比对并回填,数字/繁体字(粤语)不符直接判 ✗**。想用字级时间戳实测句开口:`--verify-timing` |
-| 素材配图 | 内置浏览器 inspect 官网 DOM(首选;取到的图片 URL 用 `scripts/fetch-official-images.mjs --url` 落盘)/ 官方 brand kit | 同上;抽象配图可用 `mmx image generate --prompt "..." --aspect-ratio 16:9 --n 3`(**仅限抽象概念图,禁止生成 logo / 截图 / 真人头像**),再按 `image-sources.md` 登记 |
+| 素材配图 | 内置浏览器 inspect 官网 DOM(首选;取到的图片 URL 用 `scripts/fetch-official-images.mjs --url` 落盘)/ 官方 brand kit | 同上;抽象配图可用 `mmx image generate --prompt "..." --aspect-ratio 16:9 --n 3`(竖版项目用 `9:16`;**仅限抽象概念图,禁止生成 logo / 截图 / 真人头像**),再按 `image-sources.md` 登记 |
 | 调研 | `web_search` / `web_fetch` | `mmx search "关键词"` / `mmx text chat` |
 
 **mmx-cli 首次配置**(非 mcode 环境):`npm install -g mmx-cli` → `mmx auth login --api-key sk-xxx` → `mmx quota` 验证。401 多半是 region 不匹配:`mmx config set --key region --value cn|global`。脚本侧用 `MINIMAX_API_KEY`(必给)与 `MINIMAX_REGION=cn|global`(可选)对齐同一套身份。
@@ -102,6 +102,8 @@ Phase 6 交付
 ```
 
 **顺序是脚手架,不是建议。** 口播稿定了才做 TTS;TTS 时长实测了才动素材和 HTML;素材清单过了 Gate 3 才写进页面;HTML 过了终态截图才渲染。改了口播稿 = 从 Phase 2 重跑(TTS 便宜,重做不贵;带着旧时长硬改才是灾难)。每个 Gate 向用户呈现"验收物清单"里明确的东西,没收到 OK 绝不前进——即使看起来显然,也要确认。
+
+**恢复/继续一个老项目,动工前先做一件事**:`node <技能>/scripts/init-project.mjs <项目目录> --check-css`。工具箱(no-fx/图表/表格)落后就跑 `--upgrade-css`(按 rev 原地替换受管块,不碰你的覆写,自动备份 `.bak`)。**注意升级只改 tokens.css** —— 已生成的 `preview/*.png`、`build/frames/`、`out/*.mp4` 里还是旧 CSS 的画面:受影响张要重跑 capture(still + motion)、重跑 preview-page,再 build-video。判断项目停在哪个 Phase:有 `research/notes.md` 内容→过 Gate 0;`script.json` clauses 已填→Gate 1;`audio/*.mp3` 齐→Gate 2;`assets/` 齐→Gate 3;`slides/*.html` 齐→Gate 4;`build/frames` 或 `out/*.mp4` 在→Gate 5。
 
 ### Phase 0 · 信息搜集(条件执行)
 
@@ -162,7 +164,7 @@ node <技能目录>/scripts/plan-timings.mjs <项目目录>
 
 可选但推荐(尤其用户反馈过"音画不同步"时):`node <技能目录>/scripts/check-timing.mjs <项目目录>` 用静音检测实测每句真实开口,输出"估算 vs 实测"对比表;偏差大就 `--calibrate` 校准后删 `build/frames/` 重渲染。注意"体感不同步"也常是设计错位——大数字/主体图必须挂在**提到它的那句**的 stage(强同步原则,见 authoring.md)。
 
-**Gate 2**:8 段音频试听 + plan-timings 的时长表给用户过。
+**Gate 2**:全部口播音频逐段试听 + plan-timings 的时长表给用户过。
 
 ### Phase 3 · 素材收集(合规在这里把关)
 
@@ -190,6 +192,7 @@ node <技能目录>/scripts/plan-timings.mjs <项目目录>
 - **动效可一键关**:`<html data-theme="..." class="no-fx">` 关整个项目,任何容器加 `no-fx` 关单张,单个元素不给 fx 类即静态。关掉后 motion 捕获自动退化为静态帧出片,时长与音画同步不受影响,字幕照常(详见 authoring.md"动效开关")。
 - 禁用 transition 做入场(截图管线 seek 不到),只用 `@keyframes`。禁外部 Google Fonts(离线不稳),用系统字体栈(tokens.css 已配 CJK fallback)。
 - 素材只用 Gate 3 已确认的 `assets/` 清单,不新增未审素材。
+- 改过项目 `tokens.css`(自定义品牌色、A股涨跌色翻转、字幕钩子 `--sub-bg/--sub-ring`)→ 先跑 `node <技能>/scripts/check-theme.mjs <项目目录>` 验对比度(内置主题未动可跳)。对比度问题拖到 Gate 5 成片才发现是最贵的返工。
 - ⚠ **写完 8 张后先跑静态检查再截图**:`node <技能>/scripts/check-slides.mjs <项目目录>` —— 抓未定义 CSS 变量(会导致文字隐形)、图片缺失/外链资源、data-stage 没配 fx 类、硬编码颜色。有 ✗ 就别截图,画面对但"看不见"是最难查的。
 
 写完终态预览(最快路径,给 Gate 4 看):
@@ -209,6 +212,7 @@ node <技能目录>/scripts/build-video.mjs <项目目录> --asr
 ```
 
 - `--mode motion`:逐帧步进(暂停全部动画 → 逐帧 seek → 截图 → 编码),动画窗口逐帧渲染、静止段自动补尾帧,时长精确。**字幕默认烧录**(内容取自 clauses、显示窗=该句开口到下句开口,画面底部居中,still 预览里不显示、成片里才有;`--no-subs` 关闭)。成本约 50–200ms/帧,8 张 × 30fps 约 3–6 分钟,预算进超时。赶时间可用 still 模式出片(动画不进视频,只有淡入淡出)。
+- ⚠ **still 复截会作废该张帧目录**(capture 的防旧帧污染设计)。Gate 4 之后改了 HTML 想复看 → `capture --mode still --ids <id>` 看效果,**确认后必须对同 ids 重跑 `--mode motion` 再 build-video**;否则该张会退回静态图出片、动画无声丢失(build-video 遇到这种情况会点名 ⚠)。
 - build-video 自动:每张编码(统一参数)→ concat 拼接(时长漂移自动回退重编码)→ 音轨按每张实测时长 `apad` 对位 → **BGM 垫底(配了 bgm 才走:循环补满、淡入淡出、人声优先;混音失败自动退回纯人声)** → mux → ffprobe 时长校验 + 全量解码自检,不过关退出码非 0;同时输出 `out/subs.srt`(与烧录字幕同源同窗,中英双语按 clauses 的 text2 自动两行,供平台上传)。
 - `--asr`:**按句**切出 `asr/part-<id>-<k>.mp3` + 生成 `asr/checklist.md`。转写与预期文本比对:数字、年份、产品名必须一致;同音字可容忍。**若某段转写混入上一句的开头,说明那句实际开口比估算晚——跑 check-timing 校准。**
   - mcode:`mcode-tools upload_temp_url` 上传后交 `connector__matrix__listen_audio`。
@@ -222,10 +226,14 @@ node <技能目录>/scripts/build-video.mjs <项目目录> --asr
 ```
 out/final.mp4            # 主交付
 out/slide-*.mp4          # 单段(可单独发布)
+out/subs.srt             # 平台上传用字幕(与烧录字幕同源同窗)
+build/timings.json       # 对时的单一事实源(check-timing/asr/preview-page 都读它)
 build/audio-timeline.wav # 对位后音轨
 preview/*.png  preview/play/index.html   slides/*.html  slides/tokens.css
 audio/*.mp3  assets/(含 MANIFEST.md)  research/notes.md  asr/(校验记录)
 ```
+
+(`slides/tokens.css.bak` 是 `--upgrade-css` 的升级前备份,确认成片无误后可删。)
 
 ## 参考文件(按需读,别全读)
 

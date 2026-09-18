@@ -20,7 +20,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { safeId, safeRel, validateScriptPaths } from './tools.mjs';
 import { NOFX_CSS } from './nofx-css.mjs';
-import { KITS, kitStatuses } from './css-kit.mjs';
+import { KITS, kitStatuses, MAX_SCAN_BYTES } from './css-kit.mjs';
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -117,6 +117,7 @@ export function buildPlayPage({
   narration = true,    // 是否加载口播文案 UI(没有 clauses 或 --no-script 时为 false)
   timing = false,      // 是否有对时数据(只影响标题上的"(未对时)"标注)
   fallbackNote = '',   // "还没对时/等间隔预览"的如实说明(与口播 UI 无关, 画面上也要说清)
+  canvas = { w: 1920, h: 1080 },   // 画布尺寸(竖版 1080×1920): 舞台缩放与缩略图比例都按它算
 } = {}) {
   const model = slides.map(s => ({
     id: s.id, name: s.name, title: s.title ?? '',
@@ -156,8 +157,8 @@ export function buildPlayPage({
   /* ── 舞台 + 口播文案 ── */
   main{display:flex;min-width:0;min-height:0}
   #stage{position:relative;flex:1 1 auto;min-width:0;min-height:0;overflow:hidden;background:#000}
-  #fit{position:absolute;left:50%;top:50%;width:1920px;height:1080px;transform-origin:center center}
-  #frame{width:1920px;height:1080px;border:0;display:block;background:#fff}
+  #fit{position:absolute;left:50%;top:50%;width:${canvas.w}px;height:${canvas.h}px;transform-origin:center center}
+  #frame{width:${canvas.w}px;height:${canvas.h}px;border:0;display:block;background:#fff}
   #hit{position:absolute;inset:0;z-index:2;touch-action:none}   /* 触屏左右滑翻页; 画面是纯 CSS 无需交互 */
   #panel{flex:0 0 clamp(240px,22vw,340px);min-width:0;overflow:auto;overscroll-behavior:contain;
     border-left:1px solid var(--c-line);background:var(--c-panel);padding:14px 16px}
@@ -185,8 +186,8 @@ export function buildPlayPage({
   #grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(240px,100%),1fr));gap:14px}
   #grid figure{margin:0;border:1px solid var(--c-line);border-radius:10px;overflow:hidden;background:#000;cursor:pointer}
   #grid figure:hover{border-color:var(--c-acc)}
-  #grid img{width:100%;aspect-ratio:16/9;object-fit:cover;display:block}
-  #grid .ph{width:100%;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;color:var(--c-dim);font-size:12px}
+  #grid img{width:100%;aspect-ratio:${canvas.w}/${canvas.h};object-fit:cover;display:block}
+  #grid .ph{width:100%;aspect-ratio:${canvas.w}/${canvas.h};display:flex;align-items:center;justify-content:center;color:var(--c-dim);font-size:12px}
   #grid figcaption{padding:8px 10px;font-size:12px;color:var(--c-dim)}
   #grid figcaption b{color:var(--c-fg);font-weight:600;margin-right:6px}
   /* ── 窄窗口 / 手机: 口播文案收到底部当抽屉, 键盘提示换成触摸按钮 ── */
@@ -260,7 +261,7 @@ function layout(){
   var st = el('stage'); if (!st) return;
   var r = st.getBoundingClientRect();
   if (!r.width || !r.height) return;
-  var k = Math.min(r.width / 1920, r.height / 1080) * 0.98;
+  var k = Math.min(r.width / ${canvas.w}, r.height / ${canvas.h}) * 0.98;
   el('fit').style.transform = 'translate(-50%,-50%) scale(' + k + ')';
 }
 window.addEventListener('resize', layout);
@@ -287,7 +288,7 @@ function render(){
   el('pageno').textContent = (i + 1) + ' / ' + S.length;
   el('mode').textContent = nofx ? '关动效' : '动效';
   el('mode').className = 'chip' + (nofx ? ' on' : '');
-  el('frame').src = nofx ? s.nofx : s.src;   // 换 src = 重新加载 = 动画从 0 开始
+  el('frame').src = './' + (nofx ? s.nofx : s.src);   // './' 前缀: 强制按相对 URL 解析, 防同名 javascript: 文件名在放映页同源执行
   paintPanel(); layout();
 }
 
@@ -413,6 +414,7 @@ function main() {
     const srcPath = safeRel(slidesDir, relHtml, { where: `slides[${sid}].html` });
     if (!fs.existsSync(srcPath)) { console.warn(`- 跳过 ${sid}: 缺 slides/${relHtml}`); continue; }
     const html = fs.readFileSync(srcPath, 'utf8');
+    if (html.length > MAX_SCAN_BYTES) { console.warn(`- 跳过 ${sid}: HTML 超过 ${MAX_SCAN_BYTES / 1e6}MB 上限, 拒绝扫描(正常 ≈10KB)`); continue; }
     const base = path.basename(srcPath);
     const t = timings?.slides?.find(x => x.id === s.id);
 
@@ -460,6 +462,7 @@ function main() {
   const page = buildPlayPage({
     topic: script.topic ?? '', lang: script.lang ?? 'zh', slides: rows, cssNote,
     narration, timing, fallbackNote,
+    canvas: { w: script.width ?? 1920, h: script.height ?? 1080 },
     generatedAt: `${now.getFullYear()}-${p2(now.getMonth() + 1)}-${p2(now.getDate())} ${p2(now.getHours())}:${p2(now.getMinutes())}`,
   });
   fs.writeFileSync(path.join(outDir, 'index.html'), page);

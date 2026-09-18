@@ -201,13 +201,16 @@ No telemetry, no analytics, no hidden endpoints, no installers, no native binari
 ## Verification
 
 The Skill ships an executable test suite (`skills/html2video-for-mcode/tests/`, plain
-`node:test` — no extra dependencies). From the repository root:
+`node:test` — no extra dependencies):
 
 ```bash
+# in the MiniMax-Code-Plugins monorepo (the plugin PR context), from the repository root:
 node --test "plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/*.test.mjs"
+# in a standalone clone of this skill repo, from its root:
+node --test "tests/*.test.mjs"
 ```
 
-132 tests in ten files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
+146 tests in ten files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
 escapes), `no-clobber` (refusing to overwrite), `endpoint-allowlist` (key never leaves the official
 hosts — plus a local server that proves the gate sits before the request), `fetch-policy` (SSRF,
 `file://`, redirect and filename rules), `preview-page` (snapshot timing injection, `base` ordering,
@@ -220,10 +223,13 @@ properties, and "off = final state"), `table-kit` (table primitives keep their l
 body-size type, ≥72px rows, token-driven up/down colours, matrix highlight covers the header row
 too), `css-kit` (managed blocks: a block that is present but stale or hand-edited must be detected
 and replaced in place, project-side overrides survive, legacy undelimited files get wrapped in
-place with duplicates removed, `--check-css` exit codes) and `render-smoke` (init → timings → static gate → capture →
+place with duplicates removed, `--check-css` exit codes, CRLF files must not false-positive,
+pathological interleaving resolves in one run, oversized inputs are refused) and `render-smoke` (init → timings → static gate → capture →
 build, end to end). The render smoke test and three ffmpeg-dependent path checks need ffmpeg and
-Chromium; where those are missing they skip with a stated reason, and the scoped workflow
-`.github/workflows/html2video-for-mcode-smoke.yml` installs them and runs everything for real.
+Chromium; where those are missing they skip with a stated reason. The scoped workflow
+`.github/workflows/html2video-for-mcode-smoke.yml` — which lives in the **MiniMax-Code-Plugins
+monorepo** (this standalone repo has no workflows) and runs on the plugin PR and on main —
+installs them and runs everything for real.
 
 ## Troubleshooting
 

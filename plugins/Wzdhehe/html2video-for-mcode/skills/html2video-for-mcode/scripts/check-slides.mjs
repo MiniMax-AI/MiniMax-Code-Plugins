@@ -21,7 +21,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { safeId, safeRel, inside } from './tools.mjs';
-import { kitStatuses } from './css-kit.mjs';
+import { kitStatuses, MAX_SCAN_BYTES } from './css-kit.mjs';
 
 // tokens.css 里的 @keyframes 名 → 是否声明了 opacity(用来判断"动画能否把基础态抬回可见")
 function opacityAwareKeyframes(css) {
@@ -60,6 +60,7 @@ const slidesDir = path.join(dir, 'slides');
 const tokensPath = path.join(slidesDir, 'tokens.css');
 if (!fs.existsSync(tokensPath)) { console.error(`✗ 找不到 ${tokensPath}`); process.exit(1); }
 const tokensRaw = fs.readFileSync(tokensPath, 'utf8');
+if (tokensRaw.length > MAX_SCAN_BYTES) { console.error(`✗ tokens.css 超过 ${MAX_SCAN_BYTES / 1e6}MB, 拒绝扫描(正常项目 ≈15KB)`); process.exit(1); }
 const tokensCss = tokensRaw.replace(/\/\*[\s\S]*?\*\//g, '');
 
 // tokens.css 里定义的变量
@@ -94,6 +95,11 @@ for (const s of slides) {
     continue;
   }
   const html = fs.readFileSync(file, 'utf8');
+  if (html.length > MAX_SCAN_BYTES) {
+    report.push({ id: s.id, level: 'error', msg: `HTML 有 ${Math.round(html.length / 1e4) / 100}MB, 超过 ${MAX_SCAN_BYTES / 1e6}MB 上限(正常 ≈10KB) — 拒绝扫描, 请检查文件是否被误写` });
+    errors++;
+    continue;
+  }
   const localDefs = new Set([...html.matchAll(/(--[\w-]+)\s*:/g)].map(m => m[1]));
   deckText.push({ id: s.id, text: html.replace(/<[^>]*>/g, ' ') });
 
@@ -174,7 +180,7 @@ for (const s of slides) {
   }
   const missing = [...used].filter(c => !definedClasses.has(c) && !localClasses.has(c) && !CLASS_ALLOW.has(c));
   if (missing.length) {
-    report.push({ id: s.id, level: 'warn', msg: `类在 tokens.css 与本张 <style> 里都无定义: .${missing.join(' .')} — 元素会静默无样式; 若只是无样式的语义钩子可忽略, 否则补规则或改用已有类(自查: node scripts/init-project.mjs <项目> --check-css)` });
+    report.push({ id: s.id, level: 'warn', msg: `类在 tokens.css 与本张 <style> 里都无定义: .${missing.join(' .')} — 元素会静默无样式; 若只是无样式的语义钩子可忽略, 否则补规则或改用已有类(若缺的类来自图表/表格工具箱, 先跑 node scripts/init-project.mjs <项目> --check-css 看工具箱新旧)` });
     warns++;
   }
 }

@@ -69,3 +69,36 @@ test('冒烟: 全链路出片', async t => {
   const dur = parseFloat((d.stdout ?? '').trim());
   assert.ok(Math.abs(dur - timings.total) <= 0.3, `成片时长 ${dur} 应≈timings ${timings.total}`);
 });
+
+test('still 复截后直接 build-video: 必须点名"静态图出片"警告(still 会作废帧目录, 动画无声丢失)', async t => {
+  if (!FFMPEG || !FFPROBE) return t.skip('无 ffmpeg/ffprobe(主 CI 环境; 由 scoped smoke workflow 覆盖)');
+  playwright = await loadPackage('playwright');
+  if (!playwright) return t.skip('无 playwright');
+  try {
+    const b = await playwright.chromium.launch({ headless: true });
+    await b.close();
+  } catch {
+    return t.skip('chromium 未安装(npx playwright install chromium)');
+  }
+  const proj = tmpdir();
+  let r = runSkill('init-project.mjs', [proj, '--topic', 'StillWarn']);
+  assert.equal(r.status, 0, r.stderr);
+  const mp3 = path.join(proj, 'audio', '01.mp3');
+  const g = spawnSync(FFMPEG, ['-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=32000:cl=mono', '-t', '2',
+    '-c:a', 'libmp3lame', '-b:a', '64k', '-y', mp3], { windowsHide: true });
+  assert.equal(g.status, 0, g.stderr ?? '');
+  const scriptPath = path.join(proj, 'script.json');
+  const script = JSON.parse(fs.readFileSync(scriptPath, 'utf8'));
+  script.slides = script.slides.filter(s => s.id === '01');
+  script.slides[0].clauses = [{ stage: 1, text: '静音。' }];
+  fs.writeFileSync(scriptPath, JSON.stringify(script, null, 2));
+  fs.writeFileSync(path.join(proj, 'slides', '01-title.html'),
+    `<!doctype html><html data-theme="a"><head><meta charset="utf-8"><link rel="stylesheet" href="tokens.css"></head>
+<body><div class="stage"><h1 class="fx-rise" data-stage="1">静音</h1></div></body></html>`);
+  assert.equal(runSkill('plan-timings.mjs', [proj]).status, 0);
+  assert.equal(runSkill('capture.mjs', [proj, '--mode', 'still']).status, 0);   // 只 still, 不 motion
+  r = runSkill('build-video.mjs', [proj]);                                       // 真编码(2.9s 静音段, 秒级; dry-run 的自检会因无产物误报)
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.ok((r.stdout + r.stderr).includes('静态图出片'), '回退静态图出片时必须点名警告并给补法');
+  assert.ok((r.stdout + r.stderr).includes('--mode motion --ids 01'), '要给出补跑命令');
+});

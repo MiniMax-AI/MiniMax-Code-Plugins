@@ -5,7 +5,7 @@
       "id": 0,
       "name": "full-run-from-outline",
       "prompt": "帮我把这份大纲做成一条一分钟的中文口播视频,1920×1080:介绍 OpenAI——十年时间、三大产品线、九亿周活、25B 年化营收、92% 财富500强渗透、一句 Altman 引语收尾。",
-      "expected_output": "走完整工作流且顺序正确: 事实性题材先搜集过 Gate 0 → 逐张填 script.json(内容量硬规则: 每张标题层+展开层, 口播 25-48 字)过 Gate 1 → TTS 落 audio/ → plan-timings 实测时长过 Gate 2 → 按 authoring.md 写 8 张 HTML(data-stage+fx-*, 不写死延迟) → capture still 过 Gate 3 → capture motion + build-video --asr → ASR 逐段比对过 Gate 4。全程不手写任何时长数字。",
+      "expected_output": "走完整工作流且顺序正确: 事实性题材先搜集过 Gate 0 → 逐张填 script.json(内容量硬规则: 每张标题层+展开层, 口播 25-48 字)过 Gate 1 → TTS 落 audio/ → plan-timings 实测时长过 Gate 2 → 按 authoring.md 写 8 张 HTML(data-stage+fx-*, 不写死延迟) → capture still 过 Gate 4 → capture motion + build-video --asr → ASR 逐段比对过 Gate 5。全程不手写任何时长数字。",
       "files": []
     },
     {
@@ -117,70 +117,74 @@
       "id": 16,
       "name": "subtitle-readability-verification",
       "prompt": "字幕到底怎么验收? 我怕深色主题下看不清。",
-      "expected_output": "三件套缺一不可: ① 数值关 —— node scripts/check-theme.mjs <项目> 算\"字幕文字 vs 胶囊合成到背景后\"的对比度, <4.5:1 直接不通过(深色主题若不足, 覆写 --sub-bg 更深 + --sub-ring 分隔); ② 帧关 —— 字幕只在成片出现(still 会 finish 掉), 抽 motion 帧 crop 底部条带看: 是否出现/是否被裁/是否与页码重叠(capture 在缺 clauses 时会告警, 不会静默出无字幕片); ③ 静音关(Gate 5)—— 关声看整片, 只靠字幕能否看懂。"
+      "expected_output": "三件套缺一不可: ① 数值关 —— node scripts/check-theme.mjs <项目> 算\"字幕文字 vs 胶囊合成到背景后\"的对比度, <4.5:1 直接不通过(深色主题若不足, 覆写 --sub-bg 更深 + --sub-ring 分隔); ② 帧关 —— 字幕只在成片出现(still 会 finish 掉), 抽 motion 帧 crop 底部条带看: 是否出现/是否被裁/是否与页码重叠(capture 在缺 clauses 时会告警, 不会静默出无字幕片); ③ 静音关(Gate 5)—— 关声看整片, 只靠字幕能否看懂。",
+      "files": []
     },
     {
       "id": 17,
       "name": "custom-brand-accent",
       "prompt": "客户给了品牌色 #C2410C, 能用上吗?",
-      "expected_output": "能: 主题主色是令牌。在项目自己的 slides/tokens.css 末尾追加 [data-theme=\"...\"] 覆写 --accent/--accent-ink/--accent-2/--accent-3/--grad(改项目副本不动技能模板), 然后必须跑 check-theme.mjs 验对比度 —— accent-ink 对 accent ≥3:1 才可接受(实测 #C2410C+白字 5.18:1 通过; 浅色如 #FFB84D+白字只有 1.72:1 会被判 ✗ 并退出码 1)。深色主题另看 --sub-bg 字幕胶囊是否仍分得开。"
+      "expected_output": "能: 主题主色是令牌。在项目自己的 slides/tokens.css 末尾追加 [data-theme=\"...\"] 覆写 --accent/--accent-ink/--accent-2/--accent-3/--grad(改项目副本不动技能模板), 然后必须跑 check-theme.mjs 验对比度 —— accent-ink 对 accent ≥3:1 才可接受(实测 #C2410C+白字 5.18:1 通过; 浅色如 #FFB84D+白字只有 1.72:1 会被判 ✗ 并退出码 1)。深色主题另看 --sub-bg 字幕胶囊是否仍分得开。",
+      "files": []
     },
     {
       "id": 18,
       "name": "undefined-css-variable-invisible-text",
       "prompt": "成片里那个大数字 42% 完全看不见, 但 HTML 里明明写了, 也不报错。为什么?",
-      "expected_output": "未定义 CSS 变量: background:linear-gradient(...,var(--coral-a),var(--coral-b)) 里有个变量没定义 → 整条声明计算为 none; 该元素又用了 -webkit-text-fill-color:transparent(渐变数字的标准写法) → 文字彻底隐形且无任何报错。常见诱因是从外部单页 HTML 抄配色, 变量名不在 tokens.css 里。修法: 项目 tokens.css 补定义, 或写 var(--coral-a, #ED3366) 带默认值; 之后跑 node scripts/check-slides.mjs <项目> 复验(它会静态抓出所有未定义且无 fallback 的变量)。"
+      "expected_output": "未定义 CSS 变量: background:linear-gradient(...,var(--coral-a),var(--coral-b)) 里有个变量没定义 → 整条声明计算为 none; 该元素又用了 -webkit-text-fill-color:transparent(渐变数字的标准写法) → 文字彻底隐形且无任何报错。常见诱因是从外部单页 HTML 抄配色, 变量名不在 tokens.css 里。修法: 项目 tokens.css 补定义, 或写 var(--coral-a, #ED3366) 带默认值; 之后跑 node scripts/check-slides.mjs <项目> 复验(它会静态抓出所有未定义且无 fallback 的变量)。",
+      "files": []
     },
     {
       "id": 19,
       "name": "broken-image-and-svg-under-file",
       "prompt": "架构图的 SVG 在截图里显示成 broken image, 是 file:// 的兼容性问题吗?",
-      "expected_output": "不是协议问题 —— 实测 file:// 下 <img src=\"x.svg\"> 正常加载(400px), PNG 同样正常。broken 的真因通常是 SVG 文件自身: XML 有误、依赖外部资源或 Web 字体(inline 到 img 时被禁)、缺 width/height、或下载失败存成了 HTML。建议一律 inline 进 HTML(彻底绕开)。防线有两道: check-slides.mjs 静态查图片路径缺失/外链并提示 SVG 建议 inline; capture 渲染时会点名哪张图没加载出来(以前是静默出 broken 图标)。"
+      "expected_output": "不是协议问题 —— 实测 file:// 下 <img src=\"x.svg\"> 正常加载(400px), PNG 同样正常。broken 的真因通常是 SVG 文件自身: XML 有误、依赖外部资源或 Web 字体(inline 到 img 时被禁)、缺 width/height、或下载失败存成了 HTML。建议一律 inline 进 HTML(彻底绕开)。防线有两道: check-slides.mjs 静态查图片路径缺失/外链并提示 SVG 建议 inline; capture 渲染时会点名哪张图没加载出来(以前是静默出 broken 图标)。",
+      "files": []
     },
     {
-      "id": 21,
+      "id": 20,
       "name": "research-hard-rules",
       "prompt": "这条片子里有个数字\"九亿周活\", 我直接写进口播稿行不行?",
       "expected_output": "先过 references/research.md 的四条硬规则: ① 关键数字至少 2 个独立来源(只有一个来源就改限定措辞\"官方口径为…\"或降级为约数); ② 优先一手(官方公告/财报/技术报告/政府统计), 二手转述要回溯原文; ③ 标注口径与日期(周活≠月活, 年化≠单季, 币种要写清); ④ 查不到出处或无法判定 → 进 research/notes.md 的\"不确定项\", 绝不进口播稿。数字类断言还要注意时效(优先 12 个月内)与\"最快/第一\"这类需要新来源的表述。Gate 0 让用户确认数字/名称/口径。",
       "files": []
     },
     {
-      "id": 22,
+      "id": 21,
       "name": "regulated-domain-kickoff",
       "prompt": "帮我做一条港股上市公司二季度财报的 60 秒口播视频, 中文, 重点讲营收和净利的变化。",
       "expected_output": "开工对齐除了常规项(语言/风格/字幕/画布/音色/素材边界), 必须先确认领域并问免责: 题材落在财经/投研 → 读 references/compliance.md, 问\"要不要免责声明与数据出处标注\"(默认要), 并按受众确认涨跌色(A股/港股=红涨绿跌, 指标卡改用 var(--up)/var(--down) 并在项目 tokens.css 覆写, 而不是默认的绿涨红跌)。数字必须带三要件: 口径(同比/环比、单季/累计、GAAP/非GAAP)+ 币种(港元)+ 时点(财报披露日, 不能写\"目前营收\")。口播不给操作建议、不预测股价、不用绝对化用语。结尾用 .disclaimer 小字行(停留 ≥3s, 口播不念、不进字幕)。check-slides.mjs 命中财经关键词而全片没有免责行时会给整片级提示。",
       "files": []
     },
     {
-      "id": 23,
+      "id": 22,
       "name": "finance-updown-color",
       "prompt": "这条财经视频里我用绿色表示上涨、红色表示下跌, 可以吧?",
       "expected_output": "要看受众市场。tokens.css 的语义色默认 --good 绿 / --bad 红, 即欧美读法(绿涨红跌); A 股/港股受众是红涨绿跌, 用反了整片观感颠倒。做法: 指标卡一律写 var(--up)/var(--down)(模板已定义 --up:var(--good)/--down:var(--bad)), 需要翻转时在项目 slides/tokens.css 末尾追加 :root{--up:#D92B2B;--down:#12A150}(旧项目缺这两个变量要补定义, check-slides 会报未定义)。同时在 Gate 3 素材确认时问清受众市场, 并把结论记进 research/notes.md。依据见 references/compliance.md。",
       "files": []
     },
     {
-      "id": 24,
+      "id": 23,
       "name": "chart-animation-and-no-fx",
       "prompt": "财务页要画营收对比图和一条三年趋势线, 要有点动效; 但老板说这版赶时间, 最好能一个开关把动画全关掉, 画面别变。",
-      "expected_output": "图表全部纯 CSS/SVG 自绘(禁外链 Chart.js/ECharts: 离线取不到 + canvas 动画逐帧 seek 不到)。动效走现成 fx 类且逐帧可 seek: 条形 fx-grow-x 从左长出、柱状 fx-grow-y 从底长出、折线 fx-draw 描边画入(SVG 自设 stroke-dasharray:800)、环形/进度条 fx-pop 与 fx-grow-x; 错峰用 --fx-delay:calc(var(--t2)+N×120ms)。开关: 根元素加 class=\"no-fx\" 一键全关(单张容器加则只关该张), 关掉后 motion 捕获检测不到动画窗、自动按静态帧出片, 时长与音画同步不变, 字幕照常烧录; 实测动画终态与 no-fx 帧 PSNR 51.7dB(画面一致)。⚠ 两个必踩的坑: ① 只做 transform/描边的关键帧必须显式写 opacity:1, 否则 [data-stage] 的 opacity:0 基础态抬不回来 → 元素永久隐形(check-slides 5b 项会报); ② 柱状图外层容器不能写 align-items:flex-end(列 wrapper 高度塌陷 → 柱子百分比高度变 0), 要用默认 stretch + 列内 justify-content:flex-end。见 references/authoring.md 的\"纯 CSS/SVG 图表\"与\"动效开关\"两节。",
+      "expected_output": "图表全部纯 CSS/SVG 自绘(禁外链 Chart.js/ECharts: 离线取不到 + canvas 动画逐帧 seek 不到)。动效走现成 fx 类且逐帧可 seek: 带标签的条形 fx-grow-w 按 width 生长(数字不变形)、纯色块 fx-grow-x、柱状 fx-grow-y 从底长出、折线 fx-draw 描边画入(SVG 自设 stroke-dasharray:800)、环形/进度 fx-sweep 扫出 + fx-count 数字滚动(见 authoring.md 动效选型表); 错峰用 --fx-delay:calc(var(--t2)+N×120ms)。开关: 根元素加 class=\"no-fx\" 一键全关(单张容器加则只关该张), 关掉后 motion 捕获检测不到动画窗、自动按静态帧出片, 时长与音画同步不变, 字幕照常烧录; 实测动画终态与 no-fx 帧 PSNR 51.7dB(画面一致)。⚠ 两个必踩的坑: ① 只做 transform/描边的关键帧必须显式写 opacity:1, 否则 [data-stage] 的 opacity:0 基础态抬不回来 → 元素永久隐形(check-slides 5b 项会报); ② 柱状图外层容器不能写 align-items:flex-end(列 wrapper 高度塌陷 → 柱子百分比高度变 0), 要用默认 stretch + 列内 justify-content:flex-end。见 references/authoring.md 的\"纯 CSS/SVG 图表\"与\"动效开关\"两节。",
       "files": []
     },
     {
-      "id": 25,
+      "id": 24,
       "name": "preview-before-render",
       "prompt": "片子渲染要等好几分钟, 我想先自己把八张连着放一遍看看动效节奏对不对, 别每次都等出片。",
       "expected_output": "跑 node <技能>/scripts/preview-page.mjs <项目目录> --open → 生成自包含放映页 preview/play/index.html(file:// 双击即看, 零依赖、不需起服务)。页面只做「把 HTML 画面放一遍」: ←→ 或触屏左右滑翻页、R 重播当前张入场动画、X 动效/关动效对照、P 口播文案开/关、O 总览、F 全屏; 刻意不做计时器/进度条/逐句跟读高亮 —— 要看时间或节奏就直接看成片, 预览页里跑计时器只会让人盯秒表(实测标签页放着就变成 204.2s / 6.3s)。口播 UI 按数据自动决定: 有 clauses + 有 timings.json → 列出该张口播文案; 有 clauses 没对时 → 只列文案并标「(未对时)」; 没有 clauses 或 --no-script → 面板与按钮完全不出现, 画面占满整宽。布局自适应: 窄窗口/手机上口播面板收成底部抽屉且默认收起, 手机给触摸条按钮+左右滑动翻页, 总览网格自动列数, 高度用 100dvh。⚠ 关键: 不要直接双击 slides/*.html —— 动画延迟 --t1/--t2/--t3 是管线按 timings.json 注入的, 原文件里只有占位值(--t2:800ms), 看到的是「所有动画挤在开头两秒」的假象; 放映页的副本把实测延迟写进 <html style> 并加 <base href=\"../../slides/\">, 浏览器里的时序才等于成片时序(实测同一张 t=3.0s: 副本第二层 opacity 0 未入场, 原文件已入场)。还没对时则按 HTML 里用到的 stage 等间隔(0.3/1.3/2.3s)预览, 页面顶部黄条如实标注。副本是快照, 改完 slides 必须重跑。X 切过去若画面变空, 说明有关键帧没把 opacity:0 基础态抬回来; 老项目(没有 no-fx 规则)先跑 init-project.mjs <项目> --upgrade-css 补规则(幂等, 不碰 script.json)。",
       "files": []
     },
     {
-      "id": 26,
+      "id": 25,
       "name": "chart-elegance",
       "prompt": "你这几张图表看着有点业余, 能不能做得更讲究一点? 图表库不给用(离线), 但只要 CSS/SVG。",
-      "expected_output": "用 tokens.css 里的图表工具箱(`.chart*` 原语 + `fx-grow-w/h · fx-sweep · fx-count · fx-dot`;老项目先 `init-project --upgrade-css` 补齐)。优雅不是加特效, 是六条纪律: ①同类同色、只强调关键一条(其余 `.dim` 用不透明同色系; 彩虹色条形=业余感来源); ②数值等宽(`.chart-num`)且绝不放进被缩放的元素(`scaleX` 会把数字拉扁 → 带标签的条用 `fx-grow-w` 按 `width` 生长); ③有基线与**看得见**的细网格(网格画在 `.chart-plot-cell` 上, 与柱高共用一把尺子, 顶边即轴上限); ④一图只讲一件事(`.chart-note` 写在标题行右侧); ⑤零值/极小值保底; ⑥图注写口径与时点(`.chart-cap`)。另有四条版面纪律: **避开字幕安全区**(1080 高下底部 84–168px、居中 73% 宽留给字幕, 容器 `padding-bottom:190px` 起步); 在安全区内**垂直居中**(别堆在顶部); 数值统一右对齐同一列(都用 `.chart-val.out`); **柱高 = 数值 ÷ 轴上限、轴从 0 起**, 并把轴上限写进标题(凭手感写百分比 = 数据失真)。动效选型: 条形 `fx-grow-w`(带标签)/`fx-grow-x`(纯色块); 柱状 `fx-grow-y`(标签在外)/`fx-grow-h`(标签在内); 折线 `fx-draw` + `fx-dot`(标记规则统一: 全标或只标末点); 环形 `fx-sweep`(**真扫出**, 不用 `fx-pop` 硬弹)+ 中心 `fx-count`; 错峰 `--fx-delay:calc(var(--t2) + N×120ms)`。禁外链图表库(离线取不到、canvas 动画逐帧 seek 不到)、禁 AI 生图当图表、数值必须来自已核实口径。可加图表类型: bullet(实际 vs 目标, `.chart-target` 虚线)、slope(前后对比)、sparkline(数字旁迷你趋势)。",
+      "expected_output": "用 tokens.css 里的图表工具箱(`.chart*` 原语 + `fx-grow-w/h · fx-sweep · fx-count · fx-dot`;老项目先 `init-project --upgrade-css` 补齐)。优雅不是加特效, 是九条纪律: ①同类同色、只强调关键一条(其余 `.dim` 用不透明同色系; 彩虹色条形=业余感来源); ②数值等宽(`.chart-num`)且绝不放进被缩放的元素(`scaleX` 会把数字拉扁 → 带标签的条用 `fx-grow-w` 按 `width` 生长); ③有基线与**看得见**的细网格(网格画在 `.chart-plot-cell` 上, 与柱高共用一把尺子, 顶边即轴上限); ④一图只讲一件事(`.chart-note` 写在标题行右侧); ⑤零值/极小值保底; ⑥图注写口径与时点(`.chart-cap`)。另有四条版面纪律: **避开字幕安全区**(1080 高下底部 84–168px、居中 73% 宽留给字幕, 容器 `padding-bottom:190px` 起步); 在安全区内**垂直居中**(别堆在顶部); 数值统一右对齐同一列(都用 `.chart-val.out`); **柱高 = 数值 ÷ 轴上限、轴从 0 起**, 并把轴上限写进标题(凭手感写百分比 = 数据失真)。动效选型: 条形 `fx-grow-w`(带标签)/`fx-grow-x`(纯色块); 柱状 `fx-grow-y`(标签在外)/`fx-grow-h`(标签在内); 折线 `fx-draw` + `fx-dot`(标记规则统一: 全标或只标末点); 环形 `fx-sweep`(**真扫出**, 不用 `fx-pop` 硬弹)+ 中心 `fx-count`; 错峰 `--fx-delay:calc(var(--t2) + N×120ms)`。禁外链图表库(离线取不到、canvas 动画逐帧 seek 不到)、禁 AI 生图当图表、数值必须来自已核实口径。可加图表类型: bullet(实际 vs 目标, `.chart-target` 虚线)、slope(前后对比)、sparkline(数字旁迷你趋势)。",
       "files": []
     },
     {
-      "id": 27,
+      "id": 26,
       "name": "table-forms",
       "prompt": "这个季度的数据我想用表格讲, 但我们的模板里表格好像只有一种样式?",
       "expected_output": "表格有五种形态, 都走 tokens.css 的原语(老项目先 `init-project --upgrade-css` 补): ① 数据表 `.tbl`(多期/多主体对比: 表头弱化、数值列 `.num` 右对齐 + 等宽数字、涨跌 `.up/.down` 走 `var(--up)/var(--down)` 并按受众市场翻转、当前行 `.key` 高亮、合计行 `.sum`); ② 规格表 `.kv`(无表头, 左标签右值 —— 参数/条款); ③ 对比矩阵 `.matrix`(行维度 × 列方案, 单元格只放勾叉, `.hi` 高亮本方案列); ④ 排名表 `.rank`(名次 + 内联微缩条 + 数值, 条长 = 数值 ÷ 轴上限); ⑤ 时间事件表(用 `.kv` 两列)。七条纪律: 主数据正文号 ≥30px(视频要在手机上看; 实测 caption 24px 吃力)、行高 ≥72px、一页一表 ≤6 行、数值右对齐等宽、涨跌走令牌、只画横线不画竖线不要斑马纹、高亮只给一行、表注写口径与时点。表格不要和图表放同一页(一页一件事)。",

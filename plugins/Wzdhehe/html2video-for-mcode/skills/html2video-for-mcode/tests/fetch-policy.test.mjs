@@ -110,3 +110,21 @@ describe('imageNameFromUrl(零散图片 URL → 落盘文件名)', () => {
     assert.ok(!/[\/:*?"<>|]/.test(n), n);
   });
 });
+
+describe('IPv4-mapped IPv6 的十六进制形式(经 new URL() 规范化后的真实到达形态)', () => {
+  // WHATWG URL 会把 http://[::ffff:127.0.0.1]/ 的 hostname 规范化成 ::ffff:7f00:1 再送检 ——
+  // 只测点分形式会漏掉这条真实穿透路径(2026-09-18 安全审计端到端打到了 loopback 与云元数据)
+  const blocked = [
+    'http://[::ffff:7f00:1]/x',                    // 127.0.0.1 loopback
+    'http://[::ffff:a9fe:a9fe]/latest/meta-data/', // 169.254.169.254 云元数据
+    'http://[::ffff:c0a8:101]/router',             // 192.168.1.1
+    'http://[::ffff:a00:5]/internal',              // 10.0.0.5
+    'http://[0:0:0:0:0:ffff:a9fe:a9fe]/',          // 长形式(解析器会压缩)
+  ];
+  for (const u of blocked) {
+    test(`拦 ${u}`, () => assert.throws(() => assertFetchableUrl(u), PolicyError));
+  }
+  test('放 公网映射形式 [::ffff:808:808](= 8.8.8.8): 换算回点分后判定, 不是一刀切', () => {
+    assert.doesNotThrow(() => assertFetchableUrl('http://[::ffff:808:808]/pub.png'));
+  });
+});

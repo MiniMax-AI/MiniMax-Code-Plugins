@@ -29,6 +29,10 @@
 `assets/animations/fx/` 下的 20 个 canvas 特效(rAF 驱动,无法被逐帧 seek)、
 `fonts.css` 与全部 Google Fonts 外链、Chart.js / highlight.js CDN 依赖、`@media print` 分页逻辑。
 
+其中"翻页看一遍"的需求由自研的 `scripts/preview-page.mjs`(生成 `preview/play/index.html`)自行实现,
+代码与上游无关:上游 runtime.js 是给"真人现场演讲"用的(演讲者窗口、逐字稿提词、计时器、BroadcastChannel 双窗同步),
+本技能产出的是视频,没有现场讲这个动作;放映页只做逐张回放 + 动效开关对照 + 口播面板。
+
 ### MIT 许可原文
 
 ```
