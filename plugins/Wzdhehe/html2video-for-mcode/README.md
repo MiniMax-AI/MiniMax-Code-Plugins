@@ -36,8 +36,8 @@ my-video/
 
 ## Pipeline
 
-One Skill drives an 11-script pipeline (plus four internal modules — path containment, URL
-policy, `no-fx` rules, chart CSS — under `skills/html2video-for-mcode/scripts/`):
+One Skill drives an 11-script pipeline (plus five internal modules — path containment, URL
+policy, `no-fx` rules, chart CSS, table CSS — under `skills/html2video-for-mcode/scripts/`):
 
 | Stage | What happens |
 |---|---|

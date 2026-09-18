@@ -29,7 +29,7 @@ my-video/
 
 ## 流水线
 
-一个技能驱动 11 个脚本,外加四个内部模块(路径收监 / URL 策略 / `no-fx` 规则 / 图表 CSS,都在 `skills/html2video-for-mcode/scripts/` 下):
+一个技能驱动 11 个脚本,外加五个内部模块(路径收监 / URL 策略 / `no-fx` 规则 / 图表 CSS / 表格 CSS,都在 `skills/html2video-for-mcode/scripts/` 下):
 
 | 阶段 | 做什么 |
 |---|---|
