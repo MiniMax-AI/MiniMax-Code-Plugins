@@ -587,6 +587,26 @@ async function linuxTrackedProcessSnapshot(
           // Preserve evidence from every torn attempt. A later complete task
           // pass cannot make a previously observed child safe to forget.
           pendingChildren.add(childPid);
+          // Bind a newly observed child before reading more task files. A short
+          // Git helper and its parent can both disappear during those reads;
+          // deferring identity capture would lose evidence that is available now.
+          if (!treeState.knownStarts.has(childPid)) {
+            const child = await readLinuxStat(childPid, procRoot, fsOps);
+            if (child === null) return null;
+            if (child && child.parentPid === pid &&
+                /^\d+$/u.test(child.startIdentity) && /^\d+$/u.test(item.startIdentity) &&
+                BigInt(child.startIdentity) >= BigInt(item.startIdentity)) {
+              const anchor = await readLinuxStat(pid, procRoot, fsOps);
+              if (anchor === null) return null;
+              if (anchor?.startIdentity === item.startIdentity) {
+                treeState.knownPids.add(childPid);
+                treeState.knownStarts.set(childPid, child.startIdentity);
+                // Ownership is now bound to this immutable identity. Later
+                // reparenting must not turn it back into an unverified candidate.
+                enqueue(childPid);
+              }
+            }
+          }
         }
       }
       try {

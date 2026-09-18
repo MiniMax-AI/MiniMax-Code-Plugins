@@ -1384,7 +1384,7 @@ export function backendGitProvenanceEnvironment(tracePath, baseEnvironment = pro
   return env;
 }
 
-async function createBackendGitProvenance(baseEnvironment = process.env, options = {}) {
+export async function createBackendGitProvenance(baseEnvironment = process.env, options = {}) {
   let root = "";
   let tracePath = "";
   let handle = null;
