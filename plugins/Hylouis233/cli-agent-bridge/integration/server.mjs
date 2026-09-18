@@ -9,7 +9,7 @@ import { createServer } from "node:net";
 import { createInterface } from "node:readline";
 import test, { after, before } from "node:test";
 import { promisify } from "node:util";
-import { acquireCliAgentBridgeTestLock } from "./plugin-test-lock.mjs";
+import { acquireCliAgentBridgeTestLock } from "../tests/plugin-test-lock.mjs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
@@ -30,7 +30,7 @@ import {
 } from "../server.mjs";
 
 const execFileAsync = promisify(execFile);
-const testsRoot = path.dirname(fileURLToPath(import.meta.url));
+const testsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../tests");
 const pluginRoot = path.resolve(testsRoot, "..");
 const serverPath = path.join(pluginRoot, "server.mjs");
 const fakeBackendPath = path.join(testsRoot, "fake-backend.mjs");
