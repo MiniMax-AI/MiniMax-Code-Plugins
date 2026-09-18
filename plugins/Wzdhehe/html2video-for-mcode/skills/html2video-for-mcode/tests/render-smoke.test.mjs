@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { findTool, loadPackage } from '../scripts/tools.mjs';
-import { runSkill, tmpdir } from './helpers.mjs';
+import { runSkill, tmpdir, SCRIPTS } from './helpers.mjs';
 
 const FFMPEG = findTool('ffmpeg');
 const FFPROBE = findTool('ffprobe');
@@ -256,4 +256,64 @@ test('grab-frames: 按 timings 抽成片实帧(图注/字幕带那类 still 看�
   r = runSkill('grab-frames.mjs', [proj]);
   assert.equal(r.status, 1);
   assert.ok(r.stderr.includes('final.mp4'), '要说清缺什么');
+});
+
+test('受管区升级真的改变渲染: 旧 CSS 出图 → 升级 → 画面按技能当前版重出(像素级)', async t => {
+  if (!FFMPEG || !FFPROBE) return t.skip('无 ffmpeg/ffprobe(主 CI 环境; 由 scoped smoke workflow 覆盖)');
+  playwright = await loadPackage('playwright');
+  if (!playwright) return t.skip('无 playwright');
+  try { const b = await playwright.chromium.launch({ headless: true }); await b.close(); } catch {
+    return t.skip('chromium 未安装(npx playwright install chromium)');
+  }
+  const { generateTokensCss, TOKENS_REV } = await import(
+    'file://' + path.join(SCRIPTS, 'tokens-template.mjs').replace(/\\/g, '/'));
+  const { wrapTokens } = await import(
+    'file://' + path.join(SCRIPTS, 'css-kit.mjs').replace(/\\/g, '/'));
+
+  const proj = tmpdir();
+  let r = runSkill('init-project.mjs', [proj, '--topic', 'CssUpgrade']);
+  assert.equal(r.status, 0, r.stderr);
+  const g = spawnSync(FFMPEG, ['-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=32000:cl=mono', '-t', '2',
+    '-c:a', 'libmp3lame', '-b:a', '64k', '-y', path.join(proj, 'audio', '01.mp3')], { windowsHide: true });
+  assert.equal(g.status, 0, g.stderr ?? '');
+  const scriptPath = path.join(proj, 'script.json');
+  const script = JSON.parse(fs.readFileSync(scriptPath, 'utf8'));
+  script.slides = script.slides.filter(s => s.id === '01');
+  script.slides[0].clauses = [{ stage: 1, text: '升级检查。' }];
+  fs.writeFileSync(scriptPath, JSON.stringify(script, null, 2));
+  fs.writeFileSync(path.join(proj, 'slides', '01-title.html'),
+    `<!doctype html><html data-theme="a"><head><meta charset="utf-8"><link rel="stylesheet" href="tokens.css"></head>
+<body><div class="stage"><h1 class="fx-rise" data-stage="1">升级检查</h1></div></body></html>`);
+  assert.equal(runSkill('plan-timings.mjs', [proj]).status, 0);
+  const still = () => {
+    assert.equal(runSkill('capture.mjs', [proj, '--mode', 'still', '--allow-stale-css']).status, 0);
+    const o = spawnSync(FFMPEG, ['-hide_banner', '-loglevel', 'error', '-i', path.join(proj, 'preview', '01.png'),
+      '-vf', 'signalstats,metadata=print:file=-', '-frames:v', '1', '-f', 'null', '-'], { encoding: 'utf8', windowsHide: true });
+    const m = /YAVG=([0-9.]+)/.exec((o.stdout || '') + (o.stderr || ''));
+    return m ? parseFloat(m[1]) : null;
+  };
+
+  // 当前版(init 直出)渲染一次做基准
+  const baseline = still();
+  assert.ok(baseline != null, '应能读到基准画面的平均亮度');
+
+  // 模拟"老项目": 把受管区内容换成改过一处令牌的旧版主体(画面整体变暗一点, 但仍是同构图)
+  const oldBody = generateTokensCss().replace('--bg: #FAFAF7', '--bg: #D8D2C4');
+  assert.notEqual(oldBody, generateTokensCss(), '前置: 主体内容确实改了(否则这个用例证明不了任何事)');
+  fs.writeFileSync(path.join(proj, 'slides', 'tokens.css'),
+    ':root { --accent: #111; }\n' + wrapTokens(oldBody, TOKENS_REV) + '\n');
+  assert.equal(runSkill('check-slides.mjs', [proj]).status, 1, '内容被改过的受管区必须被静态闸门拦住');
+  assert.equal(runSkill('capture.mjs', [proj]).status, 1, 'capture 入口也必须拦住(不许静默出旧画面)');
+  const stale = still();   // 显式放行才出得来
+  assert.ok(Math.abs(stale - baseline) > 0.5,
+    `旧 CSS 与当前版的画面必须真的不同(基准 ${baseline}, 旧版 ${stale}) —— 否则"升级生效"这件事无从谈起`);
+
+  // 升级: 受管区整段替换回技能当前版, 区外项目规则保留
+  const up = runSkill('init-project.mjs', [proj, '--upgrade-css']);
+  assert.equal(up.status, 0, up.stderr);
+  assert.ok(up.stdout.includes('tokens 主体'), '要说明整段生成物被替换: ' + up.stdout.slice(0, 200));
+  assert.equal(runSkill('check-slides.mjs', [proj]).status, 0, '升级后静态闸门必须恢复');
+  const after = still();
+  assert.ok(Math.abs(after - baseline) <= 0.05,
+    `升级后必须回到技能当前版的画面(基准 ${baseline}, 升级后 ${after}) —— 这条把"改了 CSS 项目里真的生效"钉死在像素上`);
 });

@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { requireTool, safeId, safeRel, safeOut, validateScriptPaths } from './tools.mjs';
+import { positionalDir, requireTool, safeId, safeOut, safeRel, validateScriptPaths } from './tools.mjs';
 
 // 语种相关的计量基准。中文按"字", 英文按"字符"(含词间节奏, 与音节时长大致成正比)。
 // pacing = 每单位每秒的常见语速; subMax = 字幕单行建议上限; pace 区间用于语速异常预警。
@@ -18,7 +18,7 @@ const LANG_CFG = {
 const langCfg = code => LANG_CFG[code] ?? { unit: '字符', pacing: 14, paceMin: 8, paceMax: 20, subMax: 42, word: null };
 
 const argv = process.argv.slice(2);
-const dir = path.resolve(argv.find(a => !a.startsWith('--')) ?? '.');
+const dir = positionalDir(argv);
 const LEAD = 0.2; // 视觉比语音提前出现秒数(广播惯例, 观感同步)
 
 process.env.KIT_PROJECT_DIR = dir;
@@ -104,7 +104,7 @@ for (const s of script.slides) {
 
 const totalDur = rows.reduce((n, r) => n + r.duration, 0);
 fs.mkdirSync(safeOut(dir, 'build'), { recursive: true });
-fs.writeFileSync(path.join(dir, 'build', 'timings.json'),
+fs.writeFileSync(safeOut(dir, 'build', 'timings.json'),
   JSON.stringify({ fps, lang: LANG, pacing, lead: LEAD, total: r3(totalDur), slides: rows }, null, 2) + '\n');
 
 const unitLabel = `量(${CFG.unit})`;

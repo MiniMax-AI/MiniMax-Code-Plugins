@@ -15,17 +15,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { requireTool, safeId, validateTimingsIds } from './tools.mjs';
+import { positionals, requireTool, safeId, safeOut, validateTimingsIds } from './tools.mjs';
 import { assertAsrEndpoint, PolicyError } from './url-policy.mjs';
 
 const argv = process.argv.slice(2);
-const VALUE_FLAGS = new Set(['--api-key', '--base-url', '--file', '--format', '--timestamp', '--language', '--out', '--from']);
-const positional = [];
-for (let i = 0; i < argv.length; i++) {
-  const a = argv[i];
-  if (a.startsWith('--')) { if (VALUE_FLAGS.has(a)) i++; continue; }
-  positional.push(a);
-}
+// 位置参数与取值型 flag 的清单统一在 tools.mjs(单一来源): 每个脚本自己维护一份就会漂
+// (2026-09-18 复查: 三个脚本各有一份, 而 tools 那份还误把布尔开关当取值型)
+const positional = positionals(argv);
 const flag = (n, d) => { const i = argv.indexOf(n); return i > -1 ? argv[i + 1] : d; };
 // 项目目录要早定义: --file 单文件模式在上面就分流了, 而工具发现(requireTool)要用它
 const dir = path.resolve(positional[0] ?? '.');
@@ -212,7 +208,7 @@ if (!parts.length) { console.error(`✗ ${asrDir} 里没有 part-* 音频`); pro
 const scriptJsonPath = path.join(dir, 'script.json');
 const projectLang = fs.existsSync(scriptJsonPath) ? (JSON.parse(fs.readFileSync(scriptJsonPath, 'utf8')).lang ?? 'zh') : 'zh';
 const useLang = LANG || projectLang;
-const ckPath = path.join(asrDir, 'checklist.md');
+const ckPath = safeOut(dir, 'asr', 'checklist.md');
 let ck = fs.existsSync(ckPath) ? fs.readFileSync(ckPath, 'utf8') : '';
 const results = [];
 for (const p of parts) {

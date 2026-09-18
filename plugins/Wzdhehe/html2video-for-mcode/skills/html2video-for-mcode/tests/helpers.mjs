@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { wrapTokens } from '../scripts/css-kit.mjs';
+import { generateTokensCss, TOKENS_REV } from '../scripts/tokens-template.mjs';
 
 export const SCRIPTS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'scripts');
 export const skill = name => path.join(SCRIPTS, name);
@@ -44,7 +46,12 @@ export function probeHelper(expr, argsJson) {
 }
 
 // 最小可跑的项目骨架(check-slides 需要 tokens.css; 其余脚本按需补)
-export function mkproj(dir, { slides = [], tokens = ':root { --accent: #111; }' } = {}) {
+// tokens.css 默认写成**真项目的样子**: 项目自己的规则 + 技能当前的受管区。2026-09-18 起
+// check-slides / capture / build-video 把"受管区缺失或落后"当阻断级(旧 CSS 会静默出片),
+// 所以默认骨架要是新鲜的 —— 要测"落后/无受管区"的场景, 显式传 tokens 或 LEGACY_TOKENS。
+export const FRESH_TOKENS = ':root { --accent: #111; }\n' + wrapTokens(generateTokensCss(), TOKENS_REV) + '\n';
+export const LEGACY_TOKENS = ':root { --accent: #111; }\n';   // 老项目形状: 没有受管区
+export function mkproj(dir, { slides = [], tokens = FRESH_TOKENS } = {}) {
   fs.mkdirSync(path.join(dir, 'slides'), { recursive: true });
   fs.mkdirSync(path.join(dir, 'audio'), { recursive: true });
   fs.mkdirSync(path.join(dir, 'build'), { recursive: true });

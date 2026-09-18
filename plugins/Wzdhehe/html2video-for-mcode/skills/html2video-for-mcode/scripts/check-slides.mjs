@@ -19,14 +19,17 @@
 //      会覆盖容器内带 data-stage 子元素的时刻(提前几秒冒头, 2026-09-18 实测踩过), 提示确认布局
 //   5e. 绝对定位元素落在字幕带(bottom < 168px@1080) —— 成片字幕会压住它, still 预览看不出
 //      (终态不一定显示字幕), 只有抽成片帧才见(2026-09-18 实测踩过, 最贵的一类)
-//   6. tokens.css 工具箱落后于技能当前版本(受管块 rev 不一致/缺失) —— 提示级: 不升级的话
-//      新版类(如 .chart-ticks)会静默无样式("改了 CSS 但项目里没生效"的根因, 见 css-kit.mjs)
+//   6. tokens.css 落后于技能当前版本(受管区 rev 不一致/缺失/重复/定界符被改坏/区外残留副本) ——
+//      **错误级, 阻断截图(退出 1)**: 不升级的话新版类(如 .chart-ticks)会静默无样式, 旧规则按层叠
+//      压过新版("改了 CSS 但项目里没生效"的根因, 见 css-kit.mjs)。注意本闸门**没有** --allow-stale-css,
+//      要放行只有两条路: 升级它, 或者不跑这条检查(要旧 CSS 出片请用 capture / build-video 的该旗标)
 //   7. 整片级领域自查 —— 命中多个财经/投研关键词却全片没有免责或出处行 → 提示(不是错误),
 //      提醒确认领域与免责口径(见 references/compliance.md); 用户明确不要免责时可忽略
 import fs from 'node:fs';
 import path from 'node:path';
-import { safeId, safeRel, inside } from './tools.mjs';
-import { kitStatuses, MAX_SCAN_BYTES } from './css-kit.mjs';
+import { expectedTokens, inside, positionalDir, readTransition, safeId, safeRel } from './tools.mjs';
+import { kitStatuses } from './css-kit.mjs';
+import { MAX_SCAN_BYTES } from './limits.mjs';   // 对 tokens.css 与 HTML 都生效, 单一来源(见 limits.mjs)
 
 // tokens.css 里的 @keyframes 名 → 是否声明了 opacity(用来判断"动画能否把基础态抬回可见")
 function opacityAwareKeyframes(css) {
@@ -53,7 +56,7 @@ function fxClassKeyframes(css) {
 }
 
 const argv = process.argv.slice(2);
-const dir = path.resolve(argv.find(a => !a.startsWith('--')) ?? '.');
+const dir = positionalDir(argv);
 const flag = (n, d) => { const i = argv.indexOf(n); return i > -1 ? argv[i + 1] : d; };
 const QUIET = argv.includes('--quiet');
 const idsFilter = flag('--ids', '') ? flag('--ids', '').split(',').map(s => s.trim()) : null;
@@ -198,22 +201,38 @@ for (const s of slides) {
 
   // 5e. 绝对定位元素落在字幕带(2026-09-18 实测踩坑, 最贵的一类): 成片字幕占底部 84–168px(@1080,
   //     按画布高缩放), 图注/落款写 bottom:96px 会被字幕压住 —— still 预览看不出(终态不一定显示
-  //     字幕), 只有抽成片帧才见。提示级: 字幕之外的合法贴底元素可忽略
+  //     字幕), 只有抽成片帧才见。**提示级**(字幕之外的合法贴底元素可忽略; 与 SKILL.md 的措辞一致)。
+  //     2026-09-18 复查 D5 收紧两处误报: ① 前加边界, 别把 padding-bottom / margin-bottom 当 bottom;
+  //     ② 要求同一条规则里有 position: absolute|fixed —— 流内元素写 bottom 不产生位移, 报了是噪音。
   const bandTop = Math.round(168 * (Number(script.height ?? 1080) / 1080));
-  const inBand = [...html.matchAll(/bottom\s*:\s*([\d.]+)\s*px/g)].map(m2 => parseFloat(m2[1])).filter(v => Number.isFinite(v) && v < bandTop);
+  const cssRules = [
+    ...[...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)]
+      .flatMap(m2 => [...m2[1].matchAll(/\{([^{}]*)\}/g)].map(m3 => m3[1])),   // style 块: 按规则体切(含 @media 内层)
+    ...[...html.matchAll(/style\s*=\s*"([^"]*)"/gi)].map(m2 => m2[1]),          // 行内 style 整体就是一条规则
+  ];
+  const inBand = [];
+  for (const rule of cssRules) {
+    if (!/position\s*:\s*(absolute|fixed)/i.test(rule)) continue;
+    for (const m2 of rule.matchAll(/(?<![-\w])bottom\s*:\s*([\d.]+)\s*px/g)) {
+      const v = parseFloat(m2[1]);
+      if (Number.isFinite(v) && v < bandTop) inBand.push(v);
+    }
+  }
   if (inBand.length) {
-    report.push({ id: s.id, level: 'warn', msg: `bottom:${inBand[0]}px 等 ${inBand.length} 处落在字幕带(底部 0–${bandTop}px @${script.height ?? 1080}) — 成片字幕会压住它, still 预览看不出; 图注/落款挪到 bottom ≥ ${bandTop}px 或放回流内(padding-bottom 会兜住), 验收用 grab-frames.mjs 抽成片实帧` });
+    report.push({ id: s.id, level: 'warn', msg: `绝对定位元素的 bottom:${inBand[0]}px 等 ${inBand.length} 处落在字幕带(底部 0–${bandTop}px @${script.height ?? 1080}) — 成片字幕会压住它, still 预览看不出; 图注/落款挪到 bottom ≥ ${bandTop}px 或放回流内(padding-bottom 会兜住), 验收用 grab-frames.mjs 抽成片实帧` });
     warns++;
   }
 }
 
-// 6. tokens.css 工具箱落后(受管块 rev 与技能当前不一致/缺失) → 提示级, 但必须点名:
-//    源头模块改了、项目没升级, 新类就会静默无样式 —— "改了 CSS 但没生效"的根因
+// 6. tokens.css 受管块落后——rev 与技能当前不一致 / 缺失 / 重复 / 坏定界 / 区外残留副本
+//    → **错误级, 阻断截图**: 源头模块改了、项目没升级时画面照出, 只是新类静默无样式、旧规则按层叠
+//    压过新版 —— 这正是"改了 CSS 但没生效"的根因(2026-09-18 定案)。判据与 capture / build-video
+//    入口的 requireFreshCss 完全一致(同一份 kitStatuses + 同一份期望内容), 这里是截图前的静态闸门。
 const cssNotes = [];
-for (const st of kitStatuses(tokensRaw)) {
+for (const st of kitStatuses(tokensRaw, { expected: expectedTokens() })) {
   if (st.status === 'ok') continue;
-  cssNotes.push(`tokens.css 的${st.label}${st.status === 'stale' ? `落后(${st.detail})` : `缺失(${st.detail})`} → node scripts/init-project.mjs <项目目录> --upgrade-css 原地更新受管块; 否则新版类会静默无样式`);
-  warns++;
+  cssNotes.push(`tokens.css 的${st.label}: [${st.status}] ${st.detail} → node scripts/init-project.mjs <项目目录> --upgrade-css 原地更新受管区; 否则新版类会静默无样式`);
+  errors++;
 }
 
 // 7. 受监管领域自查(整片级): 像财经/投研内容却没见免责或出处标注 → 提示, 不是错误
@@ -240,9 +259,11 @@ if (hits.size >= 2 && !hasDisclaimerLine) {
 const transition = script.transition ?? null;
 const transLabel = (() => {
   if (transition == null) return '未设置(老项目: 成片按硬切出; 想改就在 script.json 写 transition)';
-  const t = typeof transition === 'string' ? transition : transition.type;
-  if (!['cut', 'xfade'].includes(t)) return `✗ 非法值 ${JSON.stringify(t)}(只支持 cut / xfade)`;
-  return t === 'cut' ? '硬切 cut' : `交叉溶解 xfade ${transition.duration ?? 0.4}s`;
+  try {
+    return readTransition(transition).label;   // 与 build-video 同一解析(裸字符串/对象都一样, D6)
+  } catch (e) {
+    return `✗ ${e.message}`;
+  }
 })();
 const levelLine = slides
   .map(s => {
@@ -269,12 +290,12 @@ if (!QUIET) {
     console.log(`${rs.some(r => r.level === 'error') ? '✗' : '⚠'} ${s.id}`);
     for (const r of rs) console.log(`    ${r.level === 'error' ? '✗' : '⚠'} ${r.msg}`);
   }
-  for (const n of cssNotes) console.log(`⚠ tokens.css: ${n}`);
+  for (const n of cssNotes) console.log(`✗ tokens.css: ${n}`);
   for (const n of deckNotes) console.log(`⚠ 整片: ${n}`);
 }
 console.log(`\n静态检查: ${slides.length} 张 · ✗ ${errors} 项错误 / ⚠ ${warns} 项提示`);
 if (errors) {
-  console.error('错误项会让画面对但"看不见/缺内容": 未定义变量补定义或加 fallback; 图片补齐或改 inline SVG; 外链改本地。');
+  console.error('错误项会让画面对但"看不见/缺内容", 或用的是旧 CSS: 未定义变量补定义或加 fallback; 图片补齐或改 inline SVG; 外链改本地; 受管块落后按上面的 --upgrade-css 命令更新。');
   process.exit(1);
 }
 console.log('可以进入截图(无阻塞项)✓');

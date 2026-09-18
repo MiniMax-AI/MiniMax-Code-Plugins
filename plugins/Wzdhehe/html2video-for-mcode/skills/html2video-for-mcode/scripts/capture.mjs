@@ -1,19 +1,33 @@
 #!/usr/bin/env node
 // html2video-for-mcode · 画面采集: HTML → 终态 PNG(still) / 逐帧 PNG 序列(motion)
-// 用法: node capture.mjs <项目目录> [--mode still|motion] [--ids 01,03] [--dsf 1|2]
+// 用法: node capture.mjs <项目目录> [--mode still|motion] [--ids 01,03] [--dsf 1-4] [--no-subs] [--allow-stale-css]
 // 依赖: 项目目录或其上层 node_modules 里有 playwright, 且已装 chromium。
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { loadPackage, safeId, safeRel, safeOut, validateScriptPaths, validateTimingsIds } from './tools.mjs';
+import { loadPackage, positionalDir, requireFreshCss, safeId, safeOut, safeRel, validateScriptPaths, validateTimingsIds } from './tools.mjs';
 
 const argv = process.argv.slice(2);
-const dir = path.resolve(argv.find(a => !a.startsWith('--')) ?? '.');
+const dir = positionalDir(argv);
 const flag = (name, dflt) => { const i = argv.indexOf(name); return i > -1 ? argv[i + 1] : dflt; };
+// 参数先验后用: 写错的 --mode/--dsf 以前会一路带到 playwright(page.setViewportSize(scale=NaN) /
+// 走错分支静默出静态图), 报错点离真正的原因很远 —— 这里是"离用户最近"的地方, 直接说清。
 const mode = flag('--mode', 'still');
-const dsf = parseInt(flag('--dsf', '1'), 10);
+if (mode !== 'still' && mode !== 'motion') {
+  console.error(`✗ --mode ${JSON.stringify(mode)} 非法: 只能是 still(终态图) 或 motion(逐帧序列)`);
+  process.exit(1);
+}
+const DSF_RAW = flag('--dsf', '1');
+const dsf = Number(DSF_RAW);
+if (!Number.isInteger(dsf) || dsf < 1 || dsf > 4) {
+  console.error(`✗ --dsf ${JSON.stringify(DSF_RAW)} 非法: 取 1–4 的整数(deviceScaleFactor, 2 = 2 倍图; 过大在 4K 画布上会爆内存)`);
+  process.exit(1);
+}
 const SUBS = !argv.includes('--no-subs'); // 字幕默认烧录
 const idsFilter = flag('--ids', '') ? flag('--ids', '').split(',').map(s => s.trim()) : null;
+
+// 入口闸门: tokens.css 受管块落后就停 —— 旧 CSS 会照常出图, 全程不报错(见 tools.mjs 的说明)
+requireFreshCss(dir, { who: 'capture', allowStale: argv.includes('--allow-stale-css') });
 
 const script = JSON.parse(fs.readFileSync(path.join(dir, 'script.json'), 'utf8'));
 validateScriptPaths(script, dir); // script.json 是 agent 可编辑文件: id/html 等派生路径先收监再使用
@@ -98,7 +112,16 @@ async function captureCover(page, { sid, firstId }) {
 // 静态/no-fx 路径更是一帧都不带字幕(finish() 把字幕动画跳到 opacity:0)。
 // 解法: 帧序列之外, 再为每个"帧覆盖不到的字幕窗口"截一张**终态基底 + 该句字幕**的静态图,
 // 由 build-video 按窗口时长把它们拼在帧序列之后(清单见 build/substills/<id>.json)。
+// 每张的字幕静帧都是**派生数据**: 重截该张时先整目录清掉, 否则旧句子会阴魂不散 ——
+// `--no-subs`、删掉 clauses、句子变少时, 残留的 s<k>.png 会被 build-video 拼回成片
+// (2026-09-18 复查实测: 只作废 build/frames 不够)。
+function invalidateSubStills(sid) {
+  fs.rmSync(safeOut(dir, 'build', 'substills', sid), { recursive: true, force: true });
+  fs.rmSync(safeOut(dir, 'build', 'substills', sid + '.json'), { force: true });   // 清单一起清, 免得陈旧清单配新图
+}
+
 async function captureSubStills(page, { sid, t, framesCover }) {
+  invalidateSubStills(sid);                       // 先清旧图; 本张若无需字幕, 清完即保持空
   if (!SUBS || !Array.isArray(t.clauses) || !t.clauses.length) return 0;
   const stills = [];
   for (let k = 0; k < t.clauses.length; k++) {
@@ -125,9 +148,8 @@ async function captureSubStills(page, { sid, t, framesCover }) {
     await page.screenshot({ path: out });
     stills.push({ k, start: from, end });
   }
-  const manDir = path.join(dir, 'build', 'substills');
-  fs.mkdirSync(manDir, { recursive: true });
-  fs.writeFileSync(path.join(manDir, `${sid}.json`),
+  fs.mkdirSync(safeOut(dir, 'build', 'substills'), { recursive: true });
+  fs.writeFileSync(safeOut(dir, 'build', 'substills', sid + '.json'),
     JSON.stringify({ fps: timings.fps ?? 30, duration: t.duration, framesCover, stills }, null, 2));
   return stills.length;
 }

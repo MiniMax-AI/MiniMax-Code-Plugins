@@ -19,9 +19,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { safeId, safeRel, safeOut, validateScriptPaths } from './tools.mjs';
+import { expectedTokens, positionalDir, safeId, safeOut, safeRel, validateScriptPaths } from './tools.mjs';
 import { NOFX_CSS } from './nofx-css.mjs';
-import { KITS, kitStatuses, MAX_SCAN_BYTES } from './css-kit.mjs';
+import { KITS, TOKENS_ID, findAllBlocks, kitStatuses, MAX_SCAN_BYTES } from './css-kit.mjs';
+import { generateTokensCss } from './tokens-template.mjs';
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -480,7 +481,7 @@ render();
 
 function main() {
   const argv = process.argv.slice(2);
-  const dir = path.resolve(argv.find(a => !a.startsWith('--')) ?? '.');
+  const dir = positionalDir(argv);
   const OPEN = argv.includes('--open');
   const NO_SCRIPT = argv.includes('--no-script');   // 不加载口播文案 UI(只想看 HTML 画面时)
   process.env.KIT_PROJECT_DIR = dir;
@@ -508,19 +509,31 @@ function main() {
     console.error(`✗ tokens.css 有 ${(tokensCss.length / 1e6).toFixed(1)}MB, 超过 ${MAX_SCAN_BYTES / 1e6}MB 上限, 拒绝扫描(正常 ≈15KB; 与 check-slides / init-project --check-css 同一道门)`);
     process.exit(1);
   }
-  const kitIssues = kitStatuses(tokensCss)
-    .map((st, i) => ({ ...st, css: KITS[i].css }))
+  const bodyNow = generateTokensCss();
+  const kitIssues = kitStatuses(tokensCss, { expected: expectedTokens() })
+    .map(st => ({ ...st, css: st.id === TOKENS_ID ? bodyNow : KITS.find(k => k.id === st.id).css }))
     .filter(st => st.status !== 'ok');
-  const nofxIssue = kitIssues.find(k => k.id === 'nofx');
-  const chartTable = kitIssues.filter(k => k.id !== 'nofx');
-  const ctCss = chartTable.map(k => k.css).join('\n\n');
-  const ctLabel = chartTable.map(k => k.label).join(' · ');
+  // 整段主体落后(或整段缺失) → 兜底注入**当前整段生成物**: 它本身含三个工具箱子块, 一次就把
+  // 主题令牌/字号/fx/工具箱全补齐。关动效副本连 no-fx 一起要; 动效副本按既有约定不含 no-fx
+  // (它只在关动效那侧有意义), 所以给动效副本注入时把 nofx 子块摘掉。
+  const tokensBad = kitIssues.find(k => k.id === TOKENS_ID);
+  const nofxBlock = findAllBlocks(bodyNow, 'nofx')[0];
+  const bodyNoNofx = nofxBlock ? bodyNow.slice(0, nofxBlock.start) + bodyNow.slice(nofxBlock.end) : bodyNow;
+  const nofxIssue = tokensBad ? { label: tokensBad.label } : kitIssues.find(k => k.id === 'nofx');
+  const chartTable = tokensBad ? [] : kitIssues.filter(k => k.id !== 'nofx');
+  const ctCss = tokensBad ? bodyNoNofx : chartTable.map(k => k.css).join('\n\n');
+  const ctLabel = tokensBad
+    ? [tokensBad.label, ...KITS.filter(k => k.id !== 'nofx').map(k => k.label)].join(' · ')
+    : chartTable.map(k => k.label).join(' · ');
+  const nofxInjected = tokensBad ? bodyNow : nofxIssue ? NOFX_CSS : '';
   // 页面上用户可见的文字按 script.lang 双语; 终端输出是给 agent 看的, 保持中文
   const isEn = String(script.lang ?? 'zh').toLowerCase().startsWith('en');
   const L = (zh, en) => (isEn ? en : zh);
+  // 兜底注入只救放映页 —— 成片读的是项目文件, 所以这句话必须写明"成片仍是旧 CSS"(否则
+  // 会让人以为放映页对了成片就对了, 这正是"改了 CSS 没生效"的错觉来源)。
   const cssNote = kitIssues.length
-    ? L(`本项目 tokens.css 落后于技能当前版(缺: ${kitIssues.map(k => k.label).join(' · ')}) —— 快照已兜底注入当前版;想让成片与项目文件也用上, 跑 init-project --upgrade-css`,
-        `This project's tokens.css is behind the skill's current version (missing: ${kitIssues.map(k => k.label).join(' / ')}) — snapshots inject the current one as a fallback; run init-project --upgrade-css to upgrade the project itself`)
+    ? L(`本项目 tokens.css 落后于技能当前版(缺: ${kitIssues.map(k => k.label).join(' · ')}) —— 本页快照已兜底注入当前版, 但**成片仍用项目里的旧 CSS**: 先跑 init-project --upgrade-css, 再 capture / build-video`,
+        `This project's tokens.css is behind the skill's current version (missing: ${kitIssues.map(k => k.label).join(' / ')}) — these snapshots inject the current one as a fallback, but the RENDERED VIDEO still uses the project's old CSS: run init-project --upgrade-css before capture / build-video`)
     : '';
 
   const rows = [];
@@ -559,7 +572,7 @@ function main() {
     fs.writeFileSync(path.join(outDir, base), copy);
     const nofxName = base.replace(/\.html?$/i, '') + '.nofx.html';
     let nofx = addNoFx(copy);
-    if (nofxIssue) nofx = injectStyle(nofx, NOFX_CSS, 'no-fx 规则');
+    if (nofxInjected) nofx = injectStyle(nofx, nofxInjected, 'no-fx 规则');
     fs.writeFileSync(path.join(outDir, nofxName), nofx);
 
     const stageVals = Object.values(stages).filter(Number.isFinite);

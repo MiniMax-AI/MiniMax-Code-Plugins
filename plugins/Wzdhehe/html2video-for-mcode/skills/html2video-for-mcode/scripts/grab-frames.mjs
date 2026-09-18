@@ -12,12 +12,19 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { safeId, safeOut, findTool, validateTimingsIds } from './tools.mjs';
+import { findTool, positionalDir, requireTool, safeId, safeOut, validateTimingsIds } from './tools.mjs';
 
 const argv = process.argv.slice(2);
 const flag = (n, d) => { const i = argv.indexOf(n); return i > -1 ? argv[i + 1] : d; };
-const dir = path.resolve(argv.find(a => !a.startsWith('--')) ?? '.');
-const at = Math.min(1, Math.max(0, Number(flag('--at', '0.93'))));
+const dir = positionalDir(argv);
+// --at 必须在 (0,1]: 静默 clamp/NaN 会让抽帧点变成 NaN 或 0s, 抽出来的帧看着'有图'却不是该看的那一刻
+const AT_RAW = flag('--at', '0.93');
+const AT_NUM = Number(AT_RAW);
+if (!Number.isFinite(AT_NUM) || AT_NUM <= 0 || AT_NUM > 1) {
+  console.error(`✗ --at ${JSON.stringify(AT_RAW)} 非法: 取 (0,1] 的小数(0.93 = 该张 93% 处; 0 或 NaN 会抽到起始帧, 看不到入场结果)`);
+  process.exit(1);
+}
+const at = AT_NUM;
 const both = argv.includes('--both');
 
 const timingsPath = path.join(dir, 'build', 'timings.json');
@@ -26,8 +33,7 @@ const timings = JSON.parse(fs.readFileSync(timingsPath, 'utf8'));
 validateTimingsIds(timings);
 const final = path.join(dir, 'out', 'final.mp4');
 if (!fs.existsSync(final)) { console.error(`✗ 还没有 ${final} — 先跑 build-video.mjs`); process.exit(1); }
-const FFMPEG = findTool('ffmpeg', dir);
-if (!FFMPEG) { console.error('✗ 找不到 ffmpeg(按 PATH → 项目 node_modules → 常见安装位置找过; 可 npm i ffmpeg-static)'); process.exit(1); }
+const FFMPEG = requireTool('ffmpeg', dir);   // 环境错误统一退 2(与 tools.mjs 的约定一致)
 
 const onlyIds = flag('--ids', '') ? new Set(flag('--ids', '').split(',').map(s => safeId(s.trim()))) : null;
 
@@ -59,5 +65,6 @@ for (const sh of shots) {
   console.log(`${ok ? '✓' : '✗'} ${sh.id} @${sh.t.toFixed(2)}s (${sh.tag}) → ${path.relative(dir, out)}`);
   if (!ok) { bad++; console.log('    ', (r.stderr || '').split('\n').slice(-3).join(' ')); }
 }
+if (!shots.length) { console.error('✗ 一帧都没抽到(检查 --ids 是否写错、或 timings.json 的 slides 是不是空的)'); process.exit(1); }
 console.log(`\n共 ${shots.length} 帧 → ${path.relative(dir, outDir)}(逐张看: 图注/字幕有没有打架、末级元素是否都在、收尾静止够不够)`);
-process.exit(shots.length && bad ? 1 : 0);
+process.exit(bad ? 1 : 0);

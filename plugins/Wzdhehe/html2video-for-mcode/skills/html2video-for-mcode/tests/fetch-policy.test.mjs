@@ -128,3 +128,37 @@ describe('IPv4-mapped IPv6 的十六进制形式(经 new URL() 规范化后的�
     assert.doesNotThrow(() => assertFetchableUrl('http://[::ffff:808:808]/pub.png'));
   });
 });
+
+describe('2026-09-18 复查补全: 尾点 FQDN / NAT64 / 6to4 / 保留段', () => {
+  // 这一组是把"外部评审打穿的两例 + 同类载体"固化成负例: 尾点 FQDN 与 NAT64 当时都是实测放行
+  const blocked = [
+    'localhost.',                       // 尾点绝对名, 与 localhost 同一主机
+    'LOCALHOST.',                       // 大小写
+    '127.0.0.1.',                       // 字面量带尾点
+    '10.0.0.1.',
+    'printer.local.',
+    '240.0.0.1',                        // 240/4 保留
+    '255.255.255.255',
+    '224.0.0.1',                        // 组播
+    '198.18.0.1',                       // 基准测试段
+    '192.0.0.1',                        // IETF 保留
+    '192.0.2.5',                        // TEST-NET-1
+    '198.51.100.7',                     // TEST-NET-2
+    '203.0.113.9',                      // TEST-NET-3
+    '[fec0::1]',                        // 站点本地(废弃)
+    '[2001:db8::1]',                    // 文档段
+    '[64:ff9b::7f00:1]',                // NAT64 内嵌 127.0.0.1(实测曾放行)
+    '[64:ff9b::a9fe:a9fe]',             // NAT64 内嵌 169.254.169.254
+    '[2002:7f00:0001::]',               // 6to4 内嵌 127.0.0.1
+    '[2002:c0a8:0101::]',               // 6to4 内嵌 192.168.1.1
+  ];
+  for (const h of blocked) test(`拦 ${h}`, () => assert.equal(isBlockedHost(h), true, h));
+
+  const allowed = [
+    '93.184.216.34',                    // 公网 IPv4
+    'cdn.example.com.',                 // 公网域名的尾点写法照常放行
+    '[2001:4860:4860::8888]',           // 公网 IPv6 (Google DNS)
+    '[2002:0808:0808::]',               // 6to4 内嵌 8.8.8.8 —— 换算后是公网, 不该一刀切拦
+  ];
+  for (const h of allowed) test(`放 ${h}`, () => assert.equal(isBlockedHost(h), false, h));
+});

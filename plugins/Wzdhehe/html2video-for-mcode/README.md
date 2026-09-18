@@ -36,9 +36,10 @@ my-video/
 
 ## Pipeline
 
-One Skill drives an 11-script pipeline (plus six internal modules — path containment, URL
-policy, `no-fx` rules, chart CSS, table CSS, and the **CSS kit managed-block mechanism**
-(rev delimiters + in-place replacement) — under `skills/html2video-for-mcode/scripts/`):
+One Skill drives a 12-script pipeline (plus eight internal modules — path containment / URL policy,
+`no-fx` rules, chart CSS, table CSS, the **managed CSS region** (rev delimiters + in-place
+replacement), the generated-body template with its content fingerprint, and the scan cap — under
+`skills/html2video-for-mcode/scripts/`):
 
 | Stage | What happens |
 |---|---|
@@ -139,8 +140,11 @@ authoring rules, asset-sourcing SOP, TTS/timing notes, and rendering internals.
 
 `preview-page.mjs` writes a self-contained play page to `preview/play/index.html` (open it from
 disk, no server) whose only job is **screening the HTML**: arrows (or a swipe) page through the
-slides, `R` replays the entrance animations, `O` is an overview, and `X` switches to a `no-fx`
-copy — if the picture goes blank, some keyframes never lift the `opacity: 0` base state. There is
+slides, `O` is an overview, and `X` switches to a `no-fx` copy — if the picture goes blank, some
+keyframes never lift the `opacity: 0` base state. With animations on, the arrows **step through the entrance
+level by level** (`→` reveals the next level on the spot and only then turns the page) — nothing waits for a
+timer. `T` compares hard cut against cross-dissolve for the slide change, so the transition can be decided by
+ear and eye before rendering; both toggles sit in the bottom bar. There is
 deliberately no timer, progress bar, or karaoke-style highlight: for timing, watch the finished
 video. The narration panel is data-driven (`P` toggles it): it lists the slide's script lines when
 they exist, is skipped entirely when they do not, and `--no-script` hides it outright — so a deck
@@ -191,10 +195,15 @@ No telemetry, no analytics, no hidden endpoints, no installers, no native binari
 - **Nothing is overwritten silently.** `init-project.mjs` refuses a non-empty target directory
   (re-initialising needs `--force`, which only resets its own five generated files);
   `fetch-official-images.mjs` and `prep-image.mjs` do not clobber existing files without `--force`
-  and keep downloads inside your working directory by default. `--upgrade-css` updates the three
-  **rev-stamped managed blocks** in `tokens.css` (no-fx / chart / table) by replacing them in
-  place: rules outside the blocks are untouched, and a `tokens.css.bak` backup is written first;
-  `--check-css` reports staleness without changing anything.
+  and keep downloads inside your working directory by default. `--upgrade-css` updates the one
+  **managed `tokens` region** in `tokens.css` — the whole generated body (theme tokens, the `--fs-*`
+  scale, fx keyframes and utilities, `.fx-stagger`), with the three toolkit blocks (no-fx / chart /
+  table) nested inside — by replacing it in place. Stale copies **outside** the region are cleaned
+  **rule by rule**: rules that are verbatim copies of the module text are deleted (they win the CSS
+  cascade and would override the region), while your own rules — one or two overrides sitting next
+  to a copy included — are kept and reported; a `tokens.css.bak` backup is written first. Put your
+  own rules **after** the region, or the region's values win. `--check-css` reports staleness
+  without changing anything.
 - No credentials are stored or embedded: the ASR script reads a key from `MINIMAX_API_KEY` or
   `--api-key` at runtime and never writes it anywhere.
 
@@ -210,8 +219,8 @@ node --test "plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/te
 node --test "tests/*.test.mjs"
 ```
 
-146 tests in ten files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
-escapes), `no-clobber` (refusing to overwrite), `endpoint-allowlist` (key never leaves the official
+235 tests in fourteen files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
+escapes including a **dangling** link that must be caught rather than skipped), `no-clobber` (refusing to overwrite), `endpoint-allowlist` (key never leaves the official
 hosts — plus a local server that proves the gate sits before the request), `fetch-policy` (SSRF,
 `file://`, redirect and filename rules), `preview-page` (snapshot timing injection, `base` ordering,
 self-containment, containment refusals, the no-timer rule), `tokens-fx` (every entrance animation in
@@ -221,12 +230,20 @@ redirect, size and no-clobber rules), plus
 `chart-kit` (the chart toolbox is really in the generated `tokens.css`: keyframes, registered
 properties, and "off = final state"), `table-kit` (table primitives keep their legibility rules:
 body-size type, ≥72px rows, token-driven up/down colours, matrix highlight covers the header row
-too), `css-kit` (managed blocks: a block that is present but stale or hand-edited must be detected
-and replaced in place, project-side overrides survive, legacy undelimited files get wrapped in
-place with duplicates removed, `--check-css` exit codes, CRLF files must not false-positive,
-pathological interleaving resolves in one run, oversized inputs are refused) and `render-smoke` (init → timings → static gate → capture →
-build, end to end). The render smoke test and three ffmpeg-dependent path checks need ffmpeg and
-Chromium; where those are missing they skip with a stated reason. The scoped workflow
+too), `css-kit` (the managed CSS region: a region that is stale, missing, duplicated, has a broken
+delimiter, or has a leftover copy outside it must be detected and repaired in place — invisible copies
+outside the region win the CSS cascade, which is what the rewrite is about; project-side overrides
+survive rule-by-rule, legacy bare-text files get wrapped in place instead of duplicated, `--check-css`
+exit codes, CRLF files must not false-positive, pathological interleaving resolves in one run,
+oversized inputs are refused — and the two false greens an adversarial re-review then found *inside*
+the new mechanism: a live region **plus a stale copy of the generated body outside it** used to report
+`ok`, and the `ok` note for a project override now says whether it sits before the region (loses the
+cascade) or after it (wins)) and `render-smoke` (init → timings → static gate → capture → build, end
+to end, **plus a pixel-level proof that upgrading a stale project really changes the rendered picture**). Two newer suites cover the second review round and the delivery-quality fixes: `review-round2` (canary tests proving output containment, a local server proving a rejected destination receives **zero** requests, single-quoted/unquoted HTML attributes, ASR request errors counted as failures, ffmpeg discovered from the project) and `cover-transition` (cover image present, `attached_pic` stream embedded, first frame not black, no black frame at any cut point in both hard-cut and cross-dissolve modes, total duration unchanged) and `review-round3` (the seven functional defects: `check-timing --calibrate` must not write back half-measured boundaries, `--topic <value> <project>` must not treat the value as the project directory, `--json` is position-independent, `--min WxH`, `--get` all-failed exits non-zero, `capture --mode/--dsf` and `grab-frames --at` reject bad values at the entry point, the subtitle-band gate only fires on positioned elements, `--dry-run` prints the plan and exits 0, and a bare-string `transition` must mean the same thing to the gate and the renderer — plus the stale-CSS gates on `check-slides` / `capture` / `build-video`) and `subtitles-invalidate` (deleting clauses, or `--no-subs`, and rebuilding must remove the old subtitles from the video — asserted at pixel level). Everything runs with ffmpeg, ffprobe and
+Chromium installed (on `PATH`, or in this repo's / your project's `node_modules` — `npm i
+ffmpeg-static ffprobe-static playwright`). Without them the rendering suites **fail rather than
+skip**; the only cases that degrade instead are the ones with a declared reason (a tool is absent,
+or the filesystem forbids creating a junction). The scoped workflow
 `.github/workflows/html2video-for-mcode-smoke.yml` — which lives in the **MiniMax-Code-Plugins
 monorepo** (this standalone repo has no workflows) and runs on the plugin PR and on main —
 installs them and runs everything for real.

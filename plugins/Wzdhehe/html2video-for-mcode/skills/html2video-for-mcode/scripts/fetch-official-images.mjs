@@ -6,6 +6,7 @@
 //   node fetch-official-images.mjs <网址> [--list]                        列出候选(默认动作)
 //   node fetch-official-images.mjs <网址> --get 1,3,5 [--out-dir assets]  按序号下载
 //   node fetch-official-images.mjs <网址> --min 800                       只看宽度 ≥800px 的
+//   node fetch-official-images.mjs <网址> --min 800x600                   宽度与高度都要够(横扁图不能用)
 //   node fetch-official-images.mjs <网址> --json                          输出 JSON(供程序处理)
 //   node fetch-official-images.mjs --url <图片URL>[,<URL>...] [--out-dir assets]
 //                                                                         直接下载给定图片 URL
@@ -22,34 +23,14 @@
 //   - 下载逐跳过同一策略(maxRedirects=0 手动跟, ≤5 跳), 响应有大小上限(默认 30MB)
 //   - 落盘必须在工作目录内(--out-dir 越界需 --force), 不覆盖已存在文件(需 --force)
 import fs from 'node:fs';
-import { loadPackage, inside } from './tools.mjs';
+import { assertContained, canonicalPath as canonical, loadPackage, inside, positionals } from './tools.mjs';
 import path from 'node:path';
 import { assertFetchableUrl, assertRedirectTarget, assertResolvedHost, sanitizeFilename, imageNameFromUrl, MAX_REDIRECTS, PolicyError } from './url-policy.mjs';
 
-// 规范化路径后比较(二审 P2): macOS 上 /var/... 与 /private/var/... 是同一目录的两种写法,
-// 纯字符串比较会把合法路径判成"越界"。取最深已存在祖先的 realpath 再比。
-function canonical(p) {
-  const abs = path.resolve(p);
-  let probe = abs;
-  while (!fs.existsSync(probe)) {
-    const up = path.dirname(probe);
-    if (up === probe) return abs;
-    probe = up;
-  }
-  try {
-    const real = fs.realpathSync(probe);
-    return probe === abs ? real : path.join(real, path.relative(probe, abs));
-  } catch { return abs; }
-}
-
 const argv = process.argv.slice(2);
-const VALUE_FLAGS = new Set(['--get', '--out-dir', '--min', '--max-mb', '--url']);
-const positional = [];
-for (let i = 0; i < argv.length; i++) {
-  const a = argv[i];
-  if (a.startsWith('--')) { if (VALUE_FLAGS.has(a)) i++; continue; }
-  positional.push(a);
-}
+// 位置参数与取值型 flag 的清单统一在 tools.mjs: --json 曾在这里被当作取值型, 于是
+// `--json <网址>` 会把网址吃掉、位置参数成空 → 报用法错误(2026-09-18 复查 D3 的成因)。
+const positional = positionals(argv);
 const flag = (n, d) => { const i = argv.indexOf(n); return i > -1 ? argv[i + 1] : d; };
 const FORCE = argv.includes('--force');
 const ALLOW_FILE = argv.includes('--allow-file');
@@ -68,7 +49,15 @@ if (!URLS.length) {
     throw e;
   }
 }
-const MIN = parseInt(flag('--min', '0'), 10) || 0;
+// --min 支持三种写法: 800(宽≥800) / 800x600(宽高都够) / x600(只限高)
+const MIN_RAW = String(flag('--min', '0') ?? '0').trim().toLowerCase();
+const MIN_M = /^(\d*)(?:x(\d+))?$/.exec(MIN_RAW);
+if (!MIN_M || MIN_RAW === '' || (!MIN_M[1] && !MIN_M[2])) {
+  console.error(`✗ --min 写法不对: ${MIN_RAW}(支持 800 / 800x600 / x600; 只写数字=只限宽)`);
+  process.exit(1);
+}
+const MIN = parseInt(MIN_M[1] || '0', 10) || 0;
+const MIN_H = parseInt(MIN_M[2] || '0', 10) || 0;
 // 落盘收监: 默认 assets/ 必须在当前工作目录(项目根)内; 越界要显式 --force。
 // 比较用规范化路径(二审 P2): macOS 上 /var 与 /private/var 是同一目录的两种写法,
 // 纯字符串比较会把"项目内的合法路径"误判成越界(官方 CI 的 macOS 环境实测踩到)。
@@ -116,13 +105,16 @@ async function openUrl(src) {
 }
 
 if (URLS.length) {
-  fs.mkdirSync(OUT_DIR, { recursive: true });
+  // 建目录这一步也要收监: 叶子文件已经过了 assertContained, 但"先 mkdir 再写叶子"之间隔着一次
+  // 目录创建 —— OUT_DIR 的某个目录段是指向项目外的链接时, mkdir 本身就已经在项目外动手了
+  fs.mkdirSync(assertContained(CWD_REAL, OUT_DIR, { where: '输出目录' }), { recursive: true });
   let ok = 0;
   for (const src of URLS) {
     if (!/^https?:/.test(src)) { console.error(`  ✗ 跳过(只收 http(s)): ${src}`); continue; }
     try {
       const { res, type } = await openUrl(src);
-      const out = path.join(OUT_DIR, imageNameFromUrl(src, type));
+      // 逐文件收监: OUT_DIR 本身过了 canonical 比较, 但它里面的目录段可能是符号链接(复查 B4)
+      const out = assertContained(CWD_REAL, path.join(OUT_DIR, imageNameFromUrl(src, type)), { where: '下载落盘' });
       if (fs.existsSync(out) && !FORCE) { console.error(`  ✗ 已存在, 不覆盖: ${path.relative(process.cwd(), out)}(要覆盖加 --force)`); continue; }
       const body = Buffer.from(await res.arrayBuffer());
       if (!body.length) throw new Error('响应为空(0 字节)—— 多半是 404 错误页或防盗链, 别写空文件');
@@ -217,7 +209,9 @@ try {
     }
     if (srcPolicy !== 'ok') continue;
     const offsite = pageHost && host && !host.endsWith(pageHost.replace(/^www\./, '')) && !pageHost.endsWith(host.replace(/^www\./, ''));
-    const bigEnough = !MIN || it.w >= MIN || (it.w === 0 && ext === '.svg'); // svg 无自然宽度, 不按宽度筛
+    const vec = it.w === 0 && ext === '.svg';   // svg 无自然宽度, 不按像素筛
+    // --min 800 只限宽; --min 800x600 宽高都要够(横版视频里"够宽但很扁"的图没法用)
+    const bigEnough = vec || ((!MIN || it.w >= MIN) && (!MIN_H || it.h >= MIN_H));
     if (!bigEnough) continue;
     candidates.push({ ...it, host, ext: ext || '(无扩展名)', offsite });
   }
@@ -237,12 +231,12 @@ try {
   if (get) {
     const picks = get.split(',').map(x => parseInt(x.trim(), 10)).filter(n => n >= 1 && n <= candidates.length);
     if (!picks.length) { console.error('✗ --get 的序号不在范围内'); process.exit(1); }
-    fs.mkdirSync(OUT_DIR, { recursive: true });
+    fs.mkdirSync(assertContained(CWD_REAL, OUT_DIR, { where: '输出目录' }), { recursive: true });
     let ok = 0;
     for (const n of picks) {
       const c = candidates[n - 1];
       const name = sanitizeFilename(c.alt, { maxLen: 30, fallback: `official-${String(n).padStart(2, '0')}` }) + (c.ext.startsWith('.') ? c.ext : '.png');
-      const out = path.join(OUT_DIR, name);
+      const out = assertContained(CWD_REAL, path.join(OUT_DIR, name), { where: '下载落盘' });
       if (fs.existsSync(out) && !FORCE) { console.error(`  ✗ [${n}] 已存在, 不覆盖: ${out}(要覆盖加 --force)`); continue; }
       try {
         if (c.src.startsWith('file:')) {
@@ -276,6 +270,9 @@ try {
       } catch (e) { console.error(`  ✗ [${n}] 下载失败: ${e.message}`); }
     }
     console.log(`\n已下载 ${ok}/${picks.length} 张 → ${path.relative(process.cwd(), OUT_DIR)}`);
+    // 退出码按成功率给: 全失败还退 0 的话, 上游脚本会把"一张都没落盘"当成功继续往下跑
+    if (!ok) { console.error(`✗ ${picks.length} 张全部下载失败 —— 检查上面的原因(host 策略 / 网络 / --max-mb)`); process.exit(1); }
+    if (ok < picks.length) console.warn(`⚠ 部分失败: ${picks.length - ok} 张没下来(见上面的原因); 已落盘的可以继续用`);
     console.log('下一步(必做): ① node scripts/prep-image.mjs --check <图...>  ② 人眼确认主体居中无水印  ③ 登记 assets/MANIFEST.md(来源就是本 URL)');
   } else {
     console.log('\n选好后: node scripts/fetch-official-images.mjs <网址> --get 1,3 --out-dir assets');

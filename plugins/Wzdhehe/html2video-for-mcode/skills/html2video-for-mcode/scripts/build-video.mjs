@@ -1,19 +1,20 @@
 #!/usr/bin/env node
 // html2video-for-mcode · 组装成片: 单张编码 → 拼接 → 音轨对位 → mux → 自检; --asr 按句切分校验 + 出 SRT 字幕。
-// 用法: node build-video.mjs <项目目录> [--asr] [--dry-run]
+// 用法: node build-video.mjs <项目目录> [--asr] [--dry-run] [--allow-stale-css]
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { requireTool, safeId, safeRel, safeOut, validateScriptPaths, validateTimingsIds } from './tools.mjs';
+import { XFADE_DEFAULT_DUR, positionalDir, readTransition, requireFreshCss, requireTool, safeId, safeOut, safeRel, validateScriptPaths, validateTimingsIds } from './tools.mjs';
 
 const argv = process.argv.slice(2);
-const dir = path.resolve(argv.find(a => !a.startsWith('--')) ?? '.');
+const dir = positionalDir(argv);
 const DRY = argv.includes('--dry-run');
 const WANT_ASR = argv.includes('--asr');
 
+// 入口闸门(与 capture 同一道): 受管块落后即停 —— 否则成片用的是旧 CSS, 全程没有任何报错
+requireFreshCss(dir, { who: 'build-video', allowStale: argv.includes('--allow-stale-css') });
+
 process.env.KIT_PROJECT_DIR = dir;
-const FFMPEG = requireTool('ffmpeg', dir);
-const FFPROBE = requireTool('ffprobe', dir);
 
 const run = (cmd, args, label) => {
   if (DRY) { console.log(`[dry-run] ${path.basename(cmd)} ${args.join(' ')}`); return ''; }
@@ -59,6 +60,11 @@ const bgmNum = bgmCfgRaw ? {
   fo: clampNum(bgmCfgRaw.fadeOut, 2.5, 'fadeOut', 0, 30, 'bgm.fadeOut'),
 } : null;
 
+// 工具发现放在全部配置校验之后: 配置写错就是配置写错, 与这台机器上有没有 ffmpeg 无关。
+// 反过来的话, 少装了 ffmpeg 的人拿到的是"找不到 ffmpeg"(退出 2), 真正要报的 width/bgm/fps 非法被吞掉。
+const FFMPEG = requireTool('ffmpeg', dir);
+const FFPROBE = requireTool('ffprobe', dir);
+
 const probeDur = f => {
   const out = run(FFPROBE, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', f], `ffprobe ${path.basename(f)}`);
   const d = parseFloat((out || '').trim().split('\n')[0]);
@@ -77,20 +83,24 @@ fs.mkdirSync(safeOut(dir, 'build'), { recursive: true });
 // 转场(1.6.0): 默认"硬切" —— 段间不再淡出到黑再淡入(那会在每次切页留 ≈0.55s 纯黑,
 // 实测反馈"每一个大页切换过程会经过黑屏")。首段用封面溶解进入(帧 0 = 完整封面, 不再是黑帧),
 // 末段保留结尾淡出收尾;中间段之间是硬切。xfade 溶解见 TRANSITION。
+// 解析统一走 tools.readTransition(): --transition <值> / "--transition=<值>" / script.transition 三个来源,
+// 以及裸字符串与 {type,duration} 两种写法, 闸门(check-slides)与这里必须得到完全一致的结论(D6)。
 const TRANSITION = (() => {
   const a = argv.find(x => x.startsWith('--transition='));
-  const cli = argv[argv.indexOf('--transition') + 1];
-  const v = (a ? a.split('=')[1] : (argv.includes('--transition') ? cli : null)) ?? script.transition?.type ?? 'cut';
-  const dur = Number(script.transition?.duration ?? 0.4);
-  if (!['cut', 'xfade'].includes(v)) {
-    console.error(`✗ transition 非法: ${JSON.stringify(v)} — 只支持 'cut'(硬切, 默认) 或 'xfade'(交叉溶解)`);
+  const cli = argv.includes('--transition') ? argv[argv.indexOf('--transition') + 1] : null;
+  const v = (a ? a.split('=')[1] : cli) ?? script.transition ?? null;
+  // CLI(或裸字符串)只给了类型时, 时长仍取 script.transition.duration —— 老行为:
+  // {duration:1.5} + --transition xfade = 1.5s; 不能因为换了解析函数就悄悄退回 0.4s
+  const merged = typeof v === 'string' && script.transition && typeof script.transition === 'object'
+    ? { type: v, duration: script.transition.duration ?? XFADE_DEFAULT_DUR }
+    : v;
+  try {
+    // 报错要点名来源: --transition 写错时不该说成 script.transition 写错
+    return readTransition(merged, { where: (a || cli) ? '--transition' : 'script.transition' });
+  } catch (e) {
+    console.error(`✗ ${e.message}`);
     process.exit(1);
   }
-  if (v === 'xfade' && (!Number.isFinite(dur) || dur <= 0 || dur > 2)) {
-    console.error(`✗ transition.duration 非法: ${JSON.stringify(script.transition?.duration)} — 需要 0–2 秒`);
-    process.exit(1);
-  }
-  return { type: v, dur: v === 'xfade' ? dur : 0 };
 })();
 const coverPath = path.join(dir, 'preview', 'cover.png');
 const hasCover = fs.existsSync(coverPath);
@@ -115,19 +125,31 @@ for (const [segIdx, t] of timings.slides.entries()) {
   const seg = safeOut(dir, 'out', `slide-${tid}.mp4`);
   const common = ['-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'medium', '-crf', '20', '-movflags', '+faststart'];
   const stillPng = k => path.join(dir, 'build', 'substills', tid, `s${k}.png`);
-  // 首段的"封面溶解": 封面淡出叠在画面上 → 帧 0 = 完整封面, 0.25s 内溶解进入入场动画(不加时长)
-  const coverOverlay = (isFirst && hasCover)
-    ? { input: ['-loop', '1', '-i', coverPath], chain: (lastLabel, outLabel) => `[${lastLabel}]` }
-    : null;
+  // 首段的"封面溶解": 封面淡出叠在画面上 → 帧 0 = 完整封面, 0.25s 内溶解进入入场动画(不加时长)。
+  // (2026-09-18 复查 E5: 这里原本是个带 input/chain 两个字段的结构体, 两个字段都是死代码 ——
+  //  真正管用的判断在 encode() 里, 改成布尔, 少一处"看起来会用"的误导。)
+  const useCoverOverlay = isFirst && hasCover;
 
   // 字幕时间轴(二审 P1): 帧序列只覆盖动画窗, 之后的字幕变化要靠 capture 逐句截的静态图拼上来;
-  // 静态/no-fx 路径没有帧序列, 整张就由"基底图 + 逐句字幕图"拼成(否则整片一帧字幕都没有)
+  // 静态/no-fx 路径没有帧序列, 整张就由"基底图 + 逐句字幕图"拼成(否则整片一帧字幕都没有)。
+  // 复查补(1.7.0): 清单必须与当前这张对齐才用 —— 否则删掉 clauses/改过时长之后, 陈旧清单会把
+  // 早已不存在的字幕拼回成片(capture 已按张清理, 这里再做一次防御性核对, 因为清单是磁盘文件)
   let subStills = [];
-  try {
-    const man = JSON.parse(fs.readFileSync(path.join(dir, 'build', 'substills', `${tid}.json`), 'utf8'));
-    subStills = (man.stills ?? []).filter(s2 => Number.isFinite(s2.start) && Number.isFinite(s2.end) &&
-      s2.end - s2.start > 0.02 && fs.existsSync(stillPng(s2.k)));
-  } catch { /* 没清单 = 这张不需要拼字幕 */ }
+  const manPath = path.join(dir, 'build', 'substills', `${tid}.json`);
+  if (fs.existsSync(manPath)) {
+    let man = null;
+    try { man = JSON.parse(fs.readFileSync(manPath, 'utf8')); } catch { /* 坏清单按无处理 */ }
+    const clauseCount = Array.isArray(t.clauses) ? t.clauses.length : 0;
+    const durOk = man && Number.isFinite(man.duration) && Math.abs(man.duration - D) <= 0.05;
+    if (man && !durOk) console.warn(`⚠ ${tid}: 字幕清单时长 ${man.duration}s ≠ 当前 ${D}s — 忽略该清单(重跑 capture 生成)`);
+    if (man && durOk && clauseCount === 0) console.warn(`⚠ ${tid}: 当前没有 clauses 但存在字幕清单 — 忽略(重跑 capture 会清掉)`);
+    if (man && durOk && clauseCount > 0) {
+      subStills = (man.stills ?? []).filter(s2 => Number.isFinite(s2.start) && Number.isFinite(s2.end) &&
+        s2.start >= -0.001 && s2.end <= man.duration + 0.05 &&
+        s2.end - s2.start > 0.02 && Number.isInteger(s2.k) && s2.k >= 0 && s2.k < clauseCount &&
+        fs.existsSync(stillPng(s2.k)));
+    }
+  }
 
   // 统一走 filter_complex, 标签式组装: 基底 → (首段: 封面溶解) → (末段: 淡出)
   // 这样三种编码路径(帧序列+字幕段 / 帧序列 / 静态图)共用同一段收尾逻辑, 不会再出现
@@ -136,7 +158,7 @@ for (const [segIdx, t] of timings.slides.entries()) {
   const encode = (inputs, baseGraph, baseLabel, label) => {
     const graph = [baseGraph];
     let cur = baseLabel;
-    if (coverOverlay) {
+    if (useCoverOverlay) {
       const ovIdx = inputs.length;
       graph.push(`[${ovIdx}:v]scale=${W}:${H}:flags=lanczos,setsar=1,fade=t=out:st=0:d=0.25[ov]`);
       graph.push(`[${cur}][ov]overlay=format=auto[merged]`);
@@ -148,6 +170,21 @@ for (const [segIdx, t] of timings.slides.entries()) {
     run(FFMPEG, [...args, '-filter_complex', graph.join(';'), '-map', `[${cur}]`, '-t', DUR.toFixed(4), ...common, seg], label);
   };
 
+  // [逐张素材] → concat 段的组装(两处调用: 帧序列+字幕段 / 静态图+字幕段)。
+  // 2026-09-18 复查 E5: 这段拼装原先是复制两份的(只有"每段各自探尺寸"vs"整张一个前缀"这点差别),
+  // 差别用 preOf 一个回调表达, 于是"末段补齐到整张时长"这条关键规则只有一处实现。
+  const SCALE = `scale=${W}:${H}:flags=lanczos,`;
+  const encodeConcat = (parts, { preOf, label }) => {
+    const sum = parts.reduce((a, p) => a + p.dur, 0);
+    parts[parts.length - 1].dur += (D + tailHold) - sum;   // 末段补齐: 吃掉取整误差, 总长严格 = D+tailHold
+    const chains = parts.map((p, i) => `[${i}:v]${preOf(p)}setsar=1,fps=${fps}[v${i}]`).join(';');
+    const cat = parts.map((_, i) => `[v${i}]`).join('') + `concat=n=${parts.length}:v=1:a=0[cat]`;
+    const inputs = parts.map(p => ({ args: p.kind === 'frames'
+      ? ['-framerate', String(fps), '-t', p.dur.toFixed(4), '-i', p.src]
+      : ['-loop', '1', '-framerate', String(fps), '-t', p.dur.toFixed(4), '-i', p.src] }));
+    encode(inputs, `${chains};${cat}`, 'cat', label);
+  };
+
   if (fs.existsSync(firstFrame)) {
     const nFrames = fs.readdirSync(fdir).filter(f => /^f\d+\.png$/.test(f)).length;
     const framesDur = nFrames / fps;
@@ -157,15 +194,9 @@ for (const [segIdx, t] of timings.slides.entries()) {
         { kind: 'frames', src: path.join(fdir, 'f%05d.png'), dur: framesDur },
         ...subStills.map(s2 => ({ kind: 'still', src: stillPng(s2.k), dur: s2.end - s2.start })),
       ];
-      const sum = parts.reduce((a, p) => a + p.dur, 0);
-      parts[parts.length - 1].dur += (D + tailHold) - sum;
-      const needScale = parts.some(p => { const sz = probeSize(p.src); return !!sz && (sz[0] !== W || sz[1] !== H); });
-      const chains = parts.map((p, i) => `[${i}:v]${needScale ? `scale=${W}:${H}:flags=lanczos,` : ''}setsar=1,fps=${fps}[v${i}]`).join(';');
-      const cat = parts.map((_, i) => `[v${i}]`).join('') + `concat=n=${parts.length}:v=1:a=0[cat]`;
-      const inputs = parts.map(p => (p.kind === 'frames'
-        ? { args: ['-framerate', String(fps), '-t', p.dur.toFixed(4), '-i', p.src] }
-        : { args: ['-loop', '1', '-framerate', String(fps), '-t', p.dur.toFixed(4), '-i', p.src] }));
-      encode(inputs, `${chains};${cat}`, 'cat', `编码 ${tid} (帧序列 ${framesDur.toFixed(1)}s + ${subStills.length} 段字幕)`);
+      // 帧序列与字幕静帧可能尺寸不同(dsf 超采样), 所以逐段各自探尺寸
+      const preOf = p => { const sz = probeSize(p.src); return sz && (sz[0] !== W || sz[1] !== H) ? SCALE : ''; };
+      encodeConcat(parts, { preOf, label: `编码 ${tid} (帧序列 ${framesDur.toFixed(1)}s + ${subStills.length} 段字幕)` });
     } else {
       const sz = probeSize(firstFrame);
       const pre = [`tpad=stop_mode=clone:stop_duration=${(DUR + 1).toFixed(3)}`];
@@ -187,12 +218,9 @@ for (const [segIdx, t] of timings.slides.entries()) {
         ...(head > 0.02 ? [{ kind: 'still', src: png, dur: head }] : []),
         ...subStills.map(s2 => ({ kind: 'still', src: stillPng(s2.k), dur: s2.end - s2.start })),
       ];
-      const sum = parts.reduce((a, p) => a + p.dur, 0);
-      parts[parts.length - 1].dur += (D + tailHold) - sum;
-      const chains = parts.map((p, i) => `[${i}:v]${pre.join(',')}[v${i}]`).join(';');
-      const cat = parts.map((_, i) => `[v${i}]`).join('') + `concat=n=${parts.length}:v=1:a=0[cat]`;
-      encode(parts.map(p => ({ args: ['-loop', '1', '-framerate', String(fps), '-t', p.dur.toFixed(4), '-i', p.src] })),
-        `${chains};${cat}`, 'cat', `编码 ${tid} (静态图 + ${subStills.length} 段字幕)`);
+      // 这一支里所有段都是同一尺寸的静态图, 所以共用一个前缀
+      const preOf = () => (sz && (sz[0] !== W || sz[1] !== H) ? SCALE : '');
+      encodeConcat(parts, { preOf, label: `编码 ${tid} (静态图 + ${subStills.length} 段字幕)` });
     } else {
       encode([{ args: ['-loop', '1', '-i', png] }],
         `[0:v]${pre.join(',')}[base]`, 'base', `编码 ${tid} (静态图)`);
@@ -210,7 +238,7 @@ for (const [segIdx, t] of timings.slides.entries()) {
 // ── 2. 拼接视频 ──────────────────────────────────────────────
 // cut(默认): 同参数段无损 copy 拼接(段间是硬切, 不再经过黑场)。
 // xfade: 段尾已各多留 dur 秒尾帧, 这里用 xfade 叠化 —— 叠化吃掉 (n-1)×dur, 总时长仍等于 timings.total。
-const noaudio = path.join(dir, 'build', 'video-noaudio.mp4');
+const noaudio = safeOut(dir, 'build', 'video-noaudio.mp4');
 let vd = null;
 if (TRANSITION.type === 'xfade' && segs.length > 1) {
   const inputs = segs.flatMap(s => ['-i', s]);
@@ -226,7 +254,7 @@ if (TRANSITION.type === 'xfade' && segs.length > 1) {
     '-r', String(fps), '-movflags', '+faststart', noaudio], '拼接(xfade 溶解)');
   vd = probeDur(noaudio);
 } else {
-  const listFile = path.join(dir, 'build', 'concat.txt');
+  const listFile = safeOut(dir, 'build', 'concat.txt');
   fs.writeFileSync(listFile, segs.map(s => `file '${abs(s).replace(/'/g, "'\\''")}'`).join('\n') + '\n');
   run(FFMPEG, ['-y', '-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', noaudio], '拼接(copy)');
   vd = probeDur(noaudio);
@@ -263,7 +291,7 @@ timings.slides.forEach((t, i) => {
   audioInputs.push(a);
   chains.push(`[${i}:a]aresample=44100,aformat=channel_layouts=mono,apad=whole_dur=${t.duration.toFixed(4)}[s${i}]`);
 });
-const audioWav = path.join(dir, 'build', 'audio-timeline.wav');
+const audioWav = safeOut(dir, 'build', 'audio-timeline.wav');
 run(FFMPEG, ['-y', ...audioInputs.flatMap(a => ['-i', a]),
   '-filter_complex', [...chains, `${chains.map((_, i) => `[s${i}]`).join('')}concat=n=${chains.length}:v=0:a=1[out]`].join(';'),
   '-map', '[out]', '-c:a', 'pcm_s16le', audioWav], '音轨对位');
@@ -277,7 +305,7 @@ if (script.bgm) {
   if (!fs.existsSync(bgmPath)) {
     console.warn(`⚠ 配置了 bgm 但找不到 ${bgmPath} — 跳过, 只出人声`);
   } else {
-    const mixWav = path.join(dir, 'build', 'audio-mix.wav');
+    const mixWav = safeOut(dir, 'build', 'audio-mix.wav');
     const fc = `[1:a]aresample=44100,aformat=channel_layouts=mono,volume=${vol},`
       + `afade=t=in:st=0:d=${fi},afade=t=out:st=${Math.max(0, total - fo).toFixed(3)}:d=${fo}[bg];`
       + `[0:a][bg]amix=inputs=2:duration=first:normalize=0[out]`;
@@ -296,7 +324,7 @@ if (script.bgm) {
 // 封面走 attached_pic: 主视频流仍然 copy(不重编码), 封面是单帧 PNG 流 ——
 // 文件管理器 / 多数播放器 / 部分 IM 的缩略图直接读它, 发给别人时不再是黑首帧。
 // 注意: 内嵌封面时不能带 -shortest(会把输出截到那一帧的长度), 音轨本身已按总时长对齐。
-const final = path.join(dir, 'out', 'final.mp4');
+const final = safeOut(dir, 'out', 'final.mp4');
 run(FFMPEG, hasCover
   ? ['-y', '-i', noaudio, '-i', audioFinal, '-i', coverPath, '-map', '0:v:0', '-map', '1:a:0', '-map', '2:v:0',
     '-c:v:0', 'copy', '-c:a', 'aac', '-b:a', '192k', '-c:v:1', 'png', '-disposition:v:1', 'attached_pic',
@@ -306,6 +334,12 @@ run(FFMPEG, hasCover
   'mux 成片');
 
 // ── 6. 自检 ─────────────────────────────────────────────────
+// --dry-run 什么都没真编码, 产物不存在 → 自检必然全红。以前它会照跑并退出 1, 于是"看一眼计划"
+// 这个用法总是在 CI/agent 里报失败(2026-09-18 复查 D6 时踩到)。dry-run 下只打印计划, 直接成功。
+if (DRY) {
+  console.log('[dry-run] 已打印完整计划(未编码、未写产物), 跳过自检');
+  process.exit(0);
+}
 const fd = probeDur(final);
 const okDur = fd != null && Math.abs(fd - total) <= 0.25;
 const decode = spawnSync(FFMPEG, ['-v', 'error', '-i', final, '-f', 'null', '-'], { encoding: 'utf8', windowsHide: true });
@@ -398,7 +432,7 @@ if (WANT_ASR) {
     });
     cum += t.duration;
   }
-  fs.writeFileSync(path.join(dir, 'asr', 'checklist.md'), lines.join('\n') + '\n');
+  fs.writeFileSync(safeOut(dir, 'asr', 'checklist.md'), lines.join('\n') + '\n');
   console.log(`  ASR 素材与清单已生成: asr/ (${count} 句, 每句独立切分)`);
 }
 console.log('\n完成 ✅');

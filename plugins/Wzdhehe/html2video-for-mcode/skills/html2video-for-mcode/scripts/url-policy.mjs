@@ -29,6 +29,8 @@ function ipv4ToLong(ip) {
 }
 
 // [网络基址, 前缀位数]; 计算一律走无符号, 避开 int32 符号位比较的坑
+// 2026-09-18 复查补全: 除私网/回环/链路本地外, 还要拦保留段与文档段 ——
+// 前者常被内网设备使用, 后者虽不可路由, 但放行等于把"地址分类"这层判断交给下游。
 const BLOCKED_V4 = [
   [0b00000000, 8],        // 0.0.0.0/8        "this host"
   [10 << 24, 8],          // 10.0.0.0/8       私网
@@ -36,28 +38,50 @@ const BLOCKED_V4 = [
   [127 << 24, 8],         // 127.0.0.0/8      loopback
   [169 << 24 | 254 << 16, 16], // 169.254.0.0/16 链路本地(含云元数据 169.254.169.254)
   [172 << 24 | 16 << 16, 12], // 172.16.0.0/12  私网
+  [192 << 24 | 0 << 16, 24], // 192.0.0.0/24   IETF 协议保留
+  [192 << 24 | 0 << 16 | 2 << 8, 24], // 192.0.2.0/24 TEST-NET-1
   [192 << 24 | 168 << 16, 16],// 192.168.0.0/16 私网
+  [198 << 24 | 18 << 16, 15], // 198.18.0.0/15  基准测试段
+  [198 << 24 | 51 << 16 | 100 << 8, 24], // 198.51.100.0/24 TEST-NET-2
+  [203 << 24 | 0 << 16 | 113 << 8, 24],  // 203.0.113.0/24 TEST-NET-3
+  [224 << 24, 4],         // 224.0.0.0/4     组播
+  [240 << 24, 4],         // 240.0.0.0/4     保留(含 255.255.255.255)
 ].map(([base, bits]) => [base >>> 0, bits]);
 
 // host 是否属于禁止出网/抓取的地址(或形态)
 export function isBlockedHost(hostname) {
-  const h = String(hostname ?? '').toLowerCase().replace(/^\[|\]$/g, ''); // IPv6 字面量去方括号
+  // 尾点 FQDN 归一: `localhost.` 与 `localhost` 是同一个名字(RFC 1034 绝对名),
+  // 只判裸名会让 `http://localhost./` 直接穿过去(2026-09-18 实测放行)
+  const h = String(hostname ?? '').toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '');
   if (!h) return true;
   if (h.includes(':')) { // IPv6
     if (h === '::' || h === '::1') return true;                    // unspecified / loopback
     if (/^f[cd][0-9a-f]{2}:/.test(h)) return true;                 // fc00::/7 私网(ULA)
     if (/^fe[89ab][0-9a-f]:/.test(h)) return true;                 // fe80::/10 链路本地
-    if (/^::ffff:/.test(h)) {                                   // IPv4-mapped
-      const rest = h.replace(/^::ffff:/, '');
-      // WHATWG URL 会把点分 mapped 地址规范化成十六进制(127.0.0.1 → ::ffff:7f00:1),
-      // 两个 hex 组就是 IPv4 的 32 位 —— 必须换算回点分再判; 不换算的话 loopback/
-      // 私网/云元数据(169.254.169.254 → ::ffff:a9fe:a9fe)全部能借此穿透(2026-09-18 实测)
-      const m = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(rest);
+    if (/^fec[0-9a-f]:/.test(h)) return true;                      // fec0::/10 站点本地(已废弃)
+    if (/^2001:0?db8:/.test(h)) return true;                       // 2001:db8::/32 文档段
+    // 内嵌 IPv4 的三种载体都要换算回点分再判, 否则可借壳穿透:
+    //   ::ffff:x:y   IPv4-mapped(WHATWG URL 会把点分规范成 hex 组)
+    //   64:ff9b::x:y NAT64   6to4 2002:AABB:CCDD::/48(前 32 位就是 IPv4)
+    const embedded = (() => {
+      let m = /^::ffff:(.+)$/.exec(h);
+      if (m) return m[1];
+      m = /^64:ff9b::(.+)$/.exec(h);
+      if (m) return m[1];
+      m = /^2002:([0-9a-f]{1,4}):([0-9a-f]{1,4})/.exec(h);
+      if (m) {
+        const hi = parseInt(m[1], 16) >>> 0, lo = parseInt(m[2], 16) >>> 0;
+        return `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
+      }
+      return null;
+    })();
+    if (embedded) {
+      const m = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(embedded);   // 两个 hex 组 = 32 位 IPv4
       if (m) {
         const hi = parseInt(m[1], 16) >>> 0, lo = parseInt(m[2], 16) >>> 0;
         return isBlockedHost(`${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`);
       }
-      return isBlockedHost(rest);
+      return isBlockedHost(embedded);      // 已经是点分或还带别的形态, 继续判
     }
     return false;
   }
@@ -71,7 +95,7 @@ export function isBlockedHost(hostname) {
   }
   // 非字面量: 无点主机名(localhost / 内网裸名 / NetBIOS)拦下; 内网风格后缀拦下
   if (!h.includes('.')) return true;
-  if (h === 'localhost' || ['.localhost', '.local', '.internal', '.localdomain', '.home.arpa'].some(sfx => h.endsWith(sfx))) return true;
+  if (['.localhost', '.local', '.internal', '.localdomain', '.home.arpa'].some(sfx => h.endsWith(sfx))) return true;
   return false;
 }
 

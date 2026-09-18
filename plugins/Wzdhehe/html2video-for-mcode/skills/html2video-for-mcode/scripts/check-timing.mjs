@@ -6,10 +6,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { requireTool, safeId, safeRel, validateScriptPaths, validateTimingsIds } from './tools.mjs';
+import { positionalDir, requireTool, safeId, safeOut, safeRel, validateScriptPaths, validateTimingsIds } from './tools.mjs';
 
 const argv = process.argv.slice(2);
-const dir = path.resolve(argv.find(a => !a.startsWith('--')) ?? '.');
+const dir = positionalDir(argv);
 const CALIBRATE = argv.includes('--calibrate');
 const LEAD = 0.2;
 const NOISE = '-38dB', MIN_SIL = 0.18; // 句间停顿检测阈值
@@ -17,7 +17,7 @@ const NOISE = '-38dB', MIN_SIL = 0.18; // 句间停顿检测阈值
 process.env.KIT_PROJECT_DIR = dir;
 const FFMPEG = requireTool('ffmpeg', dir);
 
-const timingsPath = path.join(dir, 'build', 'timings.json');
+const timingsPath = safeOut(dir, 'build', 'timings.json');   // 写回走收监(读不到时下面会报缺文件)
 if (!fs.existsSync(timingsPath)) { console.error('✗ 缺 build/timings.json — 先运行 plan-timings.mjs'); process.exit(1); }
 const timings = JSON.parse(fs.readFileSync(timingsPath, 'utf8'));
 validateTimingsIds(timings);
@@ -46,7 +46,7 @@ function matchBoundaries(gaps, clauses) {
   if (nBound <= 0) return { method: 'none', meas: [] };
   const marks = clauses.map(c => (c.text.match(PAUSE_PUNCT) || []).length);
   const totalMarks = marks.reduce((a, b) => a + b, 0);
-  const meas = new Array(nBound).fill(null);
+  const meas = new Array(nBound).fill(null);   // 精确模式自己一份
   if (gaps.length === totalMarks - 1 || gaps.length === totalMarks) {
     let cum = 0, gi = 0;
     for (let k = 0; k < nBound; k++) {
@@ -56,6 +56,9 @@ function matchBoundaries(gaps, clauses) {
     }
     if (meas.every(v => v != null)) return { method: 'exact', meas };
   }
+  // 最近邻: **重新分配**, 绝不从上面那份里继承已填值 —— 继承的话写回的就是"精确 + 最近邻"的
+  // 混合值, 而 method 只报 nearest, 属于谎报方法(2026-09-18 复查 D1: 精确模式失败即走到此处)。
+  const near = new Array(nBound).fill(null);
   const est = clauses.slice(1).map(c => c.start);
   let lastUsed = -1;
   for (let k = 0; k < nBound; k++) {
@@ -64,9 +67,10 @@ function matchBoundaries(gaps, clauses) {
       const d = Math.abs(gaps[g].end - est[k]);
       if (d < bestD && d <= 1.0) { bestD = d; best = g; }
     }
-    if (best > -1) { meas[k] = gaps[best].end; lastUsed = best; }
+    if (best > -1) { near[k] = gaps[best].end; lastUsed = best; }
   }
-  return { method: gaps.length >= nBound ? 'nearest' : 'sparse', meas };
+  // 只有**每条边界都有实测**才叫 nearest(可写回); 有缺口的报 sparse, 只展示不写回
+  return { method: near.every(v => v != null) ? 'nearest' : 'sparse', meas: near };
 }
 
 const report = [];
@@ -78,7 +82,9 @@ for (const t of timings.slides) {
   if (!fs.existsSync(audioPath)) { console.warn(`- 跳过 ${tid}: 缺音频`); continue; }
   const gaps = detectGaps(audioPath, t.tts);
   const { method, meas } = matchBoundaries(gaps, t.clauses);
-  const complete = meas.length > 0 && meas.every(v => v != null);
+  // complete = 这份实测**整份可信**(exact/nearest 两条路都是全命中才返回); sparse 有缺口,
+  // 只展示不写回 —— 半份实测混着估算写进 timings.json 会让下游拿到自相矛盾的时刻。
+  const complete = (method === 'exact' || method === 'nearest') && meas.length > 0 && meas.every(v => v != null);
   if (complete) calibratable++;
 
   const rowsForSlide = t.clauses.slice(1).map((c, k) => ({
@@ -107,7 +113,7 @@ for (const t of timings.slides) {
 if (!report.length) { console.log('所有 slide 都只有单句, 无句间边界可校验。'); process.exit(0); }
 
 let drift = 0, driftN = 0, worst = null;
-const methodLabel = { exact: '精确(标点对齐)', nearest: '最近邻', sparse: '静音段不足', none: '-' };
+const methodLabel = { exact: '精确(标点对齐)', nearest: '最近邻(全命中)', sparse: '静音段不足(未写回)', none: '-' };
 console.log('\n对时对比(估算 vs 静音检测实测):');
 for (const r of report) {
   console.log(`  ${r.id}: 静音段 ${r.gaps} / 句边界 ${r.need} · 匹配 ${methodLabel[r.method]}`);
@@ -120,9 +126,15 @@ if (driftN) {
   const avg = (drift / driftN).toFixed(2);
   console.log(`\n平均偏差 ${avg}s, 最大 ${worst ? worst.id + ' 第' + worst.clause + '句 ' + worst.diff + 's' : '-'}`);
   if (!CALIBRATE) console.log('偏差普遍 >0.3s 时, 用 --calibrate 按实测校准后重跑 capture/build-video。');
-  else console.log('已按实测校准(仅静音段数完全匹配的 slide)。');
+  else console.log('已按实测校准(仅精确/最近邻全命中的 slide; 有缺口的只展示不写回)。');
 }
 if (CALIBRATE) {
+  // 一张都没有全命中时不要动文件: 内容没变也该保持字节不变(重排 + 补行尾会让 diff 与
+  // "文件有没有被改"这件事说谎; 2026-09-18 复查 D1)
+  if (!calibratable) {
+    console.log(`没有一张 slide 的句边界被全部实测到, 未改动 ${timingsPath}(见上面的匹配方法与"(未测)"项)`);
+    process.exit(0);
+  }
   fs.writeFileSync(timingsPath, JSON.stringify(timings, null, 2) + '\n');
-  console.log(`✓ 已写回 ${timingsPath} (校准 ${calibratable}/${report.length} 张, 仅全部句边界都有实测的 slide)。下一步: 删 build/frames/ 后重跑 capture --mode motion 与 build-video。`);
+  console.log(`✓ 已写回 ${timingsPath} (校准 ${calibratable}/${report.length} 张, 仅全部句边界都有实测的 slide; 方法 exact/nearest 才算全命中)。下一步: 删 build/frames/ 后重跑 capture --mode motion 与 build-video。`);
 }

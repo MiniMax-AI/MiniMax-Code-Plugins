@@ -1,0 +1,430 @@
+// html2video-for-mcode · tokens.css 的生成模板(整段受管: 由 tokens 块包住, 升级时整体替换)
+// 从 init-project.mjs 抽出, 让 init-project / check-slides / preview-page 共用同一个"当前版本"。
+// 模板里的三处 wrapKit 由 css-kit 提供(内部带 KIT_REV), 所以 TOKENS_REV 天然覆盖三个工具箱的每次改动。
+import { createHash } from 'node:crypto';
+import { wrapKit } from './css-kit.mjs';
+import { NOFX_CSS } from './nofx-css.mjs';
+import { CHART_CSS } from './chart-css.mjs';
+import { TABLE_CSS } from './table-css.mjs';
+
+export const TOKENS_BODY = `/* html2video-for-mcode 设计令牌 · 由 init-project 生成
+   主题切换: <html data-theme="a|b|c|minimal-white|swiss-grid|corporate-clean|editorial-serif|magazine-bold|tokyo-night|catppuccin-mocha|nord|xiaohongshu-white|soft-pastel">
+
+   a / b / c 是初版三主题(向后兼容, 老项目继续有效); 其余 10 套于 2026-09-17 移植自
+   html-ppt-skill (MIT, Copyright (c) 2026 lewis) —— 详见技能内 THIRD-PARTY-NOTICES.md。
+
+   约定: 新增或覆写主题必须覆盖全部颜色令牌 + --accent-ink, 并跑
+   \`node <技能>/scripts/check-theme.mjs <项目目录>\` 校验对比度(深色主题另需覆写 --sub-bg/--sub-ring)。
+
+   受管块: 下面 >>> html2video:nofx / chart / table <<< 三段(带 rev 定界注释)由技能单源生成,
+   不要手工编辑 —— 改了也会在下次 --upgrade-css 时被按源重写; 自己的规则加在文件尾即可(后写覆盖)。
+*/
+:root {
+  /* ── 画布(渲染管线按 script.json 的 width/height 注入真值; 默认横屏 1920×1080) ── */
+  --stage-w: 1920px; --stage-h: 1080px;
+
+  /* ── 颜色 · 表面 ── */
+  --bg: #FAFAF7; --bg-soft: #F4F3ED;
+  --panel: #F1F0EA; --panel-2: #E9E8E0;
+  --line: #E3E1D8; --line-strong: #CFCDC0;
+
+  /* ── 颜色 · 文本(三级) ── */
+  --fg: #1A1A1A; --muted: #6B6B66; --fg-3: #9A9A92;
+
+  /* ── 颜色 · 强调(accent-ink = 压在 accent 上的文字色, 每条主题必须自带对比度注释) ── */
+  --accent: #FF5B2E; --accent-ink: #FFFFFF;  /* on --accent 3.1:1 — 仅可用于大字/图形 */
+  --accent-2: #FF8A5C; --accent-3: #D94A20;
+
+  /* ── 颜色 · 语义(数据页涨跌/正负) ── */
+  --good: #1AAF6C; --warn: #C98500; --bad: #C13A3A;
+
+  /* ── 涨跌专用(指标卡写 var(--up)/var(--down), 别直接写 good/bad):
+     默认 = 欧美读法(绿涨红跌); A股/港股受众在项目 tokens.css 末尾覆写成红涨绿跌:
+     :root { --up: #D92B2B; --down: #12A150; }   见 references/compliance.md ── */
+  --up: var(--good); --down: var(--bad);
+
+  /* ── 渐变 ── */
+  --grad: linear-gradient(135deg, #FF5B2E, #FF8A5C 55%, #D94A20);
+  --grad-soft: linear-gradient(135deg, #FBF0E8, #F7E7DA);
+
+  /* ── 字幕(capture 烧录的字幕读这些钩子; 深色主题必须覆写 --sub-bg 与 --sub-ring) ── */
+  --sub-bg: rgba(12,12,16,.62); --sub-fg: #FFFFFF; --sub-ring: 0 solid transparent;
+
+  /* ── 圆角 / 阴影 ── */
+  --radius: 16px; --radius-sm: 10px; --radius-lg: 24px;
+  --shadow: 0 8px 24px rgba(18,24,40,.07), 0 2px 6px rgba(18,24,40,.04);
+  --shadow-lg: 0 22px 56px rgba(18,24,40,.13), 0 6px 16px rgba(18,24,40,.06);
+
+  /* ── 字体(全部走本地系统栈, 禁外链; 外链字体在离线沙箱会退化成 FOUT/方框) ── */
+  --font-display: "Source Han Serif SC", "Noto Serif CJK SC", "Noto Serif SC", "SimSun", serif;
+  --font-body: "Inter", "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+
+  /* ── 字号(7 档 modular scale) ── */
+  --fs-display: 92px; --fs-h1: 64px; --fs-h2: 44px; --fs-h3: 34px;
+  --fs-body: 30px; --fs-caption: 24px; --fs-tiny: 20px;
+
+  /* ── 间距(8 的倍数) ── */
+  --sp-1: 8px; --sp-2: 16px; --sp-3: 24px; --sp-4: 32px;
+  --sp-5: 48px; --sp-6: 64px; --sp-7: 96px; --sp-8: 128px;
+
+  /* ── 缓动 / 时长 ── */
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+  --ease-in-out: cubic-bezier(.65, 0, .35, 1);
+  --dur-fast: .4s; --dur-mid: .6s; --dur-slow: .9s;
+
+  /* ── stage 延迟: 浏览器里直接打开时的占位值; 渲染管线会按 TTS 实测时长注入真值 ── */
+  --t1: 0ms; --t2: 800ms; --t3: 2000ms;
+}
+
+/* ══ 主题 b · 深色科技绿(初版) ══ */
+[data-theme="b"] {
+  --bg: #0E0F12; --bg-soft: #12141A; --panel: #171A1F; --panel-2: #1E2229;
+  --line: #262A31; --line-strong: #363B45;
+  --fg: #F4F5F3; --muted: #9A9C9F; --fg-3: #6E7276;
+  --accent: #10A37F; --accent-ink: #04110C;  /* on --accent 7.4:1 */
+  --accent-2: #3DD9AC; --accent-3: #0B7A5F;
+  --good: #3DD9AC; --warn: #E0AF68; --bad: #F7768E;
+  --grad: linear-gradient(135deg, #10A37F, #3DD9AC 55%, #0B7A5F);
+  --grad-soft: linear-gradient(135deg, #171A1F, #1E2229);
+  --sub-bg: rgba(0,0,0,.58); --sub-ring: 1px solid rgba(255,255,255,.16);
+  --shadow: 0 10px 30px rgba(0,0,0,.45); --shadow-lg: 0 24px 60px rgba(0,0,0,.6);
+}
+
+/* ══ 主题 c · 极简蓝(初版) ══ */
+[data-theme="c"] {
+  --bg: #FFFFFF; --bg-soft: #F7F8FA; --panel: #F5F6F8; --panel-2: #EDEFF3;
+  --line: #E5E7EB; --line-strong: #CFD3DA;
+  --fg: #111111; --muted: #666666; --fg-3: #9AA0A8;
+  --accent: #1F6FEB; --accent-ink: #FFFFFF;  /* on --accent 4.9:1 */
+  --accent-2: #5B9BFF; --accent-3: #1550B8;
+  --good: #0E9F6E; --warn: #D97706; --bad: #DC2626;
+  --grad: linear-gradient(135deg, #1F6FEB, #5B9BFF 55%, #1550B8);
+  --grad-soft: linear-gradient(135deg, #F0F4FB, #E4ECF7);
+  --shadow: 0 1px 3px rgba(10,37,64,.08), 0 4px 12px rgba(10,37,64,.05);
+  --shadow-lg: 0 4px 12px rgba(10,37,64,.1), 0 16px 40px rgba(10,37,64,.08);
+}
+
+/* ════════════════════════════════════════════════════════════════
+   以下 10 套主题移植自 html-ppt-skill(MIT, © 2026 lewis)
+   映射规则: --surface→--panel, --surface-2→--panel-2, --border→--line,
+   --border-strong→--line-strong, --text-1→--fg, --text-2→--muted, --text-3→--fg-3;
+   外链字体(Playfair/Space Grotesk 等)一律改映射到我们的本地字体栈。
+   每套的 --accent-ink 后保留原作者实测的对比度数值。
+   ════════════════════════════════════════════════════════════════ */
+
+/* 商务汇报 · 极简白, 克制高级 */
+[data-theme="minimal-white"] {
+  --bg: #FFFFFF; --bg-soft: #FAFAFA; --panel: #FFFFFF; --panel-2: #F5F5F6;
+  --line: rgba(17,18,22,.08); --line-strong: rgba(17,18,22,.16);
+  --fg: #0C0D10; --muted: #55596A; --fg-3: #9CA1B0;
+  --accent: #111216; --accent-ink: #FFFFFF;  /* on --accent 18.7:1 */
+  --accent-2: #3B3F4A; --accent-3: #6B6F7A;
+  --good: #1AAF6C; --warn: #C98500; --bad: #C13A3A;
+  --grad: linear-gradient(135deg, #111216, #3B3F4A);
+  --grad-soft: linear-gradient(135deg, #F5F5F6, #FFFFFF);
+  --radius: 14px; --radius-sm: 8px; --radius-lg: 22px;
+  --shadow: 0 1px 2px rgba(17,18,22,.04), 0 8px 24px rgba(17,18,22,.06);
+  --shadow-lg: 0 20px 60px rgba(17,18,22,.1);
+  --font-display: var(--font-body);
+}
+
+/* 商务汇报 · 瑞士网格(Helvetica 感; .stage 带 12 栏竖线) */
+[data-theme="swiss-grid"] {
+  --bg: #FFFFFF; --bg-soft: #F4F4F4; --panel: #FFFFFF; --panel-2: #F4F4F4;
+  --line: #111111; --line-strong: #111111;
+  --fg: #111111; --muted: #444444; --fg-3: #888888;
+  --accent: #D6001C; --accent-ink: #FFFFFF;  /* on --accent 5.4:1 */
+  --accent-2: #111111; --accent-3: #888888;
+  --good: #0F8A2F; --warn: #D38A00; --bad: #D6001C;
+  --grad: linear-gradient(135deg, #D6001C, #111111);
+  --grad-soft: linear-gradient(135deg, #F4F4F4, #FFFFFF);
+  --radius: 0; --radius-sm: 0; --radius-lg: 0;
+  --shadow: none; --shadow-lg: none;
+  --font-display: var(--font-body);
+}
+[data-theme="swiss-grid"] .card { border-top: 2px solid var(--fg); border-bottom: 1px solid var(--fg); border-left: none; border-right: none; box-shadow: none; background: var(--bg); }
+[data-theme="swiss-grid"] .stage { background-image: linear-gradient(90deg, rgba(0,0,0,.04) 1px, transparent 1px); background-size: calc(100% / 12) 100%; }
+
+/* 商务汇报 · 企业商务(深蓝) */
+[data-theme="corporate-clean"] {
+  --bg: #FFFFFF; --bg-soft: #F5F7FA; --panel: #FFFFFF; --panel-2: #F0F3F7;
+  --line: rgba(10,37,64,.12); --line-strong: rgba(10,37,64,.28);
+  --fg: #0A2540; --muted: #425466; --fg-3: #8898AA;
+  --accent: #0A2540; --accent-ink: #FFFFFF;  /* on --accent 15.5:1 */
+  --accent-2: #1D4ED8; --accent-3: #64748B;
+  --good: #0E9F6E; --warn: #D97706; --bad: #DC2626;
+  --grad: linear-gradient(135deg, #0A2540, #1D4ED8);
+  --grad-soft: linear-gradient(135deg, #F0F4FB, #E4ECF7);
+  --radius: 6px; --radius-sm: 4px; --radius-lg: 10px;
+  --shadow: 0 1px 3px rgba(10,37,64,.08), 0 4px 12px rgba(10,37,64,.05);
+  --shadow-lg: 0 4px 12px rgba(10,37,64,.1), 0 16px 40px rgba(10,37,64,.08);
+  --font-display: var(--font-body);
+}
+[data-theme="corporate-clean"] .kicker { color: var(--accent-2); }
+
+/* 编辑杂志 · 杂志风衬线(原主题给标题配斜体, 中文伪斜体观感差故略去) */
+[data-theme="editorial-serif"] {
+  --bg: #FAF7F2; --bg-soft: #F3EFE6; --panel: #FFFFFF; --panel-2: #F7F2E8;
+  --line: rgba(40,28,18,.12); --line-strong: rgba(40,28,18,.24);
+  --fg: #1B1410; --muted: #5C4A3E; --fg-3: #8A7868;
+  --accent: #8A2A1C; --accent-ink: #FFFFFF;  /* on --accent 8.6:1 */
+  --accent-2: #C97A4A; --accent-3: #1B1410;
+  --good: #3F7D4F; --warn: #B07A1F; --bad: #8A2A1C;
+  --grad: linear-gradient(135deg, #8A2A1C, #C97A4A);
+  --grad-soft: linear-gradient(135deg, #FAF7F2, #F3EFE6);
+  --radius: 4px; --radius-sm: 2px; --radius-lg: 8px;
+  --shadow: 0 2px 12px rgba(40,28,18,.06); --shadow-lg: 0 20px 50px rgba(40,28,18,.14);
+}
+
+/* 编辑杂志 · 大标题(硬阴影 + 衬线巨字) */
+[data-theme="magazine-bold"] {
+  --bg: #F5EFE2; --bg-soft: #EBE4D2; --panel: #FBF6E8; --panel-2: #EDE5D0;
+  --line: rgba(10,10,10,.16); --line-strong: #0A0A0A;
+  --fg: #0A0A0A; --muted: #2A2A2A; --fg-3: #6A6458;
+  --accent: #EA5A1A; --accent-ink: #0B1024;  /* on --accent 5.4:1 */
+  --accent-2: #0A0A0A; --accent-3: #C42A10;
+  --good: #2A6A2A; --warn: #EA5A1A; --bad: #C42A10;
+  --grad: linear-gradient(135deg, #EA5A1A, #C42A10);
+  --grad-soft: linear-gradient(135deg, #FBE4D0, #F5D6C0);
+  --radius: 0; --radius-sm: 0; --radius-lg: 2px;
+  --shadow: none; --shadow-lg: 6px 6px 0 var(--accent);
+}
+[data-theme="magazine-bold"] .card { border: 1.5px solid var(--fg); }
+[data-theme="magazine-bold"] .divider-accent { height: 6px; width: 90px; }
+
+/* 科技深色 · tokyo-night */
+[data-theme="tokyo-night"] {
+  --bg: #1A1B26; --bg-soft: #16161E; --panel: #24283B; --panel-2: #2F334D;
+  --line: rgba(192,202,245,.12); --line-strong: rgba(192,202,245,.24);
+  --fg: #C0CAF5; --muted: #A9B1D6; --fg-3: #565F89;
+  --accent: #7AA2F7; --accent-ink: #0B1024;  /* on --accent 7.5:1 */
+  --accent-2: #BB9AF7; --accent-3: #7DCFFF;
+  --good: #9ECE6A; --warn: #E0AF68; --bad: #F7768E;
+  --grad: linear-gradient(135deg, #7AA2F7, #BB9AF7 55%, #F7768E);
+  --grad-soft: linear-gradient(135deg, #24283B, #2F334D);
+  --sub-bg: rgba(0,0,0,.58); --sub-ring: 1px solid rgba(255,255,255,.16);
+  --radius: 12px; --radius-sm: 8px; --radius-lg: 20px;
+  --shadow: 0 10px 30px rgba(0,0,0,.45); --shadow-lg: 0 24px 62px rgba(0,0,0,.6);
+}
+
+/* 科技深色 · catppuccin mocha */
+[data-theme="catppuccin-mocha"] {
+  --bg: #1E1E2E; --bg-soft: #181825; --panel: #313244; --panel-2: #45475A;
+  --line: rgba(205,214,244,.12); --line-strong: rgba(205,214,244,.24);
+  --fg: #CDD6F4; --muted: #A6ADC8; --fg-3: #7F849C;
+  --accent: #CBA6F7; --accent-ink: #0B1024;  /* on --accent 9.3:1 */
+  --accent-2: #89B4FA; --accent-3: #F5C2E7;
+  --good: #A6E3A1; --warn: #F9E2AF; --bad: #F38BA8;
+  --grad: linear-gradient(135deg, #CBA6F7, #89B4FA 50%, #94E2D5);
+  --grad-soft: linear-gradient(135deg, #313244, #45475A);
+  --sub-bg: rgba(0,0,0,.58); --sub-ring: 1px solid rgba(255,255,255,.16);
+  --radius: 14px; --radius-sm: 10px; --radius-lg: 22px;
+  --shadow: 0 10px 30px rgba(0,0,0,.35); --shadow-lg: 0 24px 60px rgba(0,0,0,.5);
+}
+
+/* 科技深色 · nord */
+[data-theme="nord"] {
+  --bg: #2E3440; --bg-soft: #272B35; --panel: #3B4252; --panel-2: #434C5E;
+  --line: rgba(236,239,244,.12); --line-strong: rgba(236,239,244,.24);
+  --fg: #ECEFF4; --muted: #D8DEE9; --fg-3: #7B8394;
+  --accent: #88C0D0; --accent-ink: #0B1024;  /* on --accent 9.4:1 */
+  --accent-2: #81A1C1; --accent-3: #B48EAD;
+  --good: #A3BE8C; --warn: #EBCB8B; --bad: #BF616A;
+  --grad: linear-gradient(135deg, #88C0D0, #81A1C1 50%, #B48EAD);
+  --grad-soft: linear-gradient(135deg, #3B4252, #434C5E);
+  --sub-bg: rgba(0,0,0,.58); --sub-ring: 1px solid rgba(255,255,255,.16);
+  --radius: 12px; --radius-sm: 8px; --radius-lg: 20px;
+  --shadow: 0 10px 30px rgba(0,0,0,.35); --shadow-lg: 0 22px 60px rgba(0,0,0,.5);
+}
+
+/* 消费生活 · 小红书白底高级感 */
+[data-theme="xiaohongshu-white"] {
+  --bg: #FFFDFB; --bg-soft: #FFF6F1; --panel: #FFFFFF; --panel-2: #FFF1EA;
+  --line: rgba(60,30,20,.1); --line-strong: rgba(60,30,20,.22);
+  --fg: #1A1210; --muted: #4F3A32; --fg-3: #A08D85;
+  --accent: #FF2742; --accent-ink: #0B1024;  /* on --accent 5.0:1 */
+  --accent-2: #FF7A90; --accent-3: #FFB38A;
+  --good: #3BA55C; --warn: #F5A524; --bad: #FF2742;
+  --grad: linear-gradient(135deg, #FF2742, #FF7A90 55%, #FFB38A);
+  --grad-soft: linear-gradient(135deg, #FFF6F1, #FFEAE0);
+  --radius: 20px; --radius-sm: 14px; --radius-lg: 28px;
+  --shadow: 0 12px 30px rgba(255,39,66,.08); --shadow-lg: 0 24px 60px rgba(255,39,66,.14);
+}
+
+/* 消费生活 · 柔和马卡龙 */
+[data-theme="soft-pastel"] {
+  --bg: #FDF7FB; --bg-soft: #FBEEF3; --panel: #FFFFFF; --panel-2: #FDF0F5;
+  --line: rgba(120,70,110,.12); --line-strong: rgba(120,70,110,.22);
+  --fg: #3A1F33; --muted: #6B4D62; --fg-3: #A28A99;
+  --accent: #F49BB8; --accent-ink: #0B1024;  /* on --accent 9.2:1 */
+  --accent-2: #B5D5F0; --accent-3: #F7D08A;
+  --good: #9DD9A3; --warn: #F7D08A; --bad: #EF9A9A;
+  --grad: linear-gradient(135deg, #F49BB8, #B5D5F0 55%, #C4A0E8);
+  --grad-soft: linear-gradient(135deg, #FBEEF3, #EAF4FC);
+  --radius: 24px; --radius-sm: 16px; --radius-lg: 32px;
+  --shadow: 0 8px 28px rgba(244,155,184,.18); --shadow-lg: 0 24px 70px rgba(181,213,240,.3);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: var(--stage-w, 1920px); height: var(--stage-h, 1080px); overflow: hidden; }
+.stage {
+  position: relative; width: var(--stage-w, 1920px); height: var(--stage-h, 1080px); overflow: hidden;
+  background: var(--bg); color: var(--fg); font-family: var(--font-body);
+}
+.brand {
+  position: absolute; top: 44px; left: 64px;
+  font-size: var(--fs-tiny); letter-spacing: .14em; color: var(--muted);
+}
+.slide-num {
+  position: absolute; bottom: 40px; right: 64px;
+  font-size: var(--fs-tiny); letter-spacing: .1em; color: var(--muted);
+}
+.accent { color: var(--accent); }
+.gradient-text { background: var(--grad); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent; }
+
+/* ── 排版角色 ───────────────────────────────────────────────── */
+.kicker { font-size: var(--fs-tiny); font-weight: 600; color: var(--accent); letter-spacing: .08em; }
+.eyebrow { font-size: var(--fs-tiny); font-weight: 500; letter-spacing: .16em; color: var(--fg-3); }
+.lede { font-size: var(--fs-h3); line-height: 1.55; color: var(--muted); font-weight: 300; max-width: 1400px; }
+
+/* ── 卡片 / 标签 / 分隔 ─────────────────────────────────────── */
+.card {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: var(--sp-4) var(--sp-5); box-shadow: var(--shadow); position: relative; overflow: hidden;
+}
+.card-soft { background: var(--panel-2); border-color: transparent; box-shadow: none; }
+.card-outline { background: transparent; border: 1.5px solid var(--line-strong); box-shadow: none; }
+.card-accent { border-top: 3px solid var(--accent); }
+.pill {
+  display: inline-block; padding: 4px 14px; border-radius: 999px; font-size: var(--fs-tiny);
+  font-weight: 500; background: var(--panel-2); color: var(--muted); border: 1px solid var(--line);
+}
+.pill-accent {
+  background: var(--panel-2);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent); border-color: var(--line);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.divider-accent { height: 4px; width: 72px; background: var(--accent); border-radius: 2px; }
+
+/* ── 图片框(硬规则: 图片必须套框, 禁止裸放 <img>) ─────────────
+   .img-frame        比例与裁切归框所有; 图片只管填满
+   .img-frame.contain 不裁切(截图/图表/logo 必须用这个), 居中留白
+   --img-ratio       框比例(默认 16/10); --img-pos 主体位置(如 top 保住头部)
+   .img-scrim        底部渐变压暗, 让白字压在照片上仍可读 */
+.img-frame {
+  position: relative; margin: 0; overflow: hidden; display: block;
+  border-radius: var(--radius); box-shadow: var(--shadow); background: var(--panel-2);
+  aspect-ratio: var(--img-ratio, 16/10);
+}
+.img-frame > img { width: 100%; height: 100%; object-fit: cover; object-position: var(--img-pos, center); display: block; }
+.img-frame.contain { background: var(--bg-soft); box-shadow: none; border: 1px solid var(--line); }
+.img-frame.contain > img { object-fit: contain; }
+.img-frame.fill { height: 100%; aspect-ratio: auto; }
+.img-scrim { position: absolute; inset: 0; background: linear-gradient(180deg, transparent 42%, rgba(8,10,20,.72)); }
+.img-cap { margin: 10px 2px 0; font-size: var(--fs-tiny); line-height: 1.5; color: var(--fg-3); }
+.img-tag {
+  position: absolute; top: 14px; left: 14px; padding: 5px 14px; border-radius: 999px;
+  background: rgba(10,12,20,.55); color: #fff; font-size: var(--fs-tiny); letter-spacing: .06em;
+}
+
+/* ── 免责声明 / 出处标注行(受监管题材: 财经/医疗/法律/政策, 见 references/compliance.md)
+   小字不抢视觉; 出现在 closing 张并停留 ≥3s; 口播不念、不进字幕; 加了它也不替代核实 */
+.disclaimer { font-size: var(--fs-tiny); line-height: 1.6; color: var(--fg-3); max-width: 1240px; }
+.disclaimer-box { border-left: 2px solid var(--line-strong); padding-left: var(--sp-3); }
+
+/* ── 分步入场系统 ──────────────────────────────────────────────
+   要入场的块: data-stage="1|2|3" + fx-* 工具类, 例:
+     <h1 data-stage="1" class="fx-up">大标题</h1>
+     <p  data-stage="2" class="fx-fade">展开内容</p>
+   延迟由管线按口播实测时长注入 --t1/--t2/--t3, HTML 里不要写死。
+   同层内错峰: 用容器 .fx-stagger(基准时刻用 style="--stagger-base:var(--t3)" 指定),
+   或内联 style="animation-delay:calc(var(--t2) + 150ms)"
+   ⚠ data-stage 必须与 fx-* 类同时用 —— 只有 data-stage 没有动画类, 元素会永远停在 opacity:0;
+     容器用 .fx-stagger 时容器自身不要再加 data-stage(子元素自己管入场)。
+   氛围动画(无限循环, 不承载信息)不加 data-stage: fx-pulse / fx-shimmer / fx-kenburns */
+[data-stage] { opacity: 0; --fx-delay: 0ms; }
+[data-stage="1"] { --fx-delay: var(--t1); }
+[data-stage="2"] { --fx-delay: var(--t2); }
+[data-stage="3"] { --fx-delay: var(--t3); }
+
+/* 入场(有限时长, 可被逐帧 seek)。延迟写进 shorthand 的变量槽 —— 不能用独立的
+   animation-delay 声明: 它与下面的 .fx-* 简写同优先级且更靠前, 会被简写重置为 0,
+   导致所有 stage 都在 0 秒入场(2026-09-17 实测确认的坑)。inline animation-delay 仍可覆盖(错峰用)。 */
+.fx-up    { animation: fx-up    var(--dur-mid)  var(--ease-out) var(--fx-delay, 0ms) both; }
+.fx-fade  { animation: fx-fade  var(--dur-fast) var(--ease-out) var(--fx-delay, 0ms) both; }
+.fx-grow  { animation: fx-grow  var(--dur-slow) var(--ease-out) var(--fx-delay, 0ms) both; }
+.fx-blur  { animation: fx-blur  .8s  var(--ease-out) var(--fx-delay, 0ms) both; }   /* 模糊聚焦 */
+.fx-rise  { animation: fx-rise  .9s  var(--ease-out) var(--fx-delay, 0ms) both; }   /* 上浮+微缩放+去模糊 */
+.fx-pop   { animation: fx-pop   .7s  cubic-bezier(.22,1.3,.36,1) var(--fx-delay, 0ms) both; } /* 过冲弹入 */
+.fx-spotlight { animation: fx-spotlight 1.1s var(--ease-out) var(--fx-delay, 0ms) both; }      /* 圆形揭示 */
+.fx-ripple    { animation: fx-ripple    1.2s var(--ease-out) var(--fx-delay, 0ms) both; }      /* 斜角冲开 */
+.fx-glitch    { animation: fx-glitch    .8s  steps(5, end) var(--fx-delay, 0ms) both; }        /* 故障切入 */
+.fx-draw  { animation: fx-draw 1.2s var(--ease-in-out) var(--fx-delay, 0ms) both; } /* 需元素自设 stroke-dasharray:800 */
+.fx-grow-x { transform-origin: left center; animation: fx-grow-x-kf .9s var(--ease-out) var(--fx-delay, 0ms) both; }  /* 图表: 条形从左长出 */
+.fx-grow-y { transform-origin: bottom center; animation: fx-grow-y-kf .9s var(--ease-out) var(--fx-delay, 0ms) both; } /* 图表: 柱状从底长出 */
+
+${wrapKit('nofx', NOFX_CSS)}
+
+@keyframes fx-up   { from { opacity: 0; transform: translateY(32px); } to { opacity: 1; transform: none; } }
+@keyframes fx-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fx-grow { from { opacity: 0; transform: scale(.9); } to { opacity: 1; transform: scale(1); } }
+@keyframes fx-blur { from { opacity: 0; filter: blur(18px); } to { opacity: 1; filter: none; } }
+@keyframes fx-rise { from { opacity: 0; transform: translateY(60px) scale(.97); filter: blur(6px); } to { opacity: 1; transform: none; filter: none; } }
+@keyframes fx-pop  { 0% { opacity: 0; transform: scale(.6); } 60% { transform: scale(1.04); } 100% { opacity: 1; transform: scale(1); } }
+@keyframes fx-spotlight { from { clip-path: circle(0% at 50% 50%); opacity: 1; } to { clip-path: circle(140% at 50% 50%); opacity: 1; } }
+@keyframes fx-ripple    { from { clip-path: circle(0% at 20% 80%); opacity: .4; } to { clip-path: circle(160% at 20% 80%); opacity: 1; } }
+@keyframes fx-glitch {
+  0% { opacity: 0; transform: translateX(0); clip-path: inset(0 0 0 0); }
+  20% { opacity: 1; transform: translateX(-6px); clip-path: inset(20% 0 30% 0); }
+  40% { transform: translateX(4px); clip-path: inset(50% 0 10% 0); }
+  60% { transform: translateX(-3px); clip-path: inset(10% 0 60% 0); }
+  80% { transform: translateX(2px); clip-path: inset(0 0 0 0); }
+  100% { opacity: 1; transform: none; }
+}
+@keyframes fx-draw { from { stroke-dashoffset: 800; opacity: 1; } to { stroke-dashoffset: 0; opacity: 1; } }
+/* 注意: 只做 transform 的动画必须显式带上 opacity:1 —— [data-stage] 的基础态是 opacity:0,
+   靠动画抬回 1; 关键帧不碰 opacity 的动画会让元素永远隐形(2026-09-18 实测) */
+@keyframes fx-grow-x-kf { from { transform: scaleX(0); opacity: 1; } to { transform: scaleX(1); opacity: 1; } }
+@keyframes fx-grow-y-kf { from { transform: scaleY(0); opacity: 1; } to { transform: scaleY(1); opacity: 1; } }
+
+/* 氛围(无限循环, 不参与时长计算) */
+.fx-pulse { animation: fx-pulse 2.4s var(--ease-in-out) infinite; }
+@keyframes fx-pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+.fx-shimmer { position: relative; overflow: hidden; }
+.fx-shimmer::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(110deg, transparent 40%, rgba(255,255,255,.5) 50%, transparent 60%);
+  transform: translateX(-100%); animation: fx-shimmer-kf 2.4s var(--ease-in-out) infinite;
+}
+@keyframes fx-shimmer-kf { to { transform: translateX(100%); } }
+.fx-kenburns { animation: fx-kenburns-kf 14s ease-in-out infinite alternate; }
+@keyframes fx-kenburns-kf { from { transform: scale(1) translate(0, 0); } to { transform: scale(1.15) translate(-2%, -1%); } }
+
+${wrapKit('chart', CHART_CSS)}
+
+${wrapKit('table', TABLE_CSS)}
+
+/* 依次入场容器: 子元素逐个上浮, 基准时刻取 --stagger-base(默认 --t2)。
+   :not([data-stage]) 是必须的(2026-09-18 实测踩坑): nth-child 延迟规则特异度(0,2,0)高于
+   fx-* 类(0,1,0), 不排除的话会覆盖带 data-stage 子元素自己的 --fx-delay, 元素提前几秒冒出来;
+   语义: 要错峰的块当子元素(不带 data-stage), 要自己管入场时刻的块放容器外面 */
+.fx-stagger > *:not([data-stage]) { opacity: 0; animation: fx-rise .65s var(--ease-out) both; }
+.fx-stagger > *:not([data-stage]):nth-child(1) { animation-delay: calc(var(--stagger-base, var(--t2)) + 0ms); }
+.fx-stagger > *:not([data-stage]):nth-child(2) { animation-delay: calc(var(--stagger-base, var(--t2)) + 120ms); }
+.fx-stagger > *:not([data-stage]):nth-child(3) { animation-delay: calc(var(--stagger-base, var(--t2)) + 240ms); }
+.fx-stagger > *:not([data-stage]):nth-child(4) { animation-delay: calc(var(--stagger-base, var(--t2)) + 360ms); }
+.fx-stagger > *:not([data-stage]):nth-child(5) { animation-delay: calc(var(--stagger-base, var(--t2)) + 480ms); }
+.fx-stagger > *:not([data-stage]):nth-child(6) { animation-delay: calc(var(--stagger-base, var(--t2)) + 600ms); }
+.fx-stagger > *:not([data-stage]):nth-child(7) { animation-delay: calc(var(--stagger-base, var(--t2)) + 720ms); }
+.fx-stagger > *:not([data-stage]):nth-child(n+8) { animation-delay: calc(var(--stagger-base, var(--t2)) + 840ms); }
+`;
+
+/** 生成完整 tokens.css 内容(LF 归一): init-project 写入用它, --upgrade-css 原地替换也用它 */
+export function generateTokensCss() {
+  return TOKENS_BODY.replace(/\r\n/g, '\n');
+}
+
+/** 当前版本的指纹: 内容(含三个工具箱)变了它就变 */
+export const TOKENS_REV = createHash('sha256').update(generateTokensCss()).digest('hex');

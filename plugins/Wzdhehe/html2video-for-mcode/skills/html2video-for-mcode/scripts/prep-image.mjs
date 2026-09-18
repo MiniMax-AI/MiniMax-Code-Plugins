@@ -8,16 +8,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { requireTool } from './tools.mjs';
+import { positionals, requireTool } from './tools.mjs';
 
 const argv = process.argv.slice(2);
-const VALUE_FLAGS = new Set(['--ratio', '--anchor']); // 这些 flag 后面跟一个值, 值不算位置参数
-const positional = [];
-for (let i = 0; i < argv.length; i++) {
-  const a = argv[i];
-  if (a.startsWith('--')) { if (VALUE_FLAGS.has(a)) i++; continue; }
-  positional.push(a);
-}
+// --check / --crop 是布尔开关, 它们后面那串文件名本来就是位置参数(所以不在 tools.VALUE_FLAGS 里)
+const positional = positionals(argv);
 const flag = (name, dflt) => { const i = argv.indexOf(name); return i > -1 ? argv[i + 1] : dflt; };
 
 // 按当前工作目录找项目内的 ffmpeg-static / ffprobe-static(二审 P2: README 明说支持装在视频项目里)

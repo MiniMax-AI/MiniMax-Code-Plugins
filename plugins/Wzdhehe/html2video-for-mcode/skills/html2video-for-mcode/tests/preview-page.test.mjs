@@ -4,13 +4,14 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { runSkill, mkproj, tmpdir, SCRIPTS } from './helpers.mjs';
+import { runSkill, mkproj, tmpdir, SCRIPTS, LEGACY_TOKENS } from './helpers.mjs';
 
 const mod = await import('file://' + path.join(SCRIPTS, 'preview-page.mjs').replace(/\\/g, '/'));
 const { stageVars, injectHtmlVars, addNoFx, addBaseHref, injectStyle, buildPlayPage, stagesFromHtml, fallbackStages } = mod;
 const { NOFX_CSS } = await import('file://' + path.join(SCRIPTS, 'nofx-css.mjs').replace(/\\/g, '/'));
 const { CHART_CSS } = await import('file://' + path.join(SCRIPTS, 'chart-css.mjs').replace(/\\/g, '/'));
 const { TABLE_CSS } = await import('file://' + path.join(SCRIPTS, 'table-css.mjs').replace(/\\/g, '/'));
+const { generateTokensCss } = await import('file://' + path.join(SCRIPTS, 'tokens-template.mjs').replace(/\\/g, '/'));
 
 const SLIDE = `<!doctype html>
 <html lang="zh-CN" data-theme="a">
@@ -143,8 +144,8 @@ describe('预览放映页 · 落到磁盘', () => {
     assert.ok(r.stdout.includes('4866') || r.stdout.includes('末层'), '应打印注入结果');
   });
 
-  test('老项目 tokens.css 落后 → 副本兜底注入当前版并如实警告', () => {
-    const proj = build(tmpdir(), { timings: true });
+  test('老项目 tokens.css 落后(无受管区) → 副本兜底注入当前版并如实警告', () => {
+    const proj = build(tmpdir(), { tokens: LEGACY_TOKENS, timings: true });
     const r = runSkill('preview-page.mjs', [proj]);
     assert.equal(r.status, 0, r.stderr);
     const out = path.join(proj, 'preview', 'play');
@@ -157,8 +158,10 @@ describe('预览放映页 · 落到磁盘', () => {
     assert.ok(r.stderr.includes('no-fx'), '应在终端说明 tokens.css 落后');
   });
 
-  test('新 tokens.css(三段工具箱都当前) → 不注入, 保持纯快照', () => {
-    const tokens = `:root{--accent:#111}\n${NOFX_CSS}\n${CHART_CSS}\n${TABLE_CSS}\n`;
+  test('新 tokens.css(tokens 主体 + 三段工具箱都当前) → 不注入, 保持纯快照', () => {
+    // "当前"的判据是**整段生成物在场**(受管区包裹, 或老格式的等价裸文本) —— 只贴三段工具箱
+    // 而没有主题令牌/字号/fx 的文件不算当前(渲染结果与技能当前版不同, 该兜底就兜底)。
+    const tokens = generateTokensCss();
     const proj = build(tmpdir(), { tokens, timings: true });
     const r = runSkill('preview-page.mjs', [proj]);
     assert.equal(r.status, 0, r.stderr);
@@ -166,6 +169,35 @@ describe('预览放映页 · 落到磁盘', () => {
     assert.ok(!fs.readFileSync(path.join(outDir, '01-title.nofx.html'), 'utf8').includes('兜底注入'));
     assert.ok(!fs.readFileSync(path.join(outDir, '01-title.html'), 'utf8').includes('兜底注入'));
     assert.ok(!r.stderr.includes('落后'));
+  });
+
+  test('老格式裸文本(无 tokens 受管区但内容已是当前版) → 同样不注入: 渲染无差异就不该骚扰', () => {
+    // 真实老格式: 只有外层 tokens 定界没有, 内嵌的三个工具箱子块照旧带定界(老模板就是那样)
+    const legacy = generateTokensCss()
+      .replace(/^\/\* >>> html2video:tokens rev=[0-9a-f]{8,64} >>> \*\/\n?/, '')
+      .replace(/\n?\/\* <<< html2video:tokens <<< \*\/\n?$/, '');
+    assert.ok(!/>>> html2video:tokens rev=/.test(legacy), '前置: 外层 tokens 定界已去掉');
+    assert.ok(/>>> html2video:nofx rev=/.test(legacy), '前置: 内嵌 kit 子块照旧留着');
+    const proj = build(tmpdir(), { tokens: legacy, timings: true });
+    const r = runSkill('preview-page.mjs', [proj]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(!fs.readFileSync(path.join(proj, 'preview', 'play', '01-title.html'), 'utf8').includes('兜底注入'));
+    assert.ok(!r.stderr.includes('落后'));
+  });
+
+  test('整段主体缺失(只贴了三段工具箱) → 兜底注入当前整段, 页面写明"成片仍是旧 CSS"', () => {
+    const tokens = `:root{--accent:#111}\n${NOFX_CSS}\n${CHART_CSS}\n${TABLE_CSS}\n`;
+    const proj = build(tmpdir(), { tokens, timings: true });
+    const r = runSkill('preview-page.mjs', [proj]);
+    assert.equal(r.status, 0, r.stderr);
+    const main = fs.readFileSync(path.join(proj, 'preview', 'play', '01-title.html'), 'utf8');
+    const nofx = fs.readFileSync(path.join(proj, 'preview', 'play', '01-title.nofx.html'), 'utf8');
+    assert.ok(main.includes('--fs-body'), '主题令牌/字号要兜底补上(缺了画面直接走样)');
+    assert.ok(!main.includes('no-fx 规则'), '动效副本不得注入 no-fx 规则');
+    assert.ok(nofx.includes('opacity: 1 !important'), '关动效副本要连 no-fx 一起兜底');
+    const page = fs.readFileSync(path.join(proj, 'preview', 'play', 'index.html'), 'utf8');
+    assert.ok(page.includes('成片仍用项目里的旧 CSS'), '放映页对了不等于成片对了 —— 这句话必须在页面上');
+    assert.ok(r.stderr.includes('--upgrade-css'), '终端也要给修复命令');
   });
 
   test('没有 timings.json → 照常出页, 但明确警告时序不是成片的', () => {
