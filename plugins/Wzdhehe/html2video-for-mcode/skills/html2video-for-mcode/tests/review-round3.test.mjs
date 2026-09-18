@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runSkill, mkproj, tmpdir, SCRIPTS, LEGACY_TOKENS } from './helpers.mjs';
-import { findTool } from '../scripts/tools.mjs';
+import { findTool, loadPackage } from '../scripts/tools.mjs';
 
 const FFMPEG = findTool('ffmpeg');
 const { positionals, readTransition, positionalDir, VALUE_FLAGS } = await import(
@@ -127,6 +127,32 @@ describe('D3 · fetch-official-images 的参数与退出码', () => {
       assert.ok(!r.stderr.includes('用法:'), `--json 位置 ${args[0]} 不该导致缺位置参数: ${r.stderr}`);
       assert.equal(r.status, 1);
       assert.ok(r.stderr.includes('内网') || r.stderr.includes('拒绝') || r.stderr.includes('127.0.0.1'), r.stderr);
+    }
+  });
+
+  // 终轮复查抓到: --json 在末尾(文档写的用法)时, flagValue 取"下一个参数"得到 undefined,
+  // 分支为假 → 静默退化成人类可读列表。上面的用例只断言"走到了网址校验",
+  // 观察不到这个退化 —— 必须端到端断言真的输出了 JSON。
+  test('--json 真的输出 JSON(两种位置都对 file:// 夹具页生效)', async t => {
+    const playwright = await loadPackage('playwright');
+    if (!playwright) return t.skip('无 playwright(列表路径要开浏览器; 真跑由 scoped smoke workflow 覆盖)');
+    try { const b = await playwright.chromium.launch({ headless: true }); await b.close(); } catch {
+      return t.skip('chromium 未安装(npx playwright install chromium)');
+    }
+    const d = proj();
+    fs.writeFileSync(path.join(d, 'pic.png'),
+      Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'));
+    fs.writeFileSync(path.join(d, 'page.html'),
+      '<!doctype html><html><body><img src="pic.png" alt="fixture"></body></html>');
+    const pageUrl = 'file:///' + path.join(d, 'page.html').replace(/\\/g, '/');
+    for (const args of [[pageUrl, '--allow-file', '--json'], ['--json', pageUrl, '--allow-file']]) {
+      const r = runSkill('fetch-official-images.mjs', args, { cwd: d });
+      assert.equal(r.status, 0, `--json 位置 ${args[0]}: ${r.stdout}${r.stderr}`);
+      let arr = null;
+      try { arr = JSON.parse(r.stdout); } catch { /* 下面断言报出实际输出 */ }
+      assert.ok(Array.isArray(arr) && arr.length >= 1 && arr[0].src,
+        `--json 必须输出候选 JSON 数组, 实际: ${(r.stdout || r.stderr).slice(0, 200)}`);
+      assert.ok(!r.stdout.includes('候选图'), 'JSON 模式不得再混人类可读列表');
     }
   });
 

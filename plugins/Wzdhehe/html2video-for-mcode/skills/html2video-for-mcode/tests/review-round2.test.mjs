@@ -8,7 +8,9 @@ import { spawnSync } from 'node:child_process';
 import { runSkill, runSkillAsync, mkproj, tmpdir, skill } from './helpers.mjs';
 import { assertResolvedHost, PolicyError } from '../scripts/url-policy.mjs';
 import { SCRIPTS } from './helpers.mjs';
-import { findTool } from '../scripts/tools.mjs';
+import { findTool, loadPackage } from '../scripts/tools.mjs';
+
+const HAS_PW = !!(await loadPackage('playwright'));
 const { injectHtmlVars, addNoFx } = await import('file://' + path.join(SCRIPTS, 'preview-page.mjs').replace(/\\/g, '/'));
 
 describe('二审 · 输出收监(项目内目录段是符号链接时, 不得写到/删到项目外)', () => {
@@ -30,7 +32,16 @@ describe('二审 · 输出收监(项目内目录段是符号链接时, 不得写
     } catch { return false; }
   })();
 
-  test('capture: build/frames 是指向项目外的符号链接 → 拒绝, canary 目录完好', { skip: !canLink && '当前环境建不了符号链接/junction' }, () => {
+  // 这两个 canary 都要靠 capture / preview-page 真跑到"收监检查"才观察得到越界拒绝 ——
+  // 而两个脚本启动第一件事就是加载 playwright: 无 playwright 时它们先退出 2,
+  // 用例要么误判"通过"(preview-page 只断言非零), 要么误报"失败"(capture 还断言报错文案)。
+  // 所以无 playwright 必须带原因跳过(与 ASR 用例同理) —— 否则在无 playwright 但可建链接的
+  // 环境(ubuntu 裸 CI)上, 这两条会把宿主主 CI 染红(终轮复查在 Spec 轴实测抓到)。
+  const CANARY_SKIP = [
+    !canLink && '当前环境建不了符号链接/junction',
+    !HAS_PW && '无 playwright(capture/preview-page 启动即需要, 观察不到收监检查; 真跑由 scoped smoke workflow 覆盖)',
+  ].filter(Boolean).join(' · ');
+  test('capture: build/frames 是指向项目外的符号链接 → 拒绝, canary 目录完好', { skip: CANARY_SKIP || undefined }, () => {
     const proj = tmpdir();
     const canary = tmpdir();
     fs.writeFileSync(path.join(canary, 'keep.txt'), 'DO NOT DELETE');
@@ -45,7 +56,7 @@ describe('二审 · 输出收监(项目内目录段是符号链接时, 不得写
     assert.equal(fs.readFileSync(path.join(canary, 'keep.txt'), 'utf8'), 'DO NOT DELETE', 'canary 必须完好');
   });
 
-  test('preview-page: preview 是指向项目外的符号链接 → 拒绝写快照', { skip: !canLink && '当前环境建不了符号链接/junction' }, () => {
+  test('preview-page: preview 是指向项目外的符号链接 → 拒绝写快照', { skip: CANARY_SKIP || undefined }, () => {
     const proj = tmpdir();
     const canary = tmpdir();
     mkproj(proj, { slides: [{ id: '01', html: '01.html', audio: '01.mp3', clauses: [{ stage: 1, text: 'x' }] }] });

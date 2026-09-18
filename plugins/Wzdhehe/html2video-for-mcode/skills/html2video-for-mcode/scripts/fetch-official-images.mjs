@@ -217,7 +217,9 @@ try {
 
   if (!candidates.length) { console.log('没找到符合条件的图片(试试去掉 --min, 或换页面 / 产品页 / 新闻页)'); await context.close(); await browser.close(); process.exit(0); }
 
-  if (flagValue(argv, '--json')) { console.log(JSON.stringify(candidates, null, 2)); await context.close(); await browser.close(); process.exit(0); }
+  // --json 是布尔 flag: 必须用 includes 判存在。flagValue 取的是"下一个参数",
+  // --json 在末尾(文档写的用法)时取到 undefined → 静默退化成人类可读列表(终轮复查抓到)。
+  if (argv.includes('--json')) { console.log(JSON.stringify(candidates, null, 2)); await context.close(); await browser.close(); process.exit(0); }
 
   console.log(`候选图 ${candidates.length} 张(页面 ${pageHost || url}):\n`);
   candidates.forEach((c, i) => {

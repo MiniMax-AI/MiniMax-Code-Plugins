@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.7.2 — 2026-09-18
+
+**Final audit round: one silent feature regression, one environment-dependent test, and a corrected evidence claim**
+
+- **`--json` never printed JSON in its documented position.** The flag is boolean, but it was read through the value-taking reader, so in the documented trailing position (`fetch-official-images.mjs <url> --json`) it resolved to `undefined` and the listing silently degraded to the human-readable form. It is now read by presence, and a new end-to-end case drives a local `file://` fixture page through the real listing path with the flag in **both** positions, asserting actual JSON array output (the pre-existing case only asserted that the run reached URL validation, so it could not see this).
+- **The two symlink-canary cases could redden a tool-less CI.** They had no Playwright guard, and both `capture` and `preview-page` load Playwright *before* their containment check: on a runner where symlinks/junctions are creatable but Playwright is absent (an ubuntu CI), `capture` exits `未找到 playwright` and the case failed on its expected-message assertion — the same class of host-CI reddening fixed in 1.7.1, in a different environment shape. Both cases now skip with a stated reason when Playwright is missing.
+- **Evidence correction to 1.7.1.** Its "clean sandbox: 0 fail, 22 skipped" was measured in a Windows sandbox where junction creation itself failed (the shell was unreachable on the stripped PATH), which masked exactly the case above. Corrected measurements, after the fixes, in two isolated tool-less sandbox shapes — symlinks creatable and not creatable — agree: **237 tests, 0 fail, 23 skipped**, every skip naming its reason.
+- Tests **236 → 237 in fourteen files**, all green with 0 skips in the development tree and in both published trees.
+
 ## 1.7.1 — 2026-09-18
 
 **Fourth pass over the *published* PR: three claims that were not true of the published tree, and the one test that could redden the host CI**
