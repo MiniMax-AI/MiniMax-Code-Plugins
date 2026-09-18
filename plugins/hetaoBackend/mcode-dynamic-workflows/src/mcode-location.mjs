@@ -1,4 +1,4 @@
-import { access, stat } from 'node:fs/promises';
+import { access, stat, readFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
@@ -30,15 +30,36 @@ export async function resolveMcode(command = 'mcode', { env = process.env, home 
   }
   if (path) {
     if (platform === 'win32' && /\.(cmd|bat)$/i.test(path)) {
+      // Prefer a directly spawnable node entry over the .ps1 hop: PowerShell 5.1
+      // binds flag-shaped tokens (-input, --cwd ...) as its own named parameters
+      // under -File, which breaks the exec argv on real installs. When several
+      // installs coexist (PATH shim with an old sibling, newer official root),
+      // resolve the NEWEST cli.js across layouts instead of whatever sits next to
+      // the resolved shim — a stale 0.2.x entry lacks current exec flags.
+      const candidates = [
+        join(dirname(path), 'node_modules', '@minimax-ai', 'code', 'cli.js'),
+        join(officialRoot(home, env), 'lib', 'node_modules', '@minimax-ai', 'code', 'cli.js'),
+        join(officialRoot(home, env), 'node_modules', '@minimax-ai', 'code', 'cli.js'),
+      ];
+      const versionOf = async entry => { try {
+        const pkg = JSON.parse(await readFile(join(entry, '..', 'package.json'), 'utf8'));
+        return String(pkg.version ?? '0.0.0').split('.').map(n => Number.parseInt(n, 10) || 0);
+      } catch { return [0, 0, 0]; } };
+      const cmp = (a, b) => a[0] - b[0] || (a[1] ?? 0) - (b[1] ?? 0) || (a[2] ?? 0) - (b[2] ?? 0) || b.length - a.length;
+      let best = null, bestVersion = null;
+      for (const entry of candidates) {
+        if (!await fileExists(entry)) continue;
+        const version = await versionOf(entry);
+        if (!best || cmp(version, bestVersion) > 0) { best = entry; bestVersion = version; }
+      }
+      if (best) return { command: process.execPath, args: [best], source };
       const launcher = join(dirname(path), 'mcode.ps1');
       if (await fileExists(launcher)) {
         const powershell = await executablePath('powershell.exe', env, platform) ?? await executablePath('pwsh.exe', env, platform);
         if (!powershell) throw new Error('发现 MCode PowerShell 启动器，但找不到 PowerShell。');
         return { command: powershell, args: ['-NoProfile', '-File', launcher], source };
       }
-      const entry = join(dirname(path), 'node_modules', '@minimax-ai', 'code', 'cli.js');
-      if (!await fileExists(entry)) throw new Error(`发现 ${path}，但找不到可直接执行的 cli.js；请修复该 CLI 安装。`);
-      return { command: process.execPath, args: [entry], source };
+      throw new Error(`发现 ${path}，但找不到可直接执行的 cli.js；请修复该 CLI 安装。`);
     }
     return { command: path, args: [], source };
   }
