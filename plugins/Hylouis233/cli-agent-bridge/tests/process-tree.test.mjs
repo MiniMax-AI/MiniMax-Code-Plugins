@@ -79,7 +79,7 @@ test("Linux ancestry refresh follows task children without scanning all of procf
 
 test("Linux falls back safely when the live main task has no children file", async () => {
   let childrenReads = 0;
-  const directory = (name) => String(name);
+  const directory = (name) => ({ name: String(name), isDirectory: () => true });
   const fsOps = {
     readdir: async (target) => {
       if (target === "/fixture-proc/100/task") return [directory(100)];
@@ -116,7 +116,7 @@ test("Linux falls back safely when the live main task has no children file", asy
 });
 
 test("Linux children-file fallback recovers a reparented marked descendant", async () => {
-  const directory = (name) => String(name);
+  const directory = (name) => ({ name: String(name), isDirectory: () => true });
   const fsOps = {
     readdir: async (target) => target === "/fixture-proc" ? [directory(300)] : [],
     readFile: async (target) => {
@@ -145,7 +145,7 @@ test("Linux children-file fallback recovers a reparented marked descendant", asy
 });
 
 test("Linux children-file fallback rejects an unavailable full snapshot", async () => {
-  const directory = (name) => String(name);
+  const directory = (name) => ({ name: String(name), isDirectory: () => true });
   const fsOps = {
     readdir: async (target) => {
       if (target === "/fixture-proc/100/task") return [directory(100)];
@@ -208,7 +208,7 @@ function markerReuseFixture(startIdentities) {
   return {
     fsOps: {
       readdir: async (target) => target === "/fixture-proc"
-        ? ["702"]
+        ? [{ name: "702", isDirectory: () => true }]
         : [],
       readFile: async (target) => {
         if (target.endsWith("/701/stat")) throw missingProcessError();
@@ -354,7 +354,7 @@ test("Linux liveness is unknown when procfs is missing or restricted", async () 
 
   const denied = Object.assign(new Error("access denied"), { code: "EACCES" });
   const fsOps = {
-    readdir: async () => ["402"],
+    readdir: async () => [{ name: "402", isDirectory: () => true }],
     readFile: async () => { throw denied; },
   };
   assert.equal(await linuxProcessGroupHasLiveMembers(401, "/fake-proc", fsOps), null);
@@ -494,7 +494,7 @@ test("Linux ancestry rejects a PID reused after a stale children entry", async (
   const fsOps = {
     readdir: async (target) => {
       if (target === "/fixture-proc/100/task") {
-        return ["100"];
+        return [{ name: "100", isDirectory: () => true }];
       }
       if (target === "/fixture-proc") return [];
       return [];
@@ -528,7 +528,7 @@ test("Linux ancestry rechecks the parent before accepting its children", async (
   const fsOps = {
     readdir: async (target) => {
       if (target === "/fixture-proc/100/task") {
-        return ["100"];
+        return [{ name: "100", isDirectory: () => true }];
       }
       if (target === "/fixture-proc") return [];
       return [];
@@ -561,7 +561,7 @@ test("Linux ancestry accepts a childless root exit only after stable empty marke
   const fsOps = {
     readdir: async (target) => {
       if (target === "/fixture-proc/100/task") {
-        return ["100"];
+        return [{ name: "100", isDirectory: () => true }];
       }
       if (target === "/fixture-proc") {
         markerScans += 1;
@@ -600,15 +600,15 @@ test("Linux ancestry tolerates runner and worker exits between stable scans", as
   const fsOps = {
     readdir: async (target) => {
       if (target === "/fixture-proc/100/task") {
-        return ["100"];
+        return [{ name: "100", isDirectory: () => true }];
       }
       if (target === "/fixture-proc") {
         markerScans += 1;
         if (markerScans === 1) {
-          return [200, 201].map((pid) => String(pid));
+          return [200, 201].map((pid) => ({ name: String(pid), isDirectory: () => true }));
         }
         return markerScans === 2
-          ? ["200"]
+          ? [{ name: "200", isDirectory: () => true }]
           : [];
       }
       return [];
@@ -654,7 +654,7 @@ test("Linux ancestry remains uncertain when a parent exits with a pending child"
   const fsOps = {
     readdir: async (target) => {
       if (target === "/fixture-proc/100/task") {
-        return ["100"];
+        return [{ name: "100", isDirectory: () => true }];
       }
       if (target === "/fixture-proc") {
         markerScans += 1;
@@ -694,7 +694,7 @@ test("Linux ancestry accepts an exiting parent whose pending child was already v
   const fsOps = {
     readdir: async (target) => {
       if (target === "/fixture-proc/100/task") {
-        return ["100"];
+        return [{ name: "100", isDirectory: () => true }];
       }
       if (target === "/fixture-proc") {
         markerScans += 1;
@@ -737,7 +737,7 @@ test("Linux ancestry retries a torn task sample while its parent identity remain
     readdir: async (target) => {
       if (target === "/fixture-proc/100/task") {
         taskScans += 1;
-        return [taskScans === 1 ? "101" : "100"];
+        return [{ name: taskScans === 1 ? "101" : "100", isDirectory: () => true }];
       }
       if (target === "/fixture-proc") {
         markerScans += 1;
@@ -775,11 +775,11 @@ test("Linux ancestry preserves children observed before repeated task-list churn
   const fsOps = {
     readdir: async (target) => {
       if (target === "/fixture-proc/100/task") {
-        return [100, 101].map((pid) => String(pid));
+        return [100, 101].map((pid) => ({ name: String(pid), isDirectory: () => true }));
       }
       if (target === "/fixture-proc/200/task") return [];
       if (target === "/fixture-proc") {
-        return ["200"];
+        return [{ name: "200", isDirectory: () => true }];
       }
       return [];
     },
@@ -1063,7 +1063,7 @@ test("Linux binds a visible child before scanning its parent's remaining tasks",
   let alive = true;
   const fsOps = {
     readdir: async target => target === "/fixture-proc/100/task"
-      ? [100, 101].map(pid => String(pid)) : [],
+      ? [100, 101].map(pid => ({ name: String(pid), isDirectory: () => true })) : [],
     readFile: async target => {
       if (target.endsWith("/100/stat") && alive) {
         return procStatLine(100, { parent: 1, group: 100, startIdentity: 10 });
@@ -1096,7 +1096,7 @@ test("Linux early child binding rejects a parent whose PID identity changed", as
   let reads = 0;
   const fsOps = {
     readdir: async target => target === "/fixture-proc/100/task"
-      ? ["100"] : [],
+      ? [{ name: "100", isDirectory: () => true }] : [],
     readFile: async target => {
       if (target.endsWith("/100/stat")) {
         return procStatLine(100, { parent: 1, group: 100, startIdentity: ++reads === 1 ? 10 : 30 });
@@ -1116,107 +1116,3 @@ test("Linux early child binding rejects a parent whose PID identity changed", as
   assert.equal(state.knownStarts.get(200), undefined);
   assert.equal(state.processIdentityUncertain, true);
 });
-
-test("Linux resolves an already exited child before its verified parent exits", async () => {
-  let parentAlive = true;
-  let markerScans = 0;
-  const fsOps = {
-    readdir: async target => {
-      if (target === "/fixture-proc/100/task") {
-        return [100, 101].map(pid => String(pid));
-      }
-      if (target === "/fixture-proc") markerScans += 1;
-      return [];
-    },
-    readFile: async target => {
-      if (target.endsWith("/100/stat") && parentAlive) {
-        return procStatLine(100, { parent: 1, group: 100, startIdentity: 10 });
-      }
-      if (target.endsWith("/100/task/100/children")) return "200\n";
-      if (target.endsWith("/100/task/101/children")) {
-        parentAlive = false;
-        return "\n";
-      }
-      // The Git helper is reaped before its first stat read, while the
-      // original parent is still available to confirm that observation.
-      throw missingProcessError();
-    },
-  };
-  const state = {
-    knownPids: new Set([100]), knownStarts: new Map([[100, "10"]]),
-    runMarker: "fixture-run", markerObservationGraceMs: 0,
-  };
-  const options = {
-    platform: "linux", procRoot: "/fixture-proc", fsOps,
-    probeProcessGroup: () => { throw missingProcessError("ESRCH"); },
-  };
-  await refreshProcessTree({ pid: 100 }, state, options);
-  assert.equal(state.knownStarts.has(200), false, "never invent an identity for a reaped child");
-  assert.equal(await isProcessTreeAlive({ pid: 100 }, state, options), false,
-    "a confirmed exit must not become a permanent live-tree quarantine");
-  assert.ok(markerScans >= 4, "both exits require stable marker observations");
-});
-
-test("Linux proc enumeration survives a disappearing directory with unknown entry type", async () => {
-  const fsOps = {
-    readdir: async (target, options) => {
-      // Node may lstat DT_UNKNOWN entries to construct Dirents. One reaped
-      // process then rejects the entire readdir, hiding every other process.
-      if (options?.withFileTypes) throw missingProcessError();
-      return target === "/fixture-proc" ? ["self", "200", "300"] : [];
-    },
-    readFile: async target => {
-      if (target.endsWith("/200/stat")) {
-        return procStatLine(200, { parent: 1, group: 200, startIdentity: 20 });
-      }
-      if (target.endsWith("/200/environ")) return Buffer.from("CLI_AGENT_BRIDGE_RUN_ID=fixture-run\0");
-      throw missingProcessError();
-    },
-  };
-  const options = { platform: "linux", procRoot: "/fixture-proc", fsOps };
-  const state = {
-    knownPids: new Set([100]), knownStarts: new Map([[100, "10"]]), runMarker: "fixture-run",
-  };
-  const snapshot = await refreshProcessTree({ pid: 100 }, state, options);
-  assert.deepEqual(snapshot.map(item => item.pid), [200], "recover the live escapee despite a reaped neighbor");
-  assert.equal(state.processIdentityUncertain, undefined);
-  assert.equal(await isProcessTreeAlive({ pid: 100 }, state, options), true);
-  assert.deepEqual((await posixProcessSnapshot(options)).map(item => item.pid), [200]);
-});
-
-for (const scenario of ["reused parent", "unreadable markers"]) {
-  test(`Linux does not resolve an exited child with ${scenario}`, async () => {
-    let parentReads = 0;
-    const fsOps = {
-      readdir: async target => {
-        if (target === "/fixture-proc/100/task") return ["100"];
-        if (target === "/fixture-proc" && scenario === "unreadable markers") {
-          throw Object.assign(new Error("procfs denied"), { code: "EACCES" });
-        }
-        return [];
-      },
-      readFile: async target => {
-        if (target.endsWith("/100/stat")) {
-          parentReads += 1;
-          return procStatLine(100, {
-            parent: 1, group: 100,
-            startIdentity: scenario === "reused parent" && parentReads > 1 ? 30 : 10,
-          });
-        }
-        if (target.endsWith("/100/task/100/children")) return "200\n";
-        throw missingProcessError();
-      },
-    };
-    const state = {
-      knownPids: new Set([100]), knownStarts: new Map([[100, "10"]]), runMarker: "fixture-run",
-    };
-    const refresh = refreshProcessTree({ pid: 100 }, state, {
-      platform: "linux", procRoot: "/fixture-proc", fsOps,
-    });
-    if (scenario === "unreadable markers") await assert.rejects(refresh, /cannot inspect Linux run markers/u);
-    else await refresh;
-    assert.equal(state.processIdentityUncertain, true);
-    assert.equal(state.knownStarts.has(200), false);
-    assert.equal(state.knownStarts.get(100), "10", "the original parent identity stays immutable");
-  });
-}

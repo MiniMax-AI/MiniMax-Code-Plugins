@@ -228,17 +228,15 @@ async function readLinuxStat(pid, procRoot, fsOps) {
 async function linuxProcessSnapshot(procRoot = "/proc", fsOps = { readdir, readFile }) {
   let entries;
   try {
-    // Read names, not Dirents: Node may lstat DT_UNKNOWN entries, letting one
-    // reaped PID reject the entire listing. Per-PID stat reads handle exits.
-    entries = await fsOps.readdir(procRoot);
+    entries = await fsOps.readdir(procRoot, { withFileTypes: true });
   } catch {
     return null;
   }
   const processes = [];
   for (const entry of entries) {
-    if (!/^\d+$/u.test(entry)) continue;
+    if (!entry.isDirectory() || !/^\d+$/u.test(entry.name)) continue;
     try {
-      const item = await readLinuxStat(Number(entry), procRoot, fsOps);
+      const item = await readLinuxStat(Number(entry.name), procRoot, fsOps);
       if (item === undefined) continue;
       if (item === null) return null;
       processes.push(item);
@@ -271,8 +269,7 @@ export async function linuxProcessGroupHasLiveMembers(
 async function linuxMarkedProcesses(marker, procRoot, fsOps) {
   let entries;
   try {
-    // As above, avoid implicit per-entry lstat races while listing procfs.
-    entries = await fsOps.readdir(procRoot);
+    entries = await fsOps.readdir(procRoot, { withFileTypes: true });
   } catch {
     return null;
   }
@@ -280,13 +277,13 @@ async function linuxMarkedProcesses(marker, procRoot, fsOps) {
   const matches = [];
   matches.identityConflict = false;
   for (const entry of entries) {
-    if (!/^\d+$/u.test(entry)) continue;
+    if (!entry.isDirectory() || !/^\d+$/u.test(entry.name)) continue;
     try {
-      const pid = Number(entry);
+      const pid = Number(entry.name);
       const before = await readLinuxStat(pid, procRoot, fsOps);
       if (before === undefined) continue;
       if (before === null) return null;
-      const environment = await fsOps.readFile(`${procRoot}/${entry}/environ`);
+      const environment = await fsOps.readFile(`${procRoot}/${entry.name}/environ`);
       const values = Buffer.isBuffer(environment)
         ? environment.toString("utf8").split("\0")
         : String(environment).split("\0");
@@ -537,7 +534,7 @@ async function linuxTrackedProcessSnapshot(
     for (let taskAttempt = 0; taskAttempt < 3; taskAttempt += 1) {
       let taskEntries;
       try {
-        taskEntries = await fsOps.readdir(`${procRoot}/${pid}/task`);
+        taskEntries = await fsOps.readdir(`${procRoot}/${pid}/task`, { withFileTypes: true });
       } catch (error) {
         if (isLinuxProcessGone(error)) {
           taskDirectoryGone = true;
@@ -547,24 +544,26 @@ async function linuxTrackedProcessSnapshot(
       }
       let taskChangedWhileReading = false;
       for (const taskEntry of taskEntries) {
-        if (!/^\d+$/u.test(taskEntry)) continue;
+        if (!taskEntry.isDirectory() || !/^\d+$/u.test(taskEntry.name)) continue;
         let children;
         try {
           children = await fsOps.readFile(
-            `${procRoot}/${pid}/task/${taskEntry}/children`, "utf8",
+            `${procRoot}/${pid}/task/${taskEntry.name}/children`, "utf8",
           );
         } catch (error) {
-          if (allowRootIdentityCapture && pid === rootPid && taskEntry === String(rootPid) &&
+          if (allowRootIdentityCapture && pid === rootPid && taskEntry.name === String(rootPid) &&
               error?.code === "ENOENT") {
             let taskEntriesAfter;
             try {
-              taskEntriesAfter = await fsOps.readdir(`${procRoot}/${pid}/task`);
+              taskEntriesAfter = await fsOps.readdir(`${procRoot}/${pid}/task`, {
+                withFileTypes: true,
+              });
             } catch (confirmError) {
               if (!isLinuxProcessGone(confirmError)) return null;
               taskEntriesAfter = [];
             }
             const mainTaskStillPresent = taskEntriesAfter.some((entry) =>
-              entry === String(rootPid));
+              entry.isDirectory() && entry.name === String(rootPid));
             const rootAfter = mainTaskStillPresent
               ? await readLinuxStat(pid, procRoot, fsOps)
               : undefined;
@@ -594,18 +593,6 @@ async function linuxTrackedProcessSnapshot(
           if (!treeState.knownStarts.has(childPid)) {
             const child = await readLinuxStat(childPid, procRoot, fsOps);
             if (child === null) return null;
-            if (child === undefined && treeState.runMarker) {
-              const anchor = await readLinuxStat(pid, procRoot, fsOps);
-              if (anchor === null) return null;
-              if (anchor?.startIdentity === item.startIdentity) {
-                // The child was reaped while its original parent was still
-                // verifiable. Resolve it now, as for an absent queued child,
-                // instead of carrying a stale candidate into the parent's
-                // later exit. Recover marked escapees before forgetting it.
-                await enqueueMarkedProcesses({ stable: true });
-                pendingChildren.delete(childPid);
-              }
-            }
             if (child && child.parentPid === pid &&
                 /^\d+$/u.test(child.startIdentity) && /^\d+$/u.test(item.startIdentity) &&
                 BigInt(child.startIdentity) >= BigInt(item.startIdentity)) {
