@@ -36,8 +36,9 @@ my-video/
 
 ## Pipeline
 
-One Skill drives an 11-script pipeline (plus five internal modules — path containment, URL
-policy, `no-fx` rules, chart CSS, table CSS — under `skills/html2video-for-mcode/scripts/`):
+One Skill drives an 11-script pipeline (plus six internal modules — path containment, URL
+policy, `no-fx` rules, chart CSS, table CSS, and the **CSS kit managed-block mechanism**
+(rev delimiters + in-place replacement) — under `skills/html2video-for-mcode/scripts/`):
 
 | Stage | What happens |
 |---|---|
@@ -190,7 +191,10 @@ No telemetry, no analytics, no hidden endpoints, no installers, no native binari
 - **Nothing is overwritten silently.** `init-project.mjs` refuses a non-empty target directory
   (re-initialising needs `--force`, which only resets its own five generated files);
   `fetch-official-images.mjs` and `prep-image.mjs` do not clobber existing files without `--force`
-  and keep downloads inside your working directory by default.
+  and keep downloads inside your working directory by default. `--upgrade-css` updates the three
+  **rev-stamped managed blocks** in `tokens.css` (no-fx / chart / table) by replacing them in
+  place: rules outside the blocks are untouched, and a `tokens.css.bak` backup is written first;
+  `--check-css` reports staleness without changing anything.
 - No credentials are stored or embedded: the ASR script reads a key from `MINIMAX_API_KEY` or
   `--api-key` at runtime and never writes it anywhere.
 
@@ -203,7 +207,7 @@ The Skill ships an executable test suite (`skills/html2video-for-mcode/tests/`, 
 node --test "plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/*.test.mjs"
 ```
 
-120 tests in nine files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
+132 tests in ten files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
 escapes), `no-clobber` (refusing to overwrite), `endpoint-allowlist` (key never leaves the official
 hosts — plus a local server that proves the gate sits before the request), `fetch-policy` (SSRF,
 `file://`, redirect and filename rules), `preview-page` (snapshot timing injection, `base` ordering,
@@ -213,7 +217,10 @@ idempotent) and `fetch-policy`/`no-clobber` (the `--url` download route obeys th
 redirect, size and no-clobber rules), plus
 `chart-kit` (the chart toolbox is really in the generated `tokens.css`: keyframes, registered
 properties, and "off = final state"), `table-kit` (table primitives keep their legibility rules:
-body-size type, ≥72px rows, token-driven up/down colours) and `render-smoke` (init → timings → static gate → capture →
+body-size type, ≥72px rows, token-driven up/down colours, matrix highlight covers the header row
+too), `css-kit` (managed blocks: a block that is present but stale or hand-edited must be detected
+and replaced in place, project-side overrides survive, legacy undelimited files get wrapped in
+place with duplicates removed, `--check-css` exit codes) and `render-smoke` (init → timings → static gate → capture →
 build, end to end). The render smoke test and three ffmpeg-dependent path checks need ffmpeg and
 Chromium; where those are missing they skip with a stated reason, and the scoped workflow
 `.github/workflows/html2video-for-mcode-smoke.yml` installs them and runs everything for real.

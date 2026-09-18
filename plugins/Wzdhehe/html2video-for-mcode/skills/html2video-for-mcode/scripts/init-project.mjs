@@ -1,18 +1,22 @@
 #!/usr/bin/env node
 // html2video-for-mcode · 生成项目骨架
-// 用法: node init-project.mjs <项目目录> [--topic "主题名"] [--force] [--upgrade-css]
+// 用法: node init-project.mjs <项目目录> [--topic "主题名"] [--force] [--upgrade-css] [--check-css]
 // 目标目录已存在且非空时拒绝执行(会重置 script.json 等 5 个生成文件), 需显式 --force。
-// --upgrade-css: 不生成任何文件, 只给已有项目的 tokens.css 补新版规则(no-fx + 图表工具箱, 幂等可重复跑)。
+// --upgrade-css: 不生成任何文件, 只把已有项目 tokens.css 里的三个工具箱(no-fx / 图表 / 表格)
+//   受管块更新到技能当前版本 —— 按内容 rev 原地替换, 幂等可重复跑, 写前备份 tokens.css.bak,
+//   受管块之外的规则(含你在文件尾的覆写)一概不动。
+// --check-css: 只检查不修改 —— 受管块落后/缺失时逐项报出并以退出码 1 结束(供 check 前 CI/自查用)。
 import fs from 'node:fs';
 import path from 'node:path';
-import { NOFX_CSS, hasNofxRules } from './nofx-css.mjs';
-import { CHART_CSS, hasChartKit } from './chart-css.mjs';
-import { TABLE_CSS, hasTableKit } from './table-css.mjs';
+import { NOFX_CSS } from './nofx-css.mjs';
+import { CHART_CSS } from './chart-css.mjs';
+import { TABLE_CSS } from './table-css.mjs';
+import { KIT_REV, wrapKit, applyKitUpgrade, kitStatuses } from './css-kit.mjs';
 
 const argv = process.argv.slice(2);
 const dirArg = argv.find(a => !a.startsWith('--'));
 if (!dirArg) {
-  console.error('用法: node init-project.mjs <项目目录> [--topic "主题名"]');
+  console.error('用法: node init-project.mjs <项目目录> [--topic "主题名"] [--force] [--upgrade-css] [--check-css]');
   process.exit(1);
 }
 const topicIdx = argv.indexOf('--topic');
@@ -30,6 +34,9 @@ const TOKENS_CSS = `/* html2video-for-mcode 设计令牌 · 由 init-project 生
 
    约定: 新增或覆写主题必须覆盖全部颜色令牌 + --accent-ink, 并跑
    \`node <技能>/scripts/check-theme.mjs <项目目录>\` 校验对比度(深色主题另需覆写 --sub-bg/--sub-ring)。
+
+   受管块: 下面 >>> html2video:nofx / chart / table <<< 三段(带 rev 定界注释)由技能单源生成,
+   不要手工编辑 —— 改了也会在下次 --upgrade-css 时被按源重写; 自己的规则加在文件尾即可(后写覆盖)。
 */
 :root {
   /* ── 画布(渲染管线按 script.json 的 width/height 注入真值; 默认横屏 1920×1080) ── */
@@ -377,7 +384,7 @@ html, body { width: var(--stage-w, 1920px); height: var(--stage-h, 1080px); over
 .fx-grow-x { transform-origin: left center; animation: fx-grow-x-kf .9s var(--ease-out) var(--fx-delay, 0ms) both; }  /* 图表: 条形从左长出 */
 .fx-grow-y { transform-origin: bottom center; animation: fx-grow-y-kf .9s var(--ease-out) var(--fx-delay, 0ms) both; } /* 图表: 柱状从底长出 */
 
-${NOFX_CSS}
+${wrapKit('nofx', NOFX_CSS)}
 
 @keyframes fx-up   { from { opacity: 0; transform: translateY(32px); } to { opacity: 1; transform: none; } }
 @keyframes fx-fade { from { opacity: 0; } to { opacity: 1; } }
@@ -414,9 +421,9 @@ ${NOFX_CSS}
 .fx-kenburns { animation: fx-kenburns-kf 14s ease-in-out infinite alternate; }
 @keyframes fx-kenburns-kf { from { transform: scale(1) translate(0, 0); } to { transform: scale(1.15) translate(-2%, -1%); } }
 
-${CHART_CSS}
+${wrapKit('chart', CHART_CSS)}
 
-${TABLE_CSS}
+${wrapKit('table', TABLE_CSS)}
 
 /* 依次入场容器: 子元素逐个上浮, 基准时刻取 --stagger-base(默认 --t2) */
 .fx-stagger > * { opacity: 0; animation: fx-rise .65s var(--ease-out) both; }
@@ -491,23 +498,30 @@ const scriptJson = {
 const FORCE = argv.includes('--force');
 const GENERATED = ['script.json', 'slides/tokens.css', 'slides/_template.html', 'assets/MANIFEST.md', 'research/notes.md'];
 
-// --upgrade-css: 只给已有项目补新版 tokens.css 里新增的规则(幂等, 不碰其他文件)。
+// --upgrade-css / --check-css: 只管 tokens.css 里三个工具箱受管块的新旧, 不生成/不重置任何文件。
 // 老项目缺 no-fx 规则时 <html class="no-fx"> 会静默失效(只关动画不把 opacity 抬回来, 页面反而空白);
-// 缺图表工具箱时新配方会静默半死(条形不生长 / 环形不扫出 / 数字不滚动)。
-if (argv.includes('--upgrade-css')) {
+// 缺图表/表格工具箱时新配方会静默半死(条形不生长 / 环形不扫出 / 数字不滚动)。
+// 判定按内容 rev(见 css-kit.mjs), 不再是"文件里出现过标记字符串就算有" —— 那种判定在项目补过
+// 一次后就永远报"无需升级", 源头后续改动再也传不下去(2026-09-18 排查定案的根因)。
+if (argv.includes('--upgrade-css') || argv.includes('--check-css')) {
   const cssPath = path.join(dir, 'slides', 'tokens.css');
   if (!fs.existsSync(cssPath)) { console.error(`✗ 找不到 ${cssPath}`); process.exit(1); }
-  let css = fs.readFileSync(cssPath, 'utf8');
-  const needNofx = !hasNofxRules(css);
-  const needChart = !hasChartKit(css);
-  const needTable = !hasTableKit(css);
-  if (!needNofx && !needChart && !needTable) { console.log(`无需升级: ${cssPath} 已含 no-fx 规则、图表工具箱与表格原语`); process.exit(0); }
-  const stamp = '以下由 init-project --upgrade-css 追加(2026-09-18)';
-  if (needNofx) css = css.replace(/\s*$/, '\n') + `\n/* ${stamp}: 老项目缺这段时 <html class="no-fx"> 失效 */\n${NOFX_CSS}\n`;
-  if (needChart) css = css.replace(/\s*$/, '\n') + `\n/* ${stamp}: 图表动效与图表原语(缺了则条形不生长/环形不扫出/数字不滚动) */\n${CHART_CSS}\n`;
-  if (needTable) css = css.replace(/\s*$/, '\n') + `\n/* ${stamp}: 表格原语(缺了则 .tbl/.kv/.matrix/.rank 都不生效) */\n${TABLE_CSS}\n`;
-  fs.writeFileSync(cssPath, css);
-  console.log(`✓ 已补:${needNofx ? ' no-fx 规则' : ''}${needChart ? ' 图表工具箱' : ''}${needTable ? ' 表格原语(.tbl/.kv/.matrix/.rank)' : ''} → ${cssPath}`);
+  const css = fs.readFileSync(cssPath, 'utf8');
+
+  if (argv.includes('--check-css')) {
+    const bad = kitStatuses(css).filter(s => s.status !== 'ok');
+    if (!bad.length) { console.log(`✓ tokens.css 工具箱已是最新(kit rev ${KIT_REV.slice(0, 8)})`); process.exit(0); }
+    for (const s of bad) console.error(`✗ ${s.label}: ${s.status === 'stale' ? s.detail : `缺这段(${s.detail})`}`);
+    console.error('  → node scripts/init-project.mjs <项目目录> --upgrade-css(原地替换受管块, 不动你的其他规则)');
+    process.exit(1);
+  }
+
+  const { css: next, actions } = applyKitUpgrade(css);
+  if (!actions.length) { console.log(`无需升级: ${cssPath} 工具箱已是最新(kit rev ${KIT_REV.slice(0, 8)})`); process.exit(0); }
+  fs.writeFileSync(cssPath + '.bak', css);   // 覆盖前备份: 升级只应动受管块, 万一不对可整文件回退
+  fs.writeFileSync(cssPath, next);
+  for (const a of actions) console.log(`✓ ${a.label}: ${a.reason}`);
+  console.log(`  备份 → ${cssPath}.bak;受管块之外的内容(含你的覆写)未动`);
   process.exit(0);
 }
 

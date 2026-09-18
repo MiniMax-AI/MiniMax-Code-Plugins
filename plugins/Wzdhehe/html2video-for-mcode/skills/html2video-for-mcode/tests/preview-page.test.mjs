@@ -8,7 +8,9 @@ import { runSkill, mkproj, tmpdir, SCRIPTS } from './helpers.mjs';
 
 const mod = await import('file://' + path.join(SCRIPTS, 'preview-page.mjs').replace(/\\/g, '/'));
 const { stageVars, injectHtmlVars, addNoFx, addBaseHref, injectStyle, buildPlayPage, stagesFromHtml, fallbackStages } = mod;
-const { hasNofxRules } = await import('file://' + path.join(SCRIPTS, 'nofx-css.mjs').replace(/\\/g, '/'));
+const { NOFX_CSS } = await import('file://' + path.join(SCRIPTS, 'nofx-css.mjs').replace(/\\/g, '/'));
+const { CHART_CSS } = await import('file://' + path.join(SCRIPTS, 'chart-css.mjs').replace(/\\/g, '/'));
+const { TABLE_CSS } = await import('file://' + path.join(SCRIPTS, 'table-css.mjs').replace(/\\/g, '/'));
 
 const SLIDE = `<!doctype html>
 <html lang="zh-CN" data-theme="a">
@@ -62,7 +64,7 @@ describe('预览放映页 · 纯函数', () => {
       topic: 'T', slides: [
         { id: '01', name: '01.html', copy: '01.html', copyNofx: '01.nofx.html', clauses: [{ stage: 1, text: '甲' }] },
         { id: '02', name: '02.html', copy: '02.html', copyNofx: '02.nofx.html', clauses: [] },
-      ], noFxNote: '注意 X',
+      ], cssNote: '注意 X',
     });
     assert.ok(!/https?:/.test(page), '不得引用任何外部 URL(离线双击可用)');
     assert.ok(!/<script[^>]+src=/i.test(page), '不得外链脚本');
@@ -140,27 +142,29 @@ describe('预览放映页 · 落到磁盘', () => {
     assert.ok(r.stdout.includes('4866') || r.stdout.includes('末层'), '应打印注入结果');
   });
 
-  test('老项目 tokens.css 缺 no-fx 规则 → 只给关动效副本兜底注入, 并如实警告', () => {
+  test('老项目 tokens.css 落后 → 副本兜底注入当前版并如实警告', () => {
     const proj = build(tmpdir(), { timings: true });
     const r = runSkill('preview-page.mjs', [proj]);
     assert.equal(r.status, 0, r.stderr);
     const out = path.join(proj, 'preview', 'play');
     const nofx = fs.readFileSync(path.join(out, '01-title.nofx.html'), 'utf8');
+    const copy = fs.readFileSync(path.join(out, '01-title.html'), 'utf8');
     assert.ok(/class="[^"]*no-fx/.test(nofx), '副本根元素要带 no-fx');
     assert.ok(nofx.includes('opacity: 1 !important'), '旧 tokens.css 下必须兜底注入 opacity 重置, 否则对照是空白');
-    assert.ok(!fs.readFileSync(path.join(out, '01-title.html'), 'utf8').includes('兜底注入'), '动效副本不得被注入');
+    assert.ok(!copy.includes('no-fx 规则'), '动效副本不得注入 no-fx 规则(它只在关动效副本里有意义)');
+    assert.ok(copy.includes('图表工具箱'), '图表工具箱落后时动效副本也要兜底(否则旧规则把新版画法渲染坏)');
     assert.ok(r.stderr.includes('no-fx'), '应在终端说明 tokens.css 落后');
   });
 
-  test('新 tokens.css(含 no-fx 规则) → 不注入, 保持纯快照', () => {
-    const tokens = ':root{--accent:#111}\n.no-fx [data-stage], .no-fx .fx-stagger > * { opacity: 1 !important; }';
-    assert.equal(hasNofxRules(tokens), true);
+  test('新 tokens.css(三段工具箱都当前) → 不注入, 保持纯快照', () => {
+    const tokens = `:root{--accent:#111}\n${NOFX_CSS}\n${CHART_CSS}\n${TABLE_CSS}\n`;
     const proj = build(tmpdir(), { tokens, timings: true });
     const r = runSkill('preview-page.mjs', [proj]);
     assert.equal(r.status, 0, r.stderr);
-    const nofx = fs.readFileSync(path.join(proj, 'preview', 'play', '01-title.nofx.html'), 'utf8');
-    assert.ok(!nofx.includes('兜底注入'));
-    assert.ok(!r.stderr.includes('no-fx'));
+    const outDir = path.join(proj, 'preview', 'play');
+    assert.ok(!fs.readFileSync(path.join(outDir, '01-title.nofx.html'), 'utf8').includes('兜底注入'));
+    assert.ok(!fs.readFileSync(path.join(outDir, '01-title.html'), 'utf8').includes('兜底注入'));
+    assert.ok(!r.stderr.includes('落后'));
   });
 
   test('没有 timings.json → 照常出页, 但明确警告时序不是成片的', () => {

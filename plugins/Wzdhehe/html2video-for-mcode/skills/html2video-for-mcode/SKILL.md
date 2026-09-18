@@ -27,15 +27,15 @@ description: 把脚本/大纲/主题变成带中文口播的成片 MP4(HTML 幻�
 
 ## 目录与工具
 
-技能自带 **11 个命令行脚本 + 5 个内部模块**(直接以本技能目录为路径调用,项目目录作为参数,无需复制;`tests/` 下还有一套 node:test 安全与冒烟测试,从仓库根 `node --test` 自动发现):
+技能自带 **11 个命令行脚本 + 6 个内部模块**(直接以本技能目录为路径调用,项目目录作为参数,无需复制;`tests/` 下还有一套 node:test 安全与冒烟测试,从仓库根 `node --test` 自动发现):
 
 | 脚本 | 作用 |
 |---|---|
-| `scripts/init-project.mjs <项目目录> [--force] [--upgrade-css]` | 生成项目骨架:目录 + tokens.css + slide 模板 + script.json 契约。**目标目录非空时拒绝执行**(会重置 5 个生成文件),要重新初始化必须显式 `--force`;`--upgrade-css` 只给老项目的 tokens.css 补新版 no-fx 规则(幂等) |
+| `scripts/init-project.mjs <项目目录> [--force] [--upgrade-css] [--check-css]` | 生成项目骨架:目录 + tokens.css + slide 模板 + script.json 契约。**目标目录非空时拒绝执行**(会重置 5 个生成文件),要重新初始化必须显式 `--force`。`--upgrade-css` 把项目 tokens.css 的三个工具箱(no-fx / 图表 / 表格)**受管块**更新到技能当前版——按内容 rev 判定并**原地替换**,不再追加重复段;幂等,写前备份 `tokens.css.bak`,受管块之外的规则(含项目端覆写)不动。`--check-css` 只查不改,落后/缺失逐项报出并退出码 1 |
 | `scripts/plan-timings.mjs <项目目录>` | ffprobe 实测每段 TTS → 每张时长、各 stage 入场时刻、**每句 clauses 时刻** → `build/timings.json` |
 | `scripts/check-timing.mjs <项目目录> [--calibrate]` | 静音检测实测每句真实开口, 与估算对比;`--calibrate` 按实测校准 timings 后重渲染 |
 | `scripts/check-theme.mjs <项目目录>` | 校验全部主题的 WCAG 对比度(正文/次级/字幕/accent-ink), 不达标退出码 1;新增主题必须过闸 |
-| `scripts/check-slides.mjs <项目目录> [--quiet]` | **渲染前静态闸门**:未定义 CSS 变量、缺图/外链资源、`data-stage` 没配 fx 类、fx 关键帧不含 opacity(会永久隐形)、硬编码颜色、整片级领域自查。有 ✗ 就别截图 |
+| `scripts/check-slides.mjs <项目目录> [--quiet]` | **渲染前静态闸门**:未定义 CSS 变量、缺图/外链资源、`data-stage` 没配 fx 类、fx 关键帧不含 opacity(会永久隐形)、用了无定义的类(静默无样式,提示级)、tokens.css 工具箱落后(提示级)、硬编码颜色、整片级领域自查。有 ✗ 就别截图 |
 | `scripts/prep-image.mjs --check <图...>` / `--crop <in> <out> [--ratio 16:9] [--anchor ...] [--force]` | 配图 SOP 的执行辅助:查尺寸与裁切风险;按锚点裁切(强制"裁掉 ≤20%、不放大补边") |
 | `scripts/fetch-official-images.mjs <页面URL> [--get 1,3] [--out-dir <目录>] [--allow-file] [--max-mb N] [--force]` / `--url <图片URL>[,...]` | 从官方页/本地页面列出并下载候选配图;**站点要登录/滚动加载时,用内置浏览器 inspect 出图片 URL,再用 `--url` 直接落盘(不需 Playwright)**。内网与元数据地址一律拒绝, 每跳重定向复核, 默认写在工作目录内 |
 | `scripts/capture.mjs <项目目录> [--mode still\|motion] [--no-subs]` | Playwright 截图。still=终态单帧;motion=逐帧步进入场动画。**字幕默认烧录**(内容取自 clauses),`--no-subs` 关闭 |
@@ -43,7 +43,7 @@ description: 把脚本/大纲/主题变成带中文口播的成片 MP4(HTML 幻�
 | `scripts/build-video.mjs <项目目录> [--asr] [--dry-run]` | 编码每张 → 拼接 → 音轨对位 → 合成 → 自检 + 出 `out/subs.srt`;`--asr` **按句**切分音频 + 校验清单;`--dry-run` 只打印将要执行的 ffmpeg 命令(排错用) |
 | `scripts/asr.mjs <项目目录> [--api-key K] [--verify-timing] [--from <转写>] [--allow-any-endpoint]` | 调 ASR 转写并按句校验音画是否念的是脚本(数字/繁体字不符判 ✗);`--verify-timing` 用字级时间戳实测句开口。Key 只发官方域 |
 
-内部模块(被上面的脚本 import, 不单独运行):`tools.mjs`(ffmpeg/ffprobe 探测 + 路径收监 `safeId/safeRel/inside`)、`url-policy.mjs`(ASR 端点白名单 + SSRF/重定向策略 + 下载文件名)、`nofx-css.mjs`(`no-fx` 规则的唯一来源,init-project 写入 / preview-page 兜底注入共用)、`chart-css.mjs`(图表动效与图表原语的唯一来源)、`table-css.mjs`(表格原语:`.tbl/.kv/.matrix/.rank`)。后两者由 `--upgrade-css` 给老项目补。
+内部模块(被上面的脚本 import, 不单独运行):`tools.mjs`(ffmpeg/ffprobe 探测 + 路径收监 `safeId/safeRel/inside`)、`url-policy.mjs`(ASR 端点白名单 + SSRF/重定向策略 + 下载文件名)、`nofx-css.mjs`(`no-fx` 规则的唯一来源)、`chart-css.mjs`(图表动效与图表原语的唯一来源)、`table-css.mjs`(表格原语:`.tbl/.kv/.matrix/.rank`)、`css-kit.mjs`(前三个模块的**受管块机制**:rev 定界 + 原地替换 + 落后判定,`--upgrade-css`/`--check-css`/check-slides/preview-page 共用)。三个工具箱以带 rev 定界注释的受管块写进 tokens.css,源模块改动后跑 `--upgrade-css` 即可精确传播到老项目。
 
 环境要求:Node 18+(脚本用 fileURLToPath 保兼容, 不依赖 Node 20.11 的 import.meta.dirname)、`npm i playwright && npx playwright install chromium`(项目目录内)。ffmpeg/ffprobe 自动探测:PATH → node_modules(ffmpeg-static/ffprobe-static)→ 常见安装位置,找不到会给逐条诊断而不是莫名报错。
 
@@ -259,7 +259,8 @@ audio/*.mp3  assets/(含 MANIFEST.md)  research/notes.md  asr/(校验记录)
 | 要出竖版(抖音/视频号) | — | `script.json` 设 `width:1080, height:1920`,版式改堆叠(见 authoring.md 竖版章节) |
 | 数字/文字明明写了却看不见 | 未定义 CSS 变量 + `-webkit-text-fill-color: transparent`,整条 background 失效 | 跑 `check-slides.mjs` 定位,补定义或写 `var(--x, 默认值)` |
 | 图表/折线/某个元素入场后完全不见 | 该 fx 类的关键帧没声明 opacity —— `[data-stage]` 基础态是 `opacity:0`,只做 transform/描边的动画抬不回来 | 在关键帧的 from/to 里补 `opacity:1`;`check-slides.mjs` 会直接报出来 |
-| 切了 `no-fx` 画面反而更空 | 早期模板只关动画、没恢复 `[data-stage]` 的 `opacity:0` 基础态 | 项目 tokens.css 是旧版:`node scripts/init-project.mjs <项目目录> --upgrade-css` 补上(幂等);放映页遇到旧 tokens.css 会在关动效副本里兜底注入并明确提示 |
+| 切了 `no-fx` 画面反而更空 | 早期模板只关动画、没恢复 `[data-stage]` 的 `opacity:0` 基础态 | 项目 tokens.css 是旧版:`node scripts/init-project.mjs <项目目录> --upgrade-css` 原地更新受管块(幂等);放映页遇到旧 tokens.css 会在副本里兜底注入并明确提示 |
+| 技能改了 CSS(或用了新类如 `.chart-ticks`),项目里却不生效 | 项目 tokens.css 的工具箱受管块落后于技能单源(旧判定只看"有没有",补过一次就永远报"无需升级") | `node scripts/init-project.mjs <项目> --check-css` 看状态;`--upgrade-css` 按内容 rev 原地替换受管块(不动你的覆写);check-slides 会在渲染前提示落后 |
 | 双击 `slides/*.html` 看动画, 发现全挤在开头 | 动画延迟由管线按 `timings.json` 注入,tokens.css 里只有占位值(`--t2:800ms`) | 别直接开原文件:跑 `preview-page.mjs` 用副本(已注入实测延迟), 或 `--mode motion` 出片 |
 | 柱状图柱高与标注数值不符(高柱子被压矮) | 柱子直接放在 flex 列里按百分比设高: 基准是**整列**高度, 超过剩余空间会被 `flex-shrink` 压回去, 静默失真 | 把柱子包进 `.chart-plot-cell`(1fr 行), 百分比就相对绘图区算; 顺带得到基线与各列等高 |
 | 折线图缩在版面中间一小块 | SVG 的 `viewBox` 宽高比与容器不一致, `preserveAspectRatio` 把内容等比缩小居中 | 满宽用 `width:100%;height:auto`; 半宽/固定高就把 viewBox 改成接近容器的比例 |

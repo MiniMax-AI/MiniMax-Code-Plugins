@@ -1,5 +1,5 @@
 // html2video-for-mcode · 表格原语的唯一来源。
-// init-project 把它写进 tokens.css; `--upgrade-css` 给老项目补这一段。
+// init-project 把它写进 tokens.css 的受管块; `--upgrade-css` 按内容 rev 原地更新(见 css-kit.mjs)。
 // 为什么要有原语: 以前每种表都靠内联样式各写一套, 行高/对齐/涨跌色各页不一致 ——
 // 而表格最容易出的问题正是"行高压不住、数字不右对齐、涨跌色用错"(见 authoring.md 表格纪律)。
 
@@ -34,7 +34,8 @@ export const TABLE_CSS = `/* ── 表格原语(数据表/规格表/对比矩�
 .matrix td { padding: var(--sp-3) 0; border-bottom: 1px solid var(--line); height: 72px; }
 .matrix .yes { color: var(--accent); font-size: var(--fs-h3); }
 .matrix .no { color: var(--fg-3); }
-.matrix td.hi { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+/* 高亮列: td 与 th 都要覆盖 —— 只写 td.hi 时表头那格拿不到背景, "我们"那一列看着只亮了一半(2026-09-18 排查抓到) */
+.matrix td.hi, .matrix th.hi { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 /* 排名表: 名次 + 微缩条 + 数值(表格里的条形, 复用 --w 定长) */
 .rank { width: 100%; border-collapse: collapse; font-size: var(--fs-body); }
 .rank td { padding: var(--sp-2) var(--sp-3) var(--sp-2) 0; border-bottom: 1px solid var(--line); height: 72px; }

@@ -12,11 +12,16 @@
 //   5. data-stage 没配 fx-* 类 —— 元素会永远停在 opacity:0(除非放进 .fx-stagger 容器)
 //   5b. fx 类的关键帧不含 opacity —— 同上, 基础态 opacity:0 抬不回来, 元素永远隐形
 //      (只做 transform/描边的动画必须显式写 opacity:1; 2026-09-18 实测踩过)
-//   6. 整片级领域自查 —— 命中多个财经/投研关键词却全片没有免责或出处行 → 提示(不是错误),
+//   5c. class 用了 tokens.css 与本张 <style> 都没有的类 —— 元素静默无样式(.grid g4 / <p class="dim">
+//      那类), 提示级; 纯语义钩子可忽略
+//   6. tokens.css 工具箱落后于技能当前版本(受管块 rev 不一致/缺失) —— 提示级: 不升级的话
+//      新版类(如 .chart-ticks)会静默无样式("改了 CSS 但项目里没生效"的根因, 见 css-kit.mjs)
+//   7. 整片级领域自查 —— 命中多个财经/投研关键词却全片没有免责或出处行 → 提示(不是错误),
 //      提醒确认领域与免责口径(见 references/compliance.md); 用户明确不要免责时可忽略
 import fs from 'node:fs';
 import path from 'node:path';
 import { safeId, safeRel, inside } from './tools.mjs';
+import { kitStatuses } from './css-kit.mjs';
 
 // tokens.css 里的 @keyframes 名 → 是否声明了 opacity(用来判断"动画能否把基础态抬回可见")
 function opacityAwareKeyframes(css) {
@@ -54,10 +59,15 @@ const script = JSON.parse(fs.readFileSync(scriptPath, 'utf8'));
 const slidesDir = path.join(dir, 'slides');
 const tokensPath = path.join(slidesDir, 'tokens.css');
 if (!fs.existsSync(tokensPath)) { console.error(`✗ 找不到 ${tokensPath}`); process.exit(1); }
-const tokensCss = fs.readFileSync(tokensPath, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+const tokensRaw = fs.readFileSync(tokensPath, 'utf8');
+const tokensCss = tokensRaw.replace(/\/\*[\s\S]*?\*\//g, '');
 
 // tokens.css 里定义的变量
 const defined = new Set([...tokensCss.matchAll(/(--[\w-]+)\s*:/g)].map(m => m[1]));
+// tokens.css 选择器里出现过的类名(存在即可命中, 不分裸类/复合 —— 那交给 5c 的提示与人工判断)
+const definedClasses = new Set([...tokensCss.matchAll(/\.(-?[A-Za-z_][\w-]*)/g)].map(m => m[1]));
+// 不在 tokens.css / 本张 <style> 里、但合法的类: no-fx 是放映页开关, kit-sub* 是 capture 烧字幕时注入的
+const CLASS_ALLOW = new Set(['no-fx', 'kit-sub', 'kit-sub-2']);
 // fx 类 → 关键帧名, 以及关键帧是否声明 opacity(供 5b 检查: 动画必须能把基础态 opacity:0 抬回 1)
 const fxKeyframes = fxClassKeyframes(tokensCss);
 const kfOpacity = opacityAwareKeyframes(tokensCss);
@@ -153,9 +163,32 @@ for (const s of slides) {
       }
     }
   }
+
+  // 5c. 类名有据可查: class="..." 里的每个类, tokens.css / 本张 <style> / 白名单至少要有一处,
+  //     否则该元素静默无样式(.grid g4 / <p class="dim"> 那类坑; 提示级, 纯语义钩子可忽略)
+  const localCss = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)].map(m => m[1]).join('\n');
+  const localClasses = new Set([...localCss.matchAll(/\.(-?[A-Za-z_][\w-]*)/g)].map(m => m[1]));
+  const used = new Set();
+  for (const m of html.matchAll(/\bclass\s*=\s*["']([^"']*)["']/g)) {
+    for (const c of m[1].split(/\s+/)) if (c) used.add(c);
+  }
+  const missing = [...used].filter(c => !definedClasses.has(c) && !localClasses.has(c) && !CLASS_ALLOW.has(c));
+  if (missing.length) {
+    report.push({ id: s.id, level: 'warn', msg: `类在 tokens.css 与本张 <style> 里都无定义: .${missing.join(' .')} — 元素会静默无样式; 若只是无样式的语义钩子可忽略, 否则补规则或改用已有类(自查: node scripts/init-project.mjs <项目> --check-css)` });
+    warns++;
+  }
 }
 
-// 6. 受监管领域自查(整片级): 像财经/投研内容却没见免责或出处标注 → 提示, 不是错误
+// 6. tokens.css 工具箱落后(受管块 rev 与技能当前不一致/缺失) → 提示级, 但必须点名:
+//    源头模块改了、项目没升级, 新类就会静默无样式 —— "改了 CSS 但没生效"的根因
+const cssNotes = [];
+for (const st of kitStatuses(tokensRaw)) {
+  if (st.status === 'ok') continue;
+  cssNotes.push(`tokens.css 的${st.label}${st.status === 'stale' ? `落后(${st.detail})` : `缺失(${st.detail})`} → node scripts/init-project.mjs <项目目录> --upgrade-css 原地更新受管块; 否则新版类会静默无样式`);
+  warns++;
+}
+
+// 7. 受监管领域自查(整片级): 像财经/投研内容却没见免责或出处标注 → 提示, 不是错误
 for (const s of slides) {
   const cls = (s.clauses ?? []).map(c => `${c.text ?? ''} ${c.text2 ?? ''}`).join(' ');
   if (cls.trim()) deckText.push({ id: s.id, text: cls });
@@ -183,6 +216,7 @@ if (!QUIET) {
     console.log(`${rs.some(r => r.level === 'error') ? '✗' : '⚠'} ${s.id}`);
     for (const r of rs) console.log(`    ${r.level === 'error' ? '✗' : '⚠'} ${r.msg}`);
   }
+  for (const n of cssNotes) console.log(`⚠ tokens.css: ${n}`);
   for (const n of deckNotes) console.log(`⚠ 整片: ${n}`);
 }
 console.log(`\n静态检查: ${slides.length} 张 · ✗ ${errors} 项错误 / ⚠ ${warns} 项提示`);

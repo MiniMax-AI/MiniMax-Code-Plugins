@@ -1,6 +1,6 @@
 // html2video-for-mcode · 图表动效与图表原语的唯一来源。
-// init-project 把它写进 tokens.css; `--upgrade-css` 给老项目补这一段(老 tokens.css 里没有,
-// 用了新配方会因缺 keyframes/@property 而静默失败: 条形不生长、环形不扫出、数字不滚动)。
+// init-project 把它写进 tokens.css 的受管块; `--upgrade-css` 按内容 rev 原地更新(见 css-kit.mjs)。
+// 老项目缺这段时新配方会静默半死(条形不生长 / 环形不扫出 / 数字不滚动)。
 
 export const CHART_CSS = `/* ── 图表动效(数据图形专用) ─────────────────────────────────────
    静态默认值一律 = 终值, keyframes 从 0 长到终值 —— 这样关掉动效(no-fx)时画面自然
@@ -73,13 +73,21 @@ export const CHART_CSS = `/* ── 图表动效(数据图形专用) ───�
   min-height: 0; border-bottom: 1px solid var(--line-strong); }
 .chart-plot-cell.grid { border-top: 1px solid var(--line-strong);   /* 顶边 = 轴上限, 让"轴 0–X"看得见 */
   background-image: repeating-linear-gradient(to top, var(--line-strong) 0 1px, transparent 1px 25%); }
-/* 目标线放在绘图区里(bottom 用百分比对齐轴): 0% = 基线, 100% = 轴上限 */
+/* 目标线有两种朝向, 都按比例尺定位:
+   ① 柱状图里是横线(bottom:100% = 轴上限); ② bullet 轨道里是**竖线**(left:88% = 目标位),
+     标签必须贴在刻度旁边 —— 贴轨道右端会被读成"刻度在最右边"(实测被视觉验收抓到) */
 .chart-plot-cell .chart-target { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--line-strong); }
+.chart-track .chart-target { position: absolute; top: -5px; bottom: -5px; border-left: 2px dashed var(--fg-3); }
+.chart-track .chart-target span { position: absolute; top: -1.5em; right: 4px; white-space: nowrap;
+  font-size: var(--fs-tiny); color: var(--fg-3); }
 .chart-bar-wrap { position: relative; display: flex; flex-direction: column; justify-content: flex-end; min-height: 0; }
 .chart-bar-wrap .chart-val { position: absolute; bottom: 100%; left: 0; right: 0; text-align: center; margin-bottom: 6px; }
 .chart-bar-wrap .chart-bar { width: 100%; height: 100%; border-radius: var(--radius-sm) var(--radius-sm) 0 0; padding: 0; }
 .chart-col .chart-val { color: var(--fg); align-self: stretch; text-align: center; }  /* 与柱下轴标签同一轴线 */
 .chart-col .chart-lbl { flex: 0 0 auto; text-align: center; }
+/* 左侧刻度列: 与绘图区等高(底部留出轴标签那一行的高度), 让"轴 0–X%"在图上可核验 */
+.chart-ticks { display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end;
+  height: calc(var(--cols-h, 380px) - 40px); font-size: var(--fs-tiny); color: var(--fg-3); padding-right: var(--sp-2); }
 .chart-target { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--line-strong); }
 .chart-target span { position: absolute; right: 0; top: -1.4em; font-size: var(--fs-tiny); color: var(--fg-3); }
 .chart-cap { font-size: var(--fs-tiny); color: var(--fg-3); }`;

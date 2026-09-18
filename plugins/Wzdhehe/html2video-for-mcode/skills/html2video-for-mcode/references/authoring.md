@@ -100,7 +100,7 @@ tokens.css 已内置,规则只有四条:
 
 ## 版式片段(可抄)
 
-以下片段都基于 tokens.css,只列 `<main>` 内部结构;外层 `.stage`、`.brand`、`.slide-num` 照 `_template.html`。
+以下片段基于 tokens.css + 每张自己的 `<style>`(布局骨架 `.layout/.cols/.cards/.num/.cap` 这类每张内联自定,不来自 tokens.css);只列 `<main>` 内部结构;外层 `.stage`、`.brand`、`.slide-num` 照 `_template.html`。
 
 **bullets**
 ```html
@@ -265,10 +265,10 @@ console.log(answer.output_text);</code></pre>
 <!-- comparison: 左右两栏 + 竖分隔线 -->
 <div style="display:grid;grid-template-columns:1fr 1px 1fr;gap:var(--sp-5);align-items:center">
   <div class="fx-grow" data-stage="2">
-    <p class="eyebrow">三年前</p><h3>像高中生</h3><p class="dim">会聊天,常出错</p></div>
+    <p class="eyebrow">三年前</p><h3>像高中生</h3><p style="color:var(--muted)">会聊天,常出错</p></div>
   <div style="background:var(--line);height:70%"></div>
   <div class="fx-grow" data-stage="2" style="animation-delay:calc(var(--t2) + 200ms)">
-    <p class="eyebrow">今天</p><h3>像研究员</h3><p class="dim">可托付研究级任务</p></div>
+    <p class="eyebrow">今天</p><h3>像研究员</h3><p style="color:var(--muted)">可托付研究级任务</p></div>
 </div>
 
 <!-- flow-diagram: 节点 + 箭头(用 ▸ 字符, 不引 SVG) -->
@@ -312,12 +312,12 @@ console.log(answer.output_text);</code></pre>
 
 1. **同类同色 + 一条强调**:同一序列的条/柱**同一个颜色**,要突出的那条用 `--accent`(`.chart-bar` 默认),其余加 `.dim`(自动 `color-mix` 弱化成同色系)。彩虹色条形图是最典型的"业余感"来源。**弱化条上的数值不要用白字**——半透明填充配白字读不出来(实测被视觉验收判为"读不清");要么靠 `.chart-bar.dim .chart-val` 自动改用墨色,要么把数值放条外:`<span class="chart-val out chart-num">`(轨道之后,右对齐,墨色)。
 2. **别把数字放进被缩放的元素里**:`fx-grow-x` 用 `scaleX`,条内数字会被**横向拉扁**(实测);带标签的条用 `fx-grow-w`(动画 `width`,不变形)。数值一律套 `.chart-num`(等宽 + `tabular-nums`),多位数字滚动时才不抖。
-3. **有基线、有细网格**:柱状图靠 `.chart-plot-cell` 的底边做基线(柱子必须待在 plot 容器里 —— 百分比高度若相对整列算,超出剩余空间会被 `flex-shrink` 压回去,**柱高就不再等于数值**,实测 84% 与 72% 画成一样高)+ 网格画在绘图区里、**且要在页面上看得见**(用 `--line-strong`; 网格线若太浅、或只在被柱子盖住的地方显影, 读者读不出刻度, 实测被判 fail),顶边线即轴上限, 目标值用绘图区内的 `.chart-target` 虚线(`style="bottom:100%"` 对齐轴上限);横向条形图给每条轨道加 `.chart-track.grid`(共享 25/50/75% 竖刻度),轨道左缘自带零轴竖线。**行用 `.chart-row` 的 grid 三列(标签/轨道/数值位)定宽** —— 否则"有条外数值的行"轨道会被挤窄,同一张图里出现两把尺子、条长不可比(实测被视觉验收抓到)。轴标签用 `--fs-tiny` + `--fg-3`。图表的精致度大半来自这些"看不见的线"。
+3. **有基线、有细网格**:柱状图靠 `.chart-plot-cell` 的底边做基线(柱子必须待在 plot 容器里 —— 百分比高度若相对整列算,超出剩余空间会被 `flex-shrink` 压回去,**柱高就不再等于数值**,实测 84% 与 72% 画成一样高)+ 网格画在绘图区里、**且要在页面上看得见**(用 `--line-strong`; 网格线若太浅、或只在被柱子盖住的地方显影, 读者读不出刻度, 实测被判 fail),顶边线即轴上限。**柱状图的目标值写在标题行 note 里就行** —— 顶部再画一条虚线会跟最高的柱顶数值标签挤在一起, 被读成负号(实测被判缺陷);bullet 那种轨道图才用 `.chart-target` 竖刻度线。横向条形图给每条轨道加 `.chart-track.grid`(共享 25/50/75% 竖刻度),轨道左缘自带零轴竖线。**行用 `.chart-row` 的 grid 三列(标签/轨道/数值位)定宽** —— 否则"有条外数值的行"轨道会被挤窄,同一张图里出现两把尺子、条长不可比(实测被视觉验收抓到)。轴标签用 `--fs-tiny` + `--fg-3`。图表的精致度大半来自这些"看不见的线"。
 4. **一张图只讲一件事**:用 `.chart-note` 把那句话写在标题行右侧(「同比 +38%」「距目标 0.2pp」),别让观众自己算。
 5. **零值和极小值要保底**:给 `.chart-bar` 加 `min-height:4px`(或让 `.chart-target` 虚线兜住),否则"0"看起来像"没数据"。
 6. **图注写口径与时点**(`.chart-cap`):受监管题材必写(见 compliance.md),其他题材也建议 —— 数字的可信度来自"什么时候、怎么算的"。
-7. **在字幕安全区里垂直居中, 别都堆在顶部**:图表块应占住安全区(1080 高度下可用约 825px),版面容器用 `justify-content:center`;条形行距/条高可以放大(条高用 `--bar-h`,56–64px 更好看)。上半部挤满、下半部大片空白,成片里就是"整页失衡"(视觉验收实测两次判到)。
-9. **柱高必须由数值算出来, 轴从 0 起**:凭手感写 `height:58%` 会让柱高与标注数字不成比例 —— 这不是审美问题, 是**数据失真**(截断纵轴是同一类错)。做法:先定轴上限(如 4.0%),柱高 = 数值 ÷ 轴上限(3.1/4.0 = 77.5%),并把轴上限写进标题或 note("轴 0–4.0%")。视觉验收实测:三根柱的画法与标注对不上,直接被判 fail。
+7. **标题固定在安全区顶部同一位置, 图表块在剩余空间居中**:图表块应占住安全区(1080 高度下可用约 825px),做法:`h1` 之前留固定上边距、用 `.layout{display:flex;flex-direction:column}` + 图表块外面套一层 `flex:1;display:flex;align-items:center` —— 这样每页标题的 y 位置一致(连播时标题不跳), 图表又在剩余空间里居中(实测两页标题差 170px 会被判 fail)。条形行距/条高可以放大(条高用 `--bar-h`,56–64px 更好看)。上半部挤满、下半部大片空白,成片里就是"整页失衡"(视觉验收实测两次判到)。
+9. **柱高必须由数值算出来, 轴从 0 起**:凭手感写 `height:58%` 会让柱高与标注数字不成比例 —— 这不是审美问题, 是**数据失真**(截断纵轴是同一类错)。做法:先定轴上限(如 4.0%),柱高 = 数值 ÷ 轴上限(3.1/4.0 = 77.5%),并把轴上限写进标题或 note("轴 0–4.0%"), 并在左侧用 `.chart-ticks` 标出刻度数值 —— 只写"轴 0–4.0%"却没有任何刻度, 观众无法核验柱高(实测被判为缺陷)。视觉验收实测:三根柱的画法与标注对不上,直接被判 fail。
 8. **数值对齐到同一列**:同一张图的所有数值右对齐在同一列(都用 `.chart-val.out`);条内白字只用"只有一条强调条、不与其它行并列"的情形,否则四条数值会分成两列,一眼看出没对齐(视觉验收实测)。
 
 其余照旧:颜色走令牌(涨跌 `var(--up)/var(--down)`,财经按受众翻转),网格 `var(--line)`,数值 `var(--fg)`,图例 `--muted`。**动效是图表的一部分**,且**全套可一键关**(见"动效开关")。
@@ -368,10 +368,11 @@ console.log(answer.output_text);</code></pre>
   <!-- 柱高 = 数值 ÷ 轴上限, 轴必须从 0 起: 3.1/3.5/3.8 对 4.0% 轴 → 77.5% / 87.5% / 95%。
        把轴上限写进标题或 note, 别让读者猜比例尺(凭手感写百分比 = 数据失真) -->
   <div class="chart-head"><span class="chart-title">付费转化率 · 周(轴 0–4.0%)</span><span class="chart-note">目标 4.0%</span></div>
+  <div style="display:flex;gap:var(--sp-3);align-items:flex-start">
+    <div class="chart-ticks" style="--cols-h:300px"><span>4%</span><span>3%</span><span>2%</span><span>1%</span><span>0</span></div>
   <div class="chart-cols" style="--cols-h:300px">
     <div class="chart-col">
       <div class="chart-plot-cell grid">
-        <div class="chart-target" style="bottom:100%"><span>目标 4.0%</span></div>
         <div class="chart-bar-wrap" style="height:77.5%">
           <span class="chart-val chart-num fx-fade" data-stage="2">3.1%</span>
           <div class="chart-bar dim fx-grow-y" data-stage="2"></div>
@@ -397,6 +398,7 @@ console.log(answer.output_text);</code></pre>
       </div>
       <span class="chart-lbl fx-fade" data-stage="2" style="--fx-delay:calc(var(--t2) + 240ms)">W12</span>
     </div>
+  </div>
   </div>
   <p class="chart-cap">口径: 注册后 7 日内付费 · 来源: 内部指标平台 · 截至 2026-08-15</p>
 </div>
@@ -434,17 +436,21 @@ console.log(answer.output_text);</code></pre>
 <!-- ⚠ 中心数字交给 fx-count 后不要再手写 "62"(计数器会自己填); 小数(62.4)不支持, 保持静态或拆两段。
      fx-count 在入场前是 opacity:0 —— 否则画面会停在"灰色的 0", 被读成"份额 0%/没数据"(视觉验收实测) -->
 
-<!-- ⑤ bullet(实际 vs 目标, 汇报最实用): 一条轨道 + 目标虚线 + 实际条 + 右侧数值 -->
+<!-- ⑤ bullet(实际 vs 目标, 汇报最实用): 一条轨道 + **目标竖刻度线**(标签贴刻度) + 实际条 + 条外数值
+     ⚠ 目标标签别贴轨道右端 —— 会被读成"刻度在最右边"; 也别只给轨道加淡色分界, 看不见等于没有 -->
 <div class="chart-row" style="margin-top:var(--sp-4)">
   <span class="chart-lbl">年度目标达成</span>
   <div class="chart-track" style="height:26px">
     <div class="chart-bar fx-grow-w" data-stage="2" style="--w:78%"></div>
     <div class="chart-target" style="left:88%"><span>目标 88%</span></div>
   </div>
-  <span class="chart-val chart-num fx-fade" data-stage="2" style="color:var(--fg)">78%</span>
+  <span class="chart-val out chart-num fx-fade" data-stage="2">78%</span>
 </div>
 
-<!-- ⑥ slope(前后对比): 两列点 + 斜线, 比双柱更省版面; 主体用 --accent, 对照组用 --line-strong -->
+<!-- ⑥ slope(前后对比): 两列点 + 斜线, 比双柱更省版面; 主体用 --accent, 对照组用 --line-strong
+     ⚠ 纵坐标按数值比例摆点, 而且**要单独画一条 0 基线**: 让对照组那条线兼任基线, 会出现"1M 画在 2M 之上"(实测被判 fail);
+        "1M→2M 的间距"和"2M→10M 的间距"必须与数值差成比例, 否则"涨了 10 倍"在图上读不出来(实测被判 fail);
+     对照组要如实画: 两年持平就画**水平线**, 并且**两端都标数值**, 标签别压在另一条线上 —— 只标一端、线却明显倾斜, 会被读成"数据不明/自相矛盾"(实测被视觉验收判 fail) -->
 <svg class="fx-draw" data-stage="2" viewBox="0 0 720 320" style="width:100%;height:auto" fill="none">
   <text x="0" y="24" fill="var(--fg-3)" font-size="22">三年前</text>
   <text x="720" y="24" text-anchor="end" fill="var(--fg-3)" font-size="22">今天</text>
@@ -463,7 +469,8 @@ console.log(answer.output_text);</code></pre>
   <span class="chart-num" style="font-size:var(--fs-h2);color:var(--fg)">96.4</span>
   <svg class="fx-draw" data-stage="2" viewBox="0 0 160 48" style="width:160px;height:48px" fill="none">
     <polyline points="4,40 30,34 56,36 82,22 108,18 134,10 156,6"
-      stroke="var(--up)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="300"/>
+      stroke="var(--accent)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="300"/>
+    <!-- 颜色跟主体走(--accent); 只有"涨/跌"本身是信息时才用 --up/--down。末端补个小圆点收口 -->
   </svg>
 </span>
 ```
@@ -511,7 +518,7 @@ console.log(answer.output_text);</code></pre>
   <tr><td>上线时间</td><td>2026-08-15</td></tr>
 </table>
 
-<!-- ③ 对比矩阵(.matrix: 行是维度、列是方案, 只放勾叉; .hi 高亮"我们"那一列) -->
+<!-- ③ 对比矩阵(.matrix: 行是维度、列是方案, 只放勾叉; .hi 高亮"我们"那一列, th/td 均可) -->
 <table class="matrix fx-fade" data-stage="2">
   <thead><tr><th>能力</th><th>方案 A</th><th class="hi">方案 B(本方案)</th><th>方案 C</th></tr></thead>
   <tbody>

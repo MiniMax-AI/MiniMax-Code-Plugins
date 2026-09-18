@@ -1,6 +1,6 @@
 {
   "name": "html2video-for-mcode",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Turn a topic, outline, or script into a narrated MP4: HTML slides with staged entrance animations, TTS voiceover, ffmpeg assembly, and ASR verification.",
   "skills": [
     "./skills/html2video-for-mcode/SKILL.md"

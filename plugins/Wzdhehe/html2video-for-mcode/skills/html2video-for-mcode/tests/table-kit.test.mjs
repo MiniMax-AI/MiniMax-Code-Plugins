@@ -19,6 +19,8 @@ describe('表格工具箱 · 模板内容', () => {
     }
     assert.match(css, /\.tbl tbody tr\s*\{[^}]*height:\s*72px/, '数据表行高必须 ≥72px');
     assert.match(css, /\.rank td\s*\{[^}]*height:\s*72px/, '排名表行高必须 ≥72px');
+    // 高亮列必须连表头一起覆盖: 只写 td.hi 时 <th class="hi"> 静默不生效(2026-09-18 排查抓到)
+    assert.match(css, /\.matrix th\.hi/, '矩阵高亮列要覆盖表头');
   });
 
   test('主数据用正文号(视频在手机上要读得清), 表头才降到 caption', () => {

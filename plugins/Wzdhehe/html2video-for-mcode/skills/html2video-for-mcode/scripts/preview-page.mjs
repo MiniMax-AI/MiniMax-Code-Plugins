@@ -19,7 +19,8 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { safeId, safeRel, validateScriptPaths } from './tools.mjs';
-import { NOFX_CSS, hasNofxRules } from './nofx-css.mjs';
+import { NOFX_CSS } from './nofx-css.mjs';
+import { KITS, kitStatuses } from './css-kit.mjs';
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -102,9 +103,9 @@ export function addBaseHref(html, href) {
   return html.slice(0, at) + `\n<base href="${href}">` + html.slice(at);
 }
 
-// 兜底: 老项目 tokens.css 里没有 no-fx 规则时, 只给"关动效副本"补上(排在 tokens.css 之后)
-export function injectStyle(html, css) {
-  const block = `<style>/* preview-page 兜底注入: 本项目 tokens.css 缺 no-fx 规则 */\n${css}\n</style>\n`;
+// 兜底: 项目 tokens.css 落后于技能当前版本时, 把缺的那段注入副本(排在 tokens.css 之后, 后写覆盖)
+export function injectStyle(html, css, note = '本项目 tokens.css 缺这段规则') {
+  const block = `<style>/* preview-page 兜底注入: ${note} */\n${css}\n</style>\n`;
   const i = html.search(/<\/head>/i);
   return i < 0 ? block + html : html.slice(0, i) + block + html.slice(i);
 }
@@ -112,7 +113,7 @@ export function injectStyle(html, css) {
 // ─────────────────────────── 放映页 ───────────────────────────
 
 export function buildPlayPage({
-  topic = '', lang = 'zh', slides = [], noFxNote = '', generatedAt = '',
+  topic = '', lang = 'zh', slides = [], cssNote = '', generatedAt = '',
   narration = true,    // 是否加载口播文案 UI(没有 clauses 或 --no-script 时为 false)
   timing = false,      // 是否有对时数据(只影响标题上的"(未对时)"标注)
   fallbackNote = '',   // "还没对时/等间隔预览"的如实说明(与口播 UI 无关, 画面上也要说清)
@@ -124,7 +125,7 @@ export function buildPlayPage({
   }));
   const json = JSON.stringify(model).replace(/</g, '\\u003c');
   const bodyCls = narration ? '' : 'narr-off';
-  const nofxWarn = noFxNote ? `<p class="warn">⚠ ${esc(noFxNote)}</p>` : '';
+  const cssWarn = cssNote ? `<p class="warn">⚠ ${esc(cssNote)}</p>` : '';
   const notice = fallbackNote ? `<div id="notice">${esc(fallbackNote)}</div>` : '';
 
   return `<!doctype html>
@@ -225,7 +226,7 @@ export function buildPlayPage({
   ${narration ? `<aside id="panel">
     <h2>本张口播文案${timing ? '' : '(未对时)'}</h2>
     <ol id="clauses"></ol>
-    ${nofxWarn}
+    ${cssWarn}
   </aside>` : ''}
 </main>
 <footer>
@@ -386,13 +387,20 @@ function main() {
   const outDir = path.join(dir, 'preview', 'play');
   fs.mkdirSync(outDir, { recursive: true });
 
-  // 老项目(第 8 轮之前生成的 tokens.css)没有 no-fx 规则: 只给"关动效副本"兜底注入,
-  // 并在页面上如实说明 —— 否则对照会把画面锁在入场前的透明态, 看着像整片空白。
+  // 项目 tokens.css 落后于技能当前版本(缺 no-fx / 图表 / 表格任一段)时给副本兜底注入当前版,
+  // 并在页面与终端如实说明 —— 否则"关动效对照"会把画面锁在入场前的透明态, 旧图表规则也会
+  // 把新版画法(如 .chart-ticks)渲染坏。注入的 <style> 排在 tokens.css 之后, 后写覆盖。
   const tokensPath = path.join(slidesDir, 'tokens.css');
   const tokensCss = fs.existsSync(tokensPath) ? fs.readFileSync(tokensPath, 'utf8') : '';
-  const noFxStale = !hasNofxRules(tokensCss);
-  const noFxNote = noFxStale
-    ? `本项目 slides/tokens.css ${tokensCss ? '没有 no-fx 规则(旧模板生成的)' : '不存在'} —— 关动效副本里已兜底注入。想让 <html class="no-fx"> 对成片也生效, 请用新版 init-project 重生成 tokens.css`
+  const kitIssues = kitStatuses(tokensCss)
+    .map((st, i) => ({ ...st, css: KITS[i].css }))
+    .filter(st => st.status !== 'ok');
+  const nofxIssue = kitIssues.find(k => k.id === 'nofx');
+  const chartTable = kitIssues.filter(k => k.id !== 'nofx');
+  const ctCss = chartTable.map(k => k.css).join('\n\n');
+  const ctLabel = chartTable.map(k => k.label).join(' · ');
+  const cssNote = kitIssues.length
+    ? `本项目 tokens.css 落后于技能当前版(缺: ${kitIssues.map(k => k.label).join(' · ')}) —— 快照已兜底注入当前版;想让成片与项目文件也用上, 跑 init-project --upgrade-css`
     : '';
 
   const rows = [];
@@ -418,10 +426,11 @@ function main() {
 
     let copy = addBaseHref(injectHtmlVars(html, decl), '../../slides/');
     copy = `<!-- html2video-for-mcode 放映页快照 · 由 scripts/preview-page.mjs 生成, 请勿编辑;\n     真实文件: slides/${base}(改完 slides 请重跑 preview-page.mjs) -->\n` + copy;
+    if (ctCss) copy = injectStyle(copy, ctCss, `图表/表格工具箱(${ctLabel})`);
     fs.writeFileSync(path.join(outDir, base), copy);
     const nofxName = base.replace(/\.html?$/i, '') + '.nofx.html';
     let nofx = addNoFx(copy);
-    if (noFxStale) nofx = injectStyle(nofx, NOFX_CSS);
+    if (nofxIssue) nofx = injectStyle(nofx, NOFX_CSS, 'no-fx 规则');
     fs.writeFileSync(path.join(outDir, nofxName), nofx);
 
     const stageVals = Object.values(stages).filter(Number.isFinite);
@@ -449,7 +458,7 @@ function main() {
   ].filter(Boolean).join(' · ');
 
   const page = buildPlayPage({
-    topic: script.topic ?? '', lang: script.lang ?? 'zh', slides: rows, noFxNote,
+    topic: script.topic ?? '', lang: script.lang ?? 'zh', slides: rows, cssNote,
     narration, timing, fallbackNote,
     generatedAt: `${now.getFullYear()}-${p2(now.getMonth() + 1)}-${p2(now.getDate())} ${p2(now.getHours())}:${p2(now.getMinutes())}`,
   });
@@ -462,7 +471,7 @@ function main() {
   if (!hasTimings) console.warn('⚠ 缺 build/timings.json: 副本按等间隔预览入场顺序, 不是成片时序 —— 先跑 plan-timings.mjs');
   else if (fallbackUsed) console.warn('⚠ 部分张在 timings.json 里没有 stage 数据: 那几张按等间隔预览');
   else console.log(`  已注入实测 stage 延迟: ${rows.map(r => `${r.id}(${r.lastStage != null ? '末层 ' + r.lastStage.toFixed(1) + 's' : '无 stage'})`).join(' ')}`);
-  if (noFxStale) console.warn(`⚠ slides/tokens.css ${tokensCss ? '缺 no-fx 规则(旧模板生成的)' : '不存在'} —— 关动效副本已兜底注入; 想让它对成片也生效, 用新版 init-project 重生成 tokens.css`);
+  if (kitIssues.length) console.warn(`⚠ slides/tokens.css 落后于技能当前版(缺: ${kitIssues.map(k => k.label).join(' · ')}) —— 副本已兜底注入;想让成片与项目文件也用上, 跑 node scripts/init-project.mjs <项目目录> --upgrade-css`);
   console.log(`  操作: ← → 翻页 · R 重播 · X 动效/关动效对照${narration ? ' · P 口播文案开/关' : ''} · O 总览 · F 全屏;触屏左右滑翻页`);
 
   if (OPEN) {

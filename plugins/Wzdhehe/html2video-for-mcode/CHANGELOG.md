@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.0 — 2026-09-18
+
+**CSS 工具箱受管块:把「改了 CSS 但项目里没生效」连根修掉**
+
+- 三个工具箱(`nofx-css.mjs` / `chart-css.mjs` / `table-css.mjs`)在项目 `tokens.css` 里改为**带内容 rev 的受管块**(`/* >>> html2video:<id> rev=<sha256> >>> */ … /* <<< html2video:<id> <<< */`),rev 对三段 CSS 内容求哈希 —— 内容变则 rev 变。
+- `init-project --upgrade-css` 从「存在性探针 + 追加」重写为**按 rev 原地替换**:块旧 / 被手工改过 → 原位换新;无定界但内容当前 → 原地包裹(位置不变);缺失 → 文件尾追加并提示旧规则会被后写覆盖。受管块之外的规则(含项目端覆写)一律不动,写前先备份 `tokens.css.bak`。旧实现的两类缺陷由此消除:补过一次就永远报「无需升级」、源模块后续改动永不传播;追加式升级压掉用户覆写并留下整份重复块。
+- 新增 `init-project --check-css`(只查不改,落后 / 缺失逐项报出并以退出码 1 结束);`check-slides` 增加两项提示级检查:tokens.css 工具箱落后(点名哪一段)、`class` 用了 `tokens.css` 与本张 `<style>` 都没有的类(静默无样式,`.grid g4` / `<p class="dim">` 那类坑)。
+- `preview-page` 的兜底注入从只有 no-fx 扩展到三个工具箱:no-fx 规则仍只注入「关动效」副本,图表 / 表格工具箱注入全部副本(否则旧规则会把新版画法渲染坏),页面与终端如实标注落后。
+- 修复 `.matrix` 高亮列不覆盖表头:`.matrix td.hi` → 同时覆盖 `.matrix th.hi`(`<th class="hi">` 此前静默拿不到背景,「我们」那一列看着只亮了一半)。
+- 文档修正:`authoring.md` 版式片段说明(布局骨架类来自每张内联 `<style>` 而非 tokens.css)、comparison 片段的 `<p class="dim">` 未定义类改为 `style="color:var(--muted)"`。
+- 新增 `tests/css-kit.test.mjs`(12 例:块在但 rev 旧 / 被手工改过必须检出并原地修复、项目端覆写不被压掉、老文件原地包裹并去重、`--check-css` 退出码语义),全套 **132 例**全绿。
+
 ## 1.1.0 — 2026-09-18
 
 **安全边界(响应 PR #41 评审的五条 Request changes)**

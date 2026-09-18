@@ -29,7 +29,7 @@ my-video/
 
 ## 流水线
 
-一个技能驱动 11 个脚本,外加五个内部模块(路径收监 / URL 策略 / `no-fx` 规则 / 图表 CSS / 表格 CSS,都在 `skills/html2video-for-mcode/scripts/` 下):
+一个技能驱动 11 个脚本,外加六个内部模块(路径收监 / URL 策略 / `no-fx` 规则 / 图表 CSS / 表格 CSS / **CSS 工具箱受管块**——rev 定界 + 原地替换,都在 `skills/html2video-for-mcode/scripts/` 下):
 
 | 阶段 | 做什么 |
 |---|---|
@@ -128,7 +128,7 @@ Windows / macOS / Linux。脚本全部是 Node ESM,不依赖特定 shell。Windo
 - 你写的口播文本会送到你选择的语音服务;产物音频只在你运行 `scripts/asr.mjs` 时才送到 ASR 服务。
 - 抓取的素材下载到项目的 `assets/` 目录,并需在 `assets/MANIFEST.md` 登记来源与许可。
 - **写入只发生在你传入的项目目录内。** `script.json` 派生出的每个路径(slide 的 `id` / `html` / `audio`、`bgm.file`)都先过校验:id 必须匹配 `^[A-Za-z0-9_-]{1,64}$`,路径必须 resolve 在项目目录内,符号链接逃逸同样拒绝 —— 手改或被注入的 `script.json` 无法让流水线读写或递归删除项目目录之外的东西。
-- **不会静默覆盖任何东西。** `init-project.mjs` 对非空目标目录直接拒绝(重新初始化需 `--force`,且只重置它自己生成的 5 个文件);`fetch-official-images.mjs` 与 `prep-image.mjs` 覆盖已存在文件需 `--force`,下载默认收在工作目录内。
+- **不会静默覆盖任何东西。** `init-project.mjs` 对非空目标目录直接拒绝(重新初始化需 `--force`,且只重置它自己生成的 5 个文件);`fetch-official-images.mjs` 与 `prep-image.mjs` 覆盖已存在文件需 `--force`,下载默认收在工作目录内。`--upgrade-css` 更新 tokens.css 里三个**带内容 rev 的受管块**(no-fx / 图表 / 表格)时按 rev 原地替换:块外规则一概不动、写前先备份 `tokens.css.bak`;`--check-css` 只查不改。
 - **不存储、不内嵌任何凭据**:ASR 脚本运行时从 `MINIMAX_API_KEY` 或 `--api-key` 读取,且从不写出到任何文件。
 
 ## 验证
@@ -139,7 +139,7 @@ Windows / macOS / Linux。脚本全部是 Node ESM,不依赖特定 shell。Windo
 node --test "plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/*.test.mjs"
 ```
 
-九个文件共 120 例:`safe-paths`(恶意 slide id / 路径、canary 完好性、符号链接逃逸)、`no-clobber`(覆盖拒绝)、`endpoint-allowlist`(Key 不离开官方域,并用本地服务器证明闸门在请求之前)、`fetch-policy`(SSRF、`file://`、重定向与文件名规则)、`preview-page`(快照注入实测延迟、`base` 顺序、自包含无外链、越界拒绝、无计时器)、`tokens-fx`(模板里每个入场动画的关键帧必须声明 `opacity`、`no-fx` 必须重置基础态、`--upgrade-css` 幂等)、`chart-kit`(模板里真带着图表工具箱:keyframes / 注册属性 /「关动效 = 终态」不变量)、`table-kit`(表格原语的可读性硬指标:正文号、行高 ≥72px、涨跌走令牌)与 `render-smoke`(init → 对时 → 静态闸门 → 截图 → 成片全链)。渲染冒烟与三例依赖 ffmpeg 的路径检查需要 ffmpeg 与 Chromium:缺失时按原因 skip,scoped workflow `.github/workflows/html2video-for-mcode-smoke.yml` 会装齐依赖并把全部用例真跑一遍。
+十个文件共 132 例:`safe-paths`(恶意 slide id / 路径、canary 完好性、符号链接逃逸)、`no-clobber`(覆盖拒绝)、`endpoint-allowlist`(Key 不离开官方域,并用本地服务器证明闸门在请求之前)、`fetch-policy`(SSRF、`file://`、重定向与文件名规则)、`preview-page`(快照注入实测延迟、`base` 顺序、自包含无外链、越界拒绝、无计时器)、`tokens-fx`(模板里每个入场动画的关键帧必须声明 `opacity`、`no-fx` 必须重置基础态、`--upgrade-css` 幂等)、`chart-kit`(模板里真带着图表工具箱:keyframes / 注册属性 /「关动效 = 终态」不变量)、`table-kit`(表格原语的可读性硬指标:正文号、行高 ≥72px、涨跌走令牌、矩阵高亮列覆盖表头)、`css-kit`(工具箱受管块:块在但 rev 旧 / 被手工改过必须检出并原地修复、项目端覆写不被压掉、老文件原地包裹去重、`--check-css` 退出码)与 `render-smoke`(init → 对时 → 静态闸门 → 截图 → 成片全链)。渲染冒烟与三例依赖 ffmpeg 的路径检查需要 ffmpeg 与 Chromium:缺失时按原因 skip,scoped workflow `.github/workflows/html2video-for-mcode-smoke.yml` 会装齐依赖并把全部用例真跑一遍。
 
 ## 排错
 
