@@ -34,7 +34,7 @@
 - 新增 `scripts/nofx-css.mjs`:`no-fx` 规则的唯一来源(`init-project` 写入 tokens.css、`preview-page` 兜底注入共用一份,避免 CSS 漂移)。
 - `fx-spotlight` 的关键帧补 `opacity: 1` —— 它是本技能文档里列为可用的入场类,但只做 `clip-path`,基础态 `opacity:0` 抬不回来 → 用了就永久隐形(被 `check-slides` 的 5b 项拦住,即「文档说能用、闸门说不能用」)。
 - SKILL.md 的 Gate 4 增加「放映页交用户自己放一遍」;`references/render.md` 增放映页章节(定位、键位、口播三态、为什么必须用副本);`authoring.md` 的动效开关一节写明交付前用 `X` 对照验收。
-- 测试 +27 例(共 99):`preview-page`(注入/合并/no-fx/base 顺序/自包含无外链/**不做计时器**/**不得出现「配音」字样**/响应式与触摸、口播三态、等间隔兜底、越界拒绝/幂等升级)、`tokens-fx`(对模板断言**每个非无限 fx 动画的关键帧都声明 opacity**、no-fx 规则含 opacity 重置、`--upgrade-css` 幂等且不碰其他文件)。- `fetch-official-images.mjs` 新增 `--url <图片URL>[,...]`:内置浏览器 inspect 官网 DOM 拿到的**零散图片 URL** 现在有落盘入口(此前文档只写「再下载」却没给手段,而脚本只能"页面 URL + 序号")。走同一套纪律(host 白名单、重定向逐跳复核、30MB 上限、文件名清洗、已存在不覆盖),**且不需要 Playwright** —— 站点要登录/滚动加载、脚本打不开时这是唯一落盘手段。文件名推导(`imageNameFromUrl`:取路径末段,扩展名优先用 URL 的、否则按 content-type,都不行给 `.bin`)与 `sanitizeFilename` 同住 `url-policy.mjs`;新增 8 例测试(4 例文件名推导 + 4 例 CLI 拒绝/用法)。
+- 测试 +27 例(共 99):`preview-page`(注入/合并/no-fx/base 顺序/自包含无外链/**不做计时器**/**不得出现「配音」字样**/响应式与触摸、口播三态、等间隔兜底、越界拒绝/幂等升级)、`tokens-fx`(对模板断言**每个非无限 fx 动画的关键帧都声明 opacity**、no-fx 规则含 opacity 重置、`--upgrade-css` 幂等且不碰其他文件)。- `fetch-official-images.mjs` 新增 `--url <图片URL>[,...]`:内置浏览器 inspect 官网 DOM 拿到的**零散图片 URL** 现在有落盘入口(此前文档只写「再下载」却没给手段,而脚本只能"页面 URL + 序号")。走同一套纪律(host 白名单、重定向逐跳复核、30MB 上限、文件名清洗、已存在不覆盖),**且不需要 Playwright** —— 站点要登录/滚动加载、脚本打不开时这是唯一落盘手段。文件名推导(`imageNameFromUrl`:取路径末段,扩展名优先用 URL 的、否则按 content-type,都不行给 `.bin`)与 `sanitizeFilename` 同住 `url-policy.mjs`;新增 8 例测试(4 例文件名推导 + 4 例 CLI 拒绝/用法)。另外把**查重提到读 body 之前**(已存在的图不会白下一遍,网络抖动时也不会把「已存在」报成「下载失败」),并加两道护栏:**0 字节响应直接判失败**(404 错误页/防盗链不许写空文件)、**重定向绕圈/自身跳转**给出可诊断的报错(带跳转链)。
 
 **文档**
 
