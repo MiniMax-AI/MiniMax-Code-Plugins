@@ -1,6 +1,6 @@
 ---
 name: html2video-for-mcode
-description: 把脚本/大纲/主题变成带中文口播的成片 MP4(HTML 幻灯片 + TTS + ffmpeg 渲染),为 mcode 环境定制、也可在其他 Agent 环境用 mmx-cli 跑通。当用户想把内容做成视频、html 转 mp4、幻灯片口播视频、slides video、narrated video、一分钟介绍视频、抖音/视频号竖版视频时触发;财经/财报/投研/医疗/政策等**受监管题材**的视频同样触发(需要免责声明与数据口径处理)。也当症状出现时触发——TTS 念完留白过长、画面只有标题没有细节展开、部分元素 0 秒就入场、入场动画没渲染进视频、音画不同步、图片主体被裁到画面外、字幕糊在深色背景上、拼接后总时长不对、字体闪烁或方框、财经片忘了写免责声明或涨跌色用反。覆盖全流程:开工对齐(领域与免责/风格/字幕/画布/音色/素材边界)→ 信息搜集 → 脚本 → TTS → 实测对时 → 配图 SOP → HTML 分步入场 → 逐帧渲染 → ASR 反向校验。工具分两套:mcode 沙箱用 connector__matrix__*(TTS/ASR/音乐),其他环境用 mmx-cli(注意:mmx-cli 无 ASR 与音乐生成,见文末环境对照表)。
+description: 把脚本/大纲/主题变成带中文口播的成片 MP4(HTML 幻灯片 + TTS + ffmpeg 渲染),为 mcode 环境定制、也可在其他 Agent 环境用 mmx-cli 跑通。当用户想把内容做成视频、html 转 mp4、幻灯片口播视频、slides video、narrated video、一分钟介绍视频、抖音/视频号竖版视频时触发;**只想先看看做好的 HTML 幻灯片、想自己放映一遍或预览动效(口播还没做也行)时同样触发**——技能会生成自包含放映页,不必先花几分钟渲染成片。财经/财报/投研/医疗/政策等**受监管题材**的视频同样触发(需要免责声明与数据口径处理)。也当症状出现时触发——TTS 念完留白过长、画面只有标题没有细节展开、部分元素 0 秒就入场、入场动画没渲染进视频、音画不同步、图片主体被裁到画面外、字幕糊在深色背景上、拼接后总时长不对、字体闪烁或方框、图表或某个元素入场后永远不出现(关键帧没把 opacity 抬回来)、切了 no-fx 画面反而更空、双击 slides/*.html 看动画发现全挤在开头、财经片忘了写免责声明或涨跌色用反。覆盖全流程:开工对齐(领域与免责/风格/字幕/画布/音色/素材边界)→ 信息搜集 → 脚本 → TTS → 实测对时 → 配图 SOP → HTML 分步入场 → 静态闸门与放映页自检 → 逐帧渲染 → ASR 反向校验。工具分两套:mcode 沙箱用 connector__matrix__*(TTS/ASR/音乐),其他环境用 mmx-cli(注意:mmx-cli 无 ASR 与音乐生成,见文末环境对照表)。
 ---
 
 # HTML 2 Video for mcode:脚本 → 口播成片
@@ -27,7 +27,7 @@ description: 把脚本/大纲/主题变成带中文口播的成片 MP4(HTML 幻�
 
 ## 目录与工具
 
-技能自带 13 个脚本(直接以本技能目录为路径调用,项目目录作为参数,无需复制;`tests/` 下还有一套 node:test 安全与冒烟测试,从仓库根 `node --test` 自动发现):
+技能自带 **11 个命令行脚本 + 3 个内部模块**(直接以本技能目录为路径调用,项目目录作为参数,无需复制;`tests/` 下还有一套 node:test 安全与冒烟测试,从仓库根 `node --test` 自动发现):
 
 | 脚本 | 作用 |
 |---|---|
@@ -35,10 +35,15 @@ description: 把脚本/大纲/主题变成带中文口播的成片 MP4(HTML 幻�
 | `scripts/plan-timings.mjs <项目目录>` | ffprobe 实测每段 TTS → 每张时长、各 stage 入场时刻、**每句 clauses 时刻** → `build/timings.json` |
 | `scripts/check-timing.mjs <项目目录> [--calibrate]` | 静音检测实测每句真实开口, 与估算对比;`--calibrate` 按实测校准 timings 后重渲染 |
 | `scripts/check-theme.mjs <项目目录>` | 校验全部主题的 WCAG 对比度(正文/次级/字幕/accent-ink), 不达标退出码 1;新增主题必须过闸 |
-| `scripts/prep-image.mjs --check <图...>` / `--crop <in> <out> [--ratio 16:9] [--anchor ...]` | 配图 SOP 的执行辅助:查尺寸与裁切风险;按锚点裁切(强制"裁掉 ≤20%、不放大补边") |
+| `scripts/check-slides.mjs <项目目录> [--quiet]` | **渲染前静态闸门**:未定义 CSS 变量、缺图/外链资源、`data-stage` 没配 fx 类、fx 关键帧不含 opacity(会永久隐形)、硬编码颜色、整片级领域自查。有 ✗ 就别截图 |
+| `scripts/prep-image.mjs --check <图...>` / `--crop <in> <out> [--ratio 16:9] [--anchor ...] [--force]` | 配图 SOP 的执行辅助:查尺寸与裁切风险;按锚点裁切(强制"裁掉 ≤20%、不放大补边") |
+| `scripts/fetch-official-images.mjs <页面URL> [--out-dir <目录>] [--allow-file] [--max-mb N] [--force]` | 从官方页/本地页面列出并下载候选配图。内网与元数据地址一律拒绝, 每跳重定向复核, 默认写在工作目录内 |
 | `scripts/capture.mjs <项目目录> [--mode still\|motion] [--no-subs]` | Playwright 截图。still=终态单帧;motion=逐帧步进入场动画。**字幕默认烧录**(内容取自 clauses),`--no-subs` 关闭 |
 | `scripts/preview-page.mjs <项目目录> [--open] [--no-script]` | 生成**放映页** `preview/play/index.html`(单文件、零依赖、file:// 双击即看):←→ 或触屏左右滑翻页、R 重播动画、X 动效/关动效对照、P 口播文案开/关、O 总览、F 全屏。**只做"放画面"这件事**:没有计时器/进度条/跟读高亮(要看时间就看成片)。快照按 `timings.json` **注入实测延迟**,所以浏览器里的动画时序 = 成片时序;还没对时则按等间隔预览并如实标注。口播面板按数据自动决定加不加载,窄窗口/手机上收成底部抽屉且默认收起 |
-| `scripts/build-video.mjs <项目目录> [--asr]` | 编码每张 → 拼接 → 音轨对位 → 合成 → 自检 + 出 `out/subs.srt`;`--asr` **按句**切分音频 + 校验清单 |
+| `scripts/build-video.mjs <项目目录> [--asr] [--dry-run]` | 编码每张 → 拼接 → 音轨对位 → 合成 → 自检 + 出 `out/subs.srt`;`--asr` **按句**切分音频 + 校验清单;`--dry-run` 只打印将要执行的 ffmpeg 命令(排错用) |
+| `scripts/asr.mjs <项目目录> [--api-key K] [--verify-timing] [--from <转写>] [--allow-any-endpoint]` | 调 ASR 转写并按句校验音画是否念的是脚本(数字/繁体字不符判 ✗);`--verify-timing` 用字级时间戳实测句开口。Key 只发官方域 |
+
+内部模块(被上面的脚本 import, 不单独运行):`tools.mjs`(ffmpeg/ffprobe 探测 + 路径收监 `safeId/safeRel/inside`)、`url-policy.mjs`(ASR 端点白名单 + SSRF/重定向策略)、`nofx-css.mjs`(`no-fx` 规则的唯一来源,init-project 写入 / preview-page 兜底注入共用)。
 
 环境要求:Node 18+(脚本用 fileURLToPath 保兼容, 不依赖 Node 20.11 的 import.meta.dirname)、`npm i playwright && npx playwright install chromium`(项目目录内)。ffmpeg/ffprobe 自动探测:PATH → node_modules(ffmpeg-static/ffprobe-static)→ 常见安装位置,找不到会给逐条诊断而不是莫名报错。
 
@@ -194,7 +199,7 @@ node <技能目录>/scripts/capture.mjs <项目目录> --mode still
 node <技能目录>/scripts/preview-page.mjs <项目目录> --open   # 放映页: 让用户自己过一遍动效
 ```
 
-**Gate 4**:`preview/<id>.png` 逐张给用户过(看版式、字压、素材)+ **放映页 `preview/play/index.html` 交用户自己放一遍**(看动效节奏、口播与入场是否对得上、收尾静止够不够)。静态图看不出动画——而"元素永远不出现""关动效反而空白""列高塌陷"这类故障恰恰只在动起来或切对照时才露头;放映页是 30 秒的自检手段,不必等 3–6 分钟的 motion 编码。**用户过完再进 Phase 5。**
+**Gate 4**:`preview/<id>.png` 逐张给用户过(看版式、字压、素材)+ **放映页 `preview/play/index.html` 交用户自己放一遍**(看动效是不是真的都出现了、快慢能不能接受、这张的画面撑不撑得住)。静态图看不出动画——"元素永远不出现""关动效反而空白""列高塌陷"这类故障恰恰只在动起来或切对照时才露头;放映页是 30 秒的自检手段,不必等 3–6 分钟的 motion 编码。时序与口播对轴不在这一步判(放映页刻意不做计时器),以成片和 `timings.json` 为准。**用户过完再进 Phase 5。**
 
 ### Phase 5 · 渲染 + ASR 校验
 

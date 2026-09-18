@@ -127,6 +127,8 @@ ffmpeg -y -framerate 30 -i build/frames/01/f%05d.png \
 
 音轨对位:每段 `aresample=44100,aformat=channel_layouts=mono,apad=whole_dur=<该张实测时长>` 补齐静音再 concat。**不要用 adelay+concat 的写法**(concat filter 会忽略 adelay 的偏移,所有语音堆到开头)。
 
+**先看命令再跑**:`node scripts/build-video.mjs <项目> --dry-run` 会把每一步要执行的 ffmpeg 命令打印出来而不真的执行 —— 想手工验证某张的参数、或怀疑是编码参数问题而不是素材问题时,先跑它,把命令原样拿去命令行改着试。
+
 ## 自检标准
 
 build-video 结束前强制:成片 ffprobe 时长与 timings 总时长差 ≤0.25s;`ffmpeg -v error -i final.mp4 -f null -` 全量解码零错误。任一不过,退出码非 0——看到非 0 不要交付。

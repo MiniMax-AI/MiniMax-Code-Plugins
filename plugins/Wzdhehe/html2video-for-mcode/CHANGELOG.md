@@ -8,7 +8,7 @@
 - **覆盖拒绝**:`init-project.mjs` 对已存在且非空的目录直接拒绝(列出将被覆写的 5 个生成文件),需显式 `--force`;`fetch-official-images.mjs` 的 `--out-dir` 默认收监在工作目录内、已存在文件不覆盖;`prep-image.mjs --crop` 输出已存在需 `--force`。顺带修 `--topic` 未转义即插入模板 HTML 的问题。
 - **ASR 端点白名单**:API Key 只发官方域(`api.minimaxi.com` / `api.minimax.io`);`--base-url` / `MINIMAX_BASE_URL` 指向其他地址一律硬拒绝,自建网关需显式 `--allow-any-endpoint`(打印醒目警告)。此前被偷换的环境变量可把 Key 发往任意端点。
 - **抓图 SSRF 收紧**:新增 `scripts/url-policy.mjs`(纯函数)。拦 loopback / 链路本地(含云元数据 169.254.169.254)/ 私网 / CGNAT / 无点主机名;只允许 http(s),`file://` 需显式 `--allow-file`;禁带 userinfo 的 URL;`maxRedirects:0` 手动跟重定向且**逐跳**复用同一策略;响应大小上限默认 30MB(`--max-mb`);落盘文件名清洗补 Windows 保留名。
-- **可执行测试**:新增 `tests/`(node:test,零依赖,从仓库根 `node --test` 自动发现 → 被 `npm run check` 真实执行)—— `safe-paths`(恶意 id/路径 + canary 完好性 + symlink 逃逸)、`no-clobber`(覆盖拒绝)、`endpoint-allowlist`(白名单拒绝 + 本地假服务器收到 Bearer 假 Key 的正向证据)、`fetch-policy`(host/URL/重定向/文件名 44 例)、`render-smoke`(init → 静音音频 → plan-timings → check-slides → capture → build-video 全链出片)。共 72 例,本地全绿。另附 scoped workflow `.github/workflows/html2video-for-mcode-smoke.yml`(path-filter 只在本插件变更时跑,装 ffmpeg + playwright 后真实执行,含渲染冒烟)。
+- **可执行测试**:新增 `tests/`(node:test,零依赖,从仓库根 `node --test` 自动发现 → 被 `npm run check` 真实执行)—— `safe-paths`(恶意 id/路径 + canary 完好性 + symlink 逃逸)、`no-clobber`(覆盖拒绝)、`endpoint-allowlist`(白名单拒绝 + 本地假服务器收到 Bearer 假 Key 的正向证据)、`fetch-policy`(host/URL/重定向/文件名 44 例)、`render-smoke`(init → 静音音频 → plan-timings → check-slides → capture → build-video 全链出片)。首轮 72 例(后续又加了 `preview-page` 与 `tokens-fx`,见下,现共 99 例),本地全绿。另附 scoped workflow `.github/workflows/html2video-for-mcode-smoke.yml`(path-filter 只在本插件变更时跑,装 ffmpeg + playwright 后真实执行,含渲染冒烟)。
 
 **图表与动效**
 

@@ -22,6 +22,7 @@ my-video/
 ├── audio/             8 TTS clips
 ├── build/timings.json measured durations + per-layer entrance times
 ├── preview/*.png      terminal-state frames
+├── preview/play/      self-contained play page (screen the deck without encoding)
 └── out/
     ├── final.mp4      ★ the deliverable (1920×1080 or 1080×1920, H.264 + AAC)
     ├── subs.srt       subtitles for platform upload
@@ -30,18 +31,19 @@ my-video/
 
 ## Pipeline
 
-One Skill drives a 13-script pipeline (`skills/html2video-for-mcode/scripts/`):
+One Skill drives an 11-script pipeline (plus three internal modules — path containment, URL
+policy, `no-fx` rules — under `skills/html2video-for-mcode/scripts/`):
 
 | Stage | What happens |
 |---|---|
 | 1. Kickoff alignment | Ask about language (Chinese / English / Cantonese), style & brand color, subtitles (none / single / bilingual), canvas (16:9 or 9:16), duration, voice, asset boundaries |
 | 2. Research | Fact-check the topic and record sources before writing |
-| 3. Script | Per-slide narration split into clauses; every slide must have a title layer and a detail layer |
+| 3. Script | Per-slide narration split into clauses; every slide carries at least two information layers on separate animation stages (order is free) |
 | 4. TTS | Voice synthesis (mcode connector, or `mmx-cli` elsewhere), then measure every clip with ffprobe |
 | 5. Timing | Derive each slide's duration and each animation's entrance time from the **measured** audio — nothing is hand-written |
 | 6. Assets | Official sources first, image framing primitives, compliance manifest |
 | 7. HTML | Staged entrance animations bound to the measured timings; layout recipes for 17 slide types |
-| 8. Render | Deterministic frame-stepping capture (animations land in the video), ffmpeg assembly with subtitles, optional background music |
+| 8. Render | Deterministic frame-stepping capture (animations land in the video), ffmpeg assembly with subtitles, optional background music. Before spending encode time, `preview-page.mjs` writes a play page so the deck can be screened in a browser |
 | 9. Verify | ASR transcription compared against the script; contrast, theme, and static-slide gates |
 
 ## Design decisions worth knowing
@@ -49,13 +51,26 @@ One Skill drives a 13-script pipeline (`skills/html2video-for-mcode/scripts/`):
 - **Nothing about timing is hand-written.** Every slide's duration and every animation's entrance
   time comes from the measured TTS audio, so "the voiceover finished but the picture is still
   waiting" cannot happen by construction.
-- **Every slide has a title layer and a detail layer** on separate animation stages, so a slide is
-  never just a big title with nothing to look at.
+- **Every slide has at least two information layers** on separate animation stages (which layer
+  enters first is a judgement call — a big number, a question, or an image may lead), so a slide is
+  never just one line of text with nothing to look at. Entrance order is checked statically, not
+  left to hope.
 - **Animations land in the video.** Capture steps frames deterministically instead of
   screen-recording, so entrance animations are actually rendered rather than frozen.
+- **Regulated topics get compliance handling.** For finance / medical / legal / policy decks the
+  workflow asks about disclaimers and source attribution up front, pins every number to its basis
+  (scope + currency + as-of date), and flips the up/down colour convention to the audience's market
+  (A-shares and Hong Kong read red as up) — see `references/compliance.md`.
+- **Charts are drawn in plain CSS/SVG, and effects can be switched off in one place.** No chart
+  library and no canvas (offline they would not load, and canvas animations cannot be frame-seeked).
+  Adding `no-fx` to the root element — or to any container, for a single slide — turns every
+  entrance and ambient animation off; the renderer then emits static frames and the timing stays
+  intact.
 - **Rendering is gated.** A static check refuses to render slides with undefined CSS variables,
   missing images, external resources, or entrance animations without an animation class — the
   failure modes that otherwise ship a video that looks broken while every script reports success.
+  It also refuses entrance animations whose keyframes never lift the `opacity: 0` base state — those
+  elements would silently stay invisible in the finished video.
 
 ## Install
 
@@ -177,7 +192,7 @@ The Skill ships an executable test suite (`skills/html2video-for-mcode/tests/`, 
 node --test "plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/*.test.mjs"
 ```
 
-93 tests in seven files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
+99 tests in seven files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
 escapes), `no-clobber` (refusing to overwrite), `endpoint-allowlist` (key never leaves the official
 hosts — plus a local server that proves the gate sits before the request), `fetch-policy` (SSRF,
 `file://`, redirect and filename rules), `preview-page` (snapshot timing injection, `base` ordering,
@@ -191,8 +206,11 @@ Chromium; where those are missing they skip with a stated reason, and the scoped
 
 `SKILL.md` ends with a symptom → cause → fix table covering the failures this pipeline has actually
 hit: silent tails after the voiceover, slides with nothing on them, elements entering at 0 seconds,
-invisible text from undefined CSS variables, broken images, subtitles washed out on dark themes,
-wrong voice language, and mismatched concat durations.
+invisible text from undefined CSS variables, entrance elements that never appear at all (keyframes
+that never lift the `opacity: 0` base state), a `no-fx` switch that leaves the slide blank, opening
+`slides/*.html` and finding every animation crammed into the first two seconds, a blank play page,
+broken images, subtitles washed out on dark themes, wrong voice language, mismatched concat
+durations, and finance decks missing a disclaimer or with the up/down colour flipped.
 
 ## License
 
