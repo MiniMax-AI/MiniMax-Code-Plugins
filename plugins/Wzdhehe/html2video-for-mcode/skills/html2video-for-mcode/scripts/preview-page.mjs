@@ -19,7 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { safeId, safeRel, validateScriptPaths } from './tools.mjs';
+import { safeId, safeRel, safeOut, validateScriptPaths } from './tools.mjs';
 import { NOFX_CSS } from './nofx-css.mjs';
 import { KITS, kitStatuses, MAX_SCAN_BYTES } from './css-kit.mjs';
 
@@ -55,22 +55,30 @@ export function fallbackStages(html, { start = 0.3, step = 1 } = {}) {
   return out;
 }
 
+// 属性匹配要认双引号/单引号/无引号三种写法(二审 P2): 旧实现只认双引号, 遇到
+// <html class='theme' style='--t2:800ms'> 会再插一组重复属性, 浏览器保留**先出现的那组** →
+// 实测延迟/画布尺寸全部失效、no-fx 也加不上(实测: 原延迟仍在、没有画布宽、动效关不掉)
+const ATTR_RE = name => new RegExp(`\\b${name}\\s*=\\s*("([^"]*)"|'([^']*)'|([^\\s"'>]+))`, 'i');
+const attrValue = (tag, name) => {
+  const m = ATTR_RE(name).exec(tag);
+  return m ? (m[2] ?? m[3] ?? m[4]) : null;
+};
+
 function firstTag(html, name) {
   const m = html.match(new RegExp(`<${name}\\b[^>]*>`, 'i'));
   return m ? { tag: m[0], index: m.index } : null;
 }
 
 function setAttr(tag, name, value) {
-  const re = new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"`, 'i');
-  if (re.test(tag)) return tag.replace(re, `${name}="${value}"`);
+  if (attrValue(tag, name) !== null) return tag.replace(ATTR_RE(name), () => `${name}="${value}"`);
   return tag.replace(/\s*\/?>$/, m => ` ${name}="${value}"${m.endsWith('/>') ? '/>' : '>'}`);
 }
 
 function addStyleDecl(tag, decl) {
   if (!decl) return tag;
-  const m = tag.match(/\bstyle\s*=\s*"([^"]*)"/i);
-  if (!m) return setAttr(tag, 'style', decl);
-  return tag.replace(m[0], `style="${m[1].trim().replace(/;?$/, ';')}${decl}"`);
+  const cur = attrValue(tag, 'style');
+  if (cur === null) return setAttr(tag, 'style', decl);
+  return setAttr(tag, 'style', `${cur.trim().replace(/;?$/, ';')}${decl}`);
 }
 
 // 把注入值挂在 <html> 上(等价于 capture 的 documentElement.style.setProperty, 优先级最高)
@@ -83,14 +91,9 @@ export function injectHtmlVars(html, decl) {
 export function addNoFx(html) {
   const t = firstTag(html, 'html');
   if (!t) return html;
-  const m = t.tag.match(/\bclass\s*=\s*"([^"]*)"/i);
-  let tag;
-  if (m) {
-    if (/\bno-fx\b/.test(m[1])) return html;
-    tag = t.tag.replace(m[0], `class="${m[1].trim()} no-fx"`);
-  } else {
-    tag = setAttr(t.tag, 'class', 'no-fx');
-  }
+  const cls = attrValue(t.tag, 'class');
+  if (cls !== null && /\bno-fx\b/.test(cls)) return html;
+  const tag = setAttr(t.tag, 'class', cls === null ? 'no-fx' : `${cls.trim()} no-fx`);
   return html.slice(0, t.index) + tag + html.slice(t.index + t.tag.length);
 }
 
@@ -352,28 +355,32 @@ function paintToggles(){
   var n = el('narrbtn'); if (n) { var off = document.body.classList.contains('narr-off'); n.textContent = off ? T.narrOff : T.narrOn; n.className = off ? 'on' : ''; }
 }
 
+// multi = 本张当前可逐级(动效开 + 多级 + 文件名没带 ?/# —— 带 ?/# 的副本拼 ?s= 查询会失效, 只能整张放)
+function multi(){ var s = cur(); return !nofx && s.steps && s.steps.length > 1 && !/[?#]/.test(s.src); }
+
 function render(){
   var s = cur();
-  var lvl = (!nofx && s.steps && s.steps.length > 1) ? (' · ' + T.level + ' ' + step + '/' + s.steps.length) : '';
+  var lvl = multi() ? (' · ' + T.level + ' ' + step + '/' + s.steps.length) : '';
   el('pageno').textContent = (i + 1) + ' / ' + S.length + lvl;
   var src;
   if (nofx) src = s.nofx;
-  else if (s.steps && s.steps.length > 1) src = s.src + '?s=' + step + (animNext ? '&anim=1' : '');
+  else if (multi()) src = s.src + '?s=' + step + (animNext ? '&anim=1' : '');
   else src = s.src;
   show(src);
   paintToggles(); paintPanel(); layout();
 }
 
-// 动效开: →/← 先逐级揭示(下一级当场入场、上一级直接终态), 到头/回头才翻页;动效关: 直接翻页
+// 动效开: →/← 先逐级揭示(下一级当场入场、上一级直接终态), 到头/回头才翻页;动效关: 直接翻页。
+// 片尾(末张末级)再按 → / 片头(首张第 1 级)再按 ← 都是 no-op —— 旧实现会把末张重置回第 1 级重播、首张跳到末级终态
 function next(){
-  var s = cur();
-  if (!nofx && s.steps && s.steps.length > 1 && step < s.steps.length) { step++; animNext = true; }
+  if (i >= S.length - 1 && (!multi() || step >= cur().steps.length)) return;
+  if (multi() && step < cur().steps.length) { step++; animNext = true; }
   else { i = Math.min(S.length - 1, i + 1); enterSlide(true); }
   render();
 }
 function prev(){
-  var s = cur();
-  if (!nofx && s.steps && s.steps.length > 1 && step > 1) { step--; animNext = false; }
+  if (i <= 0 && (!multi() || step <= 1)) return;
+  if (multi() && step > 1) { step--; animNext = false; }
   else { i = Math.max(0, i - 1); enterSlide(false); }
   render();
 }
@@ -474,7 +481,7 @@ function main() {
   const timings = hasTimings ? JSON.parse(fs.readFileSync(timingsPath, 'utf8')) : null;
 
   const slidesDir = path.join(dir, 'slides');
-  const outDir = path.join(dir, 'preview', 'play');
+  const outDir = safeOut(dir, 'preview', 'play');
   fs.mkdirSync(outDir, { recursive: true });
 
   // 项目 tokens.css 落后于技能当前版本(缺 no-fx / 图表 / 表格任一段)时给副本兜底注入当前版,
@@ -482,6 +489,11 @@ function main() {
   // 把新版画法(如 .chart-ticks)渲染坏。注入的 <style> 排在 tokens.css 之后, 后写覆盖。
   const tokensPath = path.join(slidesDir, 'tokens.css');
   const tokensCss = fs.existsSync(tokensPath) ? fs.readFileSync(tokensPath, 'utf8') : '';
+  // 与 check-slides / init-project 同一道门: 恶意/误写超大 tokens.css 会让受管块扫描二次方变慢(实测 6MB ≈ 129s)
+  if (tokensCss.length > MAX_SCAN_BYTES) {
+    console.error(`✗ tokens.css 有 ${(tokensCss.length / 1e6).toFixed(1)}MB, 超过 ${MAX_SCAN_BYTES / 1e6}MB 上限, 拒绝扫描(正常 ≈15KB; 与 check-slides / init-project --check-css 同一道门)`);
+    process.exit(1);
+  }
   const kitIssues = kitStatuses(tokensCss)
     .map((st, i) => ({ ...st, css: KITS[i].css }))
     .filter(st => st.status !== 'ok');
@@ -499,6 +511,12 @@ function main() {
 
   const rows = [];
   let fallbackUsed = false;
+  // 画布值会插进放映页的 CSS 与页面 JS(与 build-video 拼 ffmpeg filter 同一信任级), 先验后用
+  const cvW = Number(script.width ?? 1920), cvH = Number(script.height ?? 1080);
+  if (!Number.isInteger(cvW) || cvW < 16 || cvW > 16384 || !Number.isInteger(cvH) || cvH < 16 || cvH > 16384) {
+    console.error(`✗ script.width/height 非法: ${JSON.stringify(script.width)} × ${JSON.stringify(script.height)} — 需要 16–16384 的整数(误写字符串会直接杀死放映页脚本, 与 build-video 的 clampDim 同一道门)`);
+    process.exit(1);
+  }
   for (const s of script.slides) {
     const sid = safeId(s.id);
     // 安全性照旧收监(越界仍退出 1); 但"这张还没写"按 capture 的惯例跳过并警告 ——
@@ -506,6 +524,7 @@ function main() {
     const relHtml = s.html ?? `${sid}.html`;
     const srcPath = safeRel(slidesDir, relHtml, { where: `slides[${sid}].html` });
     if (!fs.existsSync(srcPath)) { console.warn(`- 跳过 ${sid}: 缺 slides/${relHtml}`); continue; }
+    if (path.dirname(relHtml) !== '.') { console.warn(`- 跳过 ${sid}: slides/${relHtml} 在子目录里 — 放映页快照按平铺 slides/ 设计, 子目录副本与 <base> 会错位; 把 HTML 挪到 slides/ 根再跑`); continue; }
     const html = fs.readFileSync(srcPath, 'utf8');
     if (html.length > MAX_SCAN_BYTES) { console.warn(`- 跳过 ${sid}: HTML 超过 ${MAX_SCAN_BYTES / 1e6}MB 上限, 拒绝扫描(正常 ≈10KB)`); continue; }
     const base = path.basename(srcPath);
@@ -517,7 +536,7 @@ function main() {
     let fallback = false;
     if (!Object.keys(stages).length) { stages = fallbackStages(html); fallback = Object.keys(stages).length > 0; }
     if (fallback) fallbackUsed = true;
-    const decl = stageVars(stages, { w: script.width ?? 1920, h: script.height ?? 1080 });
+    const decl = stageVars(stages, { w: cvW, h: cvH });
 
     let copy = addBaseHref(injectHtmlVars(html, decl), '../../slides/');
     copy = `<!-- html2video-for-mcode 放映页快照 · 由 scripts/preview-page.mjs 生成, 请勿编辑;\n     真实文件: slides/${base}(改完 slides 请重跑 preview-page.mjs) -->\n` + copy;
@@ -560,7 +579,7 @@ function main() {
   const page = buildPlayPage({
     topic: script.topic ?? '', lang: script.lang ?? 'zh', slides: rows, cssNote,
     narration, timing, fallbackNote,
-    canvas: { w: script.width ?? 1920, h: script.height ?? 1080 },
+    canvas: { w: cvW, h: cvH },
     generatedAt: `${now.getFullYear()}-${p2(now.getMonth() + 1)}-${p2(now.getDate())} ${p2(now.getHours())}:${p2(now.getMinutes())}`,
   });
   fs.writeFileSync(path.join(outDir, 'index.html'), page);

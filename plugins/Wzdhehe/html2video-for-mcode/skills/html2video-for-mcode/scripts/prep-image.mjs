@@ -20,8 +20,9 @@ for (let i = 0; i < argv.length; i++) {
 }
 const flag = (name, dflt) => { const i = argv.indexOf(name); return i > -1 ? argv[i + 1] : dflt; };
 
-const FFMPEG = requireTool('ffmpeg');
-const FFPROBE = requireTool('ffprobe');
+// 按当前工作目录找项目内的 ffmpeg-static / ffprobe-static(二审 P2: README 明说支持装在视频项目里)
+const FFMPEG = requireTool('ffmpeg', process.cwd());
+const FFPROBE = requireTool('ffprobe', process.cwd());
 const win = { encoding: 'utf8', windowsHide: true };
 
 function probe(file) {

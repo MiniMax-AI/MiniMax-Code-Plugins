@@ -14,10 +14,12 @@ function onPath(name) {
 
 const SELF_DIR = path.dirname(fileURLToPath(import.meta.url)); // Node 20.11 以下没有 import.meta.dirname, 用 fileURLToPath 保兼容
 
-function candidatePaths(name) {
+function candidatePaths(name, projectDir) {
   const dirs = [];
-  // 调用方项目目录(若给了)与技能自身位置的两个上层(仓库根/项目根都可能装了 node_modules)
-  const anchors = [process.env.KIT_PROJECT_DIR, SELF_DIR, path.resolve(SELF_DIR, '..'), path.resolve(SELF_DIR, '../..')]
+  // 调用方项目目录(若给了)、当前工作目录、技能自身位置的两个上层(仓库根/项目根都可能装了 node_modules)
+  // cwd 必须查(二审 P2): README 明说支持把 ffmpeg-static 装在**视频项目**里, 而 prep-image / asr
+  // 是从项目目录被调用的 —— 不查 cwd 就会"项目里明明装了却报找不到"
+  const anchors = [process.env.KIT_PROJECT_DIR, projectDir, process.cwd(), SELF_DIR, path.resolve(SELF_DIR, '..'), path.resolve(SELF_DIR, '../..')]
     .filter(Boolean);
   for (const base of anchors) {
     dirs.push(path.join(base, 'node_modules', 'ffmpeg-static'));
@@ -43,7 +45,7 @@ export function findTool(name, projectDir) {
     ];
     for (const p of local) if (fs.existsSync(p)) return p;
   }
-  for (const p of candidatePaths(name)) if (fs.existsSync(p)) return p;
+  for (const p of candidatePaths(name, projectDir)) if (fs.existsSync(p)) return p;
   return null;
 }
 
@@ -123,6 +125,39 @@ export function safeRel(root, rel, { where = 'path', mustExist = false } = {}) {
     process.exit(1);
   }
   return abs;
+}
+
+// ── 输出路径收监(2026-09-18 二审 P1: 输出侧此前只查了输入侧) ──────────
+// 威胁模型: 派生输出(preview/<id>.png、build/frames/<id>/…)是"项目内固定位置 + 受监 id",
+// 看起来安全, 但**项目内的目录段本身可能是指向项目外的符号链接**(preview → /tmp/canary,
+// 或 build/frames → 项目外)。此时 writeFileSync/rmSync(recursive) 会穿透符号链接,
+// 在项目外写/删, 而命令一路报成功 —— 用一次性 canary 数据可复现。
+// 规则: 从 root 到目标, **每一段已存在祖先**的 realpath 都必须仍在 root 的 realpath 之内。
+export function assertContained(root, abs, { where = 'output' } = {}) {
+  const realRoot = fs.existsSync(root) ? fs.realpathSync(path.resolve(root)) : path.resolve(root);
+  let probe = path.resolve(abs);
+  while (!fs.existsSync(probe)) {
+    const up = path.dirname(probe);
+    if (up === probe) break;
+    probe = up;
+  }
+  let real;
+  try { real = fs.realpathSync(probe); } catch { return abs; }   // 取不到就交给后续 fs 操作报错
+  if (real !== realRoot && !inside(realRoot, real)) {
+    console.error(`✗ ${where} 经符号链接越出项目目录: ${path.relative(path.resolve(root), abs) || abs}\n   ${probe} → ${real}(项目根 ${realRoot}) — 检查项目内是否有指向外部的符号链接`);
+    process.exit(1);
+  }
+  return abs;
+}
+
+// 派生输出路径的安全拼装: 只接受受监 id 之类的安全片段, 并做上述祖先复核
+export function safeOut(root, ...segs) {
+  const abs = path.join(path.resolve(root), ...segs);
+  if (!inside(path.resolve(root), abs)) {
+    console.error(`✗ 输出路径越出项目目录: ${abs}`);
+    process.exit(1);
+  }
+  return assertContained(root, abs, { where: `输出 ${segs.join('/')}` });
 }
 
 // 一次性走查 script.json 的全部路径派生字段(两个调用点: 每个 consumer 读入后)

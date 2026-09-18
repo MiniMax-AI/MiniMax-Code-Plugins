@@ -107,14 +107,118 @@ describe('消费者脚本: 恶意 script.json 必须在干坏事之前退出', (
     assert.ok(r.stdout.includes('bgm') || r.stderr.includes('bgm'), '应点名 bgm.file');
   });
 
-  test('build-video: width 非法字符串 → 退出 1(ffmpeg filter 注入面)', { skip: (!findTool('ffmpeg') || !findTool('ffprobe')) && '无 ffmpeg, 跳过' }, () => {
+  // ── 2026-09-18 三维审计发现的一致性缺口: 同一信任级的入参, 别处管了这里没管 ──
+  // 这些用例只喂 script.json + timings.json: 坏值必须在编码开始前就被拒(不依赖 ffmpeg),
+  // 否则就要等整条流水线跑完才报错 —— 原 width 用例没写 timings.json, 读文件就退出了, 属假绿
+  const withTimings = (scriptPatch, timingsPatch = {}) => {
     const proj = tmpdir();
     mkproj(proj, { slides: [{ id: '01', audio: '01.mp3' }] });
-    const scriptPath = path.join(proj, 'script.json');
-    const script = JSON.parse(fs.readFileSync(scriptPath, 'utf8'));
-    script.width = '1920,drawtext=text=pwned';
-    fs.writeFileSync(scriptPath, JSON.stringify(script));
-    const r = runSkill('build-video.mjs', [proj]);
+    fs.writeFileSync(path.join(proj, 'build', 'timings.json'),
+      JSON.stringify({ fps: 30, total: 1, slides: [{ id: '01', duration: 1 }], ...timingsPatch }));
+    const sp = path.join(proj, 'script.json');
+    const script = JSON.parse(fs.readFileSync(sp, 'utf8'));
+    Object.assign(script, scriptPatch);
+    fs.writeFileSync(sp, JSON.stringify(script));
+    return proj;
+  };
+
+  test('build-video: bgm.volume/fadeIn/fadeOut 非数值 → 退出 1(与 width 同一注入面, 此前漏管)', () => {
+    for (const bad of [
+      { volume: "0.5,amovie='C:/x',volume=0.5" },   // 追加 filter 节点(ffmpeg filter 可读本地文件进输出音频)
+      { fadeIn: '1.5,volume=9' },
+      { fadeOut: 'x' },
+      { volume: 999 },
+    ]) {
+      const proj = withTimings({ bgm: { file: 'assets/bgm.mp3', ...bad } });
+      fs.mkdirSync(path.join(proj, 'assets'), { recursive: true });
+      fs.writeFileSync(path.join(proj, 'assets', 'bgm.mp3'), 'x');
+      const r = runSkill('build-video.mjs', [proj]);
+      assert.notEqual(r.status, 0, `bgm ${JSON.stringify(bad)} 必须被拒绝`);
+      assert.ok(/bgm\./.test(r.stdout + r.stderr), `要点名是 bgm 的哪个字段非法, 实际: ${(r.stdout + r.stderr).slice(-200)}`);
+    }
+  });
+
+  test('build-video: fps 非数值 → 退出 1(拼进 -r/-framerate; timings.fps 优先于 script.fps)', () => {
+    const r = runSkill('build-video.mjs', [withTimings({}, { fps: '30 -vf scale=1:1' })]);
     assert.notEqual(r.status, 0);
+    assert.ok(/fps/.test(r.stdout + r.stderr), `要点名 fps, 实际: ${(r.stdout + r.stderr).slice(-200)}`);
+  });
+
+  test('build-video: width 非法字符串 → 退出 1(ffmpeg filter 注入面)', () => {
+    const r = runSkill('build-video.mjs', [withTimings({ width: '1920,drawtext=text=pwned' })]);
+    assert.notEqual(r.status, 0);
+    assert.ok(/width/.test(r.stdout + r.stderr), `要点名 width, 实际: ${(r.stdout + r.stderr).slice(-200)}`);
+  });
+
+  test('preview-page: script.width 非法字符串 → 退出 1(该值插进放映页 CSS/JS, 此前直接杀死整页脚本)', () => {
+    const proj = tmpdir();
+    mkproj(proj, { slides: [{ id: '01', html: '01.html', audio: '01.mp3' }] });
+    fs.writeFileSync(path.join(proj, 'slides', '01.html'), '<html><head></head><body><p class="fx-fade" data-stage="1">x</p></body></html>');
+    const scriptPath = path.join(proj, 'script.json');
+    for (const bad of ['1920px', '1920; } body{background:url(x)} /*']) {
+      const script = JSON.parse(fs.readFileSync(scriptPath, 'utf8'));
+      script.width = bad;
+      fs.writeFileSync(scriptPath, JSON.stringify(script));
+      const r = runSkill('preview-page.mjs', [proj]);
+      assert.notEqual(r.status, 0, `width=${JSON.stringify(bad)} 必须被拒绝(与 build-video 的 clampDim 同一道门)`);
+    }
+  });
+
+  test('preview-page: 超大 tokens.css → 退出 1(与 check-slides/init-project 同一道门, 此前实测跑 129s)', () => {
+    const proj = tmpdir();
+    mkproj(proj, { slides: [{ id: '01', html: '01.html', audio: '01.mp3' }] });
+    fs.writeFileSync(path.join(proj, 'slides', '01.html'), '<html><head></head><body><p class="fx-fade" data-stage="1">x</p></body></html>');
+    // 反复的开标记但无收标记 —— 受管块扫描的二次方放大输入
+    fs.writeFileSync(path.join(proj, 'slides', 'tokens.css'),
+      ':root{--accent:#111}\n' + '/* >>> html2video:nofx rev=deadbeef >>> */\n'.repeat(60000) + 'x'.repeat(3_000_000));
+    const t0 = Date.now();
+    const r = runSkill('preview-page.mjs', [proj], { timeout: 90000 });
+    const ms = Date.now() - t0;
+    assert.notEqual(r.status, 0, '超大 tokens.css 必须被上限拒绝');
+    assert.ok(/tokens\.css/.test(r.stdout + r.stderr), '要点名 tokens.css');
+    assert.ok(ms < 30000, `应在秒级拒绝, 实际 ${ms}ms`);
+  });
+
+  // ── 2026-09-18 实测踩坑(PITFALLS.md)固化成闸门 ──
+  test('check-slides 5e: 绝对定位落进字幕带(bottom < 168px@1080) → 点名警告', () => {
+    const proj = tmpdir();
+    mkproj(proj, { slides: [{ id: '01', html: '01.html', audio: '01.mp3' }] });
+    fs.writeFileSync(path.join(proj, 'slides', '01.html'),
+      `<html><head><style>.cap{position:absolute;bottom:96px}</style></head><body>
+       <p class="fx-fade" data-stage="1">x</p><div class="cap">图:某来源</div></body></html>`);
+    const r = runSkill('check-slides.mjs', [proj]);
+    assert.equal(r.status, 0, '提示级不得阻塞流水线');
+    assert.match(r.stdout, /字幕带/, '要点名落在字幕带');
+    assert.match(r.stdout, /bottom:96px/, '报出具体值');
+    // 安全区之上的图注不该报
+    mkproj(proj, { slides: [{ id: '01', html: '01.html', audio: '01.mp3' }] });
+    fs.writeFileSync(path.join(proj, 'slides', '01.html'),
+      `<html><head><style>.cap{position:absolute;bottom:196px}</style></head><body>
+       <p class="fx-fade" data-stage="1">x</p><div class="cap">图:某来源</div></body></html>`);
+    const r2 = runSkill('check-slides.mjs', [proj]);
+    assert.ok(!/字幕带/.test(r2.stdout), `bottom:196px 在安全区之上, 不该报: ${r2.stdout.slice(-200)}`);
+  });
+
+  test('check-slides 5d: .fx-stagger 与 data-stage 同张 → 提示确认(PITFALLS #2)', () => {
+    const proj = tmpdir();
+    mkproj(proj, { slides: [{ id: '01', html: '01.html', audio: '01.mp3' }] });
+    fs.writeFileSync(path.join(proj, 'slides', '01.html'),
+      `<html><head></head><body>
+       <ul class="fx-stagger" style="--stagger-base:var(--t1)"><li>a</li><li>b</li></ul>
+       <p class="fx-fade" data-stage="3">自己管入场</p></body></html>`);
+    const r = runSkill('check-slides.mjs', [proj]);
+    assert.equal(r.status, 0, '提示级不得阻塞流水线');
+    assert.match(r.stdout, /fx-stagger/, '要点名 stagger 与 data-stage 共存');
+    assert.match(r.stdout, /动画窗/, '要给出可自查的信号(动画窗变短)');
+  });
+
+  test('check-slides 5: 带 data-stage 却没有 fx 类 → 警告(stagger 不再兜底)', () => {
+    const proj = tmpdir();
+    mkproj(proj, { slides: [{ id: '01', html: '01.html', audio: '01.mp3' }] });
+    fs.writeFileSync(path.join(proj, 'slides', '01.html'),
+      `<html><head></head><body><ul class="fx-stagger"><li data-stage="2">以为 stagger 会管</li></ul></body></html>`);
+    const r = runSkill('check-slides.mjs', [proj]);
+    assert.match(r.stdout, /没有 fx-\* 类/, '要警告元素会停在 opacity:0');
+    assert.ok(!/可豁免/.test(r.stdout), '旧措辞"放进 .fx-stagger 容器可豁免"已不成立 —— stagger 规则带 :not([data-stage])');
   });
 });

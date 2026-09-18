@@ -425,16 +425,19 @@ ${wrapKit('chart', CHART_CSS)}
 
 ${wrapKit('table', TABLE_CSS)}
 
-/* 依次入场容器: 子元素逐个上浮, 基准时刻取 --stagger-base(默认 --t2) */
-.fx-stagger > * { opacity: 0; animation: fx-rise .65s var(--ease-out) both; }
-.fx-stagger > *:nth-child(1) { animation-delay: calc(var(--stagger-base, var(--t2)) + 0ms); }
-.fx-stagger > *:nth-child(2) { animation-delay: calc(var(--stagger-base, var(--t2)) + 120ms); }
-.fx-stagger > *:nth-child(3) { animation-delay: calc(var(--stagger-base, var(--t2)) + 240ms); }
-.fx-stagger > *:nth-child(4) { animation-delay: calc(var(--stagger-base, var(--t2)) + 360ms); }
-.fx-stagger > *:nth-child(5) { animation-delay: calc(var(--stagger-base, var(--t2)) + 480ms); }
-.fx-stagger > *:nth-child(6) { animation-delay: calc(var(--stagger-base, var(--t2)) + 600ms); }
-.fx-stagger > *:nth-child(7) { animation-delay: calc(var(--stagger-base, var(--t2)) + 720ms); }
-.fx-stagger > *:nth-child(n+8) { animation-delay: calc(var(--stagger-base, var(--t2)) + 840ms); }
+/* 依次入场容器: 子元素逐个上浮, 基准时刻取 --stagger-base(默认 --t2)。
+   :not([data-stage]) 是必须的(2026-09-18 实测踩坑): nth-child 延迟规则特异度(0,2,0)高于
+   fx-* 类(0,1,0), 不排除的话会覆盖带 data-stage 子元素自己的 --fx-delay, 元素提前几秒冒出来;
+   语义: 要错峰的块当子元素(不带 data-stage), 要自己管入场时刻的块放容器外面 */
+.fx-stagger > *:not([data-stage]) { opacity: 0; animation: fx-rise .65s var(--ease-out) both; }
+.fx-stagger > *:not([data-stage]):nth-child(1) { animation-delay: calc(var(--stagger-base, var(--t2)) + 0ms); }
+.fx-stagger > *:not([data-stage]):nth-child(2) { animation-delay: calc(var(--stagger-base, var(--t2)) + 120ms); }
+.fx-stagger > *:not([data-stage]):nth-child(3) { animation-delay: calc(var(--stagger-base, var(--t2)) + 240ms); }
+.fx-stagger > *:not([data-stage]):nth-child(4) { animation-delay: calc(var(--stagger-base, var(--t2)) + 360ms); }
+.fx-stagger > *:not([data-stage]):nth-child(5) { animation-delay: calc(var(--stagger-base, var(--t2)) + 480ms); }
+.fx-stagger > *:not([data-stage]):nth-child(6) { animation-delay: calc(var(--stagger-base, var(--t2)) + 600ms); }
+.fx-stagger > *:not([data-stage]):nth-child(7) { animation-delay: calc(var(--stagger-base, var(--t2)) + 720ms); }
+.fx-stagger > *:not([data-stage]):nth-child(n+8) { animation-delay: calc(var(--stagger-base, var(--t2)) + 840ms); }
 `;
 
 const TEMPLATE_HTML = `<!doctype html>

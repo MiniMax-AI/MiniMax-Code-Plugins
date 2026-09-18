@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { loadPackage, safeId, safeRel, validateScriptPaths, validateTimingsIds } from './tools.mjs';
+import { loadPackage, safeId, safeRel, safeOut, validateScriptPaths, validateTimingsIds } from './tools.mjs';
 
 const argv = process.argv.slice(2);
 const dir = path.resolve(argv.find(a => !a.startsWith('--')) ?? '.');
@@ -71,7 +71,46 @@ const context = await browser.newContext({
   viewport: { width: script.width ?? 1920, height: script.height ?? 1080 },
   deviceScaleFactor: dsf,
 });
-fs.mkdirSync(path.join(dir, 'preview'), { recursive: true });
+fs.mkdirSync(safeOut(dir, 'preview'), { recursive: true });
+
+// ── 字幕时间轴(二审 P1): 字幕是"全时长百分比动画", 而逐帧只覆盖动画窗, 其余靠 tpad 冻尾帧 ——
+// 动画窗之后的字幕变化永远进不了画面(实测: SRT 第 4 句在 5.3s, 6.0s 的帧还显示第 2 句);
+// 静态/no-fx 路径更是一帧都不带字幕(finish() 把字幕动画跳到 opacity:0)。
+// 解法: 帧序列之外, 再为每个"帧覆盖不到的字幕窗口"截一张**终态基底 + 该句字幕**的静态图,
+// 由 build-video 按窗口时长把它们拼在帧序列之后(清单见 build/substills/<id>.json)。
+async function captureSubStills(page, { sid, t, framesCover }) {
+  if (!SUBS || !Array.isArray(t.clauses) || !t.clauses.length) return 0;
+  const stills = [];
+  for (let k = 0; k < t.clauses.length; k++) {
+    const start = t.clauses[k].start;
+    const end = t.clauses[k + 1]?.start ?? t.duration;
+    const from = Math.max(start, framesCover);
+    if (end - from <= 0.02) continue;                 // 这段已被帧序列覆盖(逐帧 seek 时字幕本身就是对的)
+    const at = ((from + end) / 2) * 1000;             // 取该段中点, 避开淡入淡出
+    await page.evaluate(({ k, at }) => {
+      const subs = document.querySelectorAll('.kit-sub');
+      document.getAnimations().forEach(a => {
+        const el = a.effect?.target;
+        try {
+          if (el?.closest?.('.kit-sub')) a.currentTime = 0;   // 字幕先全藏(0% 关键帧 opacity:0)
+          else a.finish();                                    // 基底一律终态
+        } catch { /* 无限氛围动画 finish 会抛, 忽略 */ }
+      });
+      const target = subs && subs[k];
+      if (target) for (const a of target.getAnimations()) { try { a.currentTime = at; } catch { /* ignore */ } }
+    }, { k, at });
+    await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const out = safeOut(dir, 'build', 'substills', sid, `s${k}.png`);
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    await page.screenshot({ path: out });
+    stills.push({ k, start: from, end });
+  }
+  const manDir = path.join(dir, 'build', 'substills');
+  fs.mkdirSync(manDir, { recursive: true });
+  fs.writeFileSync(path.join(manDir, `${sid}.json`),
+    JSON.stringify({ fps: timings.fps ?? 30, duration: t.duration, framesCover, stills }, null, 2));
+  return stills.length;
+}
 
 let done = 0;
 for (const s of slides) {
@@ -197,7 +236,8 @@ for (const s of slides) {
 
   // 帧目录是派生数据: 本次只要产出的是静态图(still 或 无动画), 旧 motion 帧一律作废,
   // 否则 build-video 会优先用残留帧, 把过时动画混进成片(切 no-fx 后重渲染时必踩)
-  const invalidateFrames = () => fs.rmSync(path.join(dir, 'build', 'frames', sid), { recursive: true, force: true });
+  // safeOut: 输出侧也要防"项目内某段是符号链接"——rmSync(recursive) 会穿透符号链接删到项目外(二审 P1)
+  const invalidateFrames = () => fs.rmSync(safeOut(dir, 'build', 'frames', sid), { recursive: true, force: true });
 
   if (mode === 'still') {
     // 直接跳到所有有限动画的终态(finish), 无限氛围动画保持运行, 截图即终态。
@@ -205,9 +245,11 @@ for (const s of slides) {
       document.getAnimations().forEach(a => { try { a.finish(); } catch { /* infinite */ } });
     });
     await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
-    await page.screenshot({ path: path.join(dir, 'preview', `${sid}.png`) });
+    await page.screenshot({ path: safeOut(dir, 'preview', `${sid}.png`) });
+    // 静态路径没有帧序列 → 字幕窗口全部覆盖不到, 逐句出静态图交给 build-video 拼
+    const nStill = await captureSubStills(page, { sid, t, framesCover: 0 });
     invalidateFrames();
-    console.log(`✓ ${sid} 终态截图 → preview/${sid}.png`);
+    console.log(`✓ ${sid} 终态截图 → preview/${sid}.png${nStill ? ` + 字幕图 ${nStill} 张(静态路径, 由 build-video 拼时段)` : ''}`);
   } else {
     // 逐帧步进: 全部动画暂停在 0, 每帧统一 seek 到 t, 截图。CSS 动画自带 delay, seek 是绝对时间, 时序天然正确。
     await page.evaluate(() => {
@@ -225,16 +267,17 @@ for (const s of slides) {
       return { count, animEnd: end };
     });
     if (meta.animEnd <= 0.05) {
-      // 页面没有任何有限动画: 静态页, 单帧即全部信息, 走 still 路径
-      await page.screenshot({ path: path.join(dir, 'preview', `${sid}.png`) });
+      // 页面没有任何有限动画: 静态页, 单帧即全部信息, 走 still 路径(字幕同样逐句出图)
+      await page.screenshot({ path: safeOut(dir, 'preview', `${sid}.png`) });
+      const nStill = await captureSubStills(page, { sid, t, framesCover: 0 });
       invalidateFrames();
-      console.log(`✓ ${sid} 无动画, 静态截图 → preview/${sid}.png`);
+      console.log(`✓ ${sid} 无动画, 静态截图 → preview/${sid}.png${nStill ? ` + 字幕图 ${nStill} 张` : ''}`);
       await page.close(); done++; continue;
     }
     const fps = timings.fps ?? 30;
-    const windowS = Math.min(t.duration, meta.animEnd + 0.25); // 动画窗口逐帧, 其余靠 tpad 补尾帧
+    const windowS = Math.min(t.duration, meta.animEnd + 0.25); // 动画窗口逐帧, 其余靠字幕图/尾帧补
     const frames = Math.max(1, Math.ceil(windowS * fps));
-    const fdir = path.join(dir, 'build', 'frames', sid);
+    const fdir = safeOut(dir, 'build', 'frames', sid);
     fs.rmSync(fdir, { recursive: true, force: true });
     fs.mkdirSync(fdir, { recursive: true });
     const t0 = Date.now();
@@ -247,8 +290,10 @@ for (const s of slides) {
       if (i > 0 && i % 60 === 0) console.log(`  ${s.id}: ${i}/${frames} 帧 (${((Date.now() - t0) / 1000).toFixed(0)}s)`);
     }
     fs.copyFileSync(path.join(fdir, 'f' + String(frames - 1).padStart(5, '0') + '.png'),
-      path.join(dir, 'preview', `${sid}.png`));
-    console.log(`✓ ${sid} ${frames} 帧 @${fps}fps (动画窗 ${windowS.toFixed(1)}s / 成片 ${t.duration.toFixed(1)}s) → build/frames/${sid}/ + preview/${sid}.png`);
+      safeOut(dir, 'preview', `${sid}.png`));
+    // 动画窗之后的字幕变化: 逐句出静态图(framesCover = 帧序列实际时长, 这批窗口交给它之后的拼接)
+    const nStill = await captureSubStills(page, { sid, t, framesCover: frames / fps });
+    console.log(`✓ ${sid} ${frames} 帧 @${fps}fps (动画窗 ${windowS.toFixed(1)}s / 成片 ${t.duration.toFixed(1)}s) → build/frames/${sid}/${nStill ? ` + 字幕图 ${nStill} 张` : ''} + preview/${sid}.png`);
   }
   await page.close();
   done++;

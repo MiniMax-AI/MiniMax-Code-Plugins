@@ -6,6 +6,9 @@
 //      重定向都过同一套 host 策略: 拦 loopback / 链路本地(含云元数据)/私网 / 无点主机名,
 //      只允许 http(s), file:// 需显式 --allow-file, 禁 userinfo。
 // 全部为纯函数, 不做 IO; 抛 PolicyError(带 reason code)由调用方决定退出码与文案。
+// 例外: assertResolvedHost 会做 DNS 查询(那是它的职责 —— 见下), 其余仍为纯函数。
+
+import dns from 'node:dns';
 
 export const OFFICIAL_ASR_BASES = ['https://api.minimaxi.com', 'https://api.minimax.io'];
 
@@ -113,6 +116,20 @@ export function assertRedirectTarget(location, { where = 'redirect' } = {}) {
 }
 
 export const MAX_REDIRECTS = 5;
+
+// 解析后再验一层(2026-09-18 二审 P1): 字符串层拦得住字面 IP, 拦不住"公网域名解析回内网"
+// (DNS rebinding / 内网域名)。**每个真实请求**都要过这里 —— 页面导航、它的重定向、浏览器子资源、
+// 逐跳下载 —— 否则策略只覆盖了"最初输入的那个 URL"。lookup 可注入(测试用假解析器, 无需真 DNS)。
+export async function assertResolvedHost(urlStr, { lookup, where = 'url' } = {}) {
+  let h;
+  try { h = new URL(urlStr).hostname; } catch { return; }
+  if (!h || !h.includes('.')) return;              // 裸主机名/非法 URL 已被字符串层拦掉
+  const doLookup = lookup || (async name => dns.promises.lookup(name, { all: true }));
+  let addr;
+  try { addr = await doLookup(h); } catch { return; }   // 解析不了就交给连接自己报错
+  const bad = (addr || []).find(a => { try { return isBlockedHost(a.address); } catch { return false; } });
+  if (bad) throw new PolicyError('dns-rebinding', `${where}: ${h} 解析到被拦地址 ${bad.address}(DNS rebinding 或内网域名? 换官方 CDN 直链)`);
+}
 
 // ── 落盘文件名(抓图下载) ─────────────────────────────────────────
 

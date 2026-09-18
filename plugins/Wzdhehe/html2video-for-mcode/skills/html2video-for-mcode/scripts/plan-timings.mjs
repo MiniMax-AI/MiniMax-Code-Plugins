@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { requireTool, safeId, safeRel, validateScriptPaths } from './tools.mjs';
+import { requireTool, safeId, safeRel, safeOut, validateScriptPaths } from './tools.mjs';
 
 // 语种相关的计量基准。中文按"字", 英文按"字符"(含词间节奏, 与音节时长大致成正比)。
 // pacing = 每单位每秒的常见语速; subMax = 字幕单行建议上限; pace 区间用于语速异常预警。
@@ -91,7 +91,7 @@ for (const s of script.slides) {
 }
 
 const totalDur = rows.reduce((n, r) => n + r.duration, 0);
-fs.mkdirSync(path.join(dir, 'build'), { recursive: true });
+fs.mkdirSync(safeOut(dir, 'build'), { recursive: true });
 fs.writeFileSync(path.join(dir, 'build', 'timings.json'),
   JSON.stringify({ fps, lang: LANG, pacing, lead: LEAD, total: r3(totalDur), slides: rows }, null, 2) + '\n');
 

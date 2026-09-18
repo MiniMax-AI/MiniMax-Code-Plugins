@@ -9,11 +9,16 @@
 //      XML 有误、缺 width/height 或下载失败存成 HTML 时都会显示 broken 图标, 建议 inline
 //   3. 硬编码颜色(#hex / rgb() / hsl()) —— 换主题时会串色, 且说明配色没落到 token
 //   4. 外链资源(http/https 的 src/href) —— 离线沙箱会失败 + 引入 FOUT 风险
-//   5. data-stage 没配 fx-* 类 —— 元素会永远停在 opacity:0(除非放进 .fx-stagger 容器)
+//   5. data-stage 没配 fx-* 类 —— 元素会永远停在 opacity:0(.fx-stagger 也不兜底: 新模板的
+//      stagger 规则带 :not([data-stage]), 带 data-stage 就必须自己配 fx 类/自己管入场)
 //   5b. fx 类的关键帧不含 opacity —— 同上, 基础态 opacity:0 抬不回来, 元素永远隐形
 //      (只做 transform/描边的动画必须显式写 opacity:1; 2026-09-18 实测踩过)
 //   5c. class 用了 tokens.css 与本张 <style> 都没有的类 —— 元素静默无样式(.grid g4 / <p class="dim">
 //      那类), 提示级; 纯语义钩子可忽略
+//   5d. .fx-stagger 与 data-stage 同张共存 —— 旧 tokens.css 的 stagger nth-child 延迟特异度更高,
+//      会覆盖容器内带 data-stage 子元素的时刻(提前几秒冒头, 2026-09-18 实测踩过), 提示确认布局
+//   5e. 绝对定位元素落在字幕带(bottom < 168px@1080) —— 成片字幕会压住它, still 预览看不出
+//      (终态不一定显示字幕), 只有抽成片帧才见(2026-09-18 实测踩过, 最贵的一类)
 //   6. tokens.css 工具箱落后于技能当前版本(受管块 rev 不一致/缺失) —— 提示级: 不升级的话
 //      新版类(如 .chart-ticks)会静默无样式("改了 CSS 但项目里没生效"的根因, 见 css-kit.mjs)
 //   7. 整片级领域自查 —— 命中多个财经/投研关键词却全片没有免责或出处行 → 提示(不是错误),
@@ -144,12 +149,11 @@ for (const s of slides) {
     errors++;
   }
 
-  // 5. data-stage 没配 fx-* 类(容器 .fx-stagger 除外)
+  // 5. data-stage 没配 fx-* 类(容器/子元素都一样: stagger 规则带 :not([data-stage]), 不再兜底)
   for (const m of html.matchAll(/<[^>]*\bdata-stage\s*=\s*["'][^"']*["'][^>]*>/g)) {
     const tag = m[0];
     if (/class\s*=\s*["'][^"']*\bfx-/.test(tag)) continue;
-    if (/\bfx-stagger\b/.test(tag)) continue;
-    report.push({ id: s.id, level: 'warn', msg: `有 data-stage 但没有 fx-* 类: ${tag.slice(0, 70)}… — 元素会永远停在 opacity:0(放进 .fx-stagger 容器可豁免)` });
+    report.push({ id: s.id, level: 'warn', msg: `有 data-stage 但没有 fx-* 类: ${tag.slice(0, 70)}… — 元素会永远停在 opacity:0(.fx-stagger 不兜底带 data-stage 的元素; 给它配一个 fx-up/fx-fade, 或去掉 data-stage 让 stagger 管)` });
     warns++;
   }
 
@@ -181,6 +185,24 @@ for (const s of slides) {
   const missing = [...used].filter(c => !definedClasses.has(c) && !localClasses.has(c) && !CLASS_ALLOW.has(c));
   if (missing.length) {
     report.push({ id: s.id, level: 'warn', msg: `类在 tokens.css 与本张 <style> 里都无定义: .${missing.join(' .')} — 元素会静默无样式; 若只是无样式的语义钩子可忽略, 否则补规则或改用已有类(若缺的类来自图表/表格工具箱, 先跑 node scripts/init-project.mjs <项目> --check-css 看工具箱新旧)` });
+    warns++;
+  }
+
+  // 5d. .fx-stagger 与 data-stage 同张共存(2026-09-18 实测踩坑): 旧 tokens.css 的 stagger
+  //     nth-child 延迟特异度(0,2,0)高于 fx-* 类(0,1,0), 会覆盖容器内带 data-stage 子元素的
+  //     入场时刻(实测提前 3 秒冒头)。新模板已用 :not([data-stage]) 根治; 这里做布局确认提示
+  if (/\bfx-stagger\b/.test(html) && /\bdata-stage\s*=/.test(html)) {
+    report.push({ id: s.id, level: 'warn', msg: '本张同时用了 .fx-stagger 与 data-stage — 确认带 data-stage 的元素不在 .fx-stagger 容器内(旧 tokens.css 的 stagger 延迟会覆盖它的时刻, 元素提前冒头; capture --mode motion 打印的"动画窗"比预期短就是信号)。根治: 新模板的 stagger 规则带 :not([data-stage]); 老项目给 tokens.css 里 .fx-stagger > * 九条选择器补 :not([data-stage]), 或把带 stage 的块挪出容器' });
+    warns++;
+  }
+
+  // 5e. 绝对定位元素落在字幕带(2026-09-18 实测踩坑, 最贵的一类): 成片字幕占底部 84–168px(@1080,
+  //     按画布高缩放), 图注/落款写 bottom:96px 会被字幕压住 —— still 预览看不出(终态不一定显示
+  //     字幕), 只有抽成片帧才见。提示级: 字幕之外的合法贴底元素可忽略
+  const bandTop = Math.round(168 * (Number(script.height ?? 1080) / 1080));
+  const inBand = [...html.matchAll(/bottom\s*:\s*([\d.]+)\s*px/g)].map(m2 => parseFloat(m2[1])).filter(v => Number.isFinite(v) && v < bandTop);
+  if (inBand.length) {
+    report.push({ id: s.id, level: 'warn', msg: `bottom:${inBand[0]}px 等 ${inBand.length} 处落在字幕带(底部 0–${bandTop}px @${script.height ?? 1080}) — 成片字幕会压住它, still 预览看不出; 图注/落款挪到 bottom ≥ ${bandTop}px 或放回流内(padding-bottom 会兜住), 验收用 grab-frames.mjs 抽成片实帧` });
     warns++;
   }
 }

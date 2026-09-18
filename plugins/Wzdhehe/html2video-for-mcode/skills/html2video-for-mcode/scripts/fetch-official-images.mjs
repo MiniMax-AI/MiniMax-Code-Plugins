@@ -24,7 +24,23 @@
 import fs from 'node:fs';
 import { loadPackage, inside } from './tools.mjs';
 import path from 'node:path';
-import { assertFetchableUrl, assertRedirectTarget, sanitizeFilename, imageNameFromUrl, MAX_REDIRECTS, PolicyError } from './url-policy.mjs';
+import { assertFetchableUrl, assertRedirectTarget, assertResolvedHost, sanitizeFilename, imageNameFromUrl, MAX_REDIRECTS, PolicyError } from './url-policy.mjs';
+
+// 规范化路径后比较(二审 P2): macOS 上 /var/... 与 /private/var/... 是同一目录的两种写法,
+// 纯字符串比较会把合法路径判成"越界"。取最深已存在祖先的 realpath 再比。
+function canonical(p) {
+  const abs = path.resolve(p);
+  let probe = abs;
+  while (!fs.existsSync(probe)) {
+    const up = path.dirname(probe);
+    if (up === probe) return abs;
+    probe = up;
+  }
+  try {
+    const real = fs.realpathSync(probe);
+    return probe === abs ? real : path.join(real, path.relative(probe, abs));
+  } catch { return abs; }
+}
 
 const argv = process.argv.slice(2);
 const VALUE_FLAGS = new Set(['--get', '--out-dir', '--min', '--max-mb', '--url']);
@@ -53,9 +69,12 @@ if (!URLS.length) {
   }
 }
 const MIN = parseInt(flag('--min', '0'), 10) || 0;
-// 落盘收监: 默认 assets/ 必须在当前工作目录(项目根)内; 越界要显式 --force
+// 落盘收监: 默认 assets/ 必须在当前工作目录(项目根)内; 越界要显式 --force。
+// 比较用规范化路径(二审 P2): macOS 上 /var 与 /private/var 是同一目录的两种写法,
+// 纯字符串比较会把"项目内的合法路径"误判成越界(官方 CI 的 macOS 环境实测踩到)。
 const OUT_DIR = path.resolve(flag('--out-dir', 'assets'));
-if (!inside(process.cwd(), OUT_DIR) && OUT_DIR !== path.resolve(process.cwd())) {
+const CWD_REAL = canonical(process.cwd()), OUT_REAL = canonical(OUT_DIR);
+if (!inside(CWD_REAL, OUT_REAL) && OUT_REAL !== CWD_REAL) {
   if (!FORCE) {
     console.error(`✗ --out-dir 越出当前工作目录: ${OUT_DIR}\n  默认只写项目内(README 的"写入都在项目目录"承诺)。确需外部位置请加 --force`);
     process.exit(1);
@@ -72,6 +91,7 @@ async function openUrl(src) {
   const seen = new Set([src]);   // 见过就说明在绕圈(A→B→A 这种 ping-pong 靠单步自比较抓不到)
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     assertFetchableUrl(current, { allowFile: false, where: `下载(第 ${hop + 1} 跳)` });
+    await assertResolvedHost(current, { where: `下载(第 ${hop + 1} 跳)` });
     res = await fetch(current, { redirect: 'manual', headers: { 'user-agent': 'html2video-for-mcode/image-fetch' } });
     if (res.status === 0) throw new Error(`重定向响应读不出状态(跨域重定向常见): ${current}\n     改用图片最终地址(内置浏览器里右键复制图片地址)再试`);
     if (res.status >= 300 && res.status < 400) {
@@ -126,7 +146,28 @@ if (!playwright) { console.error('✗ 未找到 playwright(已按 项目目录 /
 const browser = await playwright.chromium.launch({ headless: true });
 const context = await browser.newContext({ viewport: { width: 1600, height: 1200 } });
 const page = await context.newPage();
+// 逐请求拦截(二审 P1: 策略必须落在**真实请求边界**上): 页面导航、Chromium 自己跟随的 30x
+// 重定向、以及页面的每一个子资源请求, 都要先过字符串策略, 再做 DNS 解析复核 —— 只查"最初输入的
+// URL"等于没覆盖真正的连接点。带缓存避免同一域名反复解析。
+const dnsCache = new Map();
+await context.route('**/*', async route => {
+  const u = route.request().url();
+  try {
+    assertFetchableUrl(u, { allowFile: ALLOW_FILE, where: '页面请求' });
+    const host = (() => { try { return new URL(u).hostname; } catch { return ''; } })();
+    if (host && host.includes('.')) {
+      if (!dnsCache.has(host)) dnsCache.set(host, assertResolvedHost(u, { where: '页面请求' }).then(() => null, e => e));
+      const err = await dnsCache.get(host);
+      if (err) throw err;
+    }
+    await route.continue();
+  } catch (e) {
+    if (e instanceof PolicyError) { console.warn(`  ⚠ 已拦截请求: ${String(u).slice(0, 90)} — ${e.message}`); await route.abort(); }
+    else await route.continue();
+  }
+});
 try {
+  await assertResolvedHost(url, { where: '页面 URL' });
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
   await page.waitForTimeout(2500); // 让懒加载图片冒出来
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
@@ -212,6 +253,7 @@ try {
           let res = null;
           for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
             assertFetchableUrl(current, { allowFile: false, where: `下载(第 ${hop + 1} 跳)` });
+            await assertResolvedHost(current, { where: `下载(第 ${hop + 1} 跳)` });
             res = await context.request.get(current, { timeout: 30000, maxRedirects: 0 });
             if (res.status() >= 300 && res.status() < 400) {
               const loc = res.headers()['location'];

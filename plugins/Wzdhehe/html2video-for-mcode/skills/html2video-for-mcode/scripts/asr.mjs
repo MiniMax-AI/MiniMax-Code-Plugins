@@ -27,6 +27,8 @@ for (let i = 0; i < argv.length; i++) {
   positional.push(a);
 }
 const flag = (n, d) => { const i = argv.indexOf(n); return i > -1 ? argv[i + 1] : d; };
+// 项目目录要早定义: --file 单文件模式在上面就分流了, 而工具发现(requireTool)要用它
+const dir = path.resolve(positional[0] ?? '.');
 
 const KEY = flag('--api-key') || process.env.MINIMAX_API_KEY || '';
 const REGION = process.env.MINIMAX_REGION || 'cn';
@@ -62,8 +64,8 @@ if (!KEY) {
 // 超限自动转码成单声道 16k mp3(500s/50MB 硬限制)
 function prepareForUpload(file) {
   const st = fs.statSync(file);
-  const FFMPEG = requireTool('ffmpeg');
-  const p = spawnSync(requireTool('ffprobe'), ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file], { encoding: 'utf8', windowsHide: true });
+  const FFMPEG = requireTool('ffmpeg', dir);
+  const p = spawnSync(requireTool('ffprobe', dir), ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file], { encoding: 'utf8', windowsHide: true });
   const dur = parseFloat((p.stdout || '').trim());
   if (st.size <= 50 * 1024 * 1024 && (!Number.isFinite(dur) || dur <= 500)) return { file, tmp: null };
   const tmp = path.join(path.dirname(file), `.asr-${path.basename(file, path.extname(file))}.16k.mp3`);
@@ -170,7 +172,6 @@ if (flag('--file')) {
 }
 
 // ── 模式 2/3: 项目目录 ──
-const dir = path.resolve(positional[0] ?? '.');
 const asrDir = path.join(dir, 'asr');
 if (!fs.existsSync(asrDir)) { console.error(`✗ 找不到 ${asrDir} — 先跑 build-video.mjs <项目> --asr 生成按句切分的音频`); process.exit(1); }
 const timingsPath = path.join(dir, 'build', 'timings.json');
@@ -224,7 +225,8 @@ for (const p of parts) {
     const verdict = expected ? checkText(expected, r.text, projectLang) : null;
     results.push({ p, text: r.text, expected, verdict });
     if (mm) {
-      ck = ck.replace(rowRe, `| asr/${p} |${mm[1]}|${mm[2]}| ${r.text} | ${verdict ? verdict.verdict + (verdict.issues.length ? ' ' + verdict.issues.join('; ') : '') : ''} |`);
+      // 函数替换: 转写文本里的 $& / $1 否则会被当替换模式展开, 弄脏 checklist 行
+      ck = ck.replace(rowRe, () => `| asr/${p} |${mm[1]}|${mm[2]}| ${r.text} | ${verdict ? verdict.verdict + (verdict.issues.length ? ' ' + verdict.issues.join('; ') : '') : ''} |`);
     }
     console.log(`${verdict ? verdict.verdict : '·'} ${p}  ${r.text}${verdict && verdict.issues.length ? '\n    ⚠ ' + verdict.issues.join('; ') : ''}`);
   } catch (e) {
@@ -235,8 +237,12 @@ for (const p of parts) {
 if (ck) { fs.writeFileSync(ckPath, ck); console.log(`\n已回填 asr/checklist.md(转写 + 判定)`); }
 const bad = results.filter(r => r.verdict?.verdict === '✗').length;
 const warn = results.filter(r => r.verdict?.verdict === '⚠').length;
-console.log(`\n完成: ${results.length - bad - warn} 通过 / ${warn} 待复核 / ${bad} 不通过`);
-if (bad) {
-  console.error('不通过项: 数字或语种不符 —— 改口播或重做该段 TTS, 重跑 plan-timings 与该张渲染。');
+// 请求失败(鉴权/限流/网络)此前只记进 results 不进统计 → "1 通过 / 0 不通过 / 退出 0" 把闸门放过去了
+// (二审 P2): 它们必须单独计数、不算通过, 且整轮非零退出
+const errored = results.filter(r => r.error);
+console.log(`\n完成: ${results.length - bad - warn - errored.length} 通过 / ${warn} 待复核 / ${bad} 不通过${errored.length ? ` / ${errored.length} 请求失败` : ''}`);
+if (bad || errored.length) {
+  if (bad) console.error('不通过项: 数字或语种不符 —— 改口播或重做该段 TTS, 重跑 plan-timings 与该张渲染。');
+  if (errored.length) console.error(`请求失败 ${errored.length} 段(鉴权/限流/网络): ${errored.map(r => r.p).join(' ')} — 这些段没有校验结论, 修好网络或 Key 后重跑; 不能当通过。`);
   process.exit(1);
 }

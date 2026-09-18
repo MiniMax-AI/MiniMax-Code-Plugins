@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.5.0 — 2026-09-18
+
+**第二轮评审整改:输出收监、网络边界的真实请求点、字幕时间轴(3 个 P1 + 4 个 P2)**
+
+- **[P1] 字幕时间轴(实测复现的成片缺陷)**:字幕是"全时长百分比动画",而逐帧只覆盖动画窗,其余靠 `tpad` 冻尾帧 —— **动画窗之后的字幕变化永远进不了画面**(实测:SRT 第 4 句在 5.32s,6.0s 的帧仍显示第 2 句);`no-fx`/静态路径更是 `finish()` 把字幕动画跳到 `opacity:0`,整片一帧字幕都没有。现 capture 逐句输出"终态基底 + 该句字幕"静态图(`build/substills/<id>/`,清单 `build/substills/<id>.json` 记 `framesCover` 与每段窗口),build-video 用 `concat` 把"帧序列段 + 各字幕段"拼成整张(段长之和必须等于整张时长,由既有自检背书)。回归测试用**逐像素判据**:成片在第二句窗内的画面必须贴合第二句字幕图(实测 0.93)、远离第一句(7.0);旧行为下这两个数值正好反过来(0.99 / 7.1)——测试会红。
+- **[P1] 输出收监(第二类越界)**:此前只收监输入路径;派生输出(`preview/`、`build/frames/<id>/`)是"项目内固定位置 + 受监 id",但**项目内的目录段本身可能是指向项目外的符号链接**,`rmSync(recursive)` 会穿透它删到项目外而命令报成功。新增 `tools.assertContained/safeOut`(逐段已存在祖先的 realpath 必须仍在 root realpath 内),接到 capture(帧目录递归删除、preview 写入)、build-video(out/build/asr 写入与清理)、preview-page、plan-timings、grab-frames 的全部写删点。canary 回归测试(Windows 用 junction 免管理员建链)断言"命令必须拒绝 + canary 完好"。
+- **[P1] 网络边界落到真实请求点**:原来只校验"最初输入的那个 URL"。现 `url-policy.assertResolvedHost` 对**每个真实请求**做 DNS 解析后再验 IP(页面导航、Chromium 自己跟随的 30x 重定向、浏览器子资源、逐跳图片下载);浏览器侧走 `context.route` 拦截 + 域名级解析缓存。端到端测试断言"被拒目标必须收到 0 个请求",并用可注入的假解析器覆盖 rebinding 场景(无需真 DNS)。
+- **[P2] ASR 请求错误计入失败**:鉴权/限流/网络失败此前只进 `results` 不进统计,`1 通过 / 0 不通过 / 退出 0` 把闸门放过去了。现单独计数、不计入通过、整轮非零退出并点名是哪几段。
+- **[P2] 放映页属性解析认三种写法**:`<html class='theme' style='--t2:800ms'>`(单引号)与无引号属性此前不被识别,会再插一组重复属性,浏览器保留**先出现的那组** → 实测延迟/画布尺寸/no-fx 全部失效。现就地改写且不产生重复属性。
+- **[P2] ffmpeg 发现补 cwd 与项目目录**:README 明说支持把 `ffmpeg-static`/`ffprobe-static` 装在视频项目里,但 `tools.mjs` 不查 `process.cwd()`,且 `prep-image.mjs`/`asr.mjs` 不传项目目录 → "项目里明明装了却报找不到"。现两处都传,并有源码级防回退断言。
+- **[P2] --out-dir 用规范化路径比较**:macOS 上 `/var/...` 与 `/private/var/...` 是同一目录,纯字符串比较会把项目内的合法路径误判成越界(官方 CI 的 macOS 环境实测踩到);现取最深已存在祖先的 realpath 再比。
+
+**同批并入的审计修复(1.4.0 之后、未单独发版)**
+
+- `preview-page`:tokens.css 补 2MB 上限(与 check-slides/init-project 同一道门 —— 6MB 输入实测曾跑 129s)、`script.width/height` 数值校验(误写字符串会直接杀死放映页脚本)、片头/片尾边界的 no-op(末张按 → 不再把该张重置回第 1 级重播)、文件名含 `?`/`#` 时退回整张播放(步进查询串会失效)、子目录 slide 明确跳过并说明。
+- `build-video`:`bgm.volume/fadeIn/fadeOut` 与 `fps` 全部数值校验(与 `width/height` 同一注入面 —— 此前只有 W/H 管了);校验提前到编码之前(坏配置立刻失败,不等渲完几分钟)。
+- `asr`:`String.replace` 改函数替换串(转写文本里的 `$&`/`$1` 会污染 checklist)。
+- **模板根治**:`.fx-stagger` 的九条规则全部加 `:not([data-stage])` —— `nth-child` 延迟特异度(0,2,0)高于 fx 类(0,1,0),此前会静默覆盖容器内带 `data-stage` 子元素的入场时刻(实测提前 3 秒冒头)。
+- `check-slides` 新增两项闸门:**5d** `.fx-stagger` 与 `data-stage` 同张共存(提示确认布局)、**5e** 绝对定位 `bottom` 落在字幕带(实测最贵的一类:still 预览看不出,成片里字幕压图注)。
+- 新增 **`grab-frames.mjs`**(第 12 个 CLI):按 `timings.json` 算每张绝对起点,从 `out/final.mp4` 抽帧核对 —— "still 看不出来、只有成片里才见"那类问题的最终对账手段。
+- 测试 **151 → 171 例**(新增 `review-round2.test.mjs` + 字幕时间轴两条端到端 + grab-frames 冒烟),全绿 0 skip。
+
 ## 1.4.0 — 2026-09-18
 
 **放映页交互模型重做:动效开 = 手动逐级入场**

@@ -32,7 +32,7 @@ description: 把脚本/大纲/主题变成带中文口播的成片 MP4(HTML 幻�
 
 ## 目录与工具
 
-技能自带 **11 个命令行脚本 + 6 个内部模块**(直接以本技能目录为路径调用,项目目录作为参数,无需复制;`tests/` 下还有一套 node:test 安全与冒烟测试,从仓库根 `node --test` 自动发现):
+技能自带 **12 个命令行脚本 + 6 个内部模块**(直接以本技能目录为路径调用,项目目录作为参数,无需复制;`tests/` 下还有一套 node:test 安全与冒烟测试,从仓库根 `node --test` 自动发现):
 
 | 脚本 | 作用 |
 |---|---|
@@ -40,12 +40,13 @@ description: 把脚本/大纲/主题变成带中文口播的成片 MP4(HTML 幻�
 | `scripts/plan-timings.mjs <项目目录> [--pacing=<每秒字数>]` | ffprobe 实测每段 TTS → 每张时长、各 stage 入场时刻、**每句 clauses 时刻** → `build/timings.json`;`--pacing` 覆写语速基准(语速告警时重估用) |
 | `scripts/check-timing.mjs <项目目录> [--calibrate]` | 静音检测实测每句真实开口, 与估算对比;`--calibrate` 按实测校准 timings 后重渲染。静音段数对不上而没校准的张, 用 `asr.mjs --verify-timing` 拿字级时间戳实测句开口 |
 | `scripts/check-theme.mjs <项目目录>` | 校验全部主题的 WCAG 对比度(正文/次级/字幕/accent-ink), 不达标退出码 1;新增主题必须过闸 |
-| `scripts/check-slides.mjs <项目目录> [--ids 01,02] [--quiet]` | **渲染前静态闸门**:未定义 CSS 变量、缺图/外链资源、`data-stage` 没配 fx 类、fx 关键帧不含 opacity(会永久隐形)、用了无定义的类(静默无样式,提示级)、tokens.css 工具箱落后(提示级)、硬编码颜色、整片级领域自查。有 ✗ 就别截图 |
+| `scripts/check-slides.mjs <项目目录> [--ids 01,02] [--quiet]` | **渲染前静态闸门**:未定义 CSS 变量、缺图/外链资源、`data-stage` 没配 fx 类、fx 关键帧不含 opacity(会永久隐形)、用了无定义的类(静默无样式,提示级)、tokens.css 工具箱落后(提示级)、**`.fx-stagger` 与 `data-stage` 同张共存(会覆盖入场时刻)**、**绝对定位 `bottom` 落进字幕带(成片字幕压图注,still 看不出)**、硬编码颜色、整片级领域自查。有 ✗ 就别截图 |
 | `scripts/prep-image.mjs --check <图...>` / `--crop <in> <out> [--ratio 16:9] [--anchor ...] [--force]` | 配图 SOP 的执行辅助:查尺寸与裁切风险;按锚点裁切(强制"裁掉 ≤20%、不放大补边") |
 | `scripts/fetch-official-images.mjs <页面URL> [--get 1,3] [--out-dir <目录>] [--min WxH] [--json] [--allow-file] [--max-mb N] [--force]` / `--url <图片URL>[,...]` | 从官方页/本地页面列出并下载候选配图(`--json` 只列候选不下载,`--min` 按尺寸过滤);**站点要登录/滚动加载时,用内置浏览器 inspect 出图片 URL,再用 `--url` 直接落盘(不需 Playwright)**。内网与元数据地址一律拒绝(含 IPv4-mapped IPv6 形式), 每跳重定向复核, 默认写在工作目录内 |
-| `scripts/capture.mjs <项目目录> [--mode still\|motion] [--ids 01,02] [--no-subs]` | Playwright 截图。still=终态单帧(会作废该张旧帧目录);motion=逐帧步进入场动画(`--dsf 2` 超采样)。**字幕默认烧录**(内容取自 clauses),`--no-subs` 关闭 |
+| `scripts/capture.mjs <项目目录> [--mode still\|motion] [--ids 01,02] [--no-subs]` | Playwright 截图。still=终态单帧(会作废该张旧帧目录);motion=逐帧步进入场动画(`--dsf 2` 超采样)。**字幕默认烧录**(内容取自 clauses),`--no-subs` 关闭;**逐句另出字幕静态图**(`build/substills/`),帧序列覆盖不到的字幕窗由 build-video 拼接 —— 动画窗之后的字幕变化否则会冻住 |
 | `scripts/preview-page.mjs <项目目录> [--open] [--no-script]` | 生成**放映页** `preview/play/index.html`(单文件、零依赖、file:// 双击即看):**动效开时 ←→/触屏滑动为逐级入场**——每按一次 → 出下一级(二级标题/小图表当场动画出现),出完才翻页;动效关直接翻页。X 动效开/关、P 口播开/关(开关都在底栏按钮上,文案直接写"动效开/动效关""口播开/口播关",顶栏只留页码)、O 总览、F 全屏。**换帧双缓冲不闪白;UI 文案随 script.json 的 lang 中英自适应**。**只做"放画面"这件事**:没有计时器/进度条/跟读高亮/重播按钮(要看时间就看成片)。快照按 `timings.json` 注入实测延迟(逐级动画与成片同源);口播面板按数据自动决定加不加载,窄窗口/手机上收成底部抽屉且默认收起,画布横竖版自适应 |
-| `scripts/build-video.mjs <项目目录> [--asr] [--dry-run]` | 编码每张 → 拼接 → 音轨对位 → 合成 → 自检 + 出 `out/subs.srt`;`--asr` **按句**切分音频 + 校验清单;`--dry-run` 只打印将要执行的 ffmpeg 命令(排错用) |
+| `scripts/build-video.mjs <项目目录> [--asr] [--dry-run]` | 编码每张 → 拼接 → 音轨对位 → 合成 → 自检 + 出 `out/subs.srt`;`--asr` **按句**切分音频 + 校验清单;`--dry-run` 只打印将要执行的 ffmpeg 命令(排错用)。有字幕静态图时按"帧序列段 + 字幕段"拼接(段长之和必须等于整张时长) |
+| `scripts/grab-frames.mjs <项目目录> [--ids 05,11] [--at 0.5] [--both]` | **成片抽帧核对**:按 `timings.json` 算每张绝对起点,从 `out/final.mp4` 抽帧到 `build/introspect/` —— 图注被字幕压住、末级元素没进画面、收尾静止不够这类"still 看不出、成片里才见"的问题,上片前逐张过一遍 |
 | `scripts/asr.mjs <项目目录> [--api-key K] [--verify-timing] [--from <转写>] [--allow-any-endpoint]` | 调 ASR 转写并按句校验音画是否念的是脚本(数字/繁体字不符判 ✗);`--verify-timing` 用字级时间戳实测句开口。Key 只发官方域 |
 
 内部模块(被上面的脚本 import, 不单独运行):`tools.mjs`(ffmpeg/ffprobe 探测 + 路径收监 `safeId/safeRel/inside`)、`url-policy.mjs`(ASR 端点白名单 + SSRF/重定向策略 + 下载文件名)、`nofx-css.mjs`(`no-fx` 规则的唯一来源)、`chart-css.mjs`(图表动效与图表原语的唯一来源)、`table-css.mjs`(表格原语:`.tbl/.kv/.matrix/.rank`)、`css-kit.mjs`(前三个模块的**受管块机制**:rev 定界 + 原地替换 + 落后判定,`--upgrade-css`/`--check-css`/check-slides/preview-page 共用)。三个工具箱以带 rev 定界注释的受管块写进 tokens.css,源模块改动后跑 `--upgrade-css` 即可精确传播到老项目。
@@ -225,7 +226,7 @@ node <技能目录>/scripts/build-video.mjs <项目目录> --asr
   - **其他环境**:`MINIMAX_API_KEY=sk-xxx node scripts/asr.mjs <项目目录>` —— 直调 REST(同一把 Key),自动比对并回填 checklist;失败项(数字不符/繁体字)会以非 0 退出码报出。想拿更准的开口时刻:`--verify-timing`。
   - 不过关的 slide:改口播或重做该段 TTS → 重跑 plan-timings → 该张重渲染(帧目录删掉对应张即可)。
 
-**Gate 5**:成片 `out/final.mp4` + ASR 校验表给用户过,含字幕可读性检查(静音播放一遍,字幕能否撑起理解)与 BGM 电平(人声是否始终清晰)。
+**Gate 5**:成片 `out/final.mp4` + ASR 校验表给用户过,含字幕可读性检查(静音播放一遍,字幕能否撑起理解)与 BGM 电平(人声是否始终清晰)。**上片前先抽成片实帧逐张看**:`node <技能>/scripts/grab-frames.mjs <项目目录>` → `build/introspect/` —— 图注/落款有没有被字幕压住、末级元素是否都进了画面、收尾静止够不够,这三类 still 与放映页都看不出来。
 
 ### Phase 6 · 交付
 
@@ -234,6 +235,7 @@ out/final.mp4            # 主交付
 out/slide-*.mp4          # 单段(可单独发布)
 out/subs.srt             # 平台上传用字幕(与烧录字幕同源同窗)
 build/timings.json       # 对时的单一事实源(check-timing/asr/preview-page 都读它)
+build/substills/         # 每句字幕的静态图与窗口清单(帧序列覆盖不到的字幕窗, build-video 拼段用)
 build/audio-timeline.wav # 对位后音轨
 preview/*.png  preview/play/index.html   slides/*.html  slides/tokens.css
 audio/*.mp3  assets/(含 MANIFEST.md)  research/notes.md  asr/(校验记录)
