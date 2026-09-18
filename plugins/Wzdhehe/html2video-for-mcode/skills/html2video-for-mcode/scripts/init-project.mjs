@@ -2,10 +2,11 @@
 // html2video-for-mcode · 生成项目骨架
 // 用法: node init-project.mjs <项目目录> [--topic "主题名"] [--force] [--upgrade-css]
 // 目标目录已存在且非空时拒绝执行(会重置 script.json 等 5 个生成文件), 需显式 --force。
-// --upgrade-css: 不生成任何文件, 只给已有项目的 tokens.css 补新版 no-fx 规则(幂等可重复跑)。
+// --upgrade-css: 不生成任何文件, 只给已有项目的 tokens.css 补新版规则(no-fx + 图表工具箱, 幂等可重复跑)。
 import fs from 'node:fs';
 import path from 'node:path';
 import { NOFX_CSS, hasNofxRules } from './nofx-css.mjs';
+import { CHART_CSS, hasChartKit } from './chart-css.mjs';
 
 const argv = process.argv.slice(2);
 const dirArg = argv.find(a => !a.startsWith('--'));
@@ -412,6 +413,8 @@ ${NOFX_CSS}
 .fx-kenburns { animation: fx-kenburns-kf 14s ease-in-out infinite alternate; }
 @keyframes fx-kenburns-kf { from { transform: scale(1) translate(0, 0); } to { transform: scale(1.15) translate(-2%, -1%); } }
 
+${CHART_CSS}
+
 /* 依次入场容器: 子元素逐个上浮, 基准时刻取 --stagger-base(默认 --t2) */
 .fx-stagger > * { opacity: 0; animation: fx-rise .65s var(--ease-out) both; }
 .fx-stagger > *:nth-child(1) { animation-delay: calc(var(--stagger-base, var(--t2)) + 0ms); }
@@ -485,17 +488,20 @@ const scriptJson = {
 const FORCE = argv.includes('--force');
 const GENERATED = ['script.json', 'slides/tokens.css', 'slides/_template.html', 'assets/MANIFEST.md', 'research/notes.md'];
 
-// --upgrade-css: 只给已有项目补新版 tokens.css 里新增的 no-fx 规则(幂等, 不碰其他文件)。
-// 老项目没有这段, <html class="no-fx"> 会静默失效 —— 只关动画不把 opacity 抬回来, 页面反而是空白。
+// --upgrade-css: 只给已有项目补新版 tokens.css 里新增的规则(幂等, 不碰其他文件)。
+// 老项目缺 no-fx 规则时 <html class="no-fx"> 会静默失效(只关动画不把 opacity 抬回来, 页面反而空白);
+// 缺图表工具箱时新配方会静默半死(条形不生长 / 环形不扫出 / 数字不滚动)。
 if (argv.includes('--upgrade-css')) {
   const cssPath = path.join(dir, 'slides', 'tokens.css');
   if (!fs.existsSync(cssPath)) { console.error(`✗ 找不到 ${cssPath}`); process.exit(1); }
-  const css = fs.readFileSync(cssPath, 'utf8');
-  if (hasNofxRules(css)) { console.log(`无需升级: ${cssPath} 已含 no-fx 规则`); process.exit(0); }
-  const block = `\n/* 以下由 init-project --upgrade-css 追加(2026-09-18): 老项目缺这段时 <html class="no-fx"> 失效 */\n${NOFX_CSS}\n`;
-  fs.writeFileSync(cssPath, css.replace(/\s*$/, '\n') + block);
-  console.log(`✓ 已补：no-fx 规则 → ${cssPath}`);
-  console.log('  其余新版组件(图表类 fx-grow-x/fx-grow-y 等)未自动补: 需要就在 references/authoring.md 里照抄对应块。');
+  let css = fs.readFileSync(cssPath, 'utf8');
+  const needNofx = !hasNofxRules(css);
+  const needChart = !hasChartKit(css);
+  if (!needNofx && !needChart) { console.log(`无需升级: ${cssPath} 已含 no-fx 规则与图表工具箱`); process.exit(0); }
+  if (needNofx) css = css.replace(/\s*$/, '\n') + `\n/* 以下由 init-project --upgrade-css 追加(2026-09-18): 老项目缺这段时 <html class="no-fx"> 失效 */\n${NOFX_CSS}\n`;
+  if (needChart) css = css.replace(/\s*$/, '\n') + `\n/* 以下由 init-project --upgrade-css 追加(2026-09-18): 图表动效与图表原语(缺了则条形不生长/环形不扫出/数字不滚动) */\n${CHART_CSS}\n`;
+  fs.writeFileSync(cssPath, css);
+  console.log(`✓ 已补:${needNofx ? ' no-fx 规则' : ''}${needChart ? ' 图表工具箱(fx-grow-w/h · fx-sweep · fx-count · fx-dot + .chart 原语)' : ''} → ${cssPath}`);
   process.exit(0);
 }
 

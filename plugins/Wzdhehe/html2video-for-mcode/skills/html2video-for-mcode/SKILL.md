@@ -27,7 +27,7 @@ description: 把脚本/大纲/主题变成带中文口播的成片 MP4(HTML 幻�
 
 ## 目录与工具
 
-技能自带 **11 个命令行脚本 + 3 个内部模块**(直接以本技能目录为路径调用,项目目录作为参数,无需复制;`tests/` 下还有一套 node:test 安全与冒烟测试,从仓库根 `node --test` 自动发现):
+技能自带 **11 个命令行脚本 + 4 个内部模块**(直接以本技能目录为路径调用,项目目录作为参数,无需复制;`tests/` 下还有一套 node:test 安全与冒烟测试,从仓库根 `node --test` 自动发现):
 
 | 脚本 | 作用 |
 |---|---|
@@ -43,7 +43,7 @@ description: 把脚本/大纲/主题变成带中文口播的成片 MP4(HTML 幻�
 | `scripts/build-video.mjs <项目目录> [--asr] [--dry-run]` | 编码每张 → 拼接 → 音轨对位 → 合成 → 自检 + 出 `out/subs.srt`;`--asr` **按句**切分音频 + 校验清单;`--dry-run` 只打印将要执行的 ffmpeg 命令(排错用) |
 | `scripts/asr.mjs <项目目录> [--api-key K] [--verify-timing] [--from <转写>] [--allow-any-endpoint]` | 调 ASR 转写并按句校验音画是否念的是脚本(数字/繁体字不符判 ✗);`--verify-timing` 用字级时间戳实测句开口。Key 只发官方域 |
 
-内部模块(被上面的脚本 import, 不单独运行):`tools.mjs`(ffmpeg/ffprobe 探测 + 路径收监 `safeId/safeRel/inside`)、`url-policy.mjs`(ASR 端点白名单 + SSRF/重定向策略)、`nofx-css.mjs`(`no-fx` 规则的唯一来源,init-project 写入 / preview-page 兜底注入共用)。
+内部模块(被上面的脚本 import, 不单独运行):`tools.mjs`(ffmpeg/ffprobe 探测 + 路径收监 `safeId/safeRel/inside`)、`url-policy.mjs`(ASR 端点白名单 + SSRF/重定向策略 + 下载文件名)、`nofx-css.mjs`(`no-fx` 规则的唯一来源,init-project 写入 / preview-page 兜底注入共用)、`chart-css.mjs`(图表动效与图表原语的唯一来源,`--upgrade-css` 给老项目补)。
 
 环境要求:Node 18+(脚本用 fileURLToPath 保兼容, 不依赖 Node 20.11 的 import.meta.dirname)、`npm i playwright && npx playwright install chromium`(项目目录内)。ffmpeg/ffprobe 自动探测:PATH → node_modules(ffmpeg-static/ffprobe-static)→ 常见安装位置,找不到会给逐条诊断而不是莫名报错。
 
@@ -229,7 +229,7 @@ audio/*.mp3  assets/(含 MANIFEST.md)  research/notes.md  asr/(校验记录)
 
 ## 参考文件(按需读,别全读)
 
-- `references/authoring.md` — 17 种版式规范(每种画面必含项)+ 内容量表 + 入场系统用法(含 stage 延迟实现原理)+ 主题速查 + 竖版说明 + 可抄的 HTML 片段
+- `references/authoring.md` — 17 种版式规范(每种画面必含项)+ 内容量表 + 入场系统用法(含 stage 延迟实现原理)+ **图表工具箱**(图表原语、九条优雅纪律、7 个配方与动效选型)+ 主题速查 + 竖版说明 + 可抄的 HTML 片段
 - `references/compliance.md` — 领域与合规(受监管题材必读):领域确认问法、财经口播红线、数字三要件、涨跌色按受众翻转、免责声明写法与位置、医疗/法律/广告法要点、收尾检查清单
 - `references/research.md` — 资料搜集(来源分级、交叉验证硬规则、query 设计、矛盾处理、notes 模板)
 - `references/image-sources.md` — 配图与素材 SOP(三条取图路径、query 正/反词、两级筛选、图片框用法、裁切硬限制、视觉验证三件套、常见题材索引)
@@ -261,6 +261,9 @@ audio/*.mp3  assets/(含 MANIFEST.md)  research/notes.md  asr/(校验记录)
 | 图表/折线/某个元素入场后完全不见 | 该 fx 类的关键帧没声明 opacity —— `[data-stage]` 基础态是 `opacity:0`,只做 transform/描边的动画抬不回来 | 在关键帧的 from/to 里补 `opacity:1`;`check-slides.mjs` 会直接报出来 |
 | 切了 `no-fx` 画面反而更空 | 早期模板只关动画、没恢复 `[data-stage]` 的 `opacity:0` 基础态 | 项目 tokens.css 是旧版:`node scripts/init-project.mjs <项目目录> --upgrade-css` 补上(幂等);放映页遇到旧 tokens.css 会在关动效副本里兜底注入并明确提示 |
 | 双击 `slides/*.html` 看动画, 发现全挤在开头 | 动画延迟由管线按 `timings.json` 注入,tokens.css 里只有占位值(`--t2:800ms`) | 别直接开原文件:跑 `preview-page.mjs` 用副本(已注入实测延迟), 或 `--mode motion` 出片 |
+| 柱状图柱高与标注数值不符(高柱子被压矮) | 柱子直接放在 flex 列里按百分比设高: 基准是**整列**高度, 超过剩余空间会被 `flex-shrink` 压回去, 静默失真 | 把柱子包进 `.chart-plot-cell`(1fr 行), 百分比就相对绘图区算; 顺带得到基线与各列等高 |
+| 折线图缩在版面中间一小块 | SVG 的 `viewBox` 宽高比与容器不一致, `preserveAspectRatio` 把内容等比缩小居中 | 满宽用 `width:100%;height:auto`; 半宽/固定高就把 viewBox 改成接近容器的比例 |
+| 图表/图注被字幕压住 | 内容排进了字幕带(底部 84–168px、居中 73% 宽) | 版面容器 `padding-bottom: 190px` 起步; 见 authoring.md 的"字幕安全区" |
 | 放映页里 iframe 是空白/图裂 | 副本的 `<base href>` 被清掉, 或 slides/ 被移动过 | 重跑 `preview-page.mjs` 重新生成快照;原文件不要手改(副本是快照,改 slides 后必须重跑) |
 | 图片显示 broken 图标 | 文件缺失,或 SVG 本身有问题(XML 错/依赖外部资源/缺尺寸) | `check-slides.mjs` 查路径;SVG 改 inline 进 HTML;capture 也会在渲染时点名哪张没加载 |
 | 财经片没免责声明 / 涨跌色反了 / 数字被质疑口径 | 开工没确认领域,默认色与默认措辞直接用了 | 读 `references/compliance.md`:结尾补 `.disclaimer` 行(停留 ≥3s)、指标卡改 `var(--up)/var(--down)` 并按受众市场翻转、每个数字补口径+币种+时点 |

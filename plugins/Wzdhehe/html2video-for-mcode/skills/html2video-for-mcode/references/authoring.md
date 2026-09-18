@@ -70,6 +70,8 @@ tokens.css 已内置,规则只有四条:
 
 字号纪律:一张 slide 上最多两个层级同屏(标题 + 一个次级);正文 ≥30px,再小就是给审查者找茬。安全边距:内容离边缘 ≥96px(brand/slide-num 除外)。
 
+⚠ **字幕安全区(1080 高度下)**:字幕胶囊占**底部 84–168px、居中约 73% 宽**(字号 40px + 上下 padding 12px,距底 7.8%);**这一带不要放正文、数值、图表或图注** —— 否则成片里字幕会直接压在内容上,两个都读不清(2026-09-18 由视觉验收抓到:示例页把图注排在底部,字幕盖上去成了"文字重影")。做法:版面容器 `padding-bottom: 190px` 起步,底部只留 brand/slide-num。
+
 ## 素材获取(Phase 3 · Gate 3)
 
 流程:列需求清单(哪几张要图、要什么)→ 按下面的优先级取材 → 合规自查 → 落盘 `assets/` 并登记 `MANIFEST.md` → **Gate 3 给用户过**。
@@ -296,90 +298,183 @@ console.log(answer.output_text);</code></pre>
 
 ---
 
-# 纯 CSS/SVG 图表(data-viz 的画法)
+# 图表工具箱(data-viz 的画法)
 
-图表**全部自绘**,三条底线:
+图表**全部自绘**,三条底线不变:
 
 1. **禁外链图表库**(Chart.js / ECharts 等 CDN):离线沙箱取不到、违反禁外链铁律,而且 canvas 动画逐帧 seek 不到(会渲染成静止/空白)。
 2. **数值必须来自 research/notes.md 里已核实的口径** —— 图表是"把核实过的数字画出来",不是装饰;画不了的口径(缺时点/混币种)先回 Phase 0。
 3. **禁止用 AI 生图当图表**(`image generate` 只限抽象概念图):数据图形必须可追溯到来源,生成图不可核查。
 
-颜色一律走令牌:涨跌用 `var(--up)/var(--down)`(财经按受众翻转,见 compliance.md),中性对比用 `var(--accent)/var(--accent-2)`,网格线 `var(--line)`,数值标签 `var(--fg)`。**动效是图表的一部分**(仍是纯 @keyframes,逐帧 seek 确定性不变):条形/柱状用 `fx-grow-x/fx-grow-y` 从 0 长到数值、折线用 `fx-draw` 描边画入、环形用 `fx-pop`;同层错峰照旧走 `--fx-delay:calc(var(--t2) + N×120ms)`。**全套动效可一键关**(见下文"动效开关")。
+图表原语与动效都在 `tokens.css` 里(`.chart*` 与 `fx-grow-w/h · fx-sweep · fx-count · fx-dot`)。**老项目先跑 `node scripts/init-project.mjs <项目> --upgrade-css` 补上**(幂等),否则新配方会静默半死:条形不生长、环形不扫出、数字不滚动。
+
+## 优雅的六条纪律(比加特效重要)
+
+1. **同类同色 + 一条强调**:同一序列的条/柱**同一个颜色**,要突出的那条用 `--accent`(`.chart-bar` 默认),其余加 `.dim`(自动 `color-mix` 弱化成同色系)。彩虹色条形图是最典型的"业余感"来源。**弱化条上的数值不要用白字**——半透明填充配白字读不出来(实测被视觉验收判为"读不清");要么靠 `.chart-bar.dim .chart-val` 自动改用墨色,要么把数值放条外:`<span class="chart-val out chart-num">`(轨道之后,右对齐,墨色)。
+2. **别把数字放进被缩放的元素里**:`fx-grow-x` 用 `scaleX`,条内数字会被**横向拉扁**(实测);带标签的条用 `fx-grow-w`(动画 `width`,不变形)。数值一律套 `.chart-num`(等宽 + `tabular-nums`),多位数字滚动时才不抖。
+3. **有基线、有细网格**:柱状图靠 `.chart-plot-cell` 的底边做基线(柱子必须待在 plot 容器里 —— 百分比高度若相对整列算,超出剩余空间会被 `flex-shrink` 压回去,**柱高就不再等于数值**,实测 84% 与 72% 画成一样高)+ 网格画在绘图区里、**且要在页面上看得见**(用 `--line-strong`; 网格线若太浅、或只在被柱子盖住的地方显影, 读者读不出刻度, 实测被判 fail),顶边线即轴上限, 目标值用绘图区内的 `.chart-target` 虚线(`style="bottom:100%"` 对齐轴上限);横向条形图给每条轨道加 `.chart-track.grid`(共享 25/50/75% 竖刻度),轨道左缘自带零轴竖线。**行用 `.chart-row` 的 grid 三列(标签/轨道/数值位)定宽** —— 否则"有条外数值的行"轨道会被挤窄,同一张图里出现两把尺子、条长不可比(实测被视觉验收抓到)。轴标签用 `--fs-tiny` + `--fg-3`。图表的精致度大半来自这些"看不见的线"。
+4. **一张图只讲一件事**:用 `.chart-note` 把那句话写在标题行右侧(「同比 +38%」「距目标 0.2pp」),别让观众自己算。
+5. **零值和极小值要保底**:给 `.chart-bar` 加 `min-height:4px`(或让 `.chart-target` 虚线兜住),否则"0"看起来像"没数据"。
+6. **图注写口径与时点**(`.chart-cap`):受监管题材必写(见 compliance.md),其他题材也建议 —— 数字的可信度来自"什么时候、怎么算的"。
+7. **在字幕安全区里垂直居中, 别都堆在顶部**:图表块应占住安全区(1080 高度下可用约 825px),版面容器用 `justify-content:center`;条形行距/条高可以放大(条高用 `--bar-h`,56–64px 更好看)。上半部挤满、下半部大片空白,成片里就是"整页失衡"(视觉验收实测两次判到)。
+9. **柱高必须由数值算出来, 轴从 0 起**:凭手感写 `height:58%` 会让柱高与标注数字不成比例 —— 这不是审美问题, 是**数据失真**(截断纵轴是同一类错)。做法:先定轴上限(如 4.0%),柱高 = 数值 ÷ 轴上限(3.1/4.0 = 77.5%),并把轴上限写进标题或 note("轴 0–4.0%")。视觉验收实测:三根柱的画法与标注对不上,直接被判 fail。
+8. **数值对齐到同一列**:同一张图的所有数值右对齐在同一列(都用 `.chart-val.out`);条内白字只用"只有一条强调条、不与其它行并列"的情形,否则四条数值会分成两列,一眼看出没对齐(视觉验收实测)。
+
+其余照旧:颜色走令牌(涨跌 `var(--up)/var(--down)`,财经按受众翻转),网格 `var(--line)`,数值 `var(--fg)`,图例 `--muted`。**动效是图表的一部分**,且**全套可一键关**(见"动效开关")。
+
+## 动效选型(逐帧 seek 确定性不变,仍是纯 @keyframes)
+
+| 图形 | 用哪个 | 为什么 |
+|---|---|---|
+| 条形(带标签) | `fx-grow-w` + 内联 `--w:86%` | 动画 `width`,数字不被拉扁 |
+| 条形(纯色块) | `fx-grow-x` | transform 更省,反正没文字 |
+| 柱状(标签在柱外) | `fx-grow-y` | 标签是兄弟节点,不受缩放影响 |
+| 柱状(标签在柱内) | `fx-grow-h` + 内联 `--h:70%` | 同上,避免数字被拉扁 |
+| 折线 | `fx-draw`(元素自设 `stroke-dasharray:800`)+ `fx-dot` 落点 | 描边画入天然可 seek;数据点逐个弹出 |
+| 环形 / 仪表 | `fx-sweep` + 内联 `--p-to:62` | 锥面渐变随注册属性逐帧重算,**真的扫出来**(不必用 `fx-pop` 硬弹) |
+| 大数字 | `fx-count` + 内联 `--n-to:924` | 纯 CSS 计数器滚动;**只支持整数**(小数请拆字段或保持静态) |
+
+错峰一律 `--fx-delay:calc(var(--t2) + N×120ms)`(数据条之间 120–150ms 最好看,超过 200ms 观众会等)。
+
+## 配方
 
 ```html
-<!-- 横向条形图: 对比类首选(标签不挤); 宽度% = 数值/序列最大值
-     条形用 fx-grow-x 从左长出; 多根错峰用 --fx-delay, 数值标签放条内右侧跟着长 -->
-<div style="display:flex;flex-direction:column;gap:var(--sp-3);margin-top:var(--sp-5)">
-  <div style="display:flex;align-items:center;gap:var(--sp-3)">
-    <p style="width:220px;text-align:right;color:var(--muted)">产品 A</p>
-    <div style="flex:1;height:34px;background:var(--panel-2);border-radius:var(--radius-sm);overflow:hidden">
-      <div class="fx-grow-x" data-stage="2" style="width:86%;height:100%;background:var(--accent);border-radius:inherit;
-                  display:flex;align-items:center;justify-content:flex-end;padding-right:12px;
-                  color:var(--accent-ink);font-size:var(--fs-tiny)">1.86 亿</div>
+<!-- ① 横向条形图(排名/对比首选): 标签在条外, 数值统一右对齐到同一列(都用 .chart-val.out); 关键一条用默认色, 其余 .dim;
+     行宽 = 数值 ÷ 轴上限(这里轴上限 ≈ 2.16 亿 = 1.86/0.86, 所以 1.17→54%、0.67→31%、0.22→10.2%), 别凭手感写百分比;
+     一句话用 .chart-note 挂在标题行; 图注写口径+时点 -->
+<div class="chart" style="margin-top:var(--sp-5)">
+  <div class="chart-head">
+    <span class="chart-title">2026 Q2 各产品线营收</span>
+    <span class="chart-note">A 产品同比 +38%</span>
+  </div>
+  <div class="chart-row">
+    <span class="chart-lbl">产品 A</span>
+    <div class="chart-track">
+      <div class="chart-bar fx-grow-w" data-stage="2" style="--w:86%"><span class="chart-val chart-num">1.86 亿</span></div>
     </div>
   </div>
-  <div style="display:flex;align-items:center;gap:var(--sp-3)">
-    <p style="width:220px;text-align:right;color:var(--muted)">产品 B</p>
-    <div style="flex:1;height:34px;background:var(--panel-2);border-radius:var(--radius-sm);overflow:hidden">
-      <div class="fx-grow-x" data-stage="2" style="width:54%;height:100%;background:var(--accent-2);border-radius:inherit;
-                  --fx-delay:calc(var(--t2) + 150ms)"></div>
+  <div class="chart-row">
+    <span class="chart-lbl">产品 B</span>
+    <div class="chart-track grid">
+      <div class="chart-bar dim fx-grow-w" data-stage="2" style="--w:54%;--fx-delay:calc(var(--t2) + 120ms)"></div>
+    </div>
+    <span class="chart-val out chart-num fx-fade" data-stage="2" style="--fx-delay:calc(var(--t2) + 120ms)">1.17 亿</span>
+  </div>
+  <p class="chart-cap">口径: 集团合并报表 · 单位: 人民币 · 截至 2026-06-30</p>
+</div>
+
+<!-- ② 柱状图(≤5 个时点): .chart-plot.grid 给细网格, 数值放柱外, 逐个错峰 -->
+<div class="chart" style="margin-top:var(--sp-5)">
+  <!-- 柱高 = 数值 ÷ 轴上限, 轴必须从 0 起: 3.1/3.5/3.8 对 4.0% 轴 → 77.5% / 87.5% / 95%。
+       把轴上限写进标题或 note, 别让读者猜比例尺(凭手感写百分比 = 数据失真) -->
+  <div class="chart-head"><span class="chart-title">付费转化率 · 周(轴 0–4.0%)</span><span class="chart-note">目标 4.0%</span></div>
+  <div class="chart-cols" style="--cols-h:300px">
+    <div class="chart-col">
+      <div class="chart-plot-cell grid">
+        <div class="chart-target" style="bottom:100%"><span>目标 4.0%</span></div>
+        <div class="chart-bar-wrap" style="height:77.5%">
+          <span class="chart-val chart-num fx-fade" data-stage="2">3.1%</span>
+          <div class="chart-bar dim fx-grow-y" data-stage="2"></div>
+        </div>
+      </div>
+      <span class="chart-lbl fx-fade" data-stage="2">W08</span>
+    </div>
+    <div class="chart-col">
+      <div class="chart-plot-cell grid">
+        <div class="chart-bar-wrap" style="height:87.5%">
+          <span class="chart-val chart-num fx-fade" data-stage="2" style="--fx-delay:calc(var(--t2) + 120ms)">3.5%</span>
+          <div class="chart-bar dim fx-grow-y" data-stage="2" style="--fx-delay:calc(var(--t2) + 120ms)"></div>
+        </div>
+      </div>
+      <span class="chart-lbl fx-fade" data-stage="2" style="--fx-delay:calc(var(--t2) + 120ms)">W10</span>
+    </div>
+    <div class="chart-col">
+      <div class="chart-plot-cell grid">
+        <div class="chart-bar-wrap" style="height:95%">
+          <span class="chart-val chart-num fx-fade" data-stage="2" style="--fx-delay:calc(var(--t2) + 240ms)">3.8%</span>
+          <div class="chart-bar fx-grow-y" data-stage="2" style="--fx-delay:calc(var(--t2) + 240ms)"></div>
+        </div>
+      </div>
+      <span class="chart-lbl fx-fade" data-stage="2" style="--fx-delay:calc(var(--t2) + 240ms)">W12</span>
     </div>
   </div>
+  <p class="chart-cap">口径: 注册后 7 日内付费 · 来源: 内部指标平台 · 截至 2026-08-15</p>
 </div>
 
-<!-- 柱状图: 少量(≤5)时间点;柱子 fx-grow-y 从基线长出,数值标柱顶(数值本身套 .fx-fade 同 stage)
-     ⚠ 容器不要写 align-items:flex-end —— 会让每列 wrapper 高度塌成内容高, 柱子的百分比高度失效(变 0)
-     正解: 容器默认 stretch(每列占满 420px), 列内用 justify-content:flex-end 把内容压到底 -->
-<div style="display:flex;justify-content:center;gap:var(--sp-4);height:420px;margin-top:var(--sp-5)">
-  <div style="flex:0 1 220px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:8px">
-    <span class="fx-fade" data-stage="2" style="color:var(--fg)">4.1</span>
-    <div class="fx-grow-y" data-stage="2" style="width:100%;height:70%;background:var(--accent);border-radius:var(--radius-sm) var(--radius-sm) 0 0"></div>
-    <span class="fx-fade" data-stage="2" style="color:var(--fg-3)">Q1</span>
-  </div>
-  <div style="flex:0 1 220px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:8px">
-    <span class="fx-fade" data-stage="2" style="color:var(--fg);--fx-delay:calc(var(--t2) + 150ms)">6.8</span>
-    <div class="fx-grow-y" data-stage="2" style="width:100%;height:100%;background:var(--up);border-radius:var(--radius-sm) var(--radius-sm) 0 0;--fx-delay:calc(var(--t2) + 150ms)"></div>
-    <span class="fx-fade" data-stage="2" style="color:var(--fg-3);--fx-delay:calc(var(--t2) + 150ms)">Q2</span>
-  </div>
-</div>
-
-<!-- 环形占比: conic-gradient 一步出图;中心挖洞用径向遮罩;配一行图例;整体 fx-pop(锥面渐变无法"生长",弹出即可) -->
-<div class="fx-pop" data-stage="2" style="position:relative;width:360px;height:360px;border-radius:50%;
-     background:conic-gradient(var(--accent) 0 62%, var(--panel-2) 62% 100%)">
-  <div style="position:absolute;inset:56px;border-radius:50%;background:var(--bg);
-              display:flex;flex-direction:column;align-items:center;justify-content:center">
-    <span style="font-family:var(--font-display);font-size:var(--fs-h1)">62%</span>
-    <span style="color:var(--muted);font-size:var(--fs-tiny)">市场份额</span>
-  </div>
-</div>
-
-<!-- 折线图: inline SVG + fx-draw(描边画入, 天然逐帧可 seek; 元素自设 stroke-dasharray:800) -->
-<svg class="fx-draw" data-stage="2" viewBox="0 0 900 400" style="width:100%;height:auto" fill="none">
-  <polyline points="40,340 210,290 380,300 550,180 720,120 860,90"
-    stroke="var(--accent)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"
-    stroke-dasharray="800"/>
-  <polyline points="40,350 210,330 380,310 550,280 720,260 860,230"
-    stroke="var(--line-strong)" stroke-width="4" stroke-dasharray="800"
-    style="--fx-delay:calc(var(--t2) + 300ms)"/>
+<!-- ③ 折线图(>5 个时点): inline SVG, 描边画入 + 数据点逐个弹出; 面积用同色低透明度渐变 -->
+<svg class="fx-draw" data-stage="2" viewBox="0 0 900 380" style="width:100%;height:auto" fill="none">
+  <defs><linearGradient id="g1" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="var(--accent)" stop-opacity=".22"/>
+    <stop offset="1" stop-color="var(--accent)" stop-opacity="0"/>
+  </linearGradient></defs>
+  <path d="M40,330 L215,290 L390,300 L565,180 L740,120 L875,88" stroke="var(--line)" stroke-width="1"/>
+  <path d="M40,330 L215,290 L390,300 L565,180 L740,120 L875,88 L875,360 L40,360 Z" fill="url(#g1)"/>
+  <polyline points="40,330 215,290 390,300 565,180 740,120 875,88"
+    stroke="var(--accent)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="800"/>
+  <g fill="var(--accent)">
+    <circle class="fx-dot" data-stage="2" cx="565" cy="180" r="9" style="--fx-delay:calc(var(--t2) + 500ms)"/>
+    <circle class="fx-dot" data-stage="2" cx="875" cy="88" r="9" style="--fx-delay:calc(var(--t2) + 800ms)"/>
+  </g>
+  <text x="875" y="60" text-anchor="end" fill="var(--fg)" font-size="26" class="chart-num">96.4</text>
 </svg>
-<!-- fx-draw 的 dasharray 要 ≥ 线长;两根线先后画入,第二根用上面的 --fx-delay 错峰 -->
-```
+<!-- fx-draw 的 dasharray 要 ≥ 线长; 数据点用 fx-dot(自带轻微过冲弹入)。**标记规则要统一**: 要么每个点都标、要么只标末点(带数值);
+     只给中间某个点标点、又没有对应数值, 视觉验收会读成"没标全"。
+     ⚠ SVG 的 viewBox 宽高比要和容器一致, 否则 preserveAspectRatio 会把图形缩到中间一小块(实测: 半个版面里图形只占 40%);
+     满宽用 width:100%;height:auto; 半宽/固定高就要把 viewBox 改成接近容器的比例, 别靠 height 硬压 -->
 
-选型速查:对比/排名 → 横向条形;时间趋势(≤5 点)→ 柱状,(>5 点)→ SVG 折线;占比 ≤3 块 → 环形;达成率 → 下面这条进度条。都别忘图注:数据口径 + 时点(受监管题材必须,见 compliance.md)。
-
-```html
-<!-- 进度条: 达成率/完成度; 填充段 fx-grow-x 生长 -->
-<div style="margin-top:var(--sp-5)">
-  <div class="fx-fade" data-stage="2" style="display:flex;justify-content:space-between;color:var(--muted);font-size:var(--fs-tiny);margin-bottom:8px">
-    <span>年度目标达成</span><span style="color:var(--fg)">78%</span>
-  </div>
-  <div style="height:18px;background:var(--panel-2);border-radius:999px;overflow:hidden">
-    <div class="fx-grow-x" data-stage="2" style="width:78%;height:100%;background:var(--grad);border-radius:inherit"></div>
+<!-- ④ 环形: fx-sweep 真扫出(--p-to = 目标百分比), 中心数字 fx-count 滚动(--n-to = 整数) -->
+<div class="fx-sweep" data-stage="2" style="--p-to:62;position:relative;width:340px;height:340px;border-radius:50%;
+     background:conic-gradient(var(--accent) 0 calc(var(--pv) * 1%), var(--panel-2) 0)">
+  <div style="position:absolute;inset:52px;border-radius:50%;background:var(--bg);
+              display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px">
+    <span class="fx-count chart-num" data-stage="2" style="font-size:var(--fs-h1);--n-to:62"></span>
+    <span style="color:var(--muted);font-size:var(--fs-tiny)">市场份额(%)</span>
   </div>
 </div>
+<!-- ⚠ 中心数字交给 fx-count 后不要再手写 "62"(计数器会自己填); 小数(62.4)不支持, 保持静态或拆两段。
+     fx-count 在入场前是 opacity:0 —— 否则画面会停在"灰色的 0", 被读成"份额 0%/没数据"(视觉验收实测) -->
+
+<!-- ⑤ bullet(实际 vs 目标, 汇报最实用): 一条轨道 + 目标虚线 + 实际条 + 右侧数值 -->
+<div class="chart-row" style="margin-top:var(--sp-4)">
+  <span class="chart-lbl">年度目标达成</span>
+  <div class="chart-track" style="height:26px">
+    <div class="chart-bar fx-grow-w" data-stage="2" style="--w:78%"></div>
+    <div class="chart-target" style="left:88%"><span>目标 88%</span></div>
+  </div>
+  <span class="chart-val chart-num fx-fade" data-stage="2" style="color:var(--fg)">78%</span>
+</div>
+
+<!-- ⑥ slope(前后对比): 两列点 + 斜线, 比双柱更省版面; 主体用 --accent, 对照组用 --line-strong -->
+<svg class="fx-draw" data-stage="2" viewBox="0 0 720 320" style="width:100%;height:auto" fill="none">
+  <text x="0" y="24" fill="var(--fg-3)" font-size="22">三年前</text>
+  <text x="720" y="24" text-anchor="end" fill="var(--fg-3)" font-size="22">今天</text>
+  <path d="M60,250 L660,90" stroke="var(--accent)" stroke-width="5" stroke-linecap="round" stroke-dasharray="800"/>
+  <path d="M60,150 L660,200" stroke="var(--line-strong)" stroke-width="4" stroke-linecap="round" stroke-dasharray="800"/>
+  <circle class="fx-dot" data-stage="2" cx="60" cy="250" r="10" fill="var(--accent)"/>
+  <circle class="fx-dot" data-stage="2" cx="660" cy="90" r="10" fill="var(--accent)" style="--fx-delay:calc(var(--t2) + 600ms)"/>
+  <circle class="fx-dot" data-stage="2" cx="60" cy="150" r="8" fill="var(--line-strong)"/>
+  <circle class="fx-dot" data-stage="2" cx="660" cy="200" r="8" fill="var(--line-strong)" style="--fx-delay:calc(var(--t2) + 600ms)"/>
+  <text x="60" y="288" fill="var(--fg)" font-size="24" class="chart-num">62</text>
+  <text x="660" y="72" text-anchor="end" fill="var(--accent)" font-size="30" class="chart-num">92</text>
+</svg>
+
+<!-- ⑦ sparkline(数字旁的迷你趋势, 不占版面): 只有线, 无坐标轴, 用来暗示趋势 -->
+<span style="display:inline-flex;align-items:center;gap:12px">
+  <span class="chart-num" style="font-size:var(--fs-h2);color:var(--fg)">96.4</span>
+  <svg class="fx-draw" data-stage="2" viewBox="0 0 160 48" style="width:160px;height:48px" fill="none">
+    <polyline points="4,40 30,34 56,36 82,22 108,18 134,10 156,6"
+      stroke="var(--up)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="300"/>
+  </svg>
+</span>
 ```
 
-## 动效开关(三种粒度)
+选型速查:排名/对比 → 横向条形;时间趋势(≤5 点)→ 柱状,(>5 点)→ 折线;占比(≤3 块)→ 环形;实际 vs 目标 → bullet;前后对照 → slope;数字旁的趋势 → sparkline。**一张 slide 只放一个图**(非放两个就必须分主次或拆张),图注永远要写。
+
+⚠ 整块图表(含图注)要落在**字幕安全区之上**:1080 高度下留给字幕的是底部 84–168px,版面容器请留 `padding-bottom: 190px`。
+
+---
+
+# 动效开关(三种粒度)
 
 | 粒度 | 做法 | 效果 |
 |---|---|---|
@@ -388,6 +483,8 @@ console.log(answer.output_text);</code></pre>
 | **单个元素** | 不给它 fx 类和 data-stage | 该元素静态呈现 |
 
 适用:赶时间要快速出片、题材要求克制(政务/法律/讣告类)、或用户明确说"不要动画"。开工对齐时可当作一个问题问出去;默认全开。
+
+**图表动效也在开关范围内**:关掉后条形/柱状直接是终值宽度、环形是完整扇形、数字是最终值(它们的静态默认值就写成终值,所以不需要额外复位规则)。
 
 **交付前验一下**:`preview-page.mjs` 的放映页按 `X` 就是"动效 / 关动效"对照 —— 关掉后**变空**说明有关键帧没把 `opacity:0` 抬回来;两版画面一致才算干净。老项目(本规则加上之前生成的 tokens.css)没有 `no-fx` 规则:先跑 `node scripts/init-project.mjs <项目目录> --upgrade-css` 补上(幂等),否则 `<html class="no-fx">` 会静默失效、页面反而全空。
 

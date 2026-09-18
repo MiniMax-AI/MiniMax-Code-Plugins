@@ -36,8 +36,8 @@ my-video/
 
 ## Pipeline
 
-One Skill drives an 11-script pipeline (plus three internal modules — path containment, URL
-policy, `no-fx` rules — under `skills/html2video-for-mcode/scripts/`):
+One Skill drives an 11-script pipeline (plus four internal modules — path containment, URL
+policy, `no-fx` rules, chart CSS — under `skills/html2video-for-mcode/scripts/`):
 
 | Stage | What happens |
 |---|---|
@@ -70,7 +70,10 @@ policy, `no-fx` rules — under `skills/html2video-for-mcode/scripts/`):
   library and no canvas (offline they would not load, and canvas animations cannot be frame-seeked).
   Adding `no-fx` to the root element — or to any container, for a single slide — turns every
   entrance and ambient animation off; the renderer then emits static frames and the timing stays
-  intact.
+  intact. The chart toolbox enforces the data-viz basics in the template itself: bars grow by
+  animating `width` (scaling would squash the numbers), column heights resolve against the plot
+  area so they always match their values, the grid shares the bars' scale, and charts stay clear of
+  the subtitle band.
 - **Rendering is gated.** A static check refuses to render slides with undefined CSS variables,
   missing images, external resources, or entrance animations without an animation class — the
   failure modes that otherwise ship a video that looks broken while every script reports success.
@@ -198,7 +201,7 @@ The Skill ships an executable test suite (`skills/html2video-for-mcode/tests/`, 
 node --test "plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/*.test.mjs"
 ```
 
-107 tests in seven files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
+114 tests in eight files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
 escapes), `no-clobber` (refusing to overwrite), `endpoint-allowlist` (key never leaves the official
 hosts — plus a local server that proves the gate sits before the request), `fetch-policy` (SSRF,
 `file://`, redirect and filename rules), `preview-page` (snapshot timing injection, `base` ordering,
@@ -206,7 +209,9 @@ self-containment, containment refusals, the no-timer rule), `tokens-fx` (every e
 the generated `tokens.css` must declare `opacity`, `no-fx` must reset it, `--upgrade-css` is
 idempotent) and `fetch-policy`/`no-clobber` (the `--url` download route obeys the same SSRF,
 redirect, size and no-clobber rules), plus
-`render-smoke` (init → timings → static gate → capture → build, end to end). The render smoke test and three ffmpeg-dependent path checks need ffmpeg and
+`chart-kit` (the chart toolbox is really in the generated `tokens.css`: keyframes, registered
+properties, and "off = final state") and `render-smoke` (init → timings → static gate → capture →
+build, end to end). The render smoke test and three ffmpeg-dependent path checks need ffmpeg and
 Chromium; where those are missing they skip with a stated reason, and the scoped workflow
 `.github/workflows/html2video-for-mcode-smoke.yml` installs them and runs everything for real.
 
