@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // html2video-for-mcode · 生成项目骨架
-// 用法: node init-project.mjs <项目目录> [--topic "主题名"]
+// 用法: node init-project.mjs <项目目录> [--topic "主题名"] [--force]
+// 目标目录已存在且非空时拒绝执行(会重置 script.json 等 5 个生成文件), 需显式 --force。
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -12,6 +13,9 @@ if (!dirArg) {
 }
 const topicIdx = argv.indexOf('--topic');
 const topic = topicIdx > -1 ? argv[topicIdx + 1] : '';
+// topic 会插进模板 HTML 的 .brand 角标, 插入点单独转义(script.json / notes.md 用原文, 不转义)
+const escapeHtml = s => String(s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+const topicHtml = escapeHtml(topic);
 const dir = path.resolve(dirArg);
 
 const TOKENS_CSS = `/* html2video-for-mcode 设计令牌 · 由 init-project 生成
@@ -366,6 +370,18 @@ html, body { width: var(--stage-w, 1920px); height: var(--stage-h, 1080px); over
 .fx-ripple    { animation: fx-ripple    1.2s var(--ease-out) var(--fx-delay, 0ms) both; }      /* 斜角冲开 */
 .fx-glitch    { animation: fx-glitch    .8s  steps(5, end) var(--fx-delay, 0ms) both; }        /* 故障切入 */
 .fx-draw  { animation: fx-draw 1.2s var(--ease-in-out) var(--fx-delay, 0ms) both; } /* 需元素自设 stroke-dasharray:800 */
+.fx-grow-x { transform-origin: left center; animation: fx-grow-x-kf .9s var(--ease-out) var(--fx-delay, 0ms) both; }  /* 图表: 条形从左长出 */
+.fx-grow-y { transform-origin: bottom center; animation: fx-grow-y-kf .9s var(--ease-out) var(--fx-delay, 0ms) both; } /* 图表: 柱状从底长出 */
+
+/* 一键关全部动效: <html class="no-fx"> 或 .stage.no-fx。
+   注意必须同时把 [data-stage] 的基础态 opacity:0 拉回来 —— 入场效果靠 animation 的 both
+   填充从 0 拉到 1, 只关动画不管基础态 = 元素全部隐形(2026-09-18 实测踩过)。
+   关掉后 motion 捕获自动退化为静态帧, 成片照常出; 字幕(.kit-sub)不受影响。 */
+.no-fx [class*="fx-"], .no-fx .fx-stagger > *, .no-fx .fx-shimmer::after { animation: none !important; }
+.no-fx [data-stage], .no-fx .fx-stagger > * {
+  opacity: 1 !important; transform: none !important; filter: none !important; clip-path: none !important;
+}
+.no-fx .fx-draw { stroke-dasharray: none !important; stroke-dashoffset: 0 !important; }
 
 @keyframes fx-up   { from { opacity: 0; transform: translateY(32px); } to { opacity: 1; transform: none; } }
 @keyframes fx-fade { from { opacity: 0; } to { opacity: 1; } }
@@ -383,7 +399,11 @@ html, body { width: var(--stage-w, 1920px); height: var(--stage-h, 1080px); over
   80% { transform: translateX(2px); clip-path: inset(0 0 0 0); }
   100% { opacity: 1; transform: none; }
 }
-@keyframes fx-draw { from { stroke-dashoffset: 800; } to { stroke-dashoffset: 0; } }
+@keyframes fx-draw { from { stroke-dashoffset: 800; opacity: 1; } to { stroke-dashoffset: 0; opacity: 1; } }
+/* 注意: 只做 transform 的动画必须显式带上 opacity:1 —— [data-stage] 的基础态是 opacity:0,
+   靠动画抬回 1; 关键帧不碰 opacity 的动画会让元素永远隐形(2026-09-18 实测) */
+@keyframes fx-grow-x-kf { from { transform: scaleX(0); opacity: 1; } to { transform: scaleX(1); opacity: 1; } }
+@keyframes fx-grow-y-kf { from { transform: scaleY(0); opacity: 1; } to { transform: scaleY(1); opacity: 1; } }
 
 /* 氛围(无限循环, 不参与时长计算) */
 .fx-pulse { animation: fx-pulse 2.4s var(--ease-in-out) infinite; }
@@ -427,7 +447,7 @@ const TEMPLATE_HTML = `<!doctype html>
 </head>
 <body>
 <div class="stage">
-  <span class="brand">A · ${topic || '主题名'}</span>
+  <span class="brand">A · ${topicHtml || '主题名'}</span>
   <main class="layout">
     <p class="kicker fx-fade" data-stage="1">SECTION · 小节名</p>
     <h1 class="fx-up" data-stage="1">一句话断言,<span class="accent">关键词</span>点亮。</h1>
@@ -464,6 +484,23 @@ const scriptJson = {
     { id: '08', layout: 'closing', html: '08-closing.html', audio: '08.mp3', title: '', clauses: [{ stage: 1, text: '' }] },
   ],
 };
+
+// 覆盖保护(必须在建目录之前检查, 否则会把自建的空子目录当成"非空"): 目标目录已存在且
+// 非空 → 拒绝。init 会重置 script.json / notes.md 等 5 个文件, 误跑到已开工的项目上会毁掉
+// 全部进度, 所以必须显式 --force。
+const FORCE = argv.includes('--force');
+const GENERATED = ['script.json', 'slides/tokens.css', 'slides/_template.html', 'assets/MANIFEST.md', 'research/notes.md'];
+if (fs.existsSync(dir)) {
+  const existing = fs.readdirSync(dir).filter(e => !GENERATED.includes(e));
+  const wouldOverwrite = GENERATED.filter(f => fs.existsSync(path.join(dir, f)));
+  if ((existing.length || wouldOverwrite.length) && !FORCE) {
+    console.error(`✗ 目标目录已存在且非空: ${dir}\n  init 会重置这些文件(其余不动): ${GENERATED.join(' · ')}`);
+    if (wouldOverwrite.length) console.error(`  其中已存在、将被覆盖的: ${wouldOverwrite.join(' · ')}`);
+    console.error('  确认要重新初始化请加 --force');
+    process.exit(1);
+  }
+  if (FORCE && wouldOverwrite.length) console.warn(`⚠ --force: 将覆盖 ${wouldOverwrite.length} 个生成文件(其余内容不动): ${wouldOverwrite.join(' · ')}`);
+}
 
 for (const d of ['research', 'assets', 'slides', 'audio', 'preview', 'out', 'build', 'asr']) {
   fs.mkdirSync(path.join(dir, d), { recursive: true });

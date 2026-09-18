@@ -27,11 +27,11 @@ description: 把脚本/大纲/主题变成带中文口播的成片 MP4(HTML 幻�
 
 ## 目录与工具
 
-技能自带四个脚本(直接以本技能目录为路径调用,项目目录作为参数,无需复制):
+技能自带 12 个脚本(直接以本技能目录为路径调用,项目目录作为参数,无需复制;`tests/` 下还有一套 node:test 安全与冒烟测试,从仓库根 `node --test` 自动发现):
 
 | 脚本 | 作用 |
 |---|---|
-| `scripts/init-project.mjs <项目目录>` | 生成项目骨架:目录 + tokens.css + slide 模板 + script.json 契约 |
+| `scripts/init-project.mjs <项目目录> [--force]` | 生成项目骨架:目录 + tokens.css + slide 模板 + script.json 契约。**目标目录非空时拒绝执行**(会重置 5 个生成文件),要重新初始化必须显式 `--force` |
 | `scripts/plan-timings.mjs <项目目录>` | ffprobe 实测每段 TTS → 每张时长、各 stage 入场时刻、**每句 clauses 时刻** → `build/timings.json` |
 | `scripts/check-timing.mjs <项目目录> [--calibrate]` | 静音检测实测每句真实开口, 与估算对比;`--calibrate` 按实测校准 timings 后重渲染 |
 | `scripts/check-theme.mjs <项目目录>` | 校验全部主题的 WCAG 对比度(正文/次级/字幕/accent-ink), 不达标退出码 1;新增主题必须过闸 |
@@ -135,9 +135,9 @@ Phase 6 交付
 **内容量硬规则**(详细版见 `references/authoring.md`):
 
 - 中文口播 ≈ 4.8 字/秒。每张目标 6–10 秒 → 口播 25–48 字;首尾张 12–20 字。单张硬上限 60 字,超了拆两张。
-- **每张(除首尾)必须同时有"标题层 + 展开层",映射到不同 stage。只有标题、没有展开 = 违规,打回。** 口播也一样:每张至少两句——引入句(配标题层)+ 展开句(配细节层)。
+- **每张(除首尾)必须至少两个信息层,映射到不同 stage —— 但层的先后顺序自由**(大数字可以先入、标题后出;设问先出、答案再出;由强同步原则决定:层挂在提到它的那句口播的 stage)。只有标题、没有展开 = 违规,打回。口播也一样:每张至少两句,分别推动不同的层。
 - `clauses` 的每个元素是一句口播,`stage` 声明"这句开口时,哪个视觉层该出现"。stage 数 ≈ clause 数,一一对应。
-- 版式共 17 种(原 8 + 补充 9:kpi-grid / stat-highlight / table / timeline / roadmap / comparison / flow-diagram / terminal / big-quote),每种画面必含项与字数区间见 `references/authoring.md` 的版式表。
+- 版式共 17 种(原 8 + 补充 9:kpi-grid / stat-highlight / table / timeline / roadmap / comparison / flow-diagram / terminal / big-quote),每种画面必含项与字数区间见 `references/authoring.md` 的版式表;**图表(条形/柱状/环形/折线/进度)有纯 CSS/SVG 画法速查,不用外链图表库**。
 - 开工对齐时若用户要**双语字幕**,这里就要给每句写 `text2`(同句翻译,不重排语序,≤60 字符)。
 
 **Gate 1**:逐张口播稿 + 版式分配给用户过。**未逐张 OK 不进 Phase 2。**
@@ -181,6 +181,7 @@ node <技能目录>/scripts/plan-timings.mjs <项目目录>
 - ⚠ **`data-stage` 必须与 fx 类同时用**(只有属性没有动画类会永远停在 opacity:0);延迟实现见 authoring.md 的"stage 延迟的实现原理",改动画时不要手写 `animation-delay: var(--tN)`。
 - 图片一律套 `.img-frame`(`.contain` 给截图/图表;`--img-ratio` 定比例;`--img-pos` 保主体;图注 `.img-cap` 写在框外)。
 - 氛围动画(无限循环的呼吸/漂浮)允许,但不能承载信息、不加 `data-stage`。
+- **动效可一键关**:`<html data-theme="..." class="no-fx">` 关整个项目,任何容器加 `no-fx` 关单张,单个元素不给 fx 类即静态。关掉后 motion 捕获自动退化为静态帧出片,时长与音画同步不受影响,字幕照常(详见 authoring.md"动效开关")。
 - 禁用 transition 做入场(截图管线 seek 不到),只用 `@keyframes`。禁外部 Google Fonts(离线不稳),用系统字体栈(tokens.css 已配 CJK fallback)。
 - 素材只用 Gate 3 已确认的 `assets/` 清单,不新增未审素材。
 - ⚠ **写完 8 张后先跑静态检查再截图**:`node <技能>/scripts/check-slides.mjs <项目目录>` —— 抓未定义 CSS 变量(会导致文字隐形)、图片缺失/外链资源、data-stage 没配 fx 类、硬编码颜色。有 ✗ 就别截图,画面对但"看不见"是最难查的。
@@ -241,6 +242,7 @@ audio/*.mp3  assets/(含 MANIFEST.md)  research/notes.md  asr/(校验记录)
 | 成片没字幕 | 用了 --no-subs 或 clauses 缺失 | capture 默认烧录;确认 timings.json 有 clauses |
 | 要双语字幕 | — | clause 加 `text2`,画面两行 + SRT 双行自动出;第二行建议 ≤60 字符 |
 | 想要背景音乐 | — | 顶层 `bgm` 配置,build-video 自动循环+淡入淡出垫底(默认音量 0.12);ASR 校验仍走纯人声轨 |
+| 赶时间 / 题材要克制,不要动画 | — | `<html class="no-fx">` 一键关全部动效,或单张容器加 `no-fx`;出片自动走静态帧,时长不变(见 authoring.md) |
 | 拼接后总时长不对 | 混用不同编码器参数的段 | 全部段由 build-video 统一编码;已自动回退重编码 |
 | 中文方框 | 系统无 CJK 字体 | Linux 装 fonts-noto-cjk;或改用已装字体 |
 | 报"找不到 ffprobe/ffmpeg" | 二进制不在 PATH | 脚本已自动探测 PATH→node_modules→常见位置;装 ffmpeg-static 或 winget install Gyan.FFmpeg |
@@ -249,6 +251,8 @@ audio/*.mp3  assets/(含 MANIFEST.md)  research/notes.md  asr/(校验记录)
 | 字幕在深色主题下糊在背景里 | 主题没覆写字幕钩子 | 该主题加 `--sub-bg`(更深)+ `--sub-ring: 1px solid rgba(255,255,255,.16)`;跑 check-theme 验 |
 | 要出竖版(抖音/视频号) | — | `script.json` 设 `width:1080, height:1920`,版式改堆叠(见 authoring.md 竖版章节) |
 | 数字/文字明明写了却看不见 | 未定义 CSS 变量 + `-webkit-text-fill-color: transparent`,整条 background 失效 | 跑 `check-slides.mjs` 定位,补定义或写 `var(--x, 默认值)` |
+| 图表/折线/某个元素入场后完全不见 | 该 fx 类的关键帧没声明 opacity —— `[data-stage]` 基础态是 `opacity:0`,只做 transform/描边的动画抬不回来 | 在关键帧的 from/to 里补 `opacity:1`;`check-slides.mjs` 会直接报出来 |
+| 切了 `no-fx` 画面反而更空 | 早期模板只关动画、没恢复 `[data-stage]` 的 `opacity:0` 基础态 | 用新版 tokens.css(no-fx 规则含 `opacity:1 !important`);截图脚本已同时作废旧帧目录 |
 | 图片显示 broken 图标 | 文件缺失,或 SVG 本身有问题(XML 错/依赖外部资源/缺尺寸) | `check-slides.mjs` 查路径;SVG 改 inline 进 HTML;capture 也会在渲染时点名哪张没加载 |
 | 财经片没免责声明 / 涨跌色反了 / 数字被质疑口径 | 开工没确认领域,默认色与默认措辞直接用了 | 读 `references/compliance.md`:结尾补 `.disclaimer` 行(停留 ≥3s)、指标卡改 `var(--up)/var(--down)` 并按受众市场翻转、每个数字补口径+币种+时点 |
 | 不知道要不要写免责声明 / 算不算受监管 | 领域没确认 | 开工对齐第一批问题里问"领域 + 要不要免责";财经投研、医疗、法律、政策、营销效果宣称默认要。`check-slides.mjs` 命中财经关键词却没见免责行时会提示 |

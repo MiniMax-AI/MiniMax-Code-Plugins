@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { requireTool } from './tools.mjs';
+import { requireTool, safeId, safeRel, validateScriptPaths, validateTimingsIds } from './tools.mjs';
 
 const argv = process.argv.slice(2);
 const dir = path.resolve(argv.find(a => !a.startsWith('--')) ?? '.');
@@ -26,8 +26,19 @@ const run = (cmd, args, label) => {
 };
 
 const script = JSON.parse(fs.readFileSync(path.join(dir, 'script.json'), 'utf8'));
+validateScriptPaths(script, dir); // script.json 是 agent 可编辑文件: id/audio/bgm 派生路径先收监
 const timings = JSON.parse(fs.readFileSync(path.join(dir, 'build', 'timings.json'), 'utf8'));
-const W = script.width ?? 1920, H = script.height ?? 1080;
+validateTimingsIds(timings);
+// W/H 会拼进 ffmpeg filter 字符串(scale=...), 强转整数并限范围, 防字符串注入
+const W = clampDim(script.width, 1920, 'width'), H = clampDim(script.height, 1080, 'height');
+function clampDim(v, dflt, name) {
+  const n = Number(v ?? dflt);
+  if (!Number.isInteger(n) || n < 16 || n > 16384) {
+    console.error(`✗ script.${name} 非法: ${JSON.stringify(v)} — 需要 16–16384 的整数`);
+    process.exit(1);
+  }
+  return n;
+}
 const fps = timings.fps ?? script.fps ?? 30;
 const total = timings.total;
 const abs = p => path.resolve(p).replace(/\\/g, '/');
@@ -49,13 +60,14 @@ fs.mkdirSync(path.join(dir, 'build'), { recursive: true });
 // ── 1. 单张编码 ─────────────────────────────────────────────
 const segs = [];
 for (const t of timings.slides) {
+  const tid = safeId(t.id);
   const D = t.duration;
   const fadeOut = Math.max(0, D - 0.35);
   const fades = `fade=t=in:st=0:d=0.25,fade=t=out:st=${fadeOut.toFixed(3)}:d=0.3`;
-  const fdir = path.join(dir, 'build', 'frames', t.id);
+  const fdir = path.join(dir, 'build', 'frames', tid);
   const firstFrame = path.join(fdir, 'f00000.png');
-  const png = path.join(dir, 'preview', `${t.id}.png`);
-  const seg = path.join(dir, 'out', `slide-${t.id}.mp4`);
+  const png = path.join(dir, 'preview', `${tid}.png`);
+  const seg = path.join(dir, 'out', `slide-${tid}.mp4`);
   const common = ['-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'medium', '-crf', '20', '-movflags', '+faststart'];
 
   if (fs.existsSync(firstFrame)) {
@@ -64,19 +76,19 @@ for (const t of timings.slides) {
     if (sz && (sz[0] !== W || sz[1] !== H)) vf.push(`scale=${W}:${H}:flags=lanczos`); // dsf 2 超采样降采
     vf.push(fades);
     run(FFMPEG, ['-y', '-framerate', String(fps), '-i', path.join(fdir, 'f%05d.png'),
-      '-vf', vf.join(','), '-t', D.toFixed(4), ...common, seg], `编码 ${t.id} (帧序列)`);
+      '-vf', vf.join(','), '-t', D.toFixed(4), ...common, seg], `编码 ${tid} (帧序列)`);
   } else if (fs.existsSync(png)) {
     let vf = [fades];
     const sz = probeSize(png);
     if (sz && (sz[0] !== W || sz[1] !== H)) vf.unshift(`scale=${W}:${H}:flags=lanczos`);
     run(FFMPEG, ['-y', '-loop', '1', '-framerate', String(fps), '-i', png,
-      '-vf', vf.join(','), '-t', D.toFixed(4), ...common, seg], `编码 ${t.id} (静态图)`);
+      '-vf', vf.join(','), '-t', D.toFixed(4), ...common, seg], `编码 ${tid} (静态图)`);
   } else {
-    console.error(`✗ ${t.id} 既无帧序列也无 preview/${t.id}.png — 先运行 capture.mjs`);
+    console.error(`✗ ${tid} 既无帧序列也无 preview/${tid}.png — 先运行 capture.mjs`);
     process.exit(1);
   }
   const d = probeDur(seg);
-  if (d != null && Math.abs(d - D) > 0.2) console.warn(`⚠ ${t.id} 段长 ${d.toFixed(2)}s ≠ 预期 ${D.toFixed(2)}s`);
+  if (d != null && Math.abs(d - D) > 0.2) console.warn(`⚠ ${tid} 段长 ${d.toFixed(2)}s ≠ 预期 ${D.toFixed(2)}s`);
   segs.push(seg);
 }
 
@@ -100,7 +112,9 @@ if (vd == null || Math.abs(vd - total) > 0.25) {
 const audioInputs = [];
 const chains = [];
 timings.slides.forEach((t, i) => {
-  const a = path.join(dir, 'audio', script.slides.find(s => s.id === t.id)?.audio ?? `${t.id}.mp3`);
+  const tid = safeId(t.id);
+  const audioRel = script.slides.find(s => s.id === tid)?.audio ?? `${tid}.mp3`;
+  const a = safeRel(path.join(dir, 'audio'), audioRel, { where: `slides[${tid}].audio` });
   if (!fs.existsSync(a)) { console.error(`✗ 缺音频 ${a}`); process.exit(1); }
   audioInputs.push(a);
   chains.push(`[${i}:a]aresample=44100,aformat=channel_layouts=mono,apad=whole_dur=${t.duration.toFixed(4)}[s${i}]`);
@@ -114,7 +128,7 @@ run(FFMPEG, ['-y', ...audioInputs.flatMap(a => ['-i', a]),
 let audioFinal = audioWav;
 if (script.bgm) {
   const cfg = typeof script.bgm === 'string' ? { file: script.bgm } : script.bgm;
-  const bgmPath = path.resolve(dir, cfg.file);
+  const bgmPath = safeRel(dir, cfg.file, { where: 'bgm.file' }); // 拒绝绝对路径与越界(原来的 path.resolve 会整体逃逸)
   if (!fs.existsSync(bgmPath)) {
     console.warn(`⚠ 配置了 bgm 但找不到 ${bgmPath} — 跳过, 只出人声`);
   } else {
@@ -188,13 +202,14 @@ if (WANT_ASR) {
   let count = 0;
   cum = 0;
   for (const t of timings.slides) {
+    const tid = safeId(t.id);
     const clauses = Array.isArray(t.clauses) && t.clauses.length ? t.clauses : [{ start: 0, text: t.script }];
     clauses.forEach((c, i) => {
       const end = t.clauses[i + 1]?.start ?? t.duration;
-      const part = path.join(dir, 'asr', `part-${t.id}-${i + 1}.mp3`);
+      const part = path.join(dir, 'asr', `part-${tid}-${i + 1}.mp3`);
       run(FFMPEG, ['-y', '-ss', (cum + c.start).toFixed(3), '-t', (end - c.start).toFixed(3), '-i', audioWav,
-        '-ac', '1', '-ar', '16000', '-c:a', 'libmp3lame', '-b:a', '128k', part], `ASR 切分 ${t.id}-${i + 1}`);
-      lines.push(`| asr/part-${t.id}-${i + 1}.mp3 | ${(cum + c.start).toFixed(1)}s | ${c.text} |  |  |`);
+        '-ac', '1', '-ar', '16000', '-c:a', 'libmp3lame', '-b:a', '128k', part], `ASR 切分 ${tid}-${i + 1}`);
+      lines.push(`| asr/part-${tid}-${i + 1}.mp3 | ${(cum + c.start).toFixed(1)}s | ${c.text} |  |  |`);
       count++;
     });
     cum += t.duration;

@@ -9,12 +9,14 @@
 //
 // Key 来源(按序): --api-key sk-xxx → 环境变量 MINIMAX_API_KEY
 // 区域(按序): --base-url → 环境变量 MINIMAX_BASE_URL → MINIMAX_REGION(cn=api.minimaxi.com / global=api.minimax.io)
+// 端点安全: Key 只发上面两个官方域; 其他 --base-url/MINIMAX_BASE_URL 一律拒绝, 自建网关需显式 --allow-any-endpoint。
 // 接口约束(官方文档): wav/aiff/flac/m4a/mp3/aac/opus/ogg; 时长 ≤500s; 大小 ≤50MB。
 //   超限时本脚本会用 ffmpeg 自动转成单声道 16k mp3 再传(识别率不受影响)。
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { requireTool } from './tools.mjs';
+import { requireTool, safeId, validateTimingsIds } from './tools.mjs';
+import { assertAsrEndpoint, PolicyError } from './url-policy.mjs';
 
 const argv = process.argv.slice(2);
 const VALUE_FLAGS = new Set(['--api-key', '--base-url', '--file', '--format', '--timestamp', '--language', '--out', '--from']);
@@ -28,8 +30,20 @@ const flag = (n, d) => { const i = argv.indexOf(n); return i > -1 ? argv[i + 1] 
 
 const KEY = flag('--api-key') || process.env.MINIMAX_API_KEY || '';
 const REGION = process.env.MINIMAX_REGION || 'cn';
-const BASE = (flag('--base-url') || process.env.MINIMAX_BASE_URL
-  || (REGION === 'global' ? 'https://api.minimax.io' : 'https://api.minimaxi.com')).replace(/\/$/, '');
+// 端点白名单: API Key 只发官方 MiniMax 域; 换端点必须显式 --allow-any-endpoint(危险项)。
+// 防的是环境变量/提示词把 MINIMAX_BASE_URL 偷换成收集器后凭证外发。
+let BASE;
+try {
+  BASE = assertAsrEndpoint(flag('--base-url') || process.env.MINIMAX_BASE_URL
+    || (REGION === 'global' ? 'https://api.minimax.io' : 'https://api.minimaxi.com'),
+  { allowAny: argv.includes('--allow-any-endpoint') });
+} catch (e) {
+  if (e instanceof PolicyError) {
+    console.error(`✗ ASR 端点被拒绝: ${e.message}\n  这把 Key 只允许发往官方端点。自定义网关请确认安全后显式加 --allow-any-endpoint`);
+    process.exit(1);
+  }
+  throw e;
+}
 const LANG = flag('--language', '');          // zh / yue / en ... 空=混合识别
 const FORMAT = flag('--format', 'json');
 const TS = flag('--timestamp', '');           // '' | sentence | word
@@ -71,7 +85,7 @@ async function transcribe(file, { format = FORMAT, ts = TS, language = LANG } = 
     if (language) headers.language = language; // 'zh' 强制普通话; 'yue' 确认粤语
     let res;
     try {
-      res = await fetch(`${BASE}/v1/speech_to_text`, { method: 'POST', headers, body: fd });
+      res = await fetch(`${BASE}/v1/speech_to_text`, { method: 'POST', headers, body: fd, signal: AbortSignal.timeout(180000) });
     } catch (e) {
       throw new Error(`网络请求失败(${BASE}): ${e.message}\n  → 检查网络/代理; 海外套餐加 MINIMAX_REGION=global`);
     }
@@ -161,6 +175,7 @@ const asrDir = path.join(dir, 'asr');
 if (!fs.existsSync(asrDir)) { console.error(`✗ 找不到 ${asrDir} — 先跑 build-video.mjs <项目> --asr 生成按句切分的音频`); process.exit(1); }
 const timingsPath = path.join(dir, 'build', 'timings.json');
 const timings = fs.existsSync(timingsPath) ? JSON.parse(fs.readFileSync(timingsPath, 'utf8')) : null;
+if (timings) validateTimingsIds(timings);
 
 // 模式 3: 用 ASR 时间戳实测句开口, 校对比 timings 估算
 if (argv.includes('--verify-timing') && timings) {
@@ -168,7 +183,8 @@ if (argv.includes('--verify-timing') && timings) {
   console.log('ASR 实测句开口(字/段级时间戳) vs plan-timings 估算:\n');
   for (const t of timings.slides) {
     if (!Array.isArray(t.clauses) || t.clauses.length < 2) continue;
-    const audio = path.join(dir, 'audio', `${t.id}.mp3`);
+    const tid = safeId(t.id);
+    const audio = path.join(dir, 'audio', `${tid}.mp3`);
     if (!fs.existsSync(audio)) { console.warn(`- 跳过 ${t.id}: 缺音频`); continue; }
     const r = await transcribe(audio, { format: 'verbose_json', ts: 'word' });
     const units = r.segments || [];

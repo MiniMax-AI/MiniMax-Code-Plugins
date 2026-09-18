@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { requireTool } from './tools.mjs';
+import { requireTool, safeId, safeRel, validateScriptPaths, validateTimingsIds } from './tools.mjs';
 
 const argv = process.argv.slice(2);
 const dir = path.resolve(argv.find(a => !a.startsWith('--')) ?? '.');
@@ -20,7 +20,9 @@ const FFMPEG = requireTool('ffmpeg', dir);
 const timingsPath = path.join(dir, 'build', 'timings.json');
 if (!fs.existsSync(timingsPath)) { console.error('✗ 缺 build/timings.json — 先运行 plan-timings.mjs'); process.exit(1); }
 const timings = JSON.parse(fs.readFileSync(timingsPath, 'utf8'));
+validateTimingsIds(timings);
 const script = JSON.parse(fs.readFileSync(path.join(dir, 'script.json'), 'utf8'));
+validateScriptPaths(script, dir);
 
 function detectGaps(file, tts) {
   const r = spawnSync(FFMPEG, ['-i', file, '-af', `silencedetect=noise=${NOISE}:d=${MIN_SIL}`, '-f', 'null', '-'], { encoding: 'utf8', windowsHide: true });
@@ -71,8 +73,9 @@ const report = [];
 let calibratable = 0;
 for (const t of timings.slides) {
   if (!t.clauses || t.clauses.length < 2) continue;
-  const audioPath = path.join(dir, 'audio', script.slides.find(s => s.id === t.id)?.audio ?? `${t.id}.mp3`);
-  if (!fs.existsSync(audioPath)) { console.warn(`- 跳过 ${t.id}: 缺音频`); continue; }
+  const tid = safeId(t.id);
+  const audioPath = safeRel(path.join(dir, 'audio'), script.slides.find(s => s.id === tid)?.audio ?? `${tid}.mp3`, { where: `slides[${tid}].audio` });
+  if (!fs.existsSync(audioPath)) { console.warn(`- 跳过 ${tid}: 缺音频`); continue; }
   const gaps = detectGaps(audioPath, t.tts);
   const { method, meas } = matchBoundaries(gaps, t.clauses);
   const complete = meas.length > 0 && meas.every(v => v != null);

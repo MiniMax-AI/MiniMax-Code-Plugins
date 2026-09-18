@@ -10,10 +10,37 @@
 //   3. 硬编码颜色(#hex / rgb() / hsl()) —— 换主题时会串色, 且说明配色没落到 token
 //   4. 外链资源(http/https 的 src/href) —— 离线沙箱会失败 + 引入 FOUT 风险
 //   5. data-stage 没配 fx-* 类 —— 元素会永远停在 opacity:0(除非放进 .fx-stagger 容器)
+//   5b. fx 类的关键帧不含 opacity —— 同上, 基础态 opacity:0 抬不回来, 元素永远隐形
+//      (只做 transform/描边的动画必须显式写 opacity:1; 2026-09-18 实测踩过)
 //   6. 整片级领域自查 —— 命中多个财经/投研关键词却全片没有免责或出处行 → 提示(不是错误),
 //      提醒确认领域与免责口径(见 references/compliance.md); 用户明确不要免责时可忽略
 import fs from 'node:fs';
 import path from 'node:path';
+import { safeId, safeRel, inside } from './tools.mjs';
+
+// tokens.css 里的 @keyframes 名 → 是否声明了 opacity(用来判断"动画能否把基础态抬回可见")
+function opacityAwareKeyframes(css) {
+  const map = new Map();
+  for (const m of css.matchAll(/@keyframes\s+([\w-]+)\s*\{/g)) {
+    // 从头扫到配平的右花括号, 拿到该关键帧块
+    let i = m.index + m[0].length - 1, depth = 0, end = i;
+    for (; end < css.length; end++) {
+      if (css[end] === '{') depth++;
+      else if (css[end] === '}') { depth--; if (depth === 0) break; }
+    }
+    map.set(m[1], /opacity\s*:/.test(css.slice(i, end)));
+  }
+  return map;
+}
+// .fx-x { animation: <kf-name> ... } → fx 类名到关键帧名的映射
+function fxClassKeyframes(css) {
+  const map = new Map();
+  for (const m of css.matchAll(/\.(fx-[\w-]+)\s*(?:,[^{]*)?\{([^}]*)\}/g)) {
+    const anim = /animation\s*:\s*([\w-]+)/.exec(m[2]);
+    if (anim) map.set(m[1], anim[1]);
+  }
+  return map;
+}
 
 const argv = process.argv.slice(2);
 const dir = path.resolve(argv.find(a => !a.startsWith('--')) ?? '.');
@@ -31,6 +58,9 @@ const tokensCss = fs.readFileSync(tokensPath, 'utf8').replace(/\/\*[\s\S]*?\*\//
 
 // tokens.css 里定义的变量
 const defined = new Set([...tokensCss.matchAll(/(--[\w-]+)\s*:/g)].map(m => m[1]));
+// fx 类 → 关键帧名, 以及关键帧是否声明 opacity(供 5b 检查: 动画必须能把基础态 opacity:0 抬回 1)
+const fxKeyframes = fxClassKeyframes(tokensCss);
+const kfOpacity = opacityAwareKeyframes(tokensCss);
 // 渲染管线/浏览器在运行时注入或框架自带的变量, 不需要在 tokens.css 里定义
 const RUNTIME_VARS = new Set([
   '--t1', '--t2', '--t3', '--fx-delay', '--stagger-base',           // capture 注入 / 入场延迟
@@ -46,7 +76,7 @@ const report = [];
 const deckText = [];   // 整片文本(HTML 去标签 + 口播稿), 用于第 6 项领域自查
 
 for (const s of slides) {
-  const file = path.join(slidesDir, s.html ?? `${s.id}.html`);
+  const file = safeRel(slidesDir, s.html ?? `${safeId(s.id)}.html`, { where: `slides[${s.id}].html` });
   if (!fs.existsSync(file)) {
     // 未写的 slide 只是"还没做", 截图时本就会跳过 —— 记提示而不是错误, 避免把告警训成噪音
     report.push({ id: s.id, level: 'warn', msg: `未写: ${path.relative(dir, file)}(截图时会跳过)` });
@@ -65,12 +95,17 @@ for (const s of slides) {
     errors++;
   }
 
-  // 2. 图片: 文件必须存在; SVG 建议 inline
+  // 2. 图片: 文件必须存在; SVG 建议 inline(引用必须落在项目目录内, 防二阶越界读)
   for (const m of html.matchAll(/<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/g)) {
     const src = m[1];
     if (/^(https?:)?\/\//.test(src) || src.startsWith('data:')) continue; // 外链单独在下面报
-    const imgPath = path.resolve(path.dirname(file), src);
-    if (!fs.existsSync(imgPath)) {
+    const resolved = path.resolve(path.dirname(file), src);
+    if (path.isAbsolute(src) || !inside(dir, resolved)) {
+      report.push({ id: s.id, level: 'error', msg: `图片引用越出项目目录: ${src} — 素材必须先落 assets/ 再引用` });
+      errors++;
+      continue;
+    }
+    if (!fs.existsSync(resolved)) {
       report.push({ id: s.id, level: 'error', msg: `图片不存在: ${src}(会渲染成 broken 图标)` });
       errors++;
     } else if (/\.svg$/i.test(src)) {
@@ -100,6 +135,23 @@ for (const s of slides) {
     if (/\bfx-stagger\b/.test(tag)) continue;
     report.push({ id: s.id, level: 'warn', msg: `有 data-stage 但没有 fx-* 类: ${tag.slice(0, 70)}… — 元素会永远停在 opacity:0(放进 .fx-stagger 容器可豁免)` });
     warns++;
+  }
+
+  // 5b. fx 类的关键帧不改 opacity → 基础态 opacity:0 抬不回来, 元素永远隐形
+  for (const m of html.matchAll(/<[^>]*\bdata-stage\s*=\s*["'][^"']*["'][^>]*>/g)) {
+    const tag = m[0];
+    const cls = /class\s*=\s*["']([^"']*)["']/.exec(tag);
+    if (!cls) continue;
+    if (/\bfx-stagger\b/.test(cls[1])) continue;
+    for (const c of cls[1].split(/\s+/).filter(x => x.startsWith('fx-'))) {
+      const kf = fxKeyframes.get(c);
+      if (!kf) continue;                       // 未在 tokens.css 定义(环境类/氛围类), 交给别的检查
+      const aware = kfOpacity.get(kf);
+      if (aware === false) {
+        report.push({ id: s.id, level: 'error', msg: `.${c} 的关键帧 ${kf} 没声明 opacity, 而 [data-stage] 基础态是 opacity:0 → 该元素入场后永远不可见; 在关键帧里补 opacity:1` });
+        errors++;
+      }
+    }
   }
 }
 

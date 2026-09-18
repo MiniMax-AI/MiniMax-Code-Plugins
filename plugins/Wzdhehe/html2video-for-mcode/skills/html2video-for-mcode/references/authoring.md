@@ -7,7 +7,15 @@
 1. **只有标题没有展开** —— 观众 7 秒只看到一行大字,信息量为零。
 2. **文字一次性全糊上屏** —— 没有节奏,口播念到后半句时视觉早已无话可说。
 
-解法是强制的三层结构:**标题层(stage 1)先出 → 展开层(stage 2)在口播展开句开口时入 → 视觉锚点(stage 3,可选)压轴**。口播与画面是同一句话的两个声部。
+解法是强制的三层结构:**标题层 + 展开层 + 视觉锚点(可选),三层分属不同 stage**。口播与画面是同一句话的两个声部。
+
+**层的入场顺序不固定 —— 由叙事决定,标题先行只是默认。** 判据是强同步原则:哪个层被哪句口播提到,就挂在那个 stage。完全合法的变体:
+
+- **大数字先入,标题后出**(stat-highlight 的默认形态):口播第一句就砸数字,数字 s1、说明与标题 s2;
+- **设问先出,答案再出**:问题大字 s1 → 答案/数据 s2 → 标题收拢 s3;
+- **图先入,文字后落**:主体图 s1 → 关键词标注 s2(图片类题材常用)。
+
+要拦的从来不是"标题不先行",而是**只有一层**:整张停在标题/单块内容上、没有第二个信息层推进。
 
 ## 内容量表(硬规则)
 
@@ -26,7 +34,7 @@
 
 判定规则(写给执行者,自查用):
 
-- 除 title-hero/closing 外,**画面视觉块 ≥2 个且分属不同 stage**;"光标题 + 页码"直接打回。
+- 除 title-hero/closing 外,**画面视觉块 ≥2 个且分属不同 stage**;"光标题 + 页码"直接打回。**层的先后顺序自由**(数字可以先于标题、设问可以先于答案),错的是"只有一个层",不是"标题不在 s1"。
 - **强同步原则(2026-09 实测教训):每个 stage 的视觉锚点(大数字/关键词/主体图)必须写在触发它的那句口播里,不要放在上一句。**反例:口播第一句就是"三亿人在用",但"3 亿"数字卡挂在 stage 2——观众听到"三亿"时画面没反应,数字卡进场时口播已讲到下一句,体感就是"动画对不上"。正例:第一句只铺垫("它有三个你可能用过的产品"),"3 亿"作为第二句开头,数字卡挂 stage 2 → 声画同时砸出"3 亿",强同步。
 - 口播 clauses 与 stage 的映射:**stage k 的视觉在 clause k 开口时入场**。stage 数 ≈ clause 数;多出的视觉层用 script.json 的 `stageTimes` 显式给时刻。
 - 单张口播硬上限 60 字;超了说明这张在干两张的活,拆。字幕场景下单句建议 ≤18 字(capture 烧录字幕单行展示);双语时第二行(text2)≤60 字符。
@@ -180,14 +188,21 @@ console.log(answer.output_text);</code></pre>
 | big-quote | 大引语转场 | 引语大字(s1) + 署名(s2) | 20–32 | 2 句 |
 
 ```html
-<!-- kpi-grid: 指标卡 + 语义色涨跌(涨跌一律走 --up/--down, 财经题材按受众翻转这两个即可, 见 compliance.md) -->
-<div class="grid g4 fx-stagger" style="--stagger-base:var(--t2)">
+<!-- kpi-grid: 指标卡 + 语义色涨跌(涨跌一律走 --up/--down, 财经题材按受众翻转这两个即可, 见 compliance.md)
+     注意: 布局几何内联在容器 style 里, 不要用没定义过的 .grid/.g4 之类的类(会静默竖排) -->
+<div class="fx-stagger" style="--stagger-base:var(--t2);display:grid;grid-template-columns:repeat(4,1fr);gap:var(--sp-4)">
   <div class="card"><p class="eyebrow">REVENUE</p>
     <div style="font-size:var(--fs-h2);font-family:var(--font-display)">1248K</div>
     <p style="color:var(--up)">↑ 38% YoY</p></div>
   <div class="card"><p class="eyebrow">RETENTION</p>
     <div style="font-size:var(--fs-h2);font-family:var(--font-display)">74%</div>
     <p style="color:var(--warn)">→ 持平</p></div>
+  <div class="card"><p class="eyebrow">NPS</p>
+    <div style="font-size:var(--fs-h2);font-family:var(--font-display)">62</div>
+    <p style="color:var(--up)">↑ 9 pts</p></div>
+  <div class="card"><p class="eyebrow">CHURN</p>
+    <div style="font-size:var(--fs-h2);font-family:var(--font-display)">3.1%</div>
+    <p style="color:var(--down)">↓ 0.4 pts</p></div>
 </div>
 
 <!-- 免责声明行: 受监管题材(财经/医疗/法律/政策)必出; 小字、不抢视觉、停留 ≥3s、口播不念 -->
@@ -214,14 +229,35 @@ console.log(answer.output_text);</code></pre>
   </tbody>
 </table>
 
-<!-- timeline: 横轴 + 时间点, flex 等分 -->
+<!-- timeline: 横轴 + 时间点; 整轴 fx-fade, 每个时间点在容器 fx-stagger 里逐个上浮(口播点到哪个年份, 哪个冒出来) -->
 <div class="fx-fade" data-stage="2" style="display:flex;gap:var(--sp-4);margin-top:var(--sp-5)">
-  <div style="flex:1;border-top:3px solid var(--accent);padding-top:var(--sp-3)">
-    <p class="eyebrow">2021</p><p>成立</p></div>
-  <div style="flex:1;border-top:3px solid var(--accent);padding-top:var(--sp-3)">
-    <p class="eyebrow">2023</p><p>首个产品</p></div>
-  <div style="flex:1;border-top:3px solid var(--accent);padding-top:var(--sp-3)">
-    <p class="eyebrow">2026</p><p>上市</p></div>
+  <div class="fx-stagger" style="--stagger-base:var(--t2);display:flex;gap:var(--sp-4);width:100%">
+    <div style="flex:1;border-top:3px solid var(--accent);padding-top:var(--sp-3)">
+      <p class="eyebrow">2021</p><p>成立</p></div>
+    <div style="flex:1;border-top:3px solid var(--accent);padding-top:var(--sp-3)">
+      <p class="eyebrow">2023</p><p>首个产品</p></div>
+    <div style="flex:1;border-top:3px solid var(--accent);padding-top:var(--sp-3)">
+      <p class="eyebrow">2026</p><p>上市</p></div>
+  </div>
+</div>
+
+<!-- roadmap: NOW/NEXT/LATER 三列(阶段规划)。当前阶段用 .card-accent 突出; 4 列时 repeat(4,1fr) 并把要点字号压到 var(--fs-tiny) -->
+<div class="fx-stagger" style="--stagger-base:var(--t2);display:grid;grid-template-columns:repeat(3,1fr);gap:var(--sp-4);margin-top:var(--sp-5)">
+  <div class="card card-accent">
+    <p class="eyebrow" style="color:var(--accent)">NOW · 2026 Q3</p>
+    <p style="margin-top:var(--sp-2)">开放平台公测</p>
+    <p style="margin-top:var(--sp-1);color:var(--muted)">长上下灰度放量</p>
+  </div>
+  <div class="card">
+    <p class="eyebrow" style="color:var(--fg-3)">NEXT · Q4</p>
+    <p style="margin-top:var(--sp-2)">多模态 API 定价</p>
+    <p style="margin-top:var(--sp-1);color:var(--muted)">企业私有化版本</p>
+  </div>
+  <div class="card">
+    <p class="eyebrow" style="color:var(--fg-3)">LATER · 2027</p>
+    <p style="margin-top:var(--sp-2)">Agent 应用商店</p>
+    <p style="margin-top:var(--sp-1);color:var(--muted)">海外节点</p>
+  </div>
 </div>
 
 <!-- comparison: 左右两栏 + 竖分隔线 -->
@@ -257,6 +293,101 @@ console.log(answer.output_text);</code></pre>
   “我们想打造的是比人类更聪明的工具,<span class="accent">而不是替代人类</span>。”
 </blockquote>
 ```
+
+---
+
+# 纯 CSS/SVG 图表(data-viz 的画法)
+
+图表**全部自绘**,三条底线:
+
+1. **禁外链图表库**(Chart.js / ECharts 等 CDN):离线沙箱取不到、违反禁外链铁律,而且 canvas 动画逐帧 seek 不到(会渲染成静止/空白)。
+2. **数值必须来自 research/notes.md 里已核实的口径** —— 图表是"把核实过的数字画出来",不是装饰;画不了的口径(缺时点/混币种)先回 Phase 0。
+3. **禁止用 AI 生图当图表**(`image generate` 只限抽象概念图):数据图形必须可追溯到来源,生成图不可核查。
+
+颜色一律走令牌:涨跌用 `var(--up)/var(--down)`(财经按受众翻转,见 compliance.md),中性对比用 `var(--accent)/var(--accent-2)`,网格线 `var(--line)`,数值标签 `var(--fg)`。**动效是图表的一部分**(仍是纯 @keyframes,逐帧 seek 确定性不变):条形/柱状用 `fx-grow-x/fx-grow-y` 从 0 长到数值、折线用 `fx-draw` 描边画入、环形用 `fx-pop`;同层错峰照旧走 `--fx-delay:calc(var(--t2) + N×120ms)`。**全套动效可一键关**(见下文"动效开关")。
+
+```html
+<!-- 横向条形图: 对比类首选(标签不挤); 宽度% = 数值/序列最大值
+     条形用 fx-grow-x 从左长出; 多根错峰用 --fx-delay, 数值标签放条内右侧跟着长 -->
+<div style="display:flex;flex-direction:column;gap:var(--sp-3);margin-top:var(--sp-5)">
+  <div style="display:flex;align-items:center;gap:var(--sp-3)">
+    <p style="width:220px;text-align:right;color:var(--muted)">产品 A</p>
+    <div style="flex:1;height:34px;background:var(--panel-2);border-radius:var(--radius-sm);overflow:hidden">
+      <div class="fx-grow-x" data-stage="2" style="width:86%;height:100%;background:var(--accent);border-radius:inherit;
+                  display:flex;align-items:center;justify-content:flex-end;padding-right:12px;
+                  color:var(--accent-ink);font-size:var(--fs-tiny)">1.86 亿</div>
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:var(--sp-3)">
+    <p style="width:220px;text-align:right;color:var(--muted)">产品 B</p>
+    <div style="flex:1;height:34px;background:var(--panel-2);border-radius:var(--radius-sm);overflow:hidden">
+      <div class="fx-grow-x" data-stage="2" style="width:54%;height:100%;background:var(--accent-2);border-radius:inherit;
+                  --fx-delay:calc(var(--t2) + 150ms)"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 柱状图: 少量(≤5)时间点;柱子 fx-grow-y 从基线长出,数值标柱顶(数值本身套 .fx-fade 同 stage)
+     ⚠ 容器不要写 align-items:flex-end —— 会让每列 wrapper 高度塌成内容高, 柱子的百分比高度失效(变 0)
+     正解: 容器默认 stretch(每列占满 420px), 列内用 justify-content:flex-end 把内容压到底 -->
+<div style="display:flex;justify-content:center;gap:var(--sp-4);height:420px;margin-top:var(--sp-5)">
+  <div style="flex:0 1 220px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:8px">
+    <span class="fx-fade" data-stage="2" style="color:var(--fg)">4.1</span>
+    <div class="fx-grow-y" data-stage="2" style="width:100%;height:70%;background:var(--accent);border-radius:var(--radius-sm) var(--radius-sm) 0 0"></div>
+    <span class="fx-fade" data-stage="2" style="color:var(--fg-3)">Q1</span>
+  </div>
+  <div style="flex:0 1 220px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:8px">
+    <span class="fx-fade" data-stage="2" style="color:var(--fg);--fx-delay:calc(var(--t2) + 150ms)">6.8</span>
+    <div class="fx-grow-y" data-stage="2" style="width:100%;height:100%;background:var(--up);border-radius:var(--radius-sm) var(--radius-sm) 0 0;--fx-delay:calc(var(--t2) + 150ms)"></div>
+    <span class="fx-fade" data-stage="2" style="color:var(--fg-3);--fx-delay:calc(var(--t2) + 150ms)">Q2</span>
+  </div>
+</div>
+
+<!-- 环形占比: conic-gradient 一步出图;中心挖洞用径向遮罩;配一行图例;整体 fx-pop(锥面渐变无法"生长",弹出即可) -->
+<div class="fx-pop" data-stage="2" style="position:relative;width:360px;height:360px;border-radius:50%;
+     background:conic-gradient(var(--accent) 0 62%, var(--panel-2) 62% 100%)">
+  <div style="position:absolute;inset:56px;border-radius:50%;background:var(--bg);
+              display:flex;flex-direction:column;align-items:center;justify-content:center">
+    <span style="font-family:var(--font-display);font-size:var(--fs-h1)">62%</span>
+    <span style="color:var(--muted);font-size:var(--fs-tiny)">市场份额</span>
+  </div>
+</div>
+
+<!-- 折线图: inline SVG + fx-draw(描边画入, 天然逐帧可 seek; 元素自设 stroke-dasharray:800) -->
+<svg class="fx-draw" data-stage="2" viewBox="0 0 900 400" style="width:100%;height:auto" fill="none">
+  <polyline points="40,340 210,290 380,300 550,180 720,120 860,90"
+    stroke="var(--accent)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"
+    stroke-dasharray="800"/>
+  <polyline points="40,350 210,330 380,310 550,280 720,260 860,230"
+    stroke="var(--line-strong)" stroke-width="4" stroke-dasharray="800"
+    style="--fx-delay:calc(var(--t2) + 300ms)"/>
+</svg>
+<!-- fx-draw 的 dasharray 要 ≥ 线长;两根线先后画入,第二根用上面的 --fx-delay 错峰 -->
+```
+
+选型速查:对比/排名 → 横向条形;时间趋势(≤5 点)→ 柱状,(>5 点)→ SVG 折线;占比 ≤3 块 → 环形;达成率 → 下面这条进度条。都别忘图注:数据口径 + 时点(受监管题材必须,见 compliance.md)。
+
+```html
+<!-- 进度条: 达成率/完成度; 填充段 fx-grow-x 生长 -->
+<div style="margin-top:var(--sp-5)">
+  <div class="fx-fade" data-stage="2" style="display:flex;justify-content:space-between;color:var(--muted);font-size:var(--fs-tiny);margin-bottom:8px">
+    <span>年度目标达成</span><span style="color:var(--fg)">78%</span>
+  </div>
+  <div style="height:18px;background:var(--panel-2);border-radius:999px;overflow:hidden">
+    <div class="fx-grow-x" data-stage="2" style="width:78%;height:100%;background:var(--grad);border-radius:inherit"></div>
+  </div>
+</div>
+```
+
+## 动效开关(三种粒度)
+
+| 粒度 | 做法 | 效果 |
+|---|---|---|
+| **整个项目** | `<html data-theme="..." class="no-fx">`(或 `.stage.no-fx`) | 全部入场/氛围动效关闭,元素直接呈终态;motion 捕获检测不到动画窗,自动按静态帧出片,时长与音画同步不受影响;字幕照常烧录 |
+| **单张** | 该张根元素加 `no-fx`(tokens.css 的规则按后代匹配,任何容器加都行) | 只有这张无动效,其余张正常 |
+| **单个元素** | 不给它 fx 类和 data-stage | 该元素静态呈现 |
+
+适用:赶时间要快速出片、题材要求克制(政务/法律/讣告类)、或用户明确说"不要动画"。开工对齐时可当作一个问题问出去;默认全开。
 
 ---
 

@@ -157,6 +157,13 @@
       "prompt": "这条财经视频里我用绿色表示上涨、红色表示下跌, 可以吧?",
       "expected_output": "要看受众市场。tokens.css 的语义色默认 --good 绿 / --bad 红, 即欧美读法(绿涨红跌); A 股/港股受众是红涨绿跌, 用反了整片观感颠倒。做法: 指标卡一律写 var(--up)/var(--down)(模板已定义 --up:var(--good)/--down:var(--bad)), 需要翻转时在项目 slides/tokens.css 末尾追加 :root{--up:#D92B2B;--down:#12A150}(旧项目缺这两个变量要补定义, check-slides 会报未定义)。同时在 Gate 3 素材确认时问清受众市场, 并把结论记进 research/notes.md。依据见 references/compliance.md。",
       "files": []
+    },
+    {
+      "id": 24,
+      "name": "chart-animation-and-no-fx",
+      "prompt": "财务页要画营收对比图和一条三年趋势线, 要有点动效; 但老板说这版赶时间, 最好能一个开关把动画全关掉, 画面别变。",
+      "expected_output": "图表全部纯 CSS/SVG 自绘(禁外链 Chart.js/ECharts: 离线取不到 + canvas 动画逐帧 seek 不到)。动效走现成 fx 类且逐帧可 seek: 条形 fx-grow-x 从左长出、柱状 fx-grow-y 从底长出、折线 fx-draw 描边画入(SVG 自设 stroke-dasharray:800)、环形/进度条 fx-pop 与 fx-grow-x; 错峰用 --fx-delay:calc(var(--t2)+N×120ms)。开关: 根元素加 class=\"no-fx\" 一键全关(单张容器加则只关该张), 关掉后 motion 捕获检测不到动画窗、自动按静态帧出片, 时长与音画同步不变, 字幕照常烧录; 实测动画终态与 no-fx 帧 PSNR 51.7dB(画面一致)。⚠ 两个必踩的坑: ① 只做 transform/描边的关键帧必须显式写 opacity:1, 否则 [data-stage] 的 opacity:0 基础态抬不回来 → 元素永久隐形(check-slides 5b 项会报); ② 柱状图外层容器不能写 align-items:flex-end(列 wrapper 高度塌陷 → 柱子百分比高度变 0), 要用默认 stretch + 列内 justify-content:flex-end。见 references/authoring.md 的\"纯 CSS/SVG 图表\"与\"动效开关\"两节。",
+      "files": []
     }
   ]
 }

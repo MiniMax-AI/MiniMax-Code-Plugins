@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.1.0 — 2026-09-18
+
+**安全边界(响应 PR #41 评审的五条 Request changes)**
+
+- **路径收监**:`script.json` 是 agent 可编辑文件,其 `slides[].id/html/audio` 与 `bgm.file` 此前被直接拼进文件路径。现于 `tools.mjs` 新增 `safeId / safeRel / inside / validateScriptPaths / validateTimingsIds`,六个消费脚本(capture / build-video / plan-timings / check-timing / check-slides / asr)在 `JSON.parse` 后立即校验:id 走白名单 `^[A-Za-z0-9_-]{1,64}$`,路径拒绝绝对路径、resolve 后必须落在项目目录内、并对符号链接做 realpath 复核。此前 `id="../../victim"` 可触发**项目目录外的递归删除**(`capture.mjs` 的 `rmSync(build/frames/<id>, {recursive:true})`)。
+- **覆盖拒绝**:`init-project.mjs` 对已存在且非空的目录直接拒绝(列出将被覆写的 5 个生成文件),需显式 `--force`;`fetch-official-images.mjs` 的 `--out-dir` 默认收监在工作目录内、已存在文件不覆盖;`prep-image.mjs --crop` 输出已存在需 `--force`。顺带修 `--topic` 未转义即插入模板 HTML 的问题。
+- **ASR 端点白名单**:API Key 只发官方域(`api.minimaxi.com` / `api.minimax.io`);`--base-url` / `MINIMAX_BASE_URL` 指向其他地址一律硬拒绝,自建网关需显式 `--allow-any-endpoint`(打印醒目警告)。此前被偷换的环境变量可把 Key 发往任意端点。
+- **抓图 SSRF 收紧**:新增 `scripts/url-policy.mjs`(纯函数)。拦 loopback / 链路本地(含云元数据 169.254.169.254)/ 私网 / CGNAT / 无点主机名;只允许 http(s),`file://` 需显式 `--allow-file`;禁带 userinfo 的 URL;`maxRedirects:0` 手动跟重定向且**逐跳**复用同一策略;响应大小上限默认 30MB(`--max-mb`);落盘文件名清洗补 Windows 保留名。
+- **可执行测试**:新增 `tests/`(node:test,零依赖,从仓库根 `node --test` 自动发现 → 被 `npm run check` 真实执行)—— `safe-paths`(恶意 id/路径 + canary 完好性 + symlink 逃逸)、`no-clobber`(覆盖拒绝)、`endpoint-allowlist`(白名单拒绝 + 本地假服务器收到 Bearer 假 Key 的正向证据)、`fetch-policy`(host/URL/重定向/文件名 44 例)、`render-smoke`(init → 静音音频 → plan-timings → check-slides → capture → build-video 全链出片)。共 72 例,本地全绿。另附 scoped workflow `.github/workflows/html2video-for-mcode-smoke.yml`(path-filter 只在本插件变更时跑,装 ffmpeg + playwright 后真实执行,含渲染冒烟)。
+
+**图表与动效**
+
+- `references/authoring.md` 新增 **纯 CSS/SVG 图表**章节:横向条形 / 柱状 / 环形(`conic-gradient`)/ 折线(inline SVG)/ 进度条五种画法与选型速查;三条底线 = 禁外链图表库(离线取不到且 canvas 动画逐帧 seek 不到)、数值必须来自已核实口径、禁止 AI 生图当图表。
+- 新增 `fx-grow-x` / `fx-grow-y`(条形从左、柱状从底生长),折线 `fx-draw` 描边画入;**动效可一键关**:根元素或任意容器加 `no-fx`,关掉后 motion 捕获自动退化为静态帧,时长与音画同步不变(实测动画终态 vs `no-fx` 帧 PSNR 51.7dB,画面一致)。
+- `timeline` 版式改为整轴淡入 + 时间点逐个错峰入场。
+
+**静默故障(继续加闸门)**
+
+- **fx 关键帧不含 opacity → 元素永久隐形**:`[data-stage]` 的基础态是 `opacity:0`,靠动画抬回 1;只做 transform/描边的动画(`fx-grow-x/y`、既有的 `fx-draw`)不改 opacity 就会永远不可见。关键帧已补 `opacity:1`,并在 `check-slides.mjs` 新增 **5b 项**静态拦截(fx 类的关键帧未声明 opacity → ✗)。
+- **旧帧目录污染成片**:切 `no-fx` 或改用 still 后,上一轮 motion 的帧目录仍在,`build-video` 会优先用残留帧把过时动画混进成片;capture 现在在产出静态图的路径上主动作废该张帧目录。
+- **柱状图模板高度塌陷**:外层容器写 `align-items:flex-end` 会让列 wrapper 高度塌成内容高,柱子百分比高度变 0(静默不显示);模板改为默认 stretch + 列内 `justify-content:flex-end`,并在文档里写明这个坑。
+
+**文档**
+
+- 开工对齐"主题与受众"→"**主题与领域**"(受监管题材必问免责声明与数据出处标注);新增 `references/compliance.md`(财经口播红线、数字三要件、涨跌色按受众翻转、免责声明写法、医疗/法律/广告法、Gate 清单);`tokens.css` 增 `--up/--down` 与 `.disclaimer`;`check-slides.mjs` 增整片级财经关键词自查。
+- **层的入场顺序不再固定为"标题先行"**:改为"每张至少两个信息层、分属不同 stage,顺序由强同步原则决定"(大数字先入 / 设问先出 / 图先入都合法),要拦的是"只有一个层"。
+- 补 `roadmap` 版式的 HTML 片段(此前表格里有、代码块缺失),并修 kpi-grid 片段使用未定义类 `.grid g4`(会静默竖排)的问题。
+
 ## 1.0.1 — 2026-09-17
 
 **新增:领域与合规(受监管题材)**

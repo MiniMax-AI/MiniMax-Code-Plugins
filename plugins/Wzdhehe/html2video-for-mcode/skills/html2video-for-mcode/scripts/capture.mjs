@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { loadPackage } from './tools.mjs';
+import { loadPackage, safeId, safeRel, validateScriptPaths, validateTimingsIds } from './tools.mjs';
 
 const argv = process.argv.slice(2);
 const dir = path.resolve(argv.find(a => !a.startsWith('--')) ?? '.');
@@ -16,12 +16,14 @@ const SUBS = !argv.includes('--no-subs'); // 字幕默认烧录
 const idsFilter = flag('--ids', '') ? flag('--ids', '').split(',').map(s => s.trim()) : null;
 
 const script = JSON.parse(fs.readFileSync(path.join(dir, 'script.json'), 'utf8'));
+validateScriptPaths(script, dir); // script.json 是 agent 可编辑文件: id/html 等派生路径先收监再使用
 const timingsPath = path.join(dir, 'build', 'timings.json');
 if (!fs.existsSync(timingsPath)) {
   console.error('✗ 缺 build/timings.json — 先运行 plan-timings.mjs');
   process.exit(1);
 }
 const timings = JSON.parse(fs.readFileSync(timingsPath, 'utf8'));
+validateTimingsIds(timings);
 
 const slides = script.slides.filter(s => !idsFilter || idsFilter.includes(s.id));
 if (!slides.length) { console.error('✗ 没有匹配的 slide'); process.exit(1); }
@@ -73,7 +75,8 @@ fs.mkdirSync(path.join(dir, 'preview'), { recursive: true });
 
 let done = 0;
 for (const s of slides) {
-  const htmlPath = path.join(dir, 'slides', s.html ?? `${s.id}.html`);
+  const sid = safeId(s.id); // 递归删帧目录/写 preview 都由 id 派生, 在源头再拦一次
+  const htmlPath = safeRel(path.join(dir, 'slides'), s.html ?? `${sid}.html`, { where: `slides[${sid}].html` });
   if (!fs.existsSync(htmlPath)) { console.warn(`- 跳过 ${s.id}: 缺 ${htmlPath}`); continue; }
   const t = timings.slides.find(x => x.id === s.id);
   if (!t) { console.warn(`- 跳过 ${s.id}: timings 里无此张`); continue; }
@@ -192,14 +195,19 @@ for (const s of slides) {
     console.warn('   先跑 check-slides.mjs 定位; SVG 类资源建议 inline 进 HTML(依赖外部资源/XML 有误/缺 width-height 都会 broken)');
   }
 
+  // 帧目录是派生数据: 本次只要产出的是静态图(still 或 无动画), 旧 motion 帧一律作废,
+  // 否则 build-video 会优先用残留帧, 把过时动画混进成片(切 no-fx 后重渲染时必踩)
+  const invalidateFrames = () => fs.rmSync(path.join(dir, 'build', 'frames', sid), { recursive: true, force: true });
+
   if (mode === 'still') {
     // 直接跳到所有有限动画的终态(finish), 无限氛围动画保持运行, 截图即终态。
     await page.evaluate(() => {
       document.getAnimations().forEach(a => { try { a.finish(); } catch { /* infinite */ } });
     });
     await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
-    await page.screenshot({ path: path.join(dir, 'preview', `${s.id}.png`) });
-    console.log(`✓ ${s.id} 终态截图 → preview/${s.id}.png`);
+    await page.screenshot({ path: path.join(dir, 'preview', `${sid}.png`) });
+    invalidateFrames();
+    console.log(`✓ ${sid} 终态截图 → preview/${sid}.png`);
   } else {
     // 逐帧步进: 全部动画暂停在 0, 每帧统一 seek 到 t, 截图。CSS 动画自带 delay, seek 是绝对时间, 时序天然正确。
     await page.evaluate(() => {
@@ -218,14 +226,15 @@ for (const s of slides) {
     });
     if (meta.animEnd <= 0.05) {
       // 页面没有任何有限动画: 静态页, 单帧即全部信息, 走 still 路径
-      await page.screenshot({ path: path.join(dir, 'preview', `${s.id}.png`) });
-      console.log(`✓ ${s.id} 无动画, 静态截图 → preview/${s.id}.png`);
+      await page.screenshot({ path: path.join(dir, 'preview', `${sid}.png`) });
+      invalidateFrames();
+      console.log(`✓ ${sid} 无动画, 静态截图 → preview/${sid}.png`);
       await page.close(); done++; continue;
     }
     const fps = timings.fps ?? 30;
     const windowS = Math.min(t.duration, meta.animEnd + 0.25); // 动画窗口逐帧, 其余靠 tpad 补尾帧
     const frames = Math.max(1, Math.ceil(windowS * fps));
-    const fdir = path.join(dir, 'build', 'frames', s.id);
+    const fdir = path.join(dir, 'build', 'frames', sid);
     fs.rmSync(fdir, { recursive: true, force: true });
     fs.mkdirSync(fdir, { recursive: true });
     const t0 = Date.now();
@@ -238,8 +247,8 @@ for (const s of slides) {
       if (i > 0 && i % 60 === 0) console.log(`  ${s.id}: ${i}/${frames} 帧 (${((Date.now() - t0) / 1000).toFixed(0)}s)`);
     }
     fs.copyFileSync(path.join(fdir, 'f' + String(frames - 1).padStart(5, '0') + '.png'),
-      path.join(dir, 'preview', `${s.id}.png`));
-    console.log(`✓ ${s.id} ${frames} 帧 @${fps}fps (动画窗 ${windowS.toFixed(1)}s / 成片 ${t.duration.toFixed(1)}s) → build/frames/${s.id}/ + preview/${s.id}.png`);
+      path.join(dir, 'preview', `${sid}.png`));
+    console.log(`✓ ${sid} ${frames} 帧 @${fps}fps (动画窗 ${windowS.toFixed(1)}s / 成片 ${t.duration.toFixed(1)}s) → build/frames/${sid}/ + preview/${sid}.png`);
   }
   await page.close();
   done++;

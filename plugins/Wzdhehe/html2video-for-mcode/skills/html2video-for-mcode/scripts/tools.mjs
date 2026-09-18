@@ -62,6 +62,88 @@ export function requireTool(name, projectDir) {
   return p;
 }
 
+// ── 输入收监(script.json 是 agent 可编辑文件, 其派生路径必须关进项目目录) ────
+// 威胁模型: script.json 里的 slides[].id / html / audio、顶层 bgm.file 若含
+// "../" 或绝对路径, 可让 fs 读写删与 ffmpeg argv 落到项目目录之外。
+// 所有消费者在 JSON.parse 之后立即调用本节的校验, 失败即退出, 不带病运行。
+
+const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+export function isSafeId(v) {
+  return typeof v === 'string' && ID_RE.test(v);
+}
+
+// 白名单校验 slide id; 返回原值, 不合格直接退出(并指明是哪个字段)
+export function safeId(v, where = 'slides[].id') {
+  if (!isSafeId(v)) {
+    console.error(`✗ ${where} 非法: ${JSON.stringify(v)} — 只允许字母/数字/下划线/连字符, 长度 1–64`);
+    process.exit(1);
+  }
+  return v;
+}
+
+// resolve 后是否仍落在 root 内(不含 root 本身; root 的 realpath 也参与比较,
+// 防 root 自身就是指向外面的符号链接)
+export function inside(root, target) {
+  const rel = path.relative(path.resolve(root), path.resolve(target));
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+// 校验"root 下的相对路径"并返回绝对路径:
+//   拒绝绝对路径 → inside(root) → 符号链接复核(取最深已存在祖先的 realpath,
+//   必须仍在 root 的 realpath 内, 防 root 内某段是指向外面的 symlink)
+export function safeRel(root, rel, { where = 'path', mustExist = false } = {}) {
+  if (typeof rel !== 'string' || rel === '') {
+    console.error(`✗ ${where} 非法: ${JSON.stringify(rel)} — 需要非空字符串`);
+    process.exit(1);
+  }
+  if (path.isAbsolute(rel)) {
+    console.error(`✗ ${where} 必须是相对路径: ${JSON.stringify(rel)}`);
+    process.exit(1);
+  }
+  const abs = path.resolve(root, rel);
+  if (!inside(root, abs)) {
+    console.error(`✗ ${where} 越出项目目录: ${JSON.stringify(rel)} → ${abs}`);
+    process.exit(1);
+  }
+  // 符号链接复核: 目标(或其最深已存在祖先)的 realpath, 必须仍在 root 的 realpath 内
+  // (或是 root realpath 的祖先 —— root 尚不存在时, 共同祖先就是最近的真实路径, 属正常)
+  try {
+    let probe = abs;
+    while (!fs.existsSync(probe)) probe = path.dirname(probe);
+    const real = fs.realpathSync(probe);
+    const realRoot = fs.existsSync(root) ? fs.realpathSync(path.resolve(root)) : path.resolve(root);
+    if (real !== realRoot && !inside(realRoot, real) && !inside(real, realRoot)) {
+      console.error(`✗ ${where} 经符号链接越出项目目录: ${JSON.stringify(rel)}`);
+      process.exit(1);
+    }
+  } catch { /* lstat 失败按不存在处理, 由 mustExist/后续逻辑兜底 */ }
+  if (mustExist && !fs.existsSync(abs)) {
+    console.error(`✗ ${where} 不存在: ${rel}`);
+    process.exit(1);
+  }
+  return abs;
+}
+
+// 一次性走查 script.json 的全部路径派生字段(两个调用点: 每个 consumer 读入后)
+export function validateScriptPaths(script, dir) {
+  const list = Array.isArray(script?.slides) ? script.slides : [];
+  for (const s of list) {
+    safeId(s.id, `slides[].id (${JSON.stringify(s.title ?? '')})`);
+    if (s.html !== undefined) safeRel(path.join(dir, 'slides'), s.html, { where: `slides[${s.id}].html` });
+    if (s.audio !== undefined) safeRel(path.join(dir, 'audio'), s.audio, { where: `slides[${s.id}].audio` });
+  }
+  const bgm = script?.bgm;
+  const bgmFile = typeof bgm === 'string' ? bgm : bgm?.file;
+  if (bgmFile !== undefined) safeRel(dir, bgmFile, { where: 'bgm.file' });
+}
+
+// timings.json 的 slides[].id 是 script.json 的二次传播, 消费侧同样校验
+export function validateTimingsIds(timings) {
+  const list = Array.isArray(timings?.slides) ? timings.slides : [];
+  for (const t of list) safeId(t.id, 'timings.slides[].id');
+}
+
 // ── Node 包解析(playwright) ──────────────────────────────────────
 // 技能通常装在 ~/.claude/skills/ 或 ~/.openclaw/skills/ —— 不在项目树里,
 // 而 Node 的 import 是按"脚本所在位置"向上找 node_modules 的, 于是会出现

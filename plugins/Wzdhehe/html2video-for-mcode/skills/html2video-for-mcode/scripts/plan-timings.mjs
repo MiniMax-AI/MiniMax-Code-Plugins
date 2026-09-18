@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { requireTool } from './tools.mjs';
+import { requireTool, safeId, safeRel, validateScriptPaths } from './tools.mjs';
 
 // 语种相关的计量基准。中文按"字", 英文按"字符"(含词间节奏, 与音节时长大致成正比)。
 // pacing = 每单位每秒的常见语速; subMax = 字幕单行建议上限; pace 区间用于语速异常预警。
@@ -27,6 +27,7 @@ const FFPROBE = requireTool('ffprobe', dir);
 const scriptPath = path.join(dir, 'script.json');
 if (!fs.existsSync(scriptPath)) { console.error(`✗ 找不到 ${scriptPath}`); process.exit(1); }
 const script = JSON.parse(fs.readFileSync(scriptPath, 'utf8'));
+validateScriptPaths(script, dir); // script.json 是 agent 可编辑文件: id/audio 派生路径先收监
 const fps = script.fps ?? 30;
 const LANG = script.lang ?? 'zh';
 const CFG = langCfg(LANG);
@@ -45,7 +46,7 @@ const r3 = x => Math.round(x * 1000) / 1000;
 const rows = [];
 const warns = [];
 for (const s of script.slides) {
-  const audioPath = path.join(dir, 'audio', s.audio ?? `${s.id}.mp3`);
+  const audioPath = safeRel(path.join(dir, 'audio'), s.audio ?? `${safeId(s.id)}.mp3`, { where: `slides[${s.id}].audio` });
   if (!fs.existsSync(audioPath)) { console.error(`✗ 缺音频 ${audioPath} — 先完成 Phase 2 TTS`); process.exit(1); }
   const tts = probeDur(audioPath);
   if (tts == null) { console.error(`✗ ffprobe 读不出时长: ${audioPath}`); process.exit(1); }

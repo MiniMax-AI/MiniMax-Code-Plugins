@@ -63,7 +63,9 @@ if (argv.includes('--check') || (!argv.includes('--crop') && positional.length))
 
 if (argv.includes('--crop')) {
   const [src, dst] = positional;
-  if (!src || !dst) { console.error('用法: node prep-image.mjs --crop <in> <out> [--ratio 16:9] [--anchor bottom|top|center]'); process.exit(1); }
+  if (!src || !dst) { console.error('用法: node prep-image.mjs --crop <in> <out> [--ratio 16:9] [--anchor bottom|top|center] [--force]'); process.exit(1); }
+  const FORCE = argv.includes('--force');
+  if (fs.existsSync(dst) && !FORCE) { console.error(`✗ 输出已存在, 不覆盖: ${dst}(要覆盖加 --force)`); process.exit(1); }
   const [rw, rh] = (flag('--ratio', '16:9')).split(':').map(Number);
   const anchor = flag('--anchor', 'center');
   if (!rw || !rh) { console.error('✗ --ratio 形如 16:9'); process.exit(1); }
