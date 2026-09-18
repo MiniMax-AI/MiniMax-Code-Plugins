@@ -182,3 +182,37 @@ test('cross-run adoption restamps planId to the current topology node',async()=>
  assert.equal(run2.topology.nodes.filter(n=>n.stepId==='a'||n.id==='a').length,1,'current topology exposes exactly one node for the agent');
  }finally{await f.cleanup();}
 });
+test('a fresh upstream execution with identical output blocks downstream adoption (same-output, changed-file shape)',async()=>{
+ // Maintainer's repro shape: A (no model, never a candidate) re-executes and returns
+ // the SAME value while its filesystem effect changes; B (eligible, unchanged spec)
+ // must re-execute rather than adopt the old result.
+ const {writeFile,readFile}=await import('node:fs/promises');const {join}=await import('node:path');
+ let aWrites='old';const calls=[],f=await fixture(async s=>{calls.push(s.id);
+  if(s.id==='a'){await writeFile(join(f.dir,'produced.txt'),aWrites);return {output:'done'};}
+  return {output:(await readFile(join(f.dir,'produced.txt'),'utf8')).trim()};});
+ try{
+ const script=`const a=await ctx.agent({id:'a',prompt:'write'});const b=await ctx.agent({id:'b',prompt:'read',model:'m2',dependsOn:['a']});return {a:a.output,b:b.output};`;
+ await writeFile(join(f.dir,'produced.txt'),'same baseline');
+ const run1=await run(f.engine,script,{files:['produced.txt']},{executor:'mcode'});
+ await writeFile(join(f.dir,'produced.txt'),'same baseline');aWrites='new';
+ const run2=await run(f.engine,script,{files:['produced.txt']},{executor:'mcode',reuseAcrossRuns:true});
+ assert.deepEqual(calls,['a','b','a','b'],'a re-executes (no model); identical output must NOT let b adopt');
+ assert.deepEqual(run2.result,{a:'done',b:'new'});
+ assert.ok(!run2.steps.find(s=>s.id==='b').reusedFrom);
+ }finally{await f.cleanup();}
+});
+
+test('originalProducer survives multi-repair chains into cross-run adoption',async()=>{
+ const f=await fixture(async s=>({output:s.id}));try{
+ const script=`return (await ctx.agent({id:'a',prompt:'a'})).output;`;
+ const broken=`const a=await ctx.agent({id:'a',prompt:'a'});throw Error('x');`;
+ const R1=await run(f.engine,broken);
+ const repair=async src=>{const d=await f.engine.repair(src.id,{requestId:crypto.randomUUID(),sourceUpdatedAt:f.store.get(src.id).updatedAt,script,reason:'fix',reuseStepIds:['a']});await f.engine.approve(d.id,{revision:1});for(let i=0;i<300;i++){if(!f.engine.active.has(d.id))return f.engine.snapshot(d.id);await new Promise(r=>setTimeout(r,20));}};
+ const R2=await repair(R1),R3=await repair(R2);
+ const R4=await run(f.engine,script,{},{reuseAcrossRuns:true});
+ const a4=R4.steps.find(s=>s.id==='a');
+ assert.equal(a4.reusedFrom.runId,R3.id,'immediate source is the newest run');
+ assert.equal(a4.reusedFrom.crossRun,true);
+ assert.equal(a4.originalProducer.runId,R1.id,'first producer survives two repairs into cross-run adoption');
+ }finally{await f.cleanup();}
+});

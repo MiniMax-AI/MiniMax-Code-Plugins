@@ -203,11 +203,20 @@ const step={id:key,kind:'checkpoint',status:'succeeded',output:payload.value,req
      // Recheck the output against today's validator, including legacy candidates.
      let valid=true;try{if(validateOutput)valid=validateOutput(candidate.output);}catch{valid=false;}
      if(valid){const step={...candidate,...(typeof planId==='string'?{planId}:{}),attempt:0,createdAt:Date.now(),startedAt:null,endedAt:Date.now(),usage:null,usageHistory:[],sessionId:undefined,turnId:undefined,contextHash:ctxHash,
-       reusedFrom:{runId:repair.sourceRunId,stepId:spec.id,endedAt:candidate.endedAt??null}};
+       reusedFrom:{runId:repair.sourceRunId,stepId:spec.id,endedAt:candidate.endedAt??null},
+       // The first producer survives repair chains: R2/R3 relay the output but
+       // only the original execution produced it.
+       originalProducer:candidate.originalProducer??(candidate.reusedFrom?{...candidate.reusedFrom}:{runId:repair.sourceRunId,stepId:spec.id,endedAt:candidate.endedAt??null})};
        this.store.saveStep(ctx.run.id,step);this.emitEvent(ctx.run.id,'step.reused',{stepId:step.id,sourceRunId:repair.sourceRunId});
        return Promise.resolve({status:'succeeded',output:step.output,cached:true});}
    }
-   if(ctx.run.reuseAcrossRuns&&!previous&&!(ctx.run.executor==='mcode'&&!spec.model)){
+   // A freshly executed agent dependency has unproven execution identity: spec and
+   // output hashes cannot see changed filesystem effects (same return value, different
+   // written content). Downstream adoption is therefore only sound when every agent
+   // dependency was itself adopted/reused; checkpoints recompute deterministically and
+   // their value hash is already bound into lineage.
+   const depsAllAdopted=deps.every(id=>{const dep=this.store.step(ctx.run.id,id);return dep?.kind==='checkpoint'||dep?.reusedFrom;});
+   if(ctx.run.reuseAcrossRuns&&!previous&&depsAllAdopted&&!(ctx.run.executor==='mcode'&&!spec.model)){
     // Cross-run reuse: adopt an earlier run's stored result when the node spec, its
     // upstream lineage and the run context (workspace, input, executor, tracked
     // files) all hash identically. All three keys are stamped on candidate steps at

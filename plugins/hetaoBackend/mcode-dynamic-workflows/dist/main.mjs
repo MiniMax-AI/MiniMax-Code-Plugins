@@ -14616,14 +14616,21 @@ var Engine = class extends EventEmitter {
           sessionId: void 0,
           turnId: void 0,
           contextHash: ctxHash,
-          reusedFrom: { runId: repair.sourceRunId, stepId: spec.id, endedAt: candidate.endedAt ?? null }
+          reusedFrom: { runId: repair.sourceRunId, stepId: spec.id, endedAt: candidate.endedAt ?? null },
+          // The first producer survives repair chains: R2/R3 relay the output but
+          // only the original execution produced it.
+          originalProducer: candidate.originalProducer ?? (candidate.reusedFrom ? { ...candidate.reusedFrom } : { runId: repair.sourceRunId, stepId: spec.id, endedAt: candidate.endedAt ?? null })
         };
         this.store.saveStep(ctx.run.id, step2);
         this.emitEvent(ctx.run.id, "step.reused", { stepId: step2.id, sourceRunId: repair.sourceRunId });
         return Promise.resolve({ status: "succeeded", output: step2.output, cached: true });
       }
     }
-    if (ctx.run.reuseAcrossRuns && !previous && !(ctx.run.executor === "mcode" && !spec.model)) {
+    const depsAllAdopted = deps.every((id2) => {
+      const dep = this.store.step(ctx.run.id, id2);
+      return dep?.kind === "checkpoint" || dep?.reusedFrom;
+    });
+    if (ctx.run.reuseAcrossRuns && !previous && depsAllAdopted && !(ctx.run.executor === "mcode" && !spec.model)) {
       for (const candidate2 of this.store.findCrossRunReuse({ contextHash: ctxHash, requestHash, lineageHash, excludeRunId: ctx.run.id })) {
         let valid = true;
         try {
