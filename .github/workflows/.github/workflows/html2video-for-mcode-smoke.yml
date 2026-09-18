@@ -1,0 +1,52 @@
+# html2video-for-mcode · scoped smoke CI
+# 官方主 CI(ci.yml)只跑 validate + node --test(无 ffmpeg/playwright, 渲染冒烟会 skip)。
+# 本 workflow 按 CONTRIBUTING/ci.yml 注释给出的"单插件 scoped workflow"模式,
+# 装齐依赖后真实执行全部测试 —— 这是 PR #41 评审要求的可执行测试证据。
+# 触发条件: 仅本插件目录(.github/workflows/ 本文件除外)或本文件自身变更。
+name: html2video-for-mcode smoke
+
+on:
+  pull_request:
+    paths:
+      - 'plugins/Wzdhehe/html2video-for-mcode/**'
+      - '.github/workflows/html2video-for-mcode-smoke.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/Wzdhehe/html2video-for-mcode/**'
+      - '.github/workflows/html2video-for-mcode-smoke.yml'
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Install playwright (no package.json / lockfile changes)
+        run: |
+          npm install --no-save --no-package-lock playwright
+          npx playwright install --with-deps chromium
+
+      - name: Security & policy tests (containment / overwrite refusal / endpoint allowlist / SSRF)
+        run: |
+          node --test \
+            plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/safe-paths.test.mjs \
+            plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/no-clobber.test.mjs \
+            plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/endpoint-allowlist.test.mjs \
+            plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/fetch-policy.test.mjs \
+            --test-timeout=60000
+
+      - name: Render smoke (init → timings → static gate → capture → build)
+        run: |
+          node --test \
+            plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/render-smoke.test.mjs \
+            --test-timeout=300000
