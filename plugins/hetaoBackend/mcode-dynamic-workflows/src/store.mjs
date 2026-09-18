@@ -56,24 +56,31 @@ export class Store {
   saveStep(runId,step) {this.db.prepare('INSERT INTO steps VALUES(?,?,?) ON CONFLICT(runId,id) DO UPDATE SET body=excluded.body').run(runId,step.id,JSON.stringify(step));}
   repairCandidate(runId,id) {const r=this.db.prepare('SELECT body FROM repair_cache WHERE runId=? AND id=?').get(runId,id);return r?JSON.parse(r.body):null;}
   saveRepairCandidate(runId,step) {this.transaction(()=>{const rowid=Number(this.db.prepare('INSERT INTO repair_cache VALUES(?,?,?)').run(runId,step.id,JSON.stringify(step)).lastInsertRowid);this.chainAdvance('repair','repair','SELECT rowid AS pos,runId,id,body FROM repair_cache WHERE rowid>? AND rowid<=? ORDER BY rowid',rowid,r=>`${r.runId}/${r.id}`);});}
-  event(runId,type,data={}) {const event={...data,type,time:Date.now()};return this.transaction(()=>{const seq=Number(this.db.prepare('INSERT INTO events(runId,body) VALUES(?,?)').run(runId,JSON.stringify(event)).lastInsertRowid);this.chainAdvance('event','events','SELECT seq AS pos,body FROM events WHERE seq>? AND seq<=? ORDER BY seq',seq,r=>String(r.pos));return {seq,...event};});}
+  event(runId,type,data={}) {const event={...data,type,time:Date.now()};return this.transaction(()=>{const seq=Number(this.db.prepare('INSERT INTO events(runId,body) VALUES(?,?)').run(runId,JSON.stringify(event)).lastInsertRowid);this.chainAdvance('event','events','SELECT seq AS pos,runId,body FROM events WHERE seq>? AND seq<=? ORDER BY seq',seq,r=>`${r.runId}:${r.pos}`);return {seq,...event};});}
   events(runId,after=0,limit=150) {return this.db.prepare('SELECT seq,body FROM events WHERE runId=? AND seq>? ORDER BY seq LIMIT ?').all(runId,after,limit).map(e=>({seq:e.seq,...JSON.parse(e.body)}));}
   rowHash(prev,kind,key,body) {return createHash('sha256').update(`${prev}:${kind}:${key}:${body}`).digest('hex');}
   chainAdvance(kind,surface,sql,newUpto,keyOf) {const tail=this.setting(`integrity_${surface}`);let prev=tail?.head??'0'.repeat(64);for(const r of this.db.prepare(sql).all(tail?.upto??0,newUpto)){const k=keyOf(r);prev=this.rowHash(prev,kind,k,r.body);this.db.prepare('INSERT OR REPLACE INTO integrity_rows VALUES(?,?,?,?)').run(surface,r.pos,k,prev);}this.saveSetting(`integrity_${surface}`,{head:prev,upto:newUpto});}
   integrityHeads() {return {events:this.setting('integrity_events')??null,repair:this.setting('integrity_repair')??null};}
   verifyIntegrity() {
-    const genesis='0'.repeat(64);const face=(kind,surface,table,posCol)=>{
+    // Each ledger link is re-checked against the live row's own identity columns:
+    // the key is re-derived from the row and must equal the recorded key before that
+    // recorded key may take part in any digest recomputation, so re-attributing a
+    // row (events.runId / repair_cache runId+id) is detected like any body edit.
+    const genesis='0'.repeat(64);const face=(kind,surface,table,posCol,rowSql,keyOf)=>{
     const skey=`integrity_${surface}`;const rec=this.setting(skey);const total=Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n);
     if(!rec)return {head:null,upto:0,verified:null,checked:0,unchained:total,firstDivergence:null};
     const rows=this.db.prepare('SELECT pos,key,hash FROM integrity_rows WHERE surface=? ORDER BY pos').all(surface);
+    const unchained=Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${posCol}>?`).get(rec.upto).n);
     let prev=genesis,firstDivergence=null;
-    for(const r of rows){const row=this.db.prepare(`SELECT body FROM ${table} WHERE ${posCol}=?`).get(r.pos);const actual=row?this.rowHash(prev,kind,r.key,row.body):null;
-      if(!firstDivergence&&(!row||actual!==r.hash))firstDivergence={key:r.key,expectedHead:r.hash,actualHead:actual};
+    for(const r of rows){const row=this.db.prepare(rowSql).get(r.pos);const key=row?keyOf(row,r.pos):null;
+      const actual=row?this.rowHash(prev,kind,key,row.body):null;
+      if(!firstDivergence&&(!row||key!==r.key||actual!==r.hash))firstDivergence={key:r.key,expectedHead:r.hash,actualHead:actual};
       prev=r.hash;}
-    const verified=!firstDivergence&&prev===rec.head;
-    return {head:rec.head,upto:rec.upto,verified,checked:rows.length,unchained:Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${posCol}>?`).get(rec.upto).n),firstDivergence};};
-    return {events:face('event','events','events','seq'),
-      repair:face('repair','repair','repair_cache','rowid')};
+    // Verification covers the anchored prefix; any unanchored row fails closed.
+    const verified=!firstDivergence&&prev===rec.head&&unchained===0;
+    return {head:rec.head,upto:rec.upto,verified,checked:rows.length,unchained,firstDivergence};};
+    return {events:face('event','events','events','seq','SELECT runId,body FROM events WHERE seq=?',(row,pos)=>`${row.runId}:${pos}`),
+      repair:face('repair','repair','repair_cache','rowid','SELECT runId,id,body FROM repair_cache WHERE rowid=?',row=>`${row.runId}/${row.id}`)};
   }
   releaseLock() {closeSync(this.fd);try{if(JSON.parse(readFileSync(this.lock,'utf8')).owner===this.owner)unlinkSync(this.lock);}catch{}}
   close() {this.db.close();this.releaseLock();}

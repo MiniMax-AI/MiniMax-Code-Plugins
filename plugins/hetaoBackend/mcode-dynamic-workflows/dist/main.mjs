@@ -7850,7 +7850,7 @@ var Store = class {
     const event = { ...data2, type, time: Date.now() };
     return this.transaction(() => {
       const seq = Number(this.db.prepare("INSERT INTO events(runId,body) VALUES(?,?)").run(runId, JSON.stringify(event)).lastInsertRowid);
-      this.chainAdvance("event", "events", "SELECT seq AS pos,body FROM events WHERE seq>? AND seq<=? ORDER BY seq", seq, (r) => String(r.pos));
+      this.chainAdvance("event", "events", "SELECT seq AS pos,runId,body FROM events WHERE seq>? AND seq<=? ORDER BY seq", seq, (r) => `${r.runId}:${r.pos}`);
       return { seq, ...event };
     });
   }
@@ -7875,25 +7875,27 @@ var Store = class {
   }
   verifyIntegrity() {
     const genesis = "0".repeat(64);
-    const face = (kind, surface, table, posCol) => {
+    const face = (kind, surface, table, posCol, rowSql, keyOf) => {
       const skey = `integrity_${surface}`;
       const rec = this.setting(skey);
       const total = Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n);
       if (!rec) return { head: null, upto: 0, verified: null, checked: 0, unchained: total, firstDivergence: null };
       const rows = this.db.prepare("SELECT pos,key,hash FROM integrity_rows WHERE surface=? ORDER BY pos").all(surface);
+      const unchained = Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${posCol}>?`).get(rec.upto).n);
       let prev = genesis, firstDivergence = null;
       for (const r of rows) {
-        const row = this.db.prepare(`SELECT body FROM ${table} WHERE ${posCol}=?`).get(r.pos);
-        const actual = row ? this.rowHash(prev, kind, r.key, row.body) : null;
-        if (!firstDivergence && (!row || actual !== r.hash)) firstDivergence = { key: r.key, expectedHead: r.hash, actualHead: actual };
+        const row = this.db.prepare(rowSql).get(r.pos);
+        const key = row ? keyOf(row, r.pos) : null;
+        const actual = row ? this.rowHash(prev, kind, key, row.body) : null;
+        if (!firstDivergence && (!row || key !== r.key || actual !== r.hash)) firstDivergence = { key: r.key, expectedHead: r.hash, actualHead: actual };
         prev = r.hash;
       }
-      const verified = !firstDivergence && prev === rec.head;
-      return { head: rec.head, upto: rec.upto, verified, checked: rows.length, unchained: Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${posCol}>?`).get(rec.upto).n), firstDivergence };
+      const verified = !firstDivergence && prev === rec.head && unchained === 0;
+      return { head: rec.head, upto: rec.upto, verified, checked: rows.length, unchained, firstDivergence };
     };
     return {
-      events: face("event", "events", "events", "seq"),
-      repair: face("repair", "repair", "repair_cache", "rowid")
+      events: face("event", "events", "events", "seq", "SELECT runId,body FROM events WHERE seq=?", (row, pos) => `${row.runId}:${pos}`),
+      repair: face("repair", "repair", "repair_cache", "rowid", "SELECT runId,id,body FROM repair_cache WHERE rowid=?", (row) => `${row.runId}/${row.id}`)
     };
   }
   releaseLock() {
@@ -26541,7 +26543,7 @@ var TOOLS = [
   { name: "workflow_start", description: "\u521B\u5EFA\u5F85\u5BA1\u6838\u5DE5\u4F5C\u6D41\u548C\u7ED3\u6784\u62D3\u6251\uFF0C\u4E0D\u6267\u884C Agent\u3002\u5FC5\u987B\u63D0\u4F9B\u9762\u677F\u8BA9\u7528\u6237\u5BA1\u9605\u3001\u4FEE\u6539\u5E76\u70B9\u51FB\u5F00\u59CB\u6267\u884C\u3002mcode \u6A21\u5F0F\u4F1A\u542F\u52A8\u771F\u5B9E MCode\uFF0C\u4F1A\u4F7F\u7528\u5DF2\u767B\u5F55\u8EAB\u4EFD\u4E0E smart \u6743\u9650\uFF0C\u4E0D\u63D0\u4F9B\u53EA\u8BFB OS \u6C99\u7BB1\u3002demo \u6A21\u5F0F\u4E0D\u8C03\u7528\u6A21\u578B\u3002\u663E\u5F0F requestId \u5E42\u7B49\u3002", inputSchema: obj({ requestId: string3, name: string3, script: string3, input: { type: "object" }, metadata: METADATA_SCHEMA, executor: { enum: ["mcode", "demo"] }, concurrency: { type: "integer", minimum: 1, maximum: 16 }, maxCalls: { type: "integer", minimum: 1, maximum: 100 }, reuseAcrossRuns: { type: "boolean", description: "Opt-in: adopt succeeded nodes from prior runs in the same workspace when context and spec hashes match" }, ...LIMIT_SCHEMAS }, ["requestId", "name", "script", "executor"]) },
   { name: "workflow_update", description: "\u4FEE\u6539\u5F85\u5BA1\u6838\u5DE5\u4F5C\u6D41\u7684\u811A\u672C\u3001\u8F93\u5165\u6216\u9884\u7B97\u5E76\u91CD\u5EFA\u62D3\u6251\uFF0C\u4FDD\u5B58\u540E\u4ECD\u5F85\u5BA1\u6838\uFF1Brevision \u5FC5\u987B\u5339\u914D\u5F53\u524D\u7248\u672C\u3002\u4E0D\u53EF\u4FEE\u6539\u5DF2\u5F00\u59CB\u7684\u8FD0\u884C\u3002", inputSchema: obj({ ...id, revision: { type: "integer", minimum: 1 }, reason: { type: "string", maxLength: 2e3 }, reuseStepIds: { type: "array", items: string3, maxItems: 100, uniqueItems: true }, name: string3, script: string3, input: { type: "object" }, metadata: METADATA_SCHEMA, executor: { enum: ["mcode", "demo"] }, concurrency: { type: "integer", minimum: 1, maximum: 16 }, maxCalls: { type: "integer", minimum: 1, maximum: 100 }, reuseAcrossRuns: { type: "boolean", description: "Opt-in: adopt succeeded nodes from prior runs in the same workspace when context and spec hashes match" }, ...LIMIT_SCHEMAS }, ["runId", "revision"]) },
   { name: "workflow_repair", description: "\u57FA\u4E8E\u505C\u6B62\u540E\u7684\u8FD0\u884C\u521B\u5EFA\u4FEE\u590D\u8349\u7A3F\uFF0C\u4FDD\u7559\u6E90\u8FD0\u884C\uFF1B\u63D0\u4F9B\u5B8C\u6574\u4FEE\u590D\u811A\u672C\u3001\u5931\u8D25\u539F\u56E0\u4E0E sourceUpdatedAt\u3002\u663E\u5F0F reuseStepIds \u4EC5\u9009\u62E9\u786E\u8BA4\u4ECD\u9002\u7528\u7684\u6210\u529F\u8282\u70B9\uFF0C\u9ED8\u8BA4\u4E0D\u590D\u7528\u3002\u8FD0\u884C\u65F6\u91CD\u65B0\u6821\u9A8C\u8F93\u5165\u3001\u6587\u4EF6\u3001\u53C2\u6570\u4E0E\u4F9D\u8D56\uFF1B\u53D8\u66F4\u6216\u91CD\u8DD1\u7684\u4E0A\u6E38\u4F7F\u4E0B\u6E38\u5931\u6548\u3002\u5FC5\u987B\u6253\u5F00\u9762\u677F\u4EA4\u7528\u6237\u5BA1\u6838\u540E\u5F00\u59CB\uFF0C\u4E0D\u80FD\u81EA\u52A8\u6267\u884C\u3002", inputSchema: obj({ ...id, requestId: string3, sourceUpdatedAt: { type: "integer" }, script: string3, reason: { type: "string", maxLength: 2e3 }, reuseStepIds: { type: "array", items: string3, maxItems: 100, uniqueItems: true }, input: { type: "object" }, ...LIMIT_SCHEMAS, maxCalls: { type: "integer", minimum: 1, maximum: 100 } }, ["runId", "requestId", "sourceUpdatedAt", "script", "reason"]) },
-  { name: "workflow_status", description: "\u8BFB\u53D6\u8FD0\u884C\u72B6\u6001\u3001\u9636\u6BB5\u548C\u8282\u70B9\uFF1B\u8F93\u51FA\u4E0D\u542B\u5B8C\u6574 prompt/result\u3002\u65E0 runId \u65F6\u5217\u51FA\u6700\u8FD1\u8FD0\u884C\u3002\u65E0 runId \u8FD4\u56DE {runs,integrityHeads} \u5BF9\u8C61\u5F62\u3002", inputSchema: obj({ ...id, verifyIntegrity: { type: "boolean", description: "\u5168\u91CF\u91CD\u7B97\u5B8C\u6574\u6027\u94FE\u5E76\u9644 integrity \u5B57\u6BB5" } }) },
+  { name: "workflow_status", description: "\u8BFB\u53D6\u8FD0\u884C\u72B6\u6001\u3001\u9636\u6BB5\u548C\u8282\u70B9\uFF1B\u8F93\u51FA\u4E0D\u542B\u5B8C\u6574 prompt/result\u3002\u65E0 runId \u65F6\u5217\u51FA\u6700\u8FD1\u8FD0\u884C\uFF0C\u9ED8\u8BA4\u8FD4\u56DE\u6570\u7EC4\uFF08\u65E2\u6709\u5F62\u72B6\u4E0D\u53D8\uFF09\u3002verifyIntegrity:true \u65F6\u6539\u8FD4 {runs,integrityHeads,integrity} \u5BF9\u8C61\u5F62\u5E76\u5168\u91CF\u91CD\u7B97\u4E24\u6761\u5B8C\u6574\u6027\u94FE\uFF1B\u6821\u9A8C\u8986\u76D6\u5DF2\u951A\u5B9A\u524D\u7F00\uFF0C\u4EFB\u4F55\u672A\u951A\u5B9A\u884C fail-closed\uFF08unchained>0 \u5373 verified:false\uFF09\u3002", inputSchema: obj({ ...id, verifyIntegrity: { type: "boolean", description: "\u5168\u91CF\u91CD\u7B97\u5B8C\u6574\u6027\u94FE\uFF0C\u8FD4\u56DE {runs,integrityHeads,integrity} \u5BF9\u8C61\u5F62\uFF08\u9ED8\u8BA4\u4E3A\u7EAF\u6570\u7EC4\uFF09" } }) },
   { name: "workflow_results", description: "\u5206\u9875\u8BFB\u53D6\u8282\u70B9\u7ED3\u679C\uFF1B\u7EC8\u6001\u62A5\u544A\u4E0E\u5931\u8D25\u660E\u786E\u5206\u5F00\u3002", inputSchema: obj({ ...id, includeDefinition: { type: "boolean" }, offset: { type: "integer", minimum: 0 }, limit: { type: "integer", minimum: 1, maximum: 20 } }, ["runId"]) },
   { name: "workflow_wait", description: "\u6309\u4E8B\u4EF6\u6E38\u6807\u7B49\u5F85\u53D8\u5316\uFF0C\u6700\u957F25\u79D2\u3002\u9700\u8981\u7EE7\u7EED\u5173\u6CE8\u65F6\u4F7F\u7528\u8FD4\u56DE\u7684nextSequence\u3002", inputSchema: obj({ ...id, afterSequence: { type: "integer", minimum: 0 }, timeoutMs: { type: "integer", minimum: 0, maximum: 25e3 } }, ["runId"]) },
   { name: "workflow_cancel", description: "\u53D6\u6D88\u672C\u63D2\u4EF6\u5DE5\u4F5C\u6D41\uFF0C\u7B49\u5F85\u5728\u9014 exec \u9000\u51FA\uFF1B\u4E0D\u53D6\u6D88\u5176\u4ED6 MCode \u4F1A\u8BDD\u3002", inputSchema: obj(id, ["runId"]) },
@@ -26585,7 +26587,8 @@ function createToolHandler(engine, getURL) {
         return summary(await engine.repair(args.runId, args));
       case "workflow_status":
         if (args.runId) return summary(engine.snapshot(args.runId));
-        return { runs: engine.store.list().map((r) => summary(r)), integrityHeads: engine.store.integrityHeads(), ...args.verifyIntegrity === true ? { integrity: engine.store.verifyIntegrity() } : {} };
+        if (args.verifyIntegrity === true) return { runs: engine.store.list().map((r) => summary(r)), integrityHeads: engine.store.integrityHeads(), integrity: engine.store.verifyIntegrity() };
+        return engine.store.list().map((r) => summary(r));
       case "workflow_results": {
         const r = engine.snapshot(args.runId);
         const offset2 = args.offset ?? 0, limit = args.limit ?? 10;

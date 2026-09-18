@@ -15,7 +15,8 @@ async function finish(engine,id){for(let i=0;i<300;i++){if(!engine.active.has(id
 async function start(engine,script,input={}){const r=await engine.start({requestId:randomUUID(),name:'Integrity',executor:'demo',script,input});await engine.approve(r.id,{revision:1});return finish(engine,r.id);}
 const GENESIS='0'.repeat(64);
 // Independent recomputation of the contracted digest formulas over raw stored rows.
-function recomputeEvents(store){let prev=GENESIS;for(const r of store.db.prepare('SELECT seq,body FROM events ORDER BY seq').all())prev=createHash('sha256').update(`${prev}:event:${r.seq}:${r.body}`).digest('hex');return prev;}
+// r3 contract: digests bind row identity (events runId+seq, repair runId/id) as well as body.
+function recomputeEvents(store){let prev=GENESIS;for(const r of store.db.prepare('SELECT seq,runId,body FROM events ORDER BY seq').all())prev=createHash('sha256').update(`${prev}:event:${r.runId}:${r.seq}:${r.body}`).digest('hex');return prev;}
 function recomputeRepair(store){let prev=GENESIS;for(const r of store.db.prepare('SELECT rowid,runId,id,body FROM repair_cache ORDER BY rowid').all())prev=createHash('sha256').update(`${prev}:repair:${r.runId}/${r.id}:${r.body}`).digest('hex');return prev;}
 const prefix=`const a=await ctx.agent({id:'a',prompt:'a'});const b=await ctx.agent({id:'b',prompt:'b',dependsOn:['a']});`;
 const broken=prefix+`throw Error('bad synthesis');`;
@@ -53,7 +54,36 @@ test('single-byte repair_cache tamper is detected at its row key and restoring t
  }finally{await f.cleanup();}
 });
 
-test('deleting the smaller of two event rows reports the first divergence at key 1',async()=>{
+test('re-attributing events.runId and repair_cache runId/id without touching bodies, chains or heads is caught on both faces; restoring attribution heals',async()=>{
+ const f=await fixture(async s=>({output:s.id}));try{
+ const runA=randomUUID(),runB=randomUUID();
+ f.store.event(runA,'run.created',{name:'n'});
+ f.store.saveRepairCandidate(runA,candidate('a'));
+ assert.equal(f.store.verifyIntegrity().events.verified,true);
+ assert.equal(f.store.verifyIntegrity().repair.verified,true);
+ // Maintainer reproduction: only the identity columns move; body, chain rows and heads stay.
+ f.store.db.prepare('UPDATE events SET runId=? WHERE seq=?').run(runB,1);
+ f.store.db.prepare('UPDATE repair_cache SET runId=?,id=? WHERE runId=? AND id=?').run(runB,'b',runA,'a');
+ const v=f.store.verifyIntegrity();
+ assert.equal(v.events.verified,false);
+ assert.equal(v.events.firstDivergence.key,`${runA}:1`);
+ assert.match(v.events.firstDivergence.expectedHead,/^[0-9a-f]{64}$/);
+ assert.match(v.events.firstDivergence.actualHead,/^[0-9a-f]{64}$/);
+ assert.notEqual(v.events.firstDivergence.expectedHead,v.events.firstDivergence.actualHead);
+ assert.equal(v.repair.verified,false);
+ assert.equal(v.repair.firstDivergence.key,`${runA}/a`);
+ assert.match(v.repair.firstDivergence.expectedHead,/^[0-9a-f]{64}$/);
+ assert.match(v.repair.firstDivergence.actualHead,/^[0-9a-f]{64}$/);
+ assert.notEqual(v.repair.firstDivergence.expectedHead,v.repair.firstDivergence.actualHead);
+ f.store.db.prepare('UPDATE events SET runId=? WHERE seq=?').run(runA,1);
+ f.store.db.prepare('UPDATE repair_cache SET runId=?,id=? WHERE runId=? AND id=?').run(runA,'a',runB,'b');
+ const healed=f.store.verifyIntegrity();
+ assert.equal(healed.events.verified,true);assert.equal(healed.events.firstDivergence,null);
+ assert.equal(healed.repair.verified,true);assert.equal(healed.repair.firstDivergence,null);
+ }finally{await f.cleanup();}
+});
+
+test('deleting the smaller of two event rows reports the first divergence at its identity key',async()=>{
  const f=await fixture(async s=>({output:s.id}));try{
  const runId=randomUUID();
  f.store.event(runId,'run.created',{name:'n'});
@@ -61,7 +91,7 @@ test('deleting the smaller of two event rows reports the first divergence at key
  f.store.db.prepare('DELETE FROM events WHERE seq=?').run(1);
  const v=f.store.verifyIntegrity();
  assert.equal(v.events.verified,false);
- assert.equal(v.events.firstDivergence.key,'1');
+ assert.equal(v.events.firstDivergence.key,`${runId}:1`);
  }finally{await f.cleanup();}
 });
 
@@ -77,13 +107,13 @@ test('a forged integrity_events head fails verification while integrityHeads lig
  }finally{await f.cleanup();}
 });
 
-test('a raw-inserted repair row beyond upto counts as unchained and never fails verification',async()=>{
+test('a raw-inserted repair row beyond upto counts as unchained and fails closed without a chain divergence',async()=>{
  const f=await fixture(async s=>({output:s.id}));try{
  const runId=randomUUID();
  f.store.saveRepairCandidate(runId,candidate('a'));
  rawRepair(f.store,runId,'ghost','{"id":"ghost"}');
  const v=f.store.verifyIntegrity();
- assert.equal(v.repair.verified,true);
+ assert.equal(v.repair.verified,false);
  assert.equal(v.repair.checked,1);assert.equal(v.repair.unchained,1);assert.equal(v.repair.firstDivergence,null);
  }finally{await f.cleanup();}
 });
@@ -102,23 +132,27 @@ test('the first anchoring write implicitly commits pre-existing rows into the re
  }finally{await f.cleanup();}
 });
 
-test('workflow_status list form carries integrityHeads plus optional integrity; schema declares verifyIntegrity; single-run form unchanged',async()=>{
+test('workflow_status list form stays a plain array by default; verifyIntegrity:true opts into the object form with heads and verdicts',async()=>{
  const f=await fixture(async s=>({output:s.id}));try{
  const runId=randomUUID();
  f.store.event(runId,'run.created',{name:'seed'});
  f.store.saveRepairCandidate(runId,candidate('a','seed'));
  const handler=createToolHandler(f.engine,()=>'http://127.0.0.1:1/');
  const list=await handler('workflow_status',{});
- assert.ok(list.integrityHeads&&list.integrityHeads.events&&list.integrityHeads.repair);
- assert.deepEqual(list.integrityHeads,f.store.integrityHeads());
+ assert.ok(Array.isArray(list));
+ assert.equal(list.integrityHeads,undefined);
  assert.equal(list.integrity,undefined);
  const audited=await handler('workflow_status',{verifyIntegrity:true});
- assert.ok(audited.integrity);
+ assert.ok(audited&&Array.isArray(audited.runs));
+ assert.ok(audited.integrityHeads&&audited.integrityHeads.events&&audited.integrityHeads.repair);
+ assert.deepEqual(audited.integrityHeads,f.store.integrityHeads());
  assert.equal(typeof audited.integrity.events.verified,'boolean');
  assert.equal(typeof audited.integrity.repair.verified,'boolean');
  assert.deepEqual(audited.integrity,f.store.verifyIntegrity());
  const source=await start(f.engine,broken);
  assert.equal(source.status,'failed');
+ const plain=await handler('workflow_status',{});
+ assert.ok(Array.isArray(plain));assert.deepEqual(plain.map(r=>r.id),[source.id]);
  const single=await handler('workflow_status',{runId:source.id});
  assert.equal(single.id,source.id);assert.equal(single.integrityHeads,undefined);assert.equal(single.integrity,undefined);
  const def=TOOLS.find(t=>t.name==='workflow_status');

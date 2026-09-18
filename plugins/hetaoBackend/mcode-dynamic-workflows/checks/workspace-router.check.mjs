@@ -52,7 +52,7 @@ test('packaged MCP launched in plugin root routes concurrent projects and execut
    assert.deepEqual(results.steps.find(s=>s.id==='cwd').output,{cwd:projects[i],arg:projects[i]});
   }
   assert.equal((await a.callTool({name:'workflow_resume',arguments:{workspace:projects[1],runId:drafts[0].id}})).isError,true);
-  assert.deepEqual((await value(a,'workflow_status',{workspace:projects[1]})).runs.map(r=>r.id),[drafts[1].id]);
+  assert.deepEqual((await value(a,'workflow_status',{workspace:projects[1]})).map(r=>r.id),[drafts[1].id]);
   await a.close();await b.close();
   for(let i=0;i<2;i++){
    const path=projectDataDir(dataRoot,projects[i]);await exec(process.execPath,[binary,'--stop-service','--workspace',projects[i],'--data-dir',path]);
