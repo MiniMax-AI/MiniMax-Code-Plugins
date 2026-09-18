@@ -46,6 +46,7 @@ jobs:
             plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/preview-page.test.mjs \
             plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/tokens-fx.test.mjs \
             plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/chart-kit.test.mjs \
+            plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/table-kit.test.mjs \
             --test-timeout=60000
 
       - name: Render smoke (init → timings → static gate → capture → build)
