@@ -90,8 +90,12 @@ test('field layout: extensionless mcode + mcode.cmd + ps1 + stale sibling + rele
   await mkdir(rel,{recursive:true});
   await writeFile(join(rel,'cli.js'),'#!/usr/bin/env node');
   await writeFile(join(rel,'package.json'),pkg('0.4.12'));
-  const env={PATH:`${root};${f.shim}`,PATHEXT:'.COM;.EXE;.BAT;.CMD',SystemRoot:'C:\\Windows'};
+  // PATHEXT case must match the fixture files: real Windows filesystems are
+  // case-insensitive, but the POSIX runners simulating win32 are not — probing
+  // mcode.CMD against a lowercase mcode.cmd would miss on Linux.
+  const env={PATH:`${root};${f.shim}`,PATHEXT:'.cmd;.bat',SystemRoot:'C:\\Windows'};
   const r=await resolveMcode('mcode',{env,home:f.official,platform:'win32'});
+  assert.ok(r,'resolution must succeed on the field layout');
   assert.equal(r.command,process.execPath,'extensionless bash script must not be selected');
   assert.equal(JSON.parse(await readFile(join(r.args[0],'..','package.json'),'utf8')).version,'0.4.12','releases layout wins over stale sibling');
  }finally{await f.cleanup();}
