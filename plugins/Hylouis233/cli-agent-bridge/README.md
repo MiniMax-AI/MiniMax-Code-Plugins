@@ -247,3 +247,9 @@ This preserves evidence for short-lived Git helpers without accepting unknown de
 children of a recycled parent PID. Pending children without verifiable identities still fail
 closed. This test-path improvement does not enable Linux production delegation; the supported
 kernel containment boundary remains Windows Job Objects.
+
+A child already reaped while its original parent can still be revalidated is resolved after
+stable run-marker scans, before the parent's later exit can turn that stale PID into a permanent
+quarantine. Unknown children after a parent exit, changed PID identities, and failed inspections
+still fail closed. Procfs listings use names rather than Dirents so a disappearing PID's implicit
+`lstat` cannot discard an otherwise usable process snapshot.
