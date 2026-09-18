@@ -2,8 +2,9 @@
 // html2video-for-mcode · 放映页: preview/play/index.html + 逐张"真实时序"快照。
 // 用法: node preview-page.mjs <项目目录> [--open] [--no-script]
 //
-// 定位: **用浏览器把 HTML 画面放一遍**。只做四件事 —— 翻页、重播动画、动效/关动效对照、总览;
+// 定位: **用浏览器把 HTML 画面放一遍**。只做四件事 —— 翻页(动效开 = 逐级入场)、动效开/关对照、口播开/关、总览;
 // 口播文案是锦上添花(可关), 不做计时器/进度条/播放器那套 UI(要看时间就直接看成片)。
+// 换帧用双缓冲 iframe: 新帧在隐藏帧里加载完才对调显示, 不闪白; UI 文案随 script.lang 中英双语。
 //
 // 为什么不是"直接双击 slides/*.html": 动画延迟(--t1/--t2/--t3)与画布尺寸是渲染管线按
 // timings.json 注入的(tokens.css 里只有占位默认值 --t2:800ms), 直接打开看到的是"所有动画
@@ -110,6 +111,27 @@ export function injectStyle(html, css, note = '本项目 tokens.css 缺这段规
   return i < 0 ? block + html : html.slice(0, i) + block + html.slice(i);
 }
 
+// 动效开的**逐级步进**: 往副本 <head> 开头注入一段在 CSS 动画启动前执行的脚本 ——
+// ?s=k 表示已揭示到第 k 个用到的 stage: 第 k 级带 &anim=1 时当场入场, 更早的级直接终态
+// (-60s 延迟 = 动画早已完成), 更晚的级保持隐藏(+60s 延迟 = 还在等, 等用户按"下一步")。
+// 父页只换 iframe src(与快照同一套机制), 不做任何跨文档访问 —— file:// 下 iframe 是独立源。
+export function addStepScript(html, stages = []) {
+  if (!stages.length) return html;
+  const script = `<script>
+/* 放映页逐级步进(动效开): 在动画启动前按 ?s=k 重设各级入场延迟 */
+(function(){try{
+  var q=new URLSearchParams(location.search);var k=parseInt(q.get('s')||'0',10);
+  if(!k)return;var anim=q.get('anim')==='1';var used=${JSON.stringify(stages)};
+  used.forEach(function(n,idx){var pos=idx+1,v;
+    if(pos<k)v='-60000ms';else if(pos===k)v=anim?'0ms':'-60000ms';else v='60000ms';
+    document.documentElement.style.setProperty('--t'+n,v);});
+}catch(e){}})();
+</script>`;
+  const m = /<head[^>]*>/i.exec(html);
+  if (!m) return script + html;
+  return html.slice(0, m.index + m[0].length) + '\n' + script + html.slice(m.index + m[0].length);
+}
+
 // ─────────────────────────── 放映页 ───────────────────────────
 
 export function buildPlayPage({
@@ -119,9 +141,30 @@ export function buildPlayPage({
   fallbackNote = '',   // "还没对时/等间隔预览"的如实说明(与口播 UI 无关, 画面上也要说清)
   canvas = { w: 1920, h: 1080 },   // 画布尺寸(竖版 1080×1920): 舞台缩放与缩略图比例都按它算
 } = {}) {
+  // UI 双语(实测反馈: 英文项目的放映页整套中文按钮)。lang 来自 script.json(en* → 英文, 其余中文)
+  const T = String(lang).toLowerCase().startsWith('en') ? {
+    title: 'Play', fxOn: 'Motion on', fxOff: 'Motion off', narrOn: 'Narration on', narrOff: 'Narration off',
+    overview: 'Overview', panelH: 'Narration for this slide', untimed: '(untimed)',
+    fxTitle: 'Motion on / off (key X)', narrTitle: 'Narration on / off (key P)',
+    prevTitle: 'Previous level / slide', nextTitle: 'Next level / slide',
+    hintStep: 'reveal level / slide', hintFx: 'motion on / off', hintNarr: 'narration on / off',
+    hintOv: 'overview', hintFs: 'fullscreen', level: 'step',
+    gen: 'Snapshots generated', genNote: 'same source as the final video (no audio, no subtitles)',
+    noThumbA: 'No thumbnail (preview/', ovH: 'Overview · click any slide to jump (thumbnails from preview/*.png)',
+  } : {
+    title: '放映页', fxOn: '动效开', fxOff: '动效关', narrOn: '口播开', narrOff: '口播关',
+    overview: '总览', panelH: '本张口播文案', untimed: '(未对时)',
+    fxTitle: '动效开 / 动效关(快捷键 X)', narrTitle: '口播开 / 口播关(快捷键 P)',
+    prevTitle: '上一级 / 上一张', nextTitle: '下一级 / 下一张',
+    hintStep: '逐级入场 / 翻页', hintFx: '动效开 / 动效关', hintNarr: '口播开 / 口播关',
+    hintOv: '总览', hintFs: '全屏', level: '级',
+    gen: '快照生成于', genNote: '画面与成片同源(无声、无字幕)',
+    noThumbA: '无缩略图(preview/', ovH: '总览 · 点任意一张跳转(缩略图来自 preview/*.png)',
+  };
   const model = slides.map(s => ({
     id: s.id, name: s.name, title: s.title ?? '',
     src: s.copy, nofx: s.copyNofx,
+    steps: (s.steps && s.steps.length) ? s.steps : [1],   // 动效开时逐级揭示的 stage 序列
     clauses: (s.clauses ?? []).map(c => ({ stage: c.stage ?? null, text: c.text ?? '', text2: c.text2 ?? '' })),
   }));
   const json = JSON.stringify(model).replace(/</g, '\\u003c');
@@ -135,7 +178,7 @@ export function buildPlayPage({
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<title>放映页 · ${esc(topic) || 'html2video'} · html2video-for-mcode</title>
+<title>${T.title} · ${esc(topic) || 'html2video'} · html2video-for-mcode</title>
 <style>
   :root{--c-bg:#0b0c10;--c-panel:#14161c;--c-fg:#e8ebf4;--c-dim:#8b90a0;--c-line:#23252e;--c-acc:#6ea8fe;--c-warn:#ffb454}
   *{box-sizing:border-box}
@@ -158,7 +201,9 @@ export function buildPlayPage({
   main{display:flex;min-width:0;min-height:0}
   #stage{position:relative;flex:1 1 auto;min-width:0;min-height:0;overflow:hidden;background:#000}
   #fit{position:absolute;left:50%;top:50%;width:${canvas.w}px;height:${canvas.h}px;transform-origin:center center}
-  #frame{width:${canvas.w}px;height:${canvas.h}px;border:0;display:block;background:#fff}
+  /* 双缓冲: 两张 iframe 叠放, 新帧在隐藏帧里加载完成才对调显示 —— 换页/逐级不再闪白 */
+  #fit iframe{position:absolute;left:0;top:0;width:${canvas.w}px;height:${canvas.h}px;border:0;background:#fff;opacity:0}
+  #fit iframe.show{opacity:1}
   #hit{position:absolute;inset:0;z-index:2;touch-action:none}   /* 触屏左右滑翻页; 画面是纯 CSS 无需交互 */
   #panel{flex:0 0 clamp(240px,22vw,340px);min-width:0;overflow:auto;overscroll-behavior:contain;
     border-left:1px solid var(--c-line);background:var(--c-panel);padding:14px 16px}
@@ -175,10 +220,13 @@ export function buildPlayPage({
   footer kbd{background:#1d2130;border:1px solid var(--c-line);border-radius:4px;padding:1px 5px;color:var(--c-fg);font-family:inherit}
   footer .gen{margin-left:auto;opacity:.8}
   .kbd-hints{display:flex;flex-wrap:wrap;gap:6px 16px}   /* 不用内联样式: 否则窄屏媒体查询盖不住它 */
-  #touchbar{display:none;gap:6px;width:100%}
+  #touchbar{display:flex;gap:6px;flex-wrap:wrap}
   #touchbar button{flex:1 1 auto;min-width:0;font:inherit;font-size:12px;color:var(--c-fg);background:#1a1d26;
     border:1px solid var(--c-line);border-radius:8px;padding:8px 4px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #touchbar button:active{background:#252a38}
+  #touchbar button.on{color:var(--c-warn)}   /* "关"态亮警示色: 一眼看出动效/口播被关了 */
+  /* 前后箭头是高频操作, 加大加粗(实测反馈太小) */
+  #touchbar button[data-act="prev"],#touchbar button[data-act="next"]{flex:0 0 76px;font-size:24px;font-weight:600}
   /* ── 总览 ── */
   #overlay{position:fixed;inset:0;background:rgba(6,7,10,.975);padding:28px;overflow:auto;display:none;z-index:9}
   #overlay.show{display:block}
@@ -193,7 +241,7 @@ export function buildPlayPage({
   /* ── 窄窗口 / 手机: 口播文案收到底部当抽屉, 键盘提示换成触摸按钮 ── */
   @media (max-width:860px), (pointer:coarse){
     footer .kbd-hints{display:none}
-    #touchbar{display:flex}
+    #touchbar{width:100%}
   }
   @media (max-width:860px){
     header{padding:8px 12px;gap:8px}
@@ -215,47 +263,62 @@ export function buildPlayPage({
 <body class="${bodyCls}">
 <div class="top">
   <header>
-    <span class="topic" title="${esc(topic)}">${esc(topic) || '放映页'}</span>
+    <span class="topic" title="${esc(topic)}">${esc(topic) || T.title}</span>
     <span class="chip" id="pageno">1 / ${slides.length}</span>
-    <button class="chip" id="mode" type="button" title="动效 / 关动效 对照(快捷键 X)">动效</button>
     <span class="grow"></span>
   </header>
   ${notice}
 </div>
 <main>
-  <div id="stage"><div id="fit"><iframe id="frame" title="slide" scrolling="no" frameborder="0"></iframe></div><div id="hit"></div></div>
+  <div id="stage"><div id="fit"><iframe id="frame" title="slide" scrolling="no" frameborder="0"></iframe><iframe id="frameB" title="slide" scrolling="no" frameborder="0" aria-hidden="true"></iframe></div><div id="hit"></div></div>
   ${narration ? `<aside id="panel">
-    <h2>本张口播文案${timing ? '' : '(未对时)'}</h2>
+    <h2>${T.panelH}${timing ? '' : T.untimed}</h2>
     <ol id="clauses"></ol>
     ${cssWarn}
   </aside>` : ''}
 </main>
 <footer>
   <span class="kbd-hints">
-    <span><kbd>←</kbd><kbd>→</kbd> 翻页</span>
-    <span><kbd>R</kbd> 重播</span>
-    <span><kbd>X</kbd> 动效 / 关动效 对照</span>
-    ${narration ? '<span><kbd>P</kbd> 口播文案 开 / 关</span>' : ''}
-    <span><kbd>O</kbd> 总览</span>
-    <span><kbd>F</kbd> 全屏</span>
+    <span><kbd>←</kbd><kbd>→</kbd> ${T.hintStep}</span>
+    <span><kbd>X</kbd> ${T.hintFx}</span>
+    ${narration ? `<span><kbd>P</kbd> ${T.hintNarr}</span>` : ''}
+    <span><kbd>O</kbd> ${T.hintOv}</span>
+    <span><kbd>F</kbd> ${T.hintFs}</span>
   </span>
-  <span class="gen">快照生成于 ${esc(generatedAt)} · 画面与成片同源(无声、无字幕)</span>
   <span id="touchbar">
-    <button type="button" data-act="prev" title="上一张">‹</button>
-    <button type="button" data-act="replay" title="重播入场动画">↻ 重播</button>
-    <button type="button" data-act="nofx" title="动效 / 关动效 对照">动效</button>
-    ${narration ? '<button type="button" data-act="narr" title="口播文案 开 / 关">口播</button>' : ''}
-    <button type="button" data-act="overview" title="总览">总览</button>
-    <button type="button" data-act="next" title="下一张">›</button>
+    <button type="button" data-act="prev" title="${T.prevTitle}">‹</button>
+    <button type="button" data-act="nofx" id="fxbtn" title="${T.fxTitle}">${T.fxOn}</button>
+    ${narration ? `<button type="button" data-act="narr" id="narrbtn" title="${T.narrTitle}">${T.narrOn}</button>` : ''}
+    <button type="button" data-act="overview" title="${T.overview}">${T.overview}</button>
+    <button type="button" data-act="next" title="${T.nextTitle}">›</button>
   </span>
+  <span class="gen">${T.gen} ${esc(generatedAt)} · ${T.genNote}</span>
 </footer>
-<div id="overlay"><h2>总览 · 点任意一张跳转(缩略图来自 preview/*.png)</h2><div id="grid"></div></div>
+<div id="overlay"><h2>${T.ovH}</h2><div id="grid"></div></div>
 <script>
 var S = ${json};
-var i = 0, nofx = false;
+var T = ${JSON.stringify({ fxOn: T.fxOn, fxOff: T.fxOff, narrOn: T.narrOn, narrOff: T.narrOff, level: T.level, noThumbA: T.noThumbA })};
+var i = 0, nofx = false, step = 1, animNext = true;
+// step = 动效开时已揭示到第几个 stage; animNext = 揭示该级时是否当场播入场动画
 
 function el(id){ return document.getElementById(id); }
 function cur(){ return S[i]; }
+
+// 双缓冲换帧: 新地址先喂给隐藏帧, load 后再等两帧 rAF(新文档首帧已画)才对调显示 ——
+// 单 iframe 直接改 src 会先卸载旧文档(白屏一瞬)再加载新文档, 换页/逐级都会闪白(实测反馈)
+var FR = [el('frame'), el('frameB')], front = 0, gen = 0;
+function show(src){
+  gen++; var g = gen, back = FR[1 - front];
+  var raf = window.requestAnimationFrame || function(f){ setTimeout(f, 16); };
+  back.addEventListener('load', function onl(){
+    back.removeEventListener('load', onl);
+    if (g !== gen) return;                 // 等待期间又按了下一步: 这次换帧作废
+    raf(function(){ raf(function(){ if (g === gen) {
+      back.classList.add('show'); FR[front].classList.remove('show'); front = 1 - front;
+    } }); });
+  });
+  back.src = './' + src;   // './' 前缀: 强制按相对 URL 解析, 防同名 javascript: 文件名在放映页同源执行
+}
 
 function layout(){
   var st = el('stage'); if (!st) return;
@@ -283,20 +346,49 @@ function paintPanel(){
   });
 }
 
-function render(){
-  var s = cur();
-  el('pageno').textContent = (i + 1) + ' / ' + S.length;
-  el('mode').textContent = nofx ? '关动效' : '动效';
-  el('mode').className = 'chip' + (nofx ? ' on' : '');
-  el('frame').src = './' + (nofx ? s.nofx : s.src);   // './' 前缀: 强制按相对 URL 解析, 防同名 javascript: 文件名在放映页同源执行
-  paintPanel(); layout();
+// 底栏开关按当前状态写明"开/关"(实测反馈: 只写"动效/口播"看不出现在是开还是关)
+function paintToggles(){
+  var b = el('fxbtn'); if (b) { b.textContent = nofx ? T.fxOff : T.fxOn; b.className = nofx ? 'on' : ''; }
+  var n = el('narrbtn'); if (n) { var off = document.body.classList.contains('narr-off'); n.textContent = off ? T.narrOff : T.narrOn; n.className = off ? 'on' : ''; }
 }
 
-function go(n){ i = Math.max(0, Math.min(S.length - 1, n)); render(); }
+function render(){
+  var s = cur();
+  var lvl = (!nofx && s.steps && s.steps.length > 1) ? (' · ' + T.level + ' ' + step + '/' + s.steps.length) : '';
+  el('pageno').textContent = (i + 1) + ' / ' + S.length + lvl;
+  var src;
+  if (nofx) src = s.nofx;
+  else if (s.steps && s.steps.length > 1) src = s.src + '?s=' + step + (animNext ? '&anim=1' : '');
+  else src = s.src;
+  show(src);
+  paintToggles(); paintPanel(); layout();
+}
+
+// 动效开: →/← 先逐级揭示(下一级当场入场、上一级直接终态), 到头/回头才翻页;动效关: 直接翻页
+function next(){
+  var s = cur();
+  if (!nofx && s.steps && s.steps.length > 1 && step < s.steps.length) { step++; animNext = true; }
+  else { i = Math.min(S.length - 1, i + 1); enterSlide(true); }
+  render();
+}
+function prev(){
+  var s = cur();
+  if (!nofx && s.steps && s.steps.length > 1 && step > 1) { step--; animNext = false; }
+  else { i = Math.max(0, i - 1); enterSlide(false); }
+  render();
+}
+// 进入一张: 向前进 = 只出第 1 级(当场入场);往回跳/总览选张 = 直接整张终态
+function enterSlide(fwd){
+  var s = cur();
+  if (fwd) { step = 1; animNext = true; }
+  else { step = (s.steps && s.steps.length) ? s.steps.length : 1; animNext = false; }
+}
+function go(n){ i = Math.max(0, Math.min(S.length - 1, n)); enterSlide(false); render(); }
 
 function toggleNarr(){
   if (!el('panel')) return;                    // 本片就没有口播 UI(没 clauses 或 --no-script)
   document.body.classList.toggle('narr-off');  // 只是 display:none, 所以还能切回来
+  paintToggles();
   setTimeout(layout, 30);
 }
 
@@ -307,7 +399,7 @@ function buildGrid(){
     var img = document.createElement('img');
     img.src = '../' + s.id + '.png';
     img.alt = s.id;
-    img.onerror = function(){ var p = document.createElement('div'); p.className = 'ph'; p.textContent = '无缩略图(preview/' + s.id + '.png)'; img.replaceWith(p); };
+    img.onerror = function(){ var p = document.createElement('div'); p.className = 'ph'; p.textContent = T.noThumbA + s.id + '.png)'; img.replaceWith(p); };
     f.appendChild(img);
     var cap = document.createElement('figcaption');
     var b = document.createElement('b'); b.textContent = s.id;
@@ -320,9 +412,8 @@ function buildGrid(){
 }
 
 var ACT = {
-  prev: function(){ go(i - 1); },
-  next: function(){ go(i + 1); },
-  replay: function(){ render(); },
+  prev: prev,
+  next: next,
   nofx: function(){ nofx = !nofx; render(); },
   narr: toggleNarr,
   overview: function(){ buildGrid(); el('overlay').classList.add('show'); }
@@ -330,25 +421,23 @@ var ACT = {
 Array.prototype.forEach.call(document.querySelectorAll('#touchbar button'), function(b){
   b.onclick = function(){ (ACT[b.getAttribute('data-act')] || function(){})(); };
 });
-el('mode').onclick = ACT.nofx;
 
-// 触屏: 左右滑翻页(画面本身是纯 CSS, 不需要交互, 所以盖一层透明接收层)
+// 触屏: 左右滑 = 逐级入场/翻页(与按钮、键盘同一套 next/prev;画面本身是纯 CSS, 盖一层透明接收层)
 (function(){
   var hit = el('hit'); if (!hit) return;
   var x0 = 0, y0 = 0;
   hit.addEventListener('touchstart', function(e){ var t = e.changedTouches[0]; x0 = t.clientX; y0 = t.clientY; }, { passive: true });
   hit.addEventListener('touchend', function(e){
     var t = e.changedTouches[0], dx = t.clientX - x0, dy = t.clientY - y0;
-    if (Math.abs(dx) >= 45 && Math.abs(dx) > Math.abs(dy)) go(i + (dx < 0 ? 1 : -1));
+    if (Math.abs(dx) >= 45 && Math.abs(dx) > Math.abs(dy)) { if (dx < 0) next(); else prev(); }
   }, { passive: true });
 })();
 
 document.addEventListener('keydown', function(e){
-  if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') { go(i + 1); e.preventDefault(); }
-  else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { go(i - 1); e.preventDefault(); }
+  if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') { next(); e.preventDefault(); }
+  else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { prev(); e.preventDefault(); }
   else if (e.key === 'Home') go(0);
   else if (e.key === 'End') go(S.length - 1);
-  else if (e.key === 'r' || e.key === 'R') render();
   else if (e.key === 'x' || e.key === 'X') ACT.nofx();
   else if (e.key === 'p' || e.key === 'P') toggleNarr();
   else if (e.key === 'o' || e.key === 'O') ACT.overview();
@@ -400,8 +489,12 @@ function main() {
   const chartTable = kitIssues.filter(k => k.id !== 'nofx');
   const ctCss = chartTable.map(k => k.css).join('\n\n');
   const ctLabel = chartTable.map(k => k.label).join(' · ');
+  // 页面上用户可见的文字按 script.lang 双语; 终端输出是给 agent 看的, 保持中文
+  const isEn = String(script.lang ?? 'zh').toLowerCase().startsWith('en');
+  const L = (zh, en) => (isEn ? en : zh);
   const cssNote = kitIssues.length
-    ? `本项目 tokens.css 落后于技能当前版(缺: ${kitIssues.map(k => k.label).join(' · ')}) —— 快照已兜底注入当前版;想让成片与项目文件也用上, 跑 init-project --upgrade-css`
+    ? L(`本项目 tokens.css 落后于技能当前版(缺: ${kitIssues.map(k => k.label).join(' · ')}) —— 快照已兜底注入当前版;想让成片与项目文件也用上, 跑 init-project --upgrade-css`,
+        `This project's tokens.css is behind the skill's current version (missing: ${kitIssues.map(k => k.label).join(' / ')}) — snapshots inject the current one as a fallback; run init-project --upgrade-css to upgrade the project itself`)
     : '';
 
   const rows = [];
@@ -428,6 +521,7 @@ function main() {
 
     let copy = addBaseHref(injectHtmlVars(html, decl), '../../slides/');
     copy = `<!-- html2video-for-mcode 放映页快照 · 由 scripts/preview-page.mjs 生成, 请勿编辑;\n     真实文件: slides/${base}(改完 slides 请重跑 preview-page.mjs) -->\n` + copy;
+    copy = addStepScript(copy, stagesFromHtml(html));   // 动效开的逐级步进(?s=k 重设各级延迟)
     if (ctCss) copy = injectStyle(copy, ctCss, `图表/表格工具箱(${ctLabel})`);
     fs.writeFileSync(path.join(outDir, base), copy);
     const nofxName = base.replace(/\.html?$/i, '') + '.nofx.html';
@@ -439,6 +533,7 @@ function main() {
     rows.push({
       id: sid, name: base, title: s.title ?? s.layout ?? '',
       copy: base, copyNofx: nofxName,
+      steps: stagesFromHtml(html),
       duration: t?.duration,
       lastStage: stageVals.length ? Math.max(...stageVals) : null,
       clauses: t?.clauses ?? (s.clauses ?? []).map(c => ({ stage: c.stage ?? null, start: null, text: c.text, text2: c.text2 })),
@@ -455,8 +550,11 @@ function main() {
   const timing = narration && !!timings && rows.some(r => r.clauses.some(c => Number.isFinite(c.start)));
   // 提示与口播无关: 动画时序不是成片的, 这件事看画面的人也必须知道
   const fallbackNote = [
-    (!hasTimings || fallbackUsed) ? '动画按等间隔 0.3/1.3/2.3s 预览入场顺序, 不是成片时序(缺 build/timings.json)' : '',
-    narration && !timing ? '口播还没对时: 只列文案' : '',
+    (!hasTimings || fallbackUsed) ? L('口播还没对时: 入场顺序按等间隔 0.3/1.3/2.3s 估算, 不是成片时序(缺 build/timings.json)',
+        'Narration not timed yet: entrance order estimated at 0.3/1.3/2.3s intervals — not the final timing (missing build/timings.json)') : '',
+    L('动画为手动逐级步进: 按 → 先出下一级, 出完再翻页(动效关则直接翻页)',
+        'Animations step manually: press → to reveal the next level first, then the next slide (motion off = switch slides directly)'),
+    narration && !timing ? L('口播还没对时: 只列文案', 'Narration not timed yet: script text only') : '',
   ].filter(Boolean).join(' · ');
 
   const page = buildPlayPage({
@@ -475,7 +573,7 @@ function main() {
   else if (fallbackUsed) console.warn('⚠ 部分张在 timings.json 里没有 stage 数据: 那几张按等间隔预览');
   else console.log(`  已注入实测 stage 延迟: ${rows.map(r => `${r.id}(${r.lastStage != null ? '末层 ' + r.lastStage.toFixed(1) + 's' : '无 stage'})`).join(' ')}`);
   if (kitIssues.length) console.warn(`⚠ slides/tokens.css 落后于技能当前版(缺: ${kitIssues.map(k => k.label).join(' · ')}) —— 副本已兜底注入;想让成片与项目文件也用上, 跑 node scripts/init-project.mjs <项目目录> --upgrade-css`);
-  console.log(`  操作: ← → 翻页 · R 重播 · X 动效/关动效对照${narration ? ' · P 口播文案开/关' : ''} · O 总览 · F 全屏;触屏左右滑翻页`);
+  console.log(`  操作: ← → 逐级入场/翻页(动效开)或翻页(动效关) · X 动效开/关${narration ? ' · P 口播开/关' : ''} · O 总览 · F 全屏;触屏左右滑同 ← →`);
 
   if (OPEN) {
     const target = path.join(outDir, 'index.html');

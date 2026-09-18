@@ -73,11 +73,12 @@ describe('预览放映页 · 纯函数', () => {
     assert.ok(page.includes('注意 X'), 'tokens.css 落后时应把提示带给用户');
   });
 
-  test('buildPlayPage: 不做播放器那套 UI(没有计时器/进度条/rAF 循环)', () => {
+  test('buildPlayPage: 不做播放器那套 UI(没有计时器/进度条/常驻动画循环)', () => {
     const page = buildPlayPage({ topic: 'T', slides: [{ id: '01', name: 'a.html', copy: 'a.html', copyNofx: 'a.nofx.html', clauses: [] }] });
     assert.ok(!page.includes('id="clock"'), '不要走秒的计时器');
     assert.ok(!page.includes('id="bar"'), '不要时间轴进度条');
-    assert.ok(!/requestAnimationFrame/.test(page), '不要常驻 rAF 循环');
+    assert.ok(!page.includes('setInterval'), '不要常驻定时循环');
+    assert.ok(!/requestAnimationFrame\((loop|tick|frame)/.test(page), '不要常驻 rAF 动画循环 —— 双缓冲换帧的一次性 rAF 等帧不算');
     assert.ok(!/配音/.test(page), '页面不得出现"配音"字样 —— 此前把"关动效对照"写成"关配音画对比", 让人以为在管音频');
   });
 
@@ -251,7 +252,7 @@ describe('预览放映页 · 竖版画布与 iframe 安全(2026-09-18 流程/安
 
   test('iframe src 一律加 ./ 前缀: javascript: 文件名不会被当 scheme 在放映页同源执行', () => {
     const page = buildPlayPage({ topic: 'T', slides: SLIDES_ARG.map(s => ({ ...s })) });
-    assert.match(page, /src\s*=\s*'\.\/'\s*\+\s*\(nofx/, '必须强制相对解析');
+    assert.match(page, /src\s*=\s*'\.\/'\s*\+\s*src/, '必须强制相对解析(赋值统一走 ./ + src 变量)');
   });
 
   test('竖版项目落盘: script.json 1080×1920 → index.html 用竖版画布', () => {
@@ -265,5 +266,95 @@ describe('预览放映页 · 竖版画布与 iframe 安全(2026-09-18 流程/安
     assert.equal(r.status, 0, r.stderr);
     const page = fs.readFileSync(path.join(proj, 'preview', 'play', 'index.html'), 'utf8');
     assert.ok(page.includes('width:1080px;height:1920px'), '放映页要按竖版渲染, 否则 Gate 4 画面被切掉近半');
+  });
+});
+
+describe('预览放映页 · 逐级步进(动效开)+ 无重播(2026-09-18 实测反馈)', () => {
+  const ARG = [{ id: '01', name: 'a.html', copy: 'a.html', copyNofx: 'a.nofx.html', clauses: [], steps: [1, 2] }];
+
+  test('开关移到底栏且写明状态(动效开/关 · 口播开/关), 顶部不再有动效开关;重播已移除', () => {
+    const page = buildPlayPage({ topic: 'T', slides: ARG.map(s => ({ ...s })) });
+    assert.ok(!page.includes('id="mode"'), '顶部动效开关要移掉(实测反馈: 与底栏开关重复)');
+    assert.match(page, /data-act="nofx"[^>]*id="fxbtn"[^>]*>动效开</, '底栏动效开关, 默认态写"动效开"');
+    assert.match(page, /data-act="narr"[^>]*id="narrbtn"[^>]*>口播开</, '底栏口播开关, 默认态写"口播开"');
+    assert.ok(page.includes('paintToggles'), '开关文案要随状态重绘(动效关/口播关)');
+    assert.ok(!page.includes('data-act="replay"'), '不得再有重播按钮');
+    assert.ok(!/<kbd>R<\/kbd>/.test(page), '不得再有 R 键提示');
+    assert.ok(page.includes('逐级入场 / 翻页'), '键盘提示要说明逐级行为');
+    assert.match(page, /#touchbar button\[data-act="prev"\]/, '前后箭头要有加大样式');
+    const noNarr = buildPlayPage({ topic: 'T', narration: false, slides: ARG.map(s => ({ ...s })) });
+    assert.ok(!noNarr.includes('id="narrbtn"'), '没有口播 UI 就不该有口播开关');
+  });
+
+  test('UI 双语: lang=en → 整套英文文案, 页面不残留中文 UI 字样(2026-09-18 实测反馈)', () => {
+    const en = buildPlayPage({ topic: 'T', lang: 'en', slides: [{ id: '01', name: 'a.html', copy: 'a.html', copyNofx: 'a.nofx.html', clauses: [{ stage: 1, text: 'Hi' }], steps: [1, 2] }] });
+    assert.match(en, /<html lang="en">/);
+    assert.match(en, /id="fxbtn"[^>]*>Motion on</, '动效开关英文');
+    assert.match(en, /id="narrbtn"[^>]*>Narration on</, '口播开关英文');
+    assert.ok(en.includes('Narration for this slide'), '口播面板标题英文');
+    assert.ok(en.includes('>Overview<'), '总览按钮英文');
+    assert.ok(en.includes('No thumbnail (preview/'), '缩略图缺失占位英文');
+    assert.ok(en.includes('reveal level / slide'), '键盘提示英文(断言可见文本; 代码注释里的中文不算)');
+    assert.ok(!en.includes('>动效开<') && !en.includes('>口播开<'), '按钮不得残留中文');
+    assert.ok(!en.includes('本张口播文案') && !en.includes('快照生成于') && !en.includes('无缩略图'), '面板/页脚/占位不得残留中文');
+    const zh = buildPlayPage({ topic: 'T', lang: 'zh', slides: [{ id: '01', name: 'a.html', copy: 'a.html', copyNofx: 'a.nofx.html', clauses: [{ stage: 1, text: '甲' }] }] });
+    assert.ok(zh.includes('>动效开</button>') && zh.includes('>口播开</button>'), '中文默认不变');
+  });
+
+  test('双缓冲换帧: 两张叠放 iframe, load 后等两帧 rAF 才对调 —— 单 iframe 改 src 换页会闪白(实测反馈)', () => {
+    const page = buildPlayPage({ topic: 'T', slides: ARG.map(s => ({ ...s })) });
+    assert.ok(page.includes('id="frame"') && page.includes('id="frameB"'), '要有一前一后两张 iframe');
+    assert.match(page, /#fit iframe\{[^}]*position:absolute/, '两张 iframe 必须叠放, 隐藏帧加载完再显示');
+    assert.match(page, /#fit iframe\.show\{opacity:1\}/, '默认 opacity:0, 显示态由 .show 控制');
+    assert.ok(page.includes("back.addEventListener('load'"), '新帧要等 load 事件(文档就绪)才换');
+    assert.match(page, /raf\(function\(\)\{ raf\(function\(\)\{ if \(g === gen\)/, 'load 后还要等两帧 rAF(新文档首帧已画)才对调, 否则仍会闪');
+    assert.match(page, /src\s*=\s*'\.\/'\s*\+\s*src/, "换帧也必须走 './' + src 强制相对解析(javascript: 文件名不得当 scheme 执行)");
+  });
+
+  test('多级张的模型带 steps, 快照副本头部带步进脚本(?s=k 重设各级延迟)', () => {
+    const page = buildPlayPage({ topic: 'T', slides: ARG.map(s => ({ ...s })) });
+    assert.ok(page.includes('"steps":[1,2]'), '模型要带逐级序列');
+    const proj = tmpdir();
+    mkproj(proj, { slides: [{ id: '01', layout: 'statement', html: '01-title.html', audio: '01.mp3', clauses: [{ stage: 1, text: '第一句。' }, { stage: 2, text: '第二句。' }] }] });
+    fs.writeFileSync(path.join(proj, 'slides', '01-title.html'), SLIDE);   // SLIDE 用了 stage 1/2
+    const r = runSkill('preview-page.mjs', [proj]);
+    assert.equal(r.status, 0, r.stderr);
+    const copy = fs.readFileSync(path.join(proj, 'preview', 'play', '01-title.html'), 'utf8');
+    assert.ok(copy.includes('逐级步进'), '副本要带步进脚本说明');
+    assert.ok(/var used=\[1,2\]/.test(copy), '步进脚本要写入该张用到的 stage 序列');
+    assert.ok(copy.indexOf('逐级步进') < copy.indexOf('tokens.css'), '脚本必须在样式表之前(动画启动前执行)');
+    assert.ok(fs.readFileSync(path.join(proj, 'preview', 'play', 'index.html'), 'utf8').includes('"steps":[1,2]'));
+  });
+
+  test('行为级: ?s=1 隐藏二级 · ?s=2&anim=1 当场入场 · 回退不重播(需 Playwright,缺则 skip)', async t => {
+    const { loadPackage } = await import('file://' + path.join(SCRIPTS, 'tools.mjs').replace(/\\/g, '/'));
+    const playwright = await loadPackage('playwright');
+    if (!playwright) return t.skip('无 playwright');
+    let browser;
+    try { browser = await playwright.chromium.launch({ headless: true }); }
+    catch { return t.skip('chromium 未安装'); }
+    try {
+      // 必须用 init-project 的完整 tokens(fx 类/[data-stage] 基础态都在里面);
+      // mkproj 的极简 tokens 没有这些规则, 元素根本不参与动画 —— 首版就错在这里
+      const proj = tmpdir();
+      assert.equal(runSkill('init-project.mjs', [proj, '--topic', 'T']).status, 0);
+      fs.writeFileSync(path.join(proj, 'script.json'), JSON.stringify({ topic: 't', fps: 30, width: 1920, height: 1080, slides: [{ id: '01', layout: 'statement', html: '01-title.html', audio: '01.mp3', clauses: [{ stage: 1, text: '一。' }, { stage: 2, text: '二。' }] }] }, null, 2));
+      fs.writeFileSync(path.join(proj, 'slides', '01-title.html'), SLIDE);
+      assert.equal(runSkill('preview-page.mjs', [proj]).status, 0);
+      const p = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+      const url = s => 'file:///' + path.join(proj, 'preview', 'play', '01-title.html').replace(/\\/g, '/') + s;
+      const op = sel => p.evaluate(x => { const e = document.querySelector(x); return e ? getComputedStyle(e).opacity : null; }, sel);
+      await p.goto(url('?s=1&anim=1')); await p.waitForTimeout(1500);
+      assert.equal(await op('[data-stage="1"]'), '1', '第 1 级可见');
+      assert.equal(await op('[data-stage="2"]'), '0', '第 2 级必须还在等(不能自己出来)');
+      await p.goto(url('?s=2&anim=1')); await p.waitForTimeout(1200);
+      assert.equal(await op('[data-stage="2"]'), '1', '按下一步后第 2 级当场入场');
+      await p.goto(url('?s=2')); await p.waitForTimeout(250);
+      assert.equal(await op('[data-stage="2"]'), '1', '回退/跳转态直接终态, 不用等动画');
+      await p.goto(url('?s=1&anim=1')); await p.waitForTimeout(250);
+      assert.equal(await op('[data-stage="2"]'), '0', '回到 ?s=1 二级重新隐藏');
+    } finally {
+      await browser.close();   // 断言失败也必须关掉浏览器, 否则事件循环挂着 node --test 永不退出(实测踩过)
+    }
   });
 });
