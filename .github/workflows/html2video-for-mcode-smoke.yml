@@ -36,13 +36,15 @@ jobs:
           npm install --no-save --no-package-lock playwright
           npx playwright install --with-deps chromium
 
-      - name: Security & policy tests (containment / overwrite refusal / endpoint allowlist / SSRF)
+      - name: Security, policy & template tests (containment / overwrite refusal / endpoint allowlist / SSRF / play page / fx keyframes)
         run: |
           node --test \
             plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/safe-paths.test.mjs \
             plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/no-clobber.test.mjs \
             plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/endpoint-allowlist.test.mjs \
             plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/fetch-policy.test.mjs \
+            plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/preview-page.test.mjs \
+            plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/tests/tokens-fx.test.mjs \
             --test-timeout=60000
 
       - name: Render smoke (init → timings → static gate → capture → build)
