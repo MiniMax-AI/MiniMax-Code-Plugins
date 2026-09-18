@@ -5,11 +5,15 @@ on:
     paths:
       - 'plugins/Hylouis233/cli-agent-bridge/**'
       - '.github/workflows/cli-agent-bridge-windows.yml'
+      - 'package.json'
+      - 'package-lock.json'
   push:
     branches: [main, plugin/cli-agent-bridge]
     paths:
       - 'plugins/Hylouis233/cli-agent-bridge/**'
       - '.github/workflows/cli-agent-bridge-windows.yml'
+      - 'package.json'
+      - 'package-lock.json'
 
 permissions:
   contents: read
@@ -34,9 +38,9 @@ jobs:
           set -euo pipefail
           node --test --test-concurrency=1 \
             plugins/Hylouis233/cli-agent-bridge/tests/process-tree.test.mjs \
-            plugins/Hylouis233/cli-agent-bridge/tests/server.test.mjs \
+            plugins/Hylouis233/cli-agent-bridge/integration/server.mjs \
             plugins/Hylouis233/cli-agent-bridge/tests/workspace-lock.test.mjs \
-            plugins/Hylouis233/cli-agent-bridge/test/server.test.mjs \
+            plugins/Hylouis233/cli-agent-bridge/integration/stdio.mjs \
             2>&1 | tee bridge-windows.tap
       - name: Preserve complete test output, including failures
         if: always()

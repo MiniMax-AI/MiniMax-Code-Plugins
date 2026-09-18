@@ -1,5 +1,5 @@
 // Self-contained tests for the cli-agent-bridge stdio MCP server.
-// Run with: node --test test/server.test.mjs
+// Run with: node --test integration/stdio.mjs
 // No network access is required: the delegation test uses a fake slow backend.
 //
 // Every test drives its server through withServer(), which always stops the
