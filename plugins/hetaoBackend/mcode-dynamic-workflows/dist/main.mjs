@@ -7714,10 +7714,203 @@ import { spawn as spawn3 } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, openSync, writeFileSync, closeSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { createHash as createHash2, randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+var Store = class {
+  constructor(dir) {
+    mkdirSync(dir, { recursive: true, mode: 448 });
+    this.lock = join(dir, "owner.lock");
+    try {
+      this.fd = openSync(this.lock, "wx", 384);
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      let pid;
+      try {
+        pid = JSON.parse(readFileSync(this.lock, "utf8")).pid;
+      } catch {
+        throw new Error("\u72B6\u6001\u76EE\u5F55\u9501\u635F\u574F\uFF0C\u8BF7\u4EBA\u5DE5\u68C0\u67E5 owner.lock");
+      }
+      let alive2 = true;
+      try {
+        process.kill(pid, 0);
+      } catch (err) {
+        if (err.code === "ESRCH") alive2 = false;
+      }
+      if (alive2) throw new Error("\u540C\u4E00\u72B6\u6001\u76EE\u5F55\u5DF2\u6709\u8FD0\u884C\u4E2D\u7684\u670D\u52A1\uFF0C\u8BF7\u8FDE\u63A5\u65E2\u6709\u670D\u52A1");
+      unlinkSync(this.lock);
+      this.fd = openSync(this.lock, "wx", 384);
+    }
+    this.owner = randomUUID();
+    this.txDepth = 0;
+    try {
+      writeFileSync(this.fd, JSON.stringify({ pid: process.pid, owner: this.owner }));
+      this.db = new DatabaseSync(join(dir, "workflows.sqlite"));
+      this.db.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT;");
+      this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+      CREATE TABLE IF NOT EXISTS templates(id TEXT PRIMARY KEY,body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,requestId TEXT UNIQUE,requestHash TEXT NOT NULL,body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS steps(runId TEXT,id TEXT,body TEXT NOT NULL,PRIMARY KEY(runId,id));
+      CREATE TABLE IF NOT EXISTS repair_cache(runId TEXT,id TEXT,body TEXT NOT NULL,PRIMARY KEY(runId,id));
+      CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT,runId TEXT,body TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS run_events ON events(runId,seq);
+      CREATE TABLE IF NOT EXISTS integrity_rows(surface TEXT NOT NULL,pos INTEGER NOT NULL,key TEXT NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(surface,pos));`);
+      const unfinished = this.db.prepare("SELECT body FROM runs WHERE json_extract(body,'$.status') IN ('running','queued','stopping','pausing')").all();
+      for (const row of unfinished) {
+        const run = JSON.parse(row.body);
+        run.status = "needs_attention";
+        run.error = "\u4E0A\u6B21\u670D\u52A1\u5F02\u5E38\u7EC8\u6B62\u3002\u5148\u786E\u8BA4\u65E7 Agent \u5DF2\u505C\u6B62\uFF0C\u518D\u6062\u590D\u3002";
+        this.save(run);
+      }
+    } catch (error2) {
+      this.db?.close();
+      this.releaseLock();
+      throw error2;
+    }
+  }
+  transaction(fn) {
+    if (this.txDepth) return fn();
+    this.txDepth = 1;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const r = fn();
+      this.db.exec("COMMIT");
+      return r;
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    } finally {
+      this.txDepth = 0;
+    }
+  }
+  templates() {
+    return this.db.prepare("SELECT body FROM templates ORDER BY rowid DESC").all().map((r) => JSON.parse(r.body));
+  }
+  template(id2) {
+    const r = this.db.prepare("SELECT body FROM templates WHERE id=?").get(id2);
+    return r ? JSON.parse(r.body) : null;
+  }
+  saveTemplate(value) {
+    this.db.prepare("INSERT INTO templates VALUES(?,?)").run(value.id, JSON.stringify(value));
+  }
+  deleteTemplate(id2) {
+    return this.db.prepare("DELETE FROM templates WHERE id=?").run(id2).changes > 0;
+  }
+  setting(key) {
+    const row = this.db.prepare("SELECT body FROM settings WHERE key=?").get(key);
+    return row ? JSON.parse(row.body) : void 0;
+  }
+  saveSetting(key, value) {
+    this.db.prepare("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET body=excluded.body").run(key, JSON.stringify(value));
+  }
+  save(run) {
+    this.db.prepare("INSERT INTO runs VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body").run(run.id, run.requestId, run.requestHash, JSON.stringify(run));
+  }
+  get(id2) {
+    const r = this.db.prepare("SELECT body FROM runs WHERE id=?").get(id2);
+    return r ? JSON.parse(r.body) : null;
+  }
+  byRequest(id2) {
+    const r = this.db.prepare("SELECT body FROM runs WHERE requestId=?").get(id2);
+    return r ? JSON.parse(r.body) : null;
+  }
+  list() {
+    return this.db.prepare("SELECT body FROM runs ORDER BY CASE WHEN json_extract(body,'$.status') IN ('running','queued','stopping','pausing') THEN 0 WHEN json_extract(body,'$.status')='needs_attention' THEN 1 ELSE 2 END, rowid DESC LIMIT 100").all().map((r) => JSON.parse(r.body));
+  }
+  step(runId, id2) {
+    const r = this.db.prepare("SELECT body FROM steps WHERE runId=? AND id=?").get(runId, id2);
+    return r ? JSON.parse(r.body) : null;
+  }
+  steps(runId) {
+    return this.db.prepare("SELECT body FROM steps WHERE runId=? ORDER BY rowid").all(runId).map((r) => JSON.parse(r.body));
+  }
+  // All match keys (contextHash, lineageHash) are stamped on the step body at
+  // creation, so filtering happens in SQL and LIMIT applies after the full match.
+  // Rows without the stamped hashes (legacy runs) never match: cross-run reuse is
+  // an opt-in feature and older steps are not candidates.
+  findCrossRunReuse({ contextHash, requestHash, lineageHash, excludeRunId, limit = 20 }) {
+    return this.db.prepare("SELECT runId,body AS stepBody FROM steps WHERE runId<>? AND json_extract(body,'$.kind')='agent' AND json_extract(body,'$.status')='succeeded' AND json_extract(body,'$.requestHash')=? AND json_extract(body,'$.contextHash')=? AND json_extract(body,'$.lineageHash')=? ORDER BY rowid DESC LIMIT ?").all(excludeRunId, requestHash, contextHash, lineageHash, limit).map((r) => {
+      const step = JSON.parse(r.stepBody);
+      return { runId: r.runId, stepId: step.id, step };
+    });
+  }
+  saveStep(runId, step) {
+    this.db.prepare("INSERT INTO steps VALUES(?,?,?) ON CONFLICT(runId,id) DO UPDATE SET body=excluded.body").run(runId, step.id, JSON.stringify(step));
+  }
+  repairCandidate(runId, id2) {
+    const r = this.db.prepare("SELECT body FROM repair_cache WHERE runId=? AND id=?").get(runId, id2);
+    return r ? JSON.parse(r.body) : null;
+  }
+  saveRepairCandidate(runId, step) {
+    this.transaction(() => {
+      const rowid = Number(this.db.prepare("INSERT INTO repair_cache VALUES(?,?,?)").run(runId, step.id, JSON.stringify(step)).lastInsertRowid);
+      this.chainAdvance("repair", "repair", "SELECT rowid AS pos,runId,id,body FROM repair_cache WHERE rowid>? AND rowid<=? ORDER BY rowid", rowid, (r) => `${r.runId}/${r.id}`);
+    });
+  }
+  event(runId, type, data2 = {}) {
+    const event = { ...data2, type, time: Date.now() };
+    return this.transaction(() => {
+      const seq = Number(this.db.prepare("INSERT INTO events(runId,body) VALUES(?,?)").run(runId, JSON.stringify(event)).lastInsertRowid);
+      this.chainAdvance("event", "events", "SELECT seq AS pos,body FROM events WHERE seq>? AND seq<=? ORDER BY seq", seq, (r) => String(r.pos));
+      return { seq, ...event };
+    });
+  }
+  events(runId, after = 0, limit = 150) {
+    return this.db.prepare("SELECT seq,body FROM events WHERE runId=? AND seq>? ORDER BY seq LIMIT ?").all(runId, after, limit).map((e) => ({ seq: e.seq, ...JSON.parse(e.body) }));
+  }
+  rowHash(prev, kind, key, body) {
+    return createHash("sha256").update(`${prev}:${kind}:${key}:${body}`).digest("hex");
+  }
+  chainAdvance(kind, surface, sql, newUpto, keyOf) {
+    const tail = this.setting(`integrity_${surface}`);
+    let prev = tail?.head ?? "0".repeat(64);
+    for (const r of this.db.prepare(sql).all(tail?.upto ?? 0, newUpto)) {
+      const k = keyOf(r);
+      prev = this.rowHash(prev, kind, k, r.body);
+      this.db.prepare("INSERT OR REPLACE INTO integrity_rows VALUES(?,?,?,?)").run(surface, r.pos, k, prev);
+    }
+    this.saveSetting(`integrity_${surface}`, { head: prev, upto: newUpto });
+  }
+  integrityHeads() {
+    return { events: this.setting("integrity_events") ?? null, repair: this.setting("integrity_repair") ?? null };
+  }
+  verifyIntegrity() {
+    const genesis = "0".repeat(64);
+    const face = (kind, surface, table, posCol) => {
+      const skey = `integrity_${surface}`;
+      const rec = this.setting(skey);
+      const total = Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n);
+      if (!rec) return { head: null, upto: 0, verified: null, checked: 0, unchained: total, firstDivergence: null };
+      const rows = this.db.prepare("SELECT pos,key,hash FROM integrity_rows WHERE surface=? ORDER BY pos").all(surface);
+      let prev = genesis, firstDivergence = null;
+      for (const r of rows) {
+        const row = this.db.prepare(`SELECT body FROM ${table} WHERE ${posCol}=?`).get(r.pos);
+        const actual = row ? this.rowHash(prev, kind, r.key, row.body) : null;
+        if (!firstDivergence && (!row || actual !== r.hash)) firstDivergence = { key: r.key, expectedHead: r.hash, actualHead: actual };
+        prev = r.hash;
+      }
+      const verified = !firstDivergence && prev === rec.head;
+      return { head: rec.head, upto: rec.upto, verified, checked: rows.length, unchained: Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${posCol}>?`).get(rec.upto).n), firstDivergence };
+    };
+    return {
+      events: face("event", "events", "events", "seq"),
+      repair: face("repair", "repair", "repair_cache", "rowid")
+    };
+  }
+  releaseLock() {
+    closeSync(this.fd);
+    try {
+      if (JSON.parse(readFileSync(this.lock, "utf8")).owner === this.owner) unlinkSync(this.lock);
+    } catch {
+    }
+  }
+  close() {
+    this.db.close();
+    this.releaseLock();
+  }
+};
 
 // src/common.mjs
-import { createHash } from "node:crypto";
+import { createHash as createHash2 } from "node:crypto";
 
 // node_modules/acorn/dist/acorn.mjs
 var astralIdentifierCodes = [509, 0, 227, 0, 150, 4, 294, 9, 1368, 2, 2, 1, 6, 3, 41, 2, 5, 0, 166, 1, 574, 3, 9, 9, 7, 9, 32, 4, 318, 1, 78, 5, 71, 10, 50, 3, 123, 2, 54, 14, 32, 10, 3, 1, 11, 3, 46, 10, 8, 0, 46, 9, 7, 2, 37, 13, 2, 9, 6, 1, 45, 0, 13, 2, 49, 13, 9, 3, 2, 11, 83, 11, 7, 0, 3, 0, 158, 11, 6, 9, 7, 3, 56, 1, 2, 6, 3, 1, 3, 2, 10, 0, 11, 1, 3, 6, 4, 4, 68, 8, 2, 0, 3, 0, 2, 3, 2, 4, 2, 0, 15, 1, 83, 17, 10, 9, 5, 0, 82, 19, 13, 9, 214, 6, 3, 8, 28, 1, 83, 16, 16, 9, 82, 12, 9, 9, 7, 19, 58, 14, 5, 9, 243, 14, 166, 9, 71, 5, 2, 1, 3, 3, 2, 0, 2, 1, 13, 9, 120, 6, 3, 6, 4, 0, 29, 9, 41, 6, 2, 3, 9, 0, 10, 10, 47, 15, 199, 7, 137, 9, 54, 7, 2, 7, 17, 9, 57, 21, 2, 13, 123, 5, 4, 0, 2, 1, 2, 6, 2, 0, 9, 9, 49, 4, 2, 1, 2, 4, 9, 9, 55, 9, 266, 3, 10, 1, 2, 0, 49, 6, 4, 4, 14, 10, 5350, 0, 7, 14, 11465, 27, 2343, 9, 87, 9, 39, 4, 60, 6, 26, 9, 535, 9, 470, 0, 2, 54, 8, 3, 82, 0, 12, 1, 19628, 1, 4178, 9, 519, 45, 3, 22, 543, 4, 4, 5, 9, 7, 3, 6, 31, 3, 149, 2, 1418, 49, 513, 54, 5, 49, 9, 0, 15, 0, 23, 4, 2, 14, 1361, 6, 2, 16, 3, 6, 2, 1, 2, 4, 101, 0, 161, 6, 10, 9, 357, 0, 62, 13, 499, 13, 245, 1, 2, 9, 233, 0, 3, 0, 8, 1, 6, 0, 475, 6, 110, 6, 6, 9, 4759, 9, 787719, 239];
@@ -13417,7 +13610,7 @@ function parse3(input, options) {
 }
 
 // src/common.mjs
-var hash = (value) => createHash("sha256").update(typeof value === "string" || Buffer.isBuffer(value) ? value : stable(value)).digest("hex");
+var hash = (value) => createHash2("sha256").update(typeof value === "string" || Buffer.isBuffer(value) ? value : stable(value)).digest("hex");
 function stable(value) {
   return JSON.stringify(canonical(value));
 }
@@ -13451,197 +13644,6 @@ ${script}
   walk(ast);
   return { valid: true, scriptHash: hash(script), dslVersion: 1 };
 }
-
-// src/store.mjs
-var Store = class {
-  constructor(dir) {
-    mkdirSync(dir, { recursive: true, mode: 448 });
-    this.lock = join(dir, "owner.lock");
-    try {
-      this.fd = openSync(this.lock, "wx", 384);
-    } catch (e) {
-      if (e.code !== "EEXIST") throw e;
-      let pid;
-      try {
-        pid = JSON.parse(readFileSync(this.lock, "utf8")).pid;
-      } catch {
-        throw new Error("\u72B6\u6001\u76EE\u5F55\u9501\u635F\u574F\uFF0C\u8BF7\u4EBA\u5DE5\u68C0\u67E5 owner.lock");
-      }
-      let alive2 = true;
-      try {
-        process.kill(pid, 0);
-      } catch (err) {
-        if (err.code === "ESRCH") alive2 = false;
-      }
-      if (alive2) throw new Error("\u540C\u4E00\u72B6\u6001\u76EE\u5F55\u5DF2\u6709\u8FD0\u884C\u4E2D\u7684\u670D\u52A1\uFF0C\u8BF7\u8FDE\u63A5\u65E2\u6709\u670D\u52A1");
-      unlinkSync(this.lock);
-      this.fd = openSync(this.lock, "wx", 384);
-    }
-    this.owner = randomUUID();
-    this.txDepth = 0;
-    try {
-      writeFileSync(this.fd, JSON.stringify({ pid: process.pid, owner: this.owner }));
-      this.db = new DatabaseSync(join(dir, "workflows.sqlite"));
-      this.db.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT;");
-      this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
-      CREATE TABLE IF NOT EXISTS templates(id TEXT PRIMARY KEY,body TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,body TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,requestId TEXT UNIQUE,requestHash TEXT NOT NULL,body TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS steps(runId TEXT,id TEXT,body TEXT NOT NULL,PRIMARY KEY(runId,id));
-      CREATE TABLE IF NOT EXISTS repair_cache(runId TEXT,id TEXT,body TEXT NOT NULL,PRIMARY KEY(runId,id));
-      CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT,runId TEXT,body TEXT NOT NULL);
-      CREATE INDEX IF NOT EXISTS run_events ON events(runId,seq);
-      CREATE TABLE IF NOT EXISTS integrity_rows(surface TEXT NOT NULL,pos INTEGER NOT NULL,key TEXT NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(surface,pos));`);
-      const unfinished = this.db.prepare("SELECT body FROM runs WHERE json_extract(body,'$.status') IN ('running','queued','stopping','pausing')").all();
-      for (const row of unfinished) {
-        const run = JSON.parse(row.body);
-        run.status = "needs_attention";
-        run.error = "\u4E0A\u6B21\u670D\u52A1\u5F02\u5E38\u7EC8\u6B62\u3002\u5148\u786E\u8BA4\u65E7 Agent \u5DF2\u505C\u6B62\uFF0C\u518D\u6062\u590D\u3002";
-        this.save(run);
-      }
-    } catch (error2) {
-      this.db?.close();
-      this.releaseLock();
-      throw error2;
-    }
-  }
-  transaction(fn) {
-    if (this.txDepth) return fn();
-    this.txDepth = 1;
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const r = fn();
-      this.db.exec("COMMIT");
-      return r;
-    } catch (e) {
-      this.db.exec("ROLLBACK");
-      throw e;
-    } finally {
-      this.txDepth = 0;
-    }
-  }
-  templates() {
-    return this.db.prepare("SELECT body FROM templates ORDER BY rowid DESC").all().map((r) => JSON.parse(r.body));
-  }
-  template(id2) {
-    const r = this.db.prepare("SELECT body FROM templates WHERE id=?").get(id2);
-    return r ? JSON.parse(r.body) : null;
-  }
-  saveTemplate(value) {
-    this.db.prepare("INSERT INTO templates VALUES(?,?)").run(value.id, JSON.stringify(value));
-  }
-  deleteTemplate(id2) {
-    return this.db.prepare("DELETE FROM templates WHERE id=?").run(id2).changes > 0;
-  }
-  setting(key) {
-    const row = this.db.prepare("SELECT body FROM settings WHERE key=?").get(key);
-    return row ? JSON.parse(row.body) : void 0;
-  }
-  saveSetting(key, value) {
-    this.db.prepare("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET body=excluded.body").run(key, JSON.stringify(value));
-  }
-  save(run) {
-    this.db.prepare("INSERT INTO runs VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body").run(run.id, run.requestId, run.requestHash, JSON.stringify(run));
-  }
-  get(id2) {
-    const r = this.db.prepare("SELECT body FROM runs WHERE id=?").get(id2);
-    return r ? JSON.parse(r.body) : null;
-  }
-  byRequest(id2) {
-    const r = this.db.prepare("SELECT body FROM runs WHERE requestId=?").get(id2);
-    return r ? JSON.parse(r.body) : null;
-  }
-  list() {
-    return this.db.prepare("SELECT body FROM runs ORDER BY CASE WHEN json_extract(body,'$.status') IN ('running','queued','stopping','pausing') THEN 0 WHEN json_extract(body,'$.status')='needs_attention' THEN 1 ELSE 2 END, rowid DESC LIMIT 100").all().map((r) => JSON.parse(r.body));
-  }
-  step(runId, id2) {
-    const r = this.db.prepare("SELECT body FROM steps WHERE runId=? AND id=?").get(runId, id2);
-    return r ? JSON.parse(r.body) : null;
-  }
-  steps(runId) {
-    return this.db.prepare("SELECT body FROM steps WHERE runId=? ORDER BY rowid").all(runId).map((r) => JSON.parse(r.body));
-  }
-  findCrossRunReuse({ contextHash, requestHash, excludeRunId, limit = 20 }) {
-    return this.db.prepare("SELECT s.body AS stepBody, r.body AS runBody, s.rowid AS ord FROM steps s JOIN runs r ON s.runId = r.id WHERE r.id <> ? AND json_extract(s.body,'$.kind')='agent' AND json_extract(s.body,'$.status')='succeeded' AND json_extract(s.body,'$.requestHash')=? ORDER BY s.rowid DESC LIMIT ?").all(excludeRunId, requestHash, limit).flatMap((r) => {
-      const step = JSON.parse(r.stepBody), run = JSON.parse(r.runBody);
-      return hash({ workspace: run.workspace, input: run.input, executor: run.executor, fingerprints: run.fingerprints }) === contextHash ? [{ runId: run.id, stepId: step.id, step }] : [];
-    });
-  }
-  saveStep(runId, step) {
-    this.db.prepare("INSERT INTO steps VALUES(?,?,?) ON CONFLICT(runId,id) DO UPDATE SET body=excluded.body").run(runId, step.id, JSON.stringify(step));
-  }
-  repairCandidate(runId, id2) {
-    const r = this.db.prepare("SELECT body FROM repair_cache WHERE runId=? AND id=?").get(runId, id2);
-    return r ? JSON.parse(r.body) : null;
-  }
-  saveRepairCandidate(runId, step) {
-    this.transaction(() => {
-      const rowid = Number(this.db.prepare("INSERT INTO repair_cache VALUES(?,?,?)").run(runId, step.id, JSON.stringify(step)).lastInsertRowid);
-      this.chainAdvance("repair", "repair", "SELECT rowid AS pos,runId,id,body FROM repair_cache WHERE rowid>? AND rowid<=? ORDER BY rowid", rowid, (r) => `${r.runId}/${r.id}`);
-    });
-  }
-  event(runId, type, data2 = {}) {
-    const event = { ...data2, type, time: Date.now() };
-    return this.transaction(() => {
-      const seq = Number(this.db.prepare("INSERT INTO events(runId,body) VALUES(?,?)").run(runId, JSON.stringify(event)).lastInsertRowid);
-      this.chainAdvance("event", "events", "SELECT seq AS pos,body FROM events WHERE seq>? AND seq<=? ORDER BY seq", seq, (r) => String(r.pos));
-      return { seq, ...event };
-    });
-  }
-  events(runId, after = 0, limit = 150) {
-    return this.db.prepare("SELECT seq,body FROM events WHERE runId=? AND seq>? ORDER BY seq LIMIT ?").all(runId, after, limit).map((e) => ({ seq: e.seq, ...JSON.parse(e.body) }));
-  }
-  rowHash(prev, kind, key, body) {
-    return createHash2("sha256").update(`${prev}:${kind}:${key}:${body}`).digest("hex");
-  }
-  chainAdvance(kind, surface, sql, newUpto, keyOf) {
-    const tail = this.setting(`integrity_${surface}`);
-    let prev = tail?.head ?? "0".repeat(64);
-    for (const r of this.db.prepare(sql).all(tail?.upto ?? 0, newUpto)) {
-      const k = keyOf(r);
-      prev = this.rowHash(prev, kind, k, r.body);
-      this.db.prepare("INSERT OR REPLACE INTO integrity_rows VALUES(?,?,?,?)").run(surface, r.pos, k, prev);
-    }
-    this.saveSetting(`integrity_${surface}`, { head: prev, upto: newUpto });
-  }
-  integrityHeads() {
-    return { events: this.setting("integrity_events") ?? null, repair: this.setting("integrity_repair") ?? null };
-  }
-  verifyIntegrity() {
-    const genesis = "0".repeat(64);
-    const face = (kind, surface, table, posCol) => {
-      const skey = `integrity_${surface}`;
-      const rec = this.setting(skey);
-      const total = Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n);
-      if (!rec) return { head: null, upto: 0, verified: null, checked: 0, unchained: total, firstDivergence: null };
-      const rows = this.db.prepare("SELECT pos,key,hash FROM integrity_rows WHERE surface=? ORDER BY pos").all(surface);
-      let prev = genesis, firstDivergence = null;
-      for (const r of rows) {
-        const row = this.db.prepare(`SELECT body FROM ${table} WHERE ${posCol}=?`).get(r.pos);
-        const actual = row ? this.rowHash(prev, kind, r.key, row.body) : null;
-        if (!firstDivergence && (!row || actual !== r.hash)) firstDivergence = { key: r.key, expectedHead: r.hash, actualHead: actual };
-        prev = r.hash;
-      }
-      const verified = !firstDivergence && prev === rec.head;
-      return { head: rec.head, upto: rec.upto, verified, checked: rows.length, unchained: Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${posCol}>?`).get(rec.upto).n), firstDivergence };
-    };
-    return {
-      events: face("event", "events", "events", "seq"),
-      repair: face("repair", "repair", "repair_cache", "rowid")
-    };
-  }
-  releaseLock() {
-    closeSync(this.fd);
-    try {
-      if (JSON.parse(readFileSync(this.lock, "utf8")).owner === this.owner) unlinkSync(this.lock);
-    } catch {
-    }
-  }
-  close() {
-    this.db.close();
-    this.releaseLock();
-  }
-};
 
 // src/limits.mjs
 var DEFAULT_LIMITS = Object.freeze({ maxSteps: 120, stepTimeoutMs: 30 * 6e4, runTimeoutMs: 2 * 60 * 6e4 });
@@ -14605,7 +14607,8 @@ var Engine = class extends EventEmitter {
         check(old.requestHash === hash(payload), "checkpoint \u53C2\u6570\u51B2\u7A81");
         return old.output;
       }
-      const step = { id: key, kind: "checkpoint", status: "succeeded", output: payload.value, requestHash: hash(payload), label: payload.id, dependsOn: [], createdAt: Date.now() };
+      const checkpointHash = hash(payload);
+      const step = { id: key, kind: "checkpoint", status: "succeeded", output: payload.value, requestHash: checkpointHash, lineageHash: hash({ requestHash: checkpointHash, deps: [] }), label: payload.id, dependsOn: [], createdAt: Date.now() };
       this.store.saveStep(ctx.run.id, step);
       this.emitEvent(ctx.run.id, "checkpoint", { stepId: key });
       return payload.value;
@@ -14635,6 +14638,11 @@ var Engine = class extends EventEmitter {
       check(cached2.hash === requestHash, "\u91CD\u590D step id \u53C2\u6570\u51B2\u7A81");
       return cached2.promise;
     }
+    const ctxHash = ctx.contextHash ?? (ctx.contextHash = hash({ workspace: ctx.run.workspace, input: ctx.run.input, executor: ctx.run.executor, fingerprints: ctx.run.fingerprints }));
+    const lineageHash = hash({ requestHash, deps: deps.map((id2) => {
+      const dep = this.store.step(ctx.run.id, id2);
+      return { id: id2, lineageHash: dep?.lineageHash ?? null };
+    }) });
     const repair = ctx.run.repair, candidate = !previous && repair?.reuseStepIds.includes(spec.id) ? this.store.repairCandidate(ctx.run.id, spec.id) : null;
     if (candidate && candidate.requestHash === requestHash && repair.contextHash === hash({ workspace: ctx.run.workspace, input: ctx.run.input, executor: ctx.run.executor, fingerprints: ctx.run.fingerprints }) && deps.every((id2) => {
       const dep = this.store.step(ctx.run.id, id2);
@@ -14658,6 +14666,7 @@ var Engine = class extends EventEmitter {
           usageHistory: [],
           sessionId: void 0,
           turnId: void 0,
+          contextHash: ctxHash,
           reusedFrom: { runId: repair.sourceRunId, stepId: spec.id, endedAt: candidate.endedAt ?? null }
         };
         this.store.saveStep(ctx.run.id, step2);
@@ -14665,9 +14674,8 @@ var Engine = class extends EventEmitter {
         return Promise.resolve({ status: "succeeded", output: step2.output, cached: true });
       }
     }
-    if (ctx.run.reuseAcrossRuns && !previous) {
-      const ctxHash = ctx.contextHash ?? (ctx.contextHash = hash({ workspace: ctx.run.workspace, input: ctx.run.input, executor: ctx.run.executor, fingerprints: ctx.run.fingerprints }));
-      for (const candidate2 of this.store.findCrossRunReuse({ contextHash: ctxHash, requestHash, excludeRunId: ctx.run.id })) {
+    if (ctx.run.reuseAcrossRuns && !previous && !(ctx.run.executor === "mcode" && !spec.model)) {
+      for (const candidate2 of this.store.findCrossRunReuse({ contextHash: ctxHash, requestHash, lineageHash, excludeRunId: ctx.run.id })) {
         let valid = true;
         try {
           if (validateOutput) valid = validateOutput(candidate2.step.output);
@@ -14675,17 +14683,20 @@ var Engine = class extends EventEmitter {
           valid = false;
         }
         if (!valid) continue;
+        const source = candidate2.step;
         const step2 = {
-          ...candidate2.step,
+          ...source,
           attempt: 0,
           createdAt: Date.now(),
           startedAt: null,
-          endedAt: candidate2.step.endedAt ?? Date.now(),
+          endedAt: source.endedAt ?? Date.now(),
           usage: null,
           usageHistory: [],
           sessionId: void 0,
           turnId: void 0,
-          reusedFrom: candidate2.step.reusedFrom ?? { runId: candidate2.runId, stepId: candidate2.stepId, endedAt: candidate2.step.endedAt ?? null, crossRun: true }
+          contextHash: ctxHash,
+          reusedFrom: { runId: candidate2.runId, stepId: candidate2.stepId, endedAt: source.endedAt ?? null, crossRun: true },
+          originalProducer: source.originalProducer ?? (source.reusedFrom ? { ...source.reusedFrom } : { runId: candidate2.runId, stepId: candidate2.stepId, endedAt: source.endedAt ?? null, crossRun: true })
         };
         this.store.saveStep(ctx.run.id, step2);
         this.emitEvent(ctx.run.id, "step.reused", { stepId: spec.id, sourceRunId: candidate2.runId, crossRun: true });
@@ -14695,7 +14706,7 @@ var Engine = class extends EventEmitter {
     check(ctx.run.attempts < ctx.run.maxCalls, `\u5DF2\u8FBE\u5230\u5DE5\u4F5C\u6D41 Agent \u603B\u8C03\u7528\u4E0A\u9650 ${ctx.run.maxCalls} \u6B21\uFF08\u5305\u62EC\u6062\u590D\u5C1D\u8BD5\uFF09\uFF0C\u8BF7\u63D0\u9AD8\u603B\u8C03\u7528\u9884\u7B97\u540E\u6062\u590D\u3002`);
     ctx.run.attempts++;
     this.save(ctx.run);
-    const step = { id: spec.id, ...typeof planId === "string" ? { planId } : {}, label: spec.label ?? spec.id, phase: spec.phase ?? null, kind: "agent", dependsOn: deps, requestHash, status: "queued", attempt: (previous?.attempt ?? 0) + 1, createdAt: previous?.createdAt ?? Date.now(), startedAt: null, endedAt: null, prompt: spec.prompt, input: spec.input ?? null, output: null, error: null, errorDetails: null, ...runLimits(ctx.run), timeoutMs: runLimits(ctx.run).stepTimeoutMs, usage: null, usageHistory: [...previous?.usageHistory ?? [], ...previous?.usage ? [previous.usage] : []] };
+    const step = { id: spec.id, ...typeof planId === "string" ? { planId } : {}, label: spec.label ?? spec.id, phase: spec.phase ?? null, kind: "agent", dependsOn: deps, requestHash, contextHash: ctxHash, lineageHash, status: "queued", attempt: (previous?.attempt ?? 0) + 1, createdAt: previous?.createdAt ?? Date.now(), startedAt: null, endedAt: null, prompt: spec.prompt, input: spec.input ?? null, output: null, error: null, errorDetails: null, ...runLimits(ctx.run), timeoutMs: runLimits(ctx.run).stepTimeoutMs, usage: null, usageHistory: [...previous?.usageHistory ?? [], ...previous?.usage ? [previous.usage] : []] };
     this.store.saveStep(ctx.run.id, step);
     this.emitEvent(ctx.run.id, "step.queued", { stepId: step.id });
     const promise = (async () => {
@@ -26516,8 +26527,8 @@ var string3 = { type: "string" };
 var id = { runId: string3 };
 var TOOLS = [
   { name: "workflow_validate", description: "\u9759\u6001\u68C0\u67E5\u811A\u672C\u5E76\u751F\u6210\u7ED3\u6784\u62D3\u6251\uFF0C\u4E0D\u6267\u884C\u811A\u672C\u6216 Agent\u3002DSL: await ctx.phase({id,label}); await ctx.agent({id,label,phase,dependsOn,prompt,input,schema}); ctx.map(items,fn); ctx.log(message,{stepId,phase}); ctx.checkpoint(id,value)\u3002dependsOn \u53EF\u4E3A\u5355\u4E2A ID \u5B57\u7B26\u4E32\u6216 ID \u6570\u7EC4\uFF0C\u63A8\u8350\u6570\u7EC4\uFF1B\u4F9D\u8D56\u987B\u5148\u6210\u529F\u3002agent \u8FD4\u56DE status/output/error\uFF1B\u987B\u663E\u5F0F\u5904\u7406\u5931\u8D25\u3002", inputSchema: obj({ script: string3 }, ["script"]) },
-  { name: "workflow_start", description: "\u521B\u5EFA\u5F85\u5BA1\u6838\u5DE5\u4F5C\u6D41\u548C\u7ED3\u6784\u62D3\u6251\uFF0C\u4E0D\u6267\u884C Agent\u3002\u5FC5\u987B\u63D0\u4F9B\u9762\u677F\u8BA9\u7528\u6237\u5BA1\u9605\u3001\u4FEE\u6539\u5E76\u70B9\u51FB\u5F00\u59CB\u6267\u884C\u3002mcode \u6A21\u5F0F\u4F1A\u542F\u52A8\u771F\u5B9E MCode\uFF0C\u4F1A\u4F7F\u7528\u5DF2\u767B\u5F55\u8EAB\u4EFD\u4E0E smart \u6743\u9650\uFF0C\u4E0D\u63D0\u4F9B\u53EA\u8BFB OS \u6C99\u7BB1\u3002demo \u6A21\u5F0F\u4E0D\u8C03\u7528\u6A21\u578B\u3002\u663E\u5F0F requestId \u5E42\u7B49\u3002", inputSchema: obj({ requestId: string3, name: string3, script: string3, input: { type: "object" }, metadata: METADATA_SCHEMA, executor: { enum: ["mcode", "demo"] }, concurrency: { type: "integer", minimum: 1, maximum: 16 }, maxCalls: { type: "integer", minimum: 1, maximum: 100 }, ...LIMIT_SCHEMAS }, ["requestId", "name", "script", "executor"]) },
-  { name: "workflow_update", description: "\u4FEE\u6539\u5F85\u5BA1\u6838\u5DE5\u4F5C\u6D41\u7684\u811A\u672C\u3001\u8F93\u5165\u6216\u9884\u7B97\u5E76\u91CD\u5EFA\u62D3\u6251\uFF0C\u4FDD\u5B58\u540E\u4ECD\u5F85\u5BA1\u6838\uFF1Brevision \u5FC5\u987B\u5339\u914D\u5F53\u524D\u7248\u672C\u3002\u4E0D\u53EF\u4FEE\u6539\u5DF2\u5F00\u59CB\u7684\u8FD0\u884C\u3002", inputSchema: obj({ ...id, revision: { type: "integer", minimum: 1 }, reason: { type: "string", maxLength: 2e3 }, reuseStepIds: { type: "array", items: string3, maxItems: 100, uniqueItems: true }, name: string3, script: string3, input: { type: "object" }, metadata: METADATA_SCHEMA, executor: { enum: ["mcode", "demo"] }, concurrency: { type: "integer", minimum: 1, maximum: 16 }, maxCalls: { type: "integer", minimum: 1, maximum: 100 }, ...LIMIT_SCHEMAS }, ["runId", "revision"]) },
+  { name: "workflow_start", description: "\u521B\u5EFA\u5F85\u5BA1\u6838\u5DE5\u4F5C\u6D41\u548C\u7ED3\u6784\u62D3\u6251\uFF0C\u4E0D\u6267\u884C Agent\u3002\u5FC5\u987B\u63D0\u4F9B\u9762\u677F\u8BA9\u7528\u6237\u5BA1\u9605\u3001\u4FEE\u6539\u5E76\u70B9\u51FB\u5F00\u59CB\u6267\u884C\u3002mcode \u6A21\u5F0F\u4F1A\u542F\u52A8\u771F\u5B9E MCode\uFF0C\u4F1A\u4F7F\u7528\u5DF2\u767B\u5F55\u8EAB\u4EFD\u4E0E smart \u6743\u9650\uFF0C\u4E0D\u63D0\u4F9B\u53EA\u8BFB OS \u6C99\u7BB1\u3002demo \u6A21\u5F0F\u4E0D\u8C03\u7528\u6A21\u578B\u3002\u663E\u5F0F requestId \u5E42\u7B49\u3002", inputSchema: obj({ requestId: string3, name: string3, script: string3, input: { type: "object" }, metadata: METADATA_SCHEMA, executor: { enum: ["mcode", "demo"] }, concurrency: { type: "integer", minimum: 1, maximum: 16 }, maxCalls: { type: "integer", minimum: 1, maximum: 100 }, reuseAcrossRuns: { type: "boolean", description: "Opt-in: adopt succeeded nodes from prior runs in the same workspace when context and spec hashes match" }, ...LIMIT_SCHEMAS }, ["requestId", "name", "script", "executor"]) },
+  { name: "workflow_update", description: "\u4FEE\u6539\u5F85\u5BA1\u6838\u5DE5\u4F5C\u6D41\u7684\u811A\u672C\u3001\u8F93\u5165\u6216\u9884\u7B97\u5E76\u91CD\u5EFA\u62D3\u6251\uFF0C\u4FDD\u5B58\u540E\u4ECD\u5F85\u5BA1\u6838\uFF1Brevision \u5FC5\u987B\u5339\u914D\u5F53\u524D\u7248\u672C\u3002\u4E0D\u53EF\u4FEE\u6539\u5DF2\u5F00\u59CB\u7684\u8FD0\u884C\u3002", inputSchema: obj({ ...id, revision: { type: "integer", minimum: 1 }, reason: { type: "string", maxLength: 2e3 }, reuseStepIds: { type: "array", items: string3, maxItems: 100, uniqueItems: true }, name: string3, script: string3, input: { type: "object" }, metadata: METADATA_SCHEMA, executor: { enum: ["mcode", "demo"] }, concurrency: { type: "integer", minimum: 1, maximum: 16 }, maxCalls: { type: "integer", minimum: 1, maximum: 100 }, reuseAcrossRuns: { type: "boolean", description: "Opt-in: adopt succeeded nodes from prior runs in the same workspace when context and spec hashes match" }, ...LIMIT_SCHEMAS }, ["runId", "revision"]) },
   { name: "workflow_repair", description: "\u57FA\u4E8E\u505C\u6B62\u540E\u7684\u8FD0\u884C\u521B\u5EFA\u4FEE\u590D\u8349\u7A3F\uFF0C\u4FDD\u7559\u6E90\u8FD0\u884C\uFF1B\u63D0\u4F9B\u5B8C\u6574\u4FEE\u590D\u811A\u672C\u3001\u5931\u8D25\u539F\u56E0\u4E0E sourceUpdatedAt\u3002\u663E\u5F0F reuseStepIds \u4EC5\u9009\u62E9\u786E\u8BA4\u4ECD\u9002\u7528\u7684\u6210\u529F\u8282\u70B9\uFF0C\u9ED8\u8BA4\u4E0D\u590D\u7528\u3002\u8FD0\u884C\u65F6\u91CD\u65B0\u6821\u9A8C\u8F93\u5165\u3001\u6587\u4EF6\u3001\u53C2\u6570\u4E0E\u4F9D\u8D56\uFF1B\u53D8\u66F4\u6216\u91CD\u8DD1\u7684\u4E0A\u6E38\u4F7F\u4E0B\u6E38\u5931\u6548\u3002\u5FC5\u987B\u6253\u5F00\u9762\u677F\u4EA4\u7528\u6237\u5BA1\u6838\u540E\u5F00\u59CB\uFF0C\u4E0D\u80FD\u81EA\u52A8\u6267\u884C\u3002", inputSchema: obj({ ...id, requestId: string3, sourceUpdatedAt: { type: "integer" }, script: string3, reason: { type: "string", maxLength: 2e3 }, reuseStepIds: { type: "array", items: string3, maxItems: 100, uniqueItems: true }, input: { type: "object" }, ...LIMIT_SCHEMAS, maxCalls: { type: "integer", minimum: 1, maximum: 100 } }, ["runId", "requestId", "sourceUpdatedAt", "script", "reason"]) },
   { name: "workflow_status", description: "\u8BFB\u53D6\u8FD0\u884C\u72B6\u6001\u3001\u9636\u6BB5\u548C\u8282\u70B9\uFF1B\u8F93\u51FA\u4E0D\u542B\u5B8C\u6574 prompt/result\u3002\u65E0 runId \u65F6\u5217\u51FA\u6700\u8FD1\u8FD0\u884C\u3002", inputSchema: obj(id) },
   { name: "workflow_results", description: "\u5206\u9875\u8BFB\u53D6\u8282\u70B9\u7ED3\u679C\uFF1B\u7EC8\u6001\u62A5\u544A\u4E0E\u5931\u8D25\u660E\u786E\u5206\u5F00\u3002", inputSchema: obj({ ...id, includeDefinition: { type: "boolean" }, offset: { type: "integer", minimum: 0 }, limit: { type: "integer", minimum: 1, maximum: 20 } }, ["runId"]) },

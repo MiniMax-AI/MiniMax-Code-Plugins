@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {Store} from '../src/store.mjs';
 import {Engine} from '../src/engine.mjs';
+import {TOOLS} from '../src/tools.mjs';
 // SDD contract suite for run-level reuseAcrossRuns (cross-run reuse of succeeded
 // agent nodes). The engine/store behavior specified here may not exist yet; this
 // file is the contract the implementation must satisfy.
@@ -102,5 +103,53 @@ test('reusing a requestId with a flipped reuseAcrossRuns value is rejected as a 
  const requestId=crypto.randomUUID();
  await f.engine.start({requestId,name:'Cross reuse',executor:'demo',script:probe,input:{}});
  await assert.rejects(f.engine.start({requestId,name:'Cross reuse',executor:'demo',script:probe,input:{},reuseAcrossRuns:true}),/requestId 已用于不同参数/);
+ }finally{await f.cleanup();}
+});
+test('a changed upstream prompt invalidates the downstream candidate even though its own spec is unchanged',async()=>{
+ const calls=[],f=await fixture(async s=>{calls.push(s.id);return {output:s.prompt};});try{
+ const first=await run(f.engine,repaired,{},{reuseAcrossRuns:true});
+ assert.equal(first.status,'succeeded');assert.deepEqual(first.result,{a:'a',b:'b'});assert.deepEqual(calls,['a','b']);
+ const second=await run(f.engine,repaired.replace("prompt:'a'","prompt:'new'"),{},{reuseAcrossRuns:true});
+ assert.equal(second.status,'succeeded');
+ assert.deepEqual(calls,['a','b','a','b']);
+ assert.deepEqual(second.result,{a:'new',b:'b'});
+ assert.ok(second.steps.every(s=>!s.reusedFrom));
+ }finally{await f.cleanup();}
+});
+test('mcode nodes without an explicit model are never cross-run candidates; with an explicit model they are',async()=>{
+ const calls=[],f=await fixture(async s=>{calls.push(s.id);return {output:s.model??'default'};});try{
+ const opts={reuseAcrossRuns:true,executor:'mcode'};
+ const withModel=`return await ctx.agent({id:'a',prompt:'a',model:'m2'});`;
+ const r1=await run(f.engine,withModel,{},opts),r2=await run(f.engine,withModel,{},opts);
+ assert.equal(r1.status,'succeeded');assert.equal(r2.status,'succeeded');
+ assert.deepEqual(calls,['a']);assert.equal(r2.attempts,0);
+ assert.equal(r2.steps.find(s=>s.id==='a').reusedFrom.crossRun,true);
+ const r3=await run(f.engine,probe,{},opts),r4=await run(f.engine,probe,{},opts);
+ assert.equal(r3.status,'succeeded');assert.equal(r4.status,'succeeded');
+ assert.equal(r3.attempts,1);assert.equal(r4.attempts,1);assert.deepEqual(calls,['a','a','a']);
+ assert.ok([...r3.steps,...r4.steps].every(s=>!s.reusedFrom));
+ }finally{await f.cleanup();}
+});
+test('workflow_start and workflow_update expose reuseAcrossRuns as a boolean parameter',()=>{
+ for(const name of ['workflow_start','workflow_update']){
+  const tool=TOOLS.find(t=>t.name===name);
+  assert.ok(tool,`${name} missing from TOOLS`);
+  assert.equal(tool.inputSchema.additionalProperties,false);
+  assert.equal(tool.inputSchema.properties.reuseAcrossRuns.type,'boolean');
+  assert.equal(typeof tool.inputSchema.properties.reuseAcrossRuns.description,'string');
+ }
+});
+test('chained adoption keeps reusedFrom on the immediate source and originalProducer on the first producer',async()=>{
+ const calls=[],f=await fixture(async s=>{calls.push(s.id);return {output:s.id};});try{
+ const run1=await run(f.engine,repaired,{},{reuseAcrossRuns:true});
+ const run2=await run(f.engine,repaired,{},{reuseAcrossRuns:true});
+ const run3=await run(f.engine,repaired,{},{reuseAcrossRuns:true});
+ assert.deepEqual(calls,['a','b']);assert.equal(run3.attempts,0);
+ const b1=run1.steps.find(s=>s.id==='b'),b2=run2.steps.find(s=>s.id==='b'),b3=run3.steps.find(s=>s.id==='b');
+ assert.equal(b2.reusedFrom.runId,run1.id);assert.equal(b2.reusedFrom.crossRun,true);
+ assert.equal(b2.originalProducer.runId,run1.id);assert.equal(b2.originalProducer.stepId,'b');
+ assert.equal(b3.reusedFrom.runId,run2.id);assert.equal(b3.reusedFrom.stepId,'b');assert.equal(b3.reusedFrom.crossRun,true);
+ assert.equal(b3.originalProducer.runId,run1.id);assert.equal(b3.originalProducer.stepId,'b');
+ assert.equal(b3.usage,null);assert.deepEqual(b3.usageHistory,[]);
  }finally{await f.cleanup();}
 });

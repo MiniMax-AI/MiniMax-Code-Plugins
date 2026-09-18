@@ -166,7 +166,8 @@ export class Engine extends EventEmitter {
      for(const key of ['stepId','phase'])if(payload[key]!==undefined){check(typeof payload[key]==='string'&&/^[A-Za-z0-9_:./-]{1,150}$/.test(payload[key]),'日志关联 ID 无效');detail[key]=payload[key];}
      ctx.run.latestProgress={...detail,time:Date.now()};this.save(ctx.run);this.emitEvent(ctx.run.id,'log',detail);return;
    }
-   if(method==='checkpoint'){check(typeof payload.id==='string'&&payload.id.length<=100,'checkpoint 必须有 ID');const key=`checkpoint:${payload.id}`,old=this.store.step(ctx.run.id,key);if(old){check(old.requestHash===hash(payload),'checkpoint 参数冲突');return old.output;}const step={id:key,kind:'checkpoint',status:'succeeded',output:payload.value,requestHash:hash(payload),label:payload.id,dependsOn:[],createdAt:Date.now()};this.store.saveStep(ctx.run.id,step);this.emitEvent(ctx.run.id,'checkpoint',{stepId:key});return payload.value;}
+   if(method==='checkpoint'){check(typeof payload.id==='string'&&payload.id.length<=100,'checkpoint 必须有 ID');const key=`checkpoint:${payload.id}`,old=this.store.step(ctx.run.id,key);if(old){check(old.requestHash===hash(payload),'checkpoint 参数冲突');return old.output;}const checkpointHash=hash(payload);// Checkpoints recompute every run; their lineage hash covers the recomputed value so a changed value breaks downstream cross-run lineage.
+const step={id:key,kind:'checkpoint',status:'succeeded',output:payload.value,requestHash:checkpointHash,lineageHash:hash({requestHash:checkpointHash,deps:[]}),label:payload.id,dependsOn:[],createdAt:Date.now()};this.store.saveStep(ctx.run.id,step);this.emitEvent(ctx.run.id,'checkpoint',{stepId:key});return payload.value;}
    throw new Error('未知脚本操作');
  }
  agent(ctx,spec,planId){
@@ -184,6 +185,13 @@ export class Engine extends EventEmitter {
    const requestHash=hash(spec),previous=this.store.step(ctx.run.id,spec.id),cached=ctx.calls.get(spec.id);
    if(previous){check(previous.requestHash===requestHash,`步骤 ${spec.id} 使用了不同参数，恢复已停止`);if(previous.status==='succeeded')return Promise.resolve({status:'succeeded',output:previous.output,cached:true});}
    if(cached){check(cached.hash===requestHash,'重复 step id 参数冲突');return cached.promise;}
+   // Computed once per dispatch attempt, before any candidate lookup. contextHash is
+   // stamped on every new step so the store can filter cross-run candidates in SQL
+   // before LIMIT; lineageHash pins the node to its own spec plus the lineage hashes
+   // of its succeeded dependencies (in dependsOn order), so a changed upstream
+   // invalidates downstream candidates even when the downstream spec is unchanged.
+   const ctxHash=ctx.contextHash??(ctx.contextHash=hash({workspace:ctx.run.workspace,input:ctx.run.input,executor:ctx.run.executor,fingerprints:ctx.run.fingerprints}));
+   const lineageHash=hash({requestHash,deps:deps.map(id=>{const dep=this.store.step(ctx.run.id,id);return {id,lineageHash:dep?.lineageHash??null};})});
    const repair=ctx.run.repair,candidate=!previous&&repair?.reuseStepIds.includes(spec.id)?this.store.repairCandidate(ctx.run.id,spec.id):null;
    if(candidate&&candidate.requestHash===requestHash
       &&repair.contextHash===hash({workspace:ctx.run.workspace,input:ctx.run.input,executor:ctx.run.executor,fingerprints:ctx.run.fingerprints})
@@ -193,25 +201,35 @@ export class Engine extends EventEmitter {
        ||(dep?.kind==='checkpoint'&&dep.requestHash===this.store.step(repair.sourceRunId,id)?.requestHash);})){
      // Recheck the output against today's validator, including legacy candidates.
      let valid=true;try{if(validateOutput)valid=validateOutput(candidate.output);}catch{valid=false;}
-     if(valid){const step={...candidate,...(typeof planId==='string'?{planId}:{}),attempt:0,createdAt:Date.now(),startedAt:null,endedAt:Date.now(),usage:null,usageHistory:[],sessionId:undefined,turnId:undefined,
+     if(valid){const step={...candidate,...(typeof planId==='string'?{planId}:{}),attempt:0,createdAt:Date.now(),startedAt:null,endedAt:Date.now(),usage:null,usageHistory:[],sessionId:undefined,turnId:undefined,contextHash:ctxHash,
        reusedFrom:{runId:repair.sourceRunId,stepId:spec.id,endedAt:candidate.endedAt??null}};
        this.store.saveStep(ctx.run.id,step);this.emitEvent(ctx.run.id,'step.reused',{stepId:step.id,sourceRunId:repair.sourceRunId});
        return Promise.resolve({status:'succeeded',output:step.output,cached:true});}
    }
-   if(ctx.run.reuseAcrossRuns&&!previous){
-    // Cross-run reuse: adopt an earlier run's stored result when the node spec and the context (workspace, input, executor, tracked files) are identical.
-    const ctxHash=ctx.contextHash??(ctx.contextHash=hash({workspace:ctx.run.workspace,input:ctx.run.input,executor:ctx.run.executor,fingerprints:ctx.run.fingerprints}));
-    for(const candidate of this.store.findCrossRunReuse({contextHash:ctxHash,requestHash,excludeRunId:ctx.run.id})){
+   if(ctx.run.reuseAcrossRuns&&!previous&&!(ctx.run.executor==='mcode'&&!spec.model)){
+    // Cross-run reuse: adopt an earlier run's stored result when the node spec, its
+    // upstream lineage and the run context (workspace, input, executor, tracked
+    // files) all hash identically. All three keys are stamped on candidate steps at
+    // creation, so the store filters in SQL before LIMIT. mcode nodes without an
+    // explicit model are never candidates: the effective model comes from the CLI
+    // environment and is not part of the match key.
+    for(const candidate of this.store.findCrossRunReuse({contextHash:ctxHash,requestHash,lineageHash,excludeRunId:ctx.run.id})){
      let valid=true;try{if(validateOutput)valid=validateOutput(candidate.step.output);}catch{valid=false;}
      if(!valid)continue;
-     const step={...candidate.step,attempt:0,createdAt:Date.now(),startedAt:null,endedAt:candidate.step.endedAt??Date.now(),usage:null,usageHistory:[],sessionId:undefined,turnId:undefined,
-       reusedFrom:candidate.step.reusedFrom??{runId:candidate.runId,stepId:candidate.stepId,endedAt:candidate.step.endedAt??null,crossRun:true}};
+     const source=candidate.step;
+     // lineageHash is adopted from the source (dependencies already matched, so the
+     // lineage is equivalent); contextHash is restamped with this run's. Provenance
+     // always records the immediate source in reusedFrom and the first producer in
+     // originalProducer, so chained adoptions stay consistent with the emitted event.
+     const step={...source,attempt:0,createdAt:Date.now(),startedAt:null,endedAt:source.endedAt??Date.now(),usage:null,usageHistory:[],sessionId:undefined,turnId:undefined,contextHash:ctxHash,
+       reusedFrom:{runId:candidate.runId,stepId:candidate.stepId,endedAt:source.endedAt??null,crossRun:true},
+       originalProducer:source.originalProducer??(source.reusedFrom?{...source.reusedFrom}:{runId:candidate.runId,stepId:candidate.stepId,endedAt:source.endedAt??null,crossRun:true})};
      this.store.saveStep(ctx.run.id,step);this.emitEvent(ctx.run.id,'step.reused',{stepId:spec.id,sourceRunId:candidate.runId,crossRun:true});
      return Promise.resolve({status:'succeeded',output:step.output,cached:true});
     }
    }
    check(ctx.run.attempts<ctx.run.maxCalls,`已达到工作流 Agent 总调用上限 ${ctx.run.maxCalls} 次（包括恢复尝试），请提高总调用预算后恢复。`);ctx.run.attempts++;this.save(ctx.run);
-   const step={id:spec.id,...(typeof planId==='string'?{planId}:{}),label:spec.label??spec.id,phase:spec.phase??null,kind:'agent',dependsOn:deps,requestHash,status:'queued',attempt:(previous?.attempt??0)+1,createdAt:previous?.createdAt??Date.now(),startedAt:null,endedAt:null,prompt:spec.prompt,input:spec.input??null,output:null,error:null,errorDetails:null,...runLimits(ctx.run),timeoutMs:runLimits(ctx.run).stepTimeoutMs,usage:null,usageHistory:[...(previous?.usageHistory??[]),...(previous?.usage?[previous.usage]:[])]};
+   const step={id:spec.id,...(typeof planId==='string'?{planId}:{}),label:spec.label??spec.id,phase:spec.phase??null,kind:'agent',dependsOn:deps,requestHash,contextHash:ctxHash,lineageHash,status:'queued',attempt:(previous?.attempt??0)+1,createdAt:previous?.createdAt??Date.now(),startedAt:null,endedAt:null,prompt:spec.prompt,input:spec.input??null,output:null,error:null,errorDetails:null,...runLimits(ctx.run),timeoutMs:runLimits(ctx.run).stepTimeoutMs,usage:null,usageHistory:[...(previous?.usageHistory??[]),...(previous?.usage?[previous.usage]:[])]};
    this.store.saveStep(ctx.run.id,step);this.emitEvent(ctx.run.id,'step.queued',{stepId:step.id});
    const promise=(async()=>{
     let release;try{release=await this.acquire(ctx.controller.signal,ctx,step.id);ctx.controller.signal.throwIfAborted();step.status='running';step.startedAt=Date.now();this.store.saveStep(ctx.run.id,step);this.emitEvent(ctx.run.id,'step.started',{stepId:step.id});

@@ -2,7 +2,6 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, openSync, writeFileSync, closeSync, readFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { hash } from './common.mjs';
 export class Store {
   constructor(dir) {
     mkdirSync(dir,{recursive:true,mode:0o700}); this.lock=join(dir,'owner.lock');
@@ -49,7 +48,11 @@ export class Store {
   list() {return this.db.prepare("SELECT body FROM runs ORDER BY CASE WHEN json_extract(body,'$.status') IN ('running','queued','stopping','pausing') THEN 0 WHEN json_extract(body,'$.status')='needs_attention' THEN 1 ELSE 2 END, rowid DESC LIMIT 100").all().map(r=>JSON.parse(r.body));}
   step(runId,id) {const r=this.db.prepare('SELECT body FROM steps WHERE runId=? AND id=?').get(runId,id);return r?JSON.parse(r.body):null;}
   steps(runId) {return this.db.prepare('SELECT body FROM steps WHERE runId=? ORDER BY rowid').all(runId).map(r=>JSON.parse(r.body));}
-  findCrossRunReuse({contextHash,requestHash,excludeRunId,limit=20}) {return this.db.prepare("SELECT s.body AS stepBody, r.body AS runBody, s.rowid AS ord FROM steps s JOIN runs r ON s.runId = r.id WHERE r.id <> ? AND json_extract(s.body,'$.kind')='agent' AND json_extract(s.body,'$.status')='succeeded' AND json_extract(s.body,'$.requestHash')=? ORDER BY s.rowid DESC LIMIT ?").all(excludeRunId,requestHash,limit).flatMap(r=>{const step=JSON.parse(r.stepBody),run=JSON.parse(r.runBody);return hash({workspace:run.workspace,input:run.input,executor:run.executor,fingerprints:run.fingerprints})===contextHash?[{runId:run.id,stepId:step.id,step}]:[];});}
+  // All match keys (contextHash, lineageHash) are stamped on the step body at
+  // creation, so filtering happens in SQL and LIMIT applies after the full match.
+  // Rows without the stamped hashes (legacy runs) never match: cross-run reuse is
+  // an opt-in feature and older steps are not candidates.
+  findCrossRunReuse({contextHash,requestHash,lineageHash,excludeRunId,limit=20}) {return this.db.prepare("SELECT runId,body AS stepBody FROM steps WHERE runId<>? AND json_extract(body,'$.kind')='agent' AND json_extract(body,'$.status')='succeeded' AND json_extract(body,'$.requestHash')=? AND json_extract(body,'$.contextHash')=? AND json_extract(body,'$.lineageHash')=? ORDER BY rowid DESC LIMIT ?").all(excludeRunId,requestHash,contextHash,lineageHash,limit).map(r=>{const step=JSON.parse(r.stepBody);return {runId:r.runId,stepId:step.id,step};});}
   saveStep(runId,step) {this.db.prepare('INSERT INTO steps VALUES(?,?,?) ON CONFLICT(runId,id) DO UPDATE SET body=excluded.body').run(runId,step.id,JSON.stringify(step));}
   repairCandidate(runId,id) {const r=this.db.prepare('SELECT body FROM repair_cache WHERE runId=? AND id=?').get(runId,id);return r?JSON.parse(r.body):null;}
   saveRepairCandidate(runId,step) {this.transaction(()=>{const rowid=Number(this.db.prepare('INSERT INTO repair_cache VALUES(?,?,?)').run(runId,step.id,JSON.stringify(step)).lastInsertRowid);this.chainAdvance('repair','repair','SELECT rowid AS pos,runId,id,body FROM repair_cache WHERE rowid>? AND rowid<=? ORDER BY rowid',rowid,r=>`${r.runId}/${r.id}`);});}
