@@ -13949,7 +13949,7 @@ import { constants as constants2 } from "node:fs";
 import { resolve as resolve2, relative, isAbsolute, sep } from "node:path";
 
 // src/mcode-location.mjs
-import { access, stat, readFile } from "node:fs/promises";
+import { access, stat, readFile, readdir } from "node:fs/promises";
 import { constants } from "node:fs";
 import { delimiter, dirname, join as join2, resolve } from "node:path";
 import { homedir } from "node:os";
@@ -13968,7 +13968,8 @@ async function executablePath(command, env = process.env, platform = process.pla
   if (typeof command !== "string" || !command) return null;
   const direct = /[\\/]/.test(command);
   const dirs = direct ? [""] : (env.PATH ?? env.Path ?? "").split(platform === "win32" ? ";" : delimiter).filter(Boolean);
-  const extensions = platform === "win32" ? ["", ...(env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";")] : [""];
+  const dotted = /\.[a-z0-9]+$/i.test(command);
+  const extensions = platform === "win32" ? [...dotted ? [""] : [], ...(env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";").filter(Boolean)] : [""];
   for (const dir of dirs) for (const ext of extensions) {
     const file = direct ? resolve(command + ext) : resolve(join2(dir, command + ext));
     if (await fileExists(file, true, platform)) return file;
@@ -13984,11 +13985,17 @@ async function resolveMcode(command = "mcode", { env = process.env, home = homed
   }
   if (path) {
     if (platform === "win32" && /\.(cmd|bat)$/i.test(path)) {
+      const root = officialRoot(home, env);
       const candidates = [
         join2(dirname(path), "node_modules", "@minimax-ai", "code", "cli.js"),
-        join2(officialRoot(home, env), "lib", "node_modules", "@minimax-ai", "code", "cli.js"),
-        join2(officialRoot(home, env), "node_modules", "@minimax-ai", "code", "cli.js")
+        join2(root, "lib", "node_modules", "@minimax-ai", "code", "cli.js"),
+        join2(root, "node_modules", "@minimax-ai", "code", "cli.js")
       ];
+      try {
+        for (const entry of await readdir(join2(root, "releases"), { withFileTypes: true }))
+          if (entry.isDirectory()) candidates.push(join2(root, "releases", entry.name, "node_modules", "@minimax-ai", "code", "cli.js"));
+      } catch {
+      }
       const versionOf = async (entry) => {
         try {
           const pkg = JSON.parse(await readFile(join2(entry, "..", "package.json"), "utf8"));
@@ -14010,7 +14017,7 @@ async function resolveMcode(command = "mcode", { env = process.env, home = homed
       if (best) return { command: process.execPath, args: [best], source };
       const launcher = join2(dirname(path), "mcode.ps1");
       if (await fileExists(launcher)) {
-        const powershell = await executablePath("powershell.exe", env, platform) ?? await executablePath("pwsh.exe", env, platform);
+        const powershell = await executablePath("pwsh.exe", env, platform) ?? await executablePath("powershell.exe", env, platform);
         if (!powershell) throw new Error("\u53D1\u73B0 MCode PowerShell \u542F\u52A8\u5668\uFF0C\u4F46\u627E\u4E0D\u5230 PowerShell\u3002");
         return { command: powershell, args: ["-NoProfile", "-File", launcher], source };
       }

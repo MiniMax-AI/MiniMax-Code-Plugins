@@ -77,3 +77,40 @@ test('posix resolution is unchanged',async()=>{
   assert.equal(r.command,join(f.shim,'mcode'));assert.deepEqual(r.args,[]);
  }finally{await f.cleanup();}
 });
+
+test('field layout: extensionless mcode + mcode.cmd + ps1 + stale sibling + releases/0.4.12 -> newest via node, never the bash script',async()=>{
+ const f=await layout();try{
+  const root=join(f.official,'.minimax-code');
+  await install(f.shim,{});                       // provides fake powershell.exe + pwsh? (powershell only)
+  await writeFile(join(f.shim,'pwsh.exe'),'fake'); // pwsh preferred on the last-resort path
+  await mkdir(root,{recursive:true});
+  await writeFile(join(root,'mcode'),'#!/bin/sh'); // extensionless bash script — must never be spawned
+  await install(root,{version:'0.2.7',npmLayout:true,withCmd:true,withPs1:true});
+  const rel=join(root,'releases','0.4.12','node_modules','@minimax-ai','code');
+  await mkdir(rel,{recursive:true});
+  await writeFile(join(rel,'cli.js'),'#!/usr/bin/env node');
+  await writeFile(join(rel,'package.json'),pkg('0.4.12'));
+  const env={PATH:`${root};${f.shim}`,PATHEXT:'.COM;.EXE;.BAT;.CMD',SystemRoot:'C:\\Windows'};
+  const r=await resolveMcode('mcode',{env,home:f.official,platform:'win32'});
+  assert.equal(r.command,process.execPath,'extensionless bash script must not be selected');
+  assert.equal(JSON.parse(await readFile(join(r.args[0],'..','package.json'),'utf8')).version,'0.4.12','releases layout wins over stale sibling');
+ }finally{await f.cleanup();}
+});
+test('ps1 renamed, sibling 0.2.7, releases/0.4.12 present -> releases entry (not the sibling)',async()=>{
+ const f=await layout();try{
+  const root=join(f.official,'.minimax-code');
+  await install(root,{version:'0.2.7',npmLayout:true,withPs1:false});
+  const rel=join(root,'releases','0.4.12','node_modules','@minimax-ai','code');
+  await mkdir(rel,{recursive:true});
+  await writeFile(join(rel,'cli.js'),'x');await writeFile(join(rel,'package.json'),pkg('0.4.12'));
+  const r=await resolveMcode('mcode',{env:winEnv(root),home:f.official,platform:'win32'});
+  assert.equal(JSON.parse(await readFile(join(r.args[0],'..','package.json'),'utf8')).version,'0.4.12');
+ }finally{await f.cleanup();}
+});
+test('last-resort PS hop prefers pwsh (PS7) over powershell (PS5.1 -File is broken in the field)',async()=>{
+ const f=await layout();try{
+  await install(f.shim,{});await writeFile(join(f.shim,'pwsh.exe'),'fake');
+  const r=await resolveMcode('mcode',{env:winEnv(f.shim),home:f.official,platform:'win32'});
+  assert.match(r.command,/pwsh\.exe$/i);
+ }finally{await f.cleanup();}
+});
