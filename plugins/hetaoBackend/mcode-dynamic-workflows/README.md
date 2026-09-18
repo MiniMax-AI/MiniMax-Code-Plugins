@@ -45,6 +45,12 @@ Tracked files are regular workspace files (up to 1 MB each), fingerprinted from 
 
 The repaired script runs from its beginning; checkpoints are recomputed and unreached branches are not premarked complete. Declare every data/control dependency in `dependsOn`. Untracked files, external evidence and side effects cannot be checked automatically, so stale or incorrect results must not be selected for reuse. Schema-constrained outputs accept native values, complete JSON text, or one complete JSON fence; validation errors preserve the raw output. Each node has an independent schema namespace, including local references, so repeated schema identifiers cannot conflict across nodes or runs.
 
+## Cross-run reuse
+
+Stored results are normally reused only within a run (resume) or through explicit repair selection. Passing `reuseAcrossRuns: true` to `workflow_start`, or setting it while a draft is pending review, additionally lets a node adopt a stored result from an earlier run of the same project. Adoption requires the node's full spec to hash identically (prompt, model, effort, input, schema, dependencies) and the run context to match on all four keys — workspace, input, executor and tracked-file fingerprints. Adopted outputs are re-validated against the node's current schema; the step records provenance in `reusedFrom.crossRun: true` with the source run and step, emits a `step.reused` event, and does not consume the workflow's agent-call budget.
+
+Reuse proves only that the context was identical and that the stored result was carried over faithfully — it does not prove the original run's output was semantically correct. For critical nodes, prefer schemas with evidence fields or place an independent verification node downstream, and keep `reuseAcrossRuns` off when in doubt.
+
 ## Data, permissions and network
 
 - Every project-scoped tool requires an absolute `workspace`; plugin process cwd is never treated as your project. Canonical project paths isolate runs, templates, history, limits and ports. Never use an unrelated project's path.

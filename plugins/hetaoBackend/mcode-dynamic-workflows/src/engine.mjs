@@ -44,7 +44,9 @@ export class Engine extends EventEmitter {
    check(Number.isInteger(concurrency)&&concurrency>=1&&concurrency<=16,'并发范围 1–16');check(Number.isInteger(maxCalls)&&maxCalls>=1&&maxCalls<=100,'调用数范围 1–100');
    const limits=resolveLimits(request,this.defaults);
    const metadata=request.metadata===undefined?{}:{metadata:normalizeMetadata(request.metadata)};
-   const definition={...limits,...metadata,name:request.name,script:request.script,input:request.input??{},executor:request.executor,concurrency,maxCalls};const requestHash=hash(repair?{...definition,repair}:definition);
+   // Absent unless explicitly true: an always-present default key would change requestHash and break legacy idempotent replays.
+   const reuseAcrossRuns=request.reuseAcrossRuns===undefined?false:(check(typeof request.reuseAcrossRuns==='boolean','reuseAcrossRuns 必须为布尔'),request.reuseAcrossRuns);
+   const definition={...limits,...metadata,name:request.name,script:request.script,input:request.input??{},executor:request.executor,concurrency,maxCalls,...(reuseAcrossRuns?{reuseAcrossRuns:true}:{})};const requestHash=hash(repair?{...definition,repair}:definition);
    const existing=this.store.byRequest(request.requestId);if(existing){const legacyDefinition={...definition};for(const key of Object.keys(DEFAULT_LIMITS))delete legacyDefinition[key];check(existing.requestHash===requestHash||(existing.maxSteps===undefined&&Object.keys(DEFAULT_LIMITS).every(k=>request[k]===undefined)&&existing.requestHash===hash(legacyDefinition)),'requestId 已用于不同参数');return this.snapshot(existing.id);}
    const fingerprints={};const topology=assertValidDependencies(previewTopology(request.script,request.input??{}));
    check(!this.closing,'服务正在关闭');
@@ -71,14 +73,14 @@ export class Engine extends EventEmitter {
    check(Number.isInteger(request.revision)&&request.revision===run.revision,'审核版本已更新，请刷新后再修改');
    const script=request.script??run.script,input=request.input??run.input,topology=assertValidDependencies(previewTopology(script,input));
    check(input&&typeof input==='object'&&!Array.isArray(input),'input 必须为 JSON object');boundedJSON(input);
-   const name=request.name??run.name,executor=request.executor??run.executor,concurrency=request.concurrency??run.concurrency,maxCalls=request.maxCalls??run.maxCalls;
+   const name=request.name??run.name,executor=request.executor??run.executor,concurrency=request.concurrency??run.concurrency,maxCalls=request.maxCalls??run.maxCalls,reuseAcrossRuns=request.reuseAcrossRuns===undefined?run.reuseAcrossRuns:(check(typeof request.reuseAcrossRuns==='boolean','reuseAcrossRuns 必须为布尔'),request.reuseAcrossRuns);
    check(typeof name==='string'&&name.trim().length>0&&name.length<=120,'名称须为 1–120 字符');check(['demo','mcode'].includes(executor),'executor 须为 demo 或 mcode');
    check(Number.isInteger(concurrency)&&concurrency>=1&&concurrency<=16,'并发范围 1–16');check(Number.isInteger(maxCalls)&&maxCalls>=1&&maxCalls<=100,'调用数范围 1–100');
    const metadata=request.metadata===undefined?{}:{metadata:normalizeMetadata(request.metadata)};
    let repair=run.repair;
    if(request.reuseStepIds!==undefined){const ids=request.reuseStepIds;check(repair&&Array.isArray(ids)&&ids.length<=100&&new Set(ids).size===ids.length&&ids.every(id=>typeof id==='string'&&(repair.candidateStepIds??repair.reuseStepIds).includes(id)),'只能选择修复草稿已冻结的候选节点');repair={...repair,reuseStepIds:ids};}
    if(request.reason!==undefined){check(repair&&typeof request.reason==='string'&&request.reason.trim()&&request.reason.length<=2000,'请提供修复原因（最多 2000 字符）');repair={...repair,reason:request.reason.trim()};}
-   Object.assign(run,...(repair?[{repair}]:[]),resolveLimits(request,runLimits(run)),metadata,{name,script,input,executor,concurrency,maxCalls,topology,scriptHash:hash(script),revision:run.revision+1});
+   Object.assign(run,...(repair?[{repair}]:[]),resolveLimits(request,runLimits(run)),metadata,{name,script,input,executor,concurrency,maxCalls,reuseAcrossRuns,topology,scriptHash:hash(script),revision:run.revision+1});
    this.save(run);this.emitEvent(id,'run.updated',{revision:run.revision});return this.snapshot(id);
  }
  saveTemplate(id,{name,revision}={}) {
@@ -195,6 +197,18 @@ export class Engine extends EventEmitter {
        reusedFrom:{runId:repair.sourceRunId,stepId:spec.id,endedAt:candidate.endedAt??null}};
        this.store.saveStep(ctx.run.id,step);this.emitEvent(ctx.run.id,'step.reused',{stepId:step.id,sourceRunId:repair.sourceRunId});
        return Promise.resolve({status:'succeeded',output:step.output,cached:true});}
+   }
+   if(ctx.run.reuseAcrossRuns&&!previous){
+    // Cross-run reuse: adopt an earlier run's stored result when the node spec and the context (workspace, input, executor, tracked files) are identical.
+    const ctxHash=ctx.contextHash??(ctx.contextHash=hash({workspace:ctx.run.workspace,input:ctx.run.input,executor:ctx.run.executor,fingerprints:ctx.run.fingerprints}));
+    for(const candidate of this.store.findCrossRunReuse({contextHash:ctxHash,requestHash,excludeRunId:ctx.run.id})){
+     let valid=true;try{if(validateOutput)valid=validateOutput(candidate.step.output);}catch{valid=false;}
+     if(!valid)continue;
+     const step={...candidate.step,attempt:0,createdAt:Date.now(),startedAt:null,endedAt:candidate.step.endedAt??Date.now(),usage:null,usageHistory:[],sessionId:undefined,turnId:undefined,
+       reusedFrom:candidate.step.reusedFrom??{runId:candidate.runId,stepId:candidate.stepId,endedAt:candidate.step.endedAt??null,crossRun:true}};
+     this.store.saveStep(ctx.run.id,step);this.emitEvent(ctx.run.id,'step.reused',{stepId:spec.id,sourceRunId:candidate.runId,crossRun:true});
+     return Promise.resolve({status:'succeeded',output:step.output,cached:true});
+    }
    }
    check(ctx.run.attempts<ctx.run.maxCalls,`已达到工作流 Agent 总调用上限 ${ctx.run.maxCalls} 次（包括恢复尝试），请提高总调用预算后恢复。`);ctx.run.attempts++;this.save(ctx.run);
    const step={id:spec.id,...(typeof planId==='string'?{planId}:{}),label:spec.label??spec.id,phase:spec.phase??null,kind:'agent',dependsOn:deps,requestHash,status:'queued',attempt:(previous?.attempt??0)+1,createdAt:previous?.createdAt??Date.now(),startedAt:null,endedAt:null,prompt:spec.prompt,input:spec.input??null,output:null,error:null,errorDetails:null,...runLimits(ctx.run),timeoutMs:runLimits(ctx.run).stepTimeoutMs,usage:null,usageHistory:[...(previous?.usageHistory??[]),...(previous?.usage?[previous.usage]:[])]};

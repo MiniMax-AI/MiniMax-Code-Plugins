@@ -7714,139 +7714,7 @@ import { spawn as spawn3 } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, openSync, writeFileSync, closeSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
-var Store = class {
-  constructor(dir) {
-    mkdirSync(dir, { recursive: true, mode: 448 });
-    this.lock = join(dir, "owner.lock");
-    try {
-      this.fd = openSync(this.lock, "wx", 384);
-    } catch (e) {
-      if (e.code !== "EEXIST") throw e;
-      let pid;
-      try {
-        pid = JSON.parse(readFileSync(this.lock, "utf8")).pid;
-      } catch {
-        throw new Error("\u72B6\u6001\u76EE\u5F55\u9501\u635F\u574F\uFF0C\u8BF7\u4EBA\u5DE5\u68C0\u67E5 owner.lock");
-      }
-      let alive2 = true;
-      try {
-        process.kill(pid, 0);
-      } catch (err) {
-        if (err.code === "ESRCH") alive2 = false;
-      }
-      if (alive2) throw new Error("\u540C\u4E00\u72B6\u6001\u76EE\u5F55\u5DF2\u6709\u8FD0\u884C\u4E2D\u7684\u670D\u52A1\uFF0C\u8BF7\u8FDE\u63A5\u65E2\u6709\u670D\u52A1");
-      unlinkSync(this.lock);
-      this.fd = openSync(this.lock, "wx", 384);
-    }
-    this.owner = randomUUID();
-    try {
-      writeFileSync(this.fd, JSON.stringify({ pid: process.pid, owner: this.owner }));
-      this.db = new DatabaseSync(join(dir, "workflows.sqlite"));
-      this.db.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT;");
-      this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
-      CREATE TABLE IF NOT EXISTS templates(id TEXT PRIMARY KEY,body TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,body TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,requestId TEXT UNIQUE,requestHash TEXT NOT NULL,body TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS steps(runId TEXT,id TEXT,body TEXT NOT NULL,PRIMARY KEY(runId,id));
-      CREATE TABLE IF NOT EXISTS repair_cache(runId TEXT,id TEXT,body TEXT NOT NULL,PRIMARY KEY(runId,id));
-      CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT,runId TEXT,body TEXT NOT NULL);
-      CREATE INDEX IF NOT EXISTS run_events ON events(runId,seq);`);
-      const unfinished = this.db.prepare("SELECT body FROM runs WHERE json_extract(body,'$.status') IN ('running','queued','stopping','pausing')").all();
-      for (const row of unfinished) {
-        const run = JSON.parse(row.body);
-        run.status = "needs_attention";
-        run.error = "\u4E0A\u6B21\u670D\u52A1\u5F02\u5E38\u7EC8\u6B62\u3002\u5148\u786E\u8BA4\u65E7 Agent \u5DF2\u505C\u6B62\uFF0C\u518D\u6062\u590D\u3002";
-        this.save(run);
-      }
-    } catch (error2) {
-      this.db?.close();
-      this.releaseLock();
-      throw error2;
-    }
-  }
-  transaction(fn) {
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const r = fn();
-      this.db.exec("COMMIT");
-      return r;
-    } catch (e) {
-      this.db.exec("ROLLBACK");
-      throw e;
-    }
-  }
-  templates() {
-    return this.db.prepare("SELECT body FROM templates ORDER BY rowid DESC").all().map((r) => JSON.parse(r.body));
-  }
-  template(id2) {
-    const r = this.db.prepare("SELECT body FROM templates WHERE id=?").get(id2);
-    return r ? JSON.parse(r.body) : null;
-  }
-  saveTemplate(value) {
-    this.db.prepare("INSERT INTO templates VALUES(?,?)").run(value.id, JSON.stringify(value));
-  }
-  deleteTemplate(id2) {
-    return this.db.prepare("DELETE FROM templates WHERE id=?").run(id2).changes > 0;
-  }
-  setting(key) {
-    const row = this.db.prepare("SELECT body FROM settings WHERE key=?").get(key);
-    return row ? JSON.parse(row.body) : void 0;
-  }
-  saveSetting(key, value) {
-    this.db.prepare("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET body=excluded.body").run(key, JSON.stringify(value));
-  }
-  save(run) {
-    this.db.prepare("INSERT INTO runs VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body").run(run.id, run.requestId, run.requestHash, JSON.stringify(run));
-  }
-  get(id2) {
-    const r = this.db.prepare("SELECT body FROM runs WHERE id=?").get(id2);
-    return r ? JSON.parse(r.body) : null;
-  }
-  byRequest(id2) {
-    const r = this.db.prepare("SELECT body FROM runs WHERE requestId=?").get(id2);
-    return r ? JSON.parse(r.body) : null;
-  }
-  list() {
-    return this.db.prepare("SELECT body FROM runs ORDER BY CASE WHEN json_extract(body,'$.status') IN ('running','queued','stopping','pausing') THEN 0 WHEN json_extract(body,'$.status')='needs_attention' THEN 1 ELSE 2 END, rowid DESC LIMIT 100").all().map((r) => JSON.parse(r.body));
-  }
-  step(runId, id2) {
-    const r = this.db.prepare("SELECT body FROM steps WHERE runId=? AND id=?").get(runId, id2);
-    return r ? JSON.parse(r.body) : null;
-  }
-  steps(runId) {
-    return this.db.prepare("SELECT body FROM steps WHERE runId=? ORDER BY rowid").all(runId).map((r) => JSON.parse(r.body));
-  }
-  saveStep(runId, step) {
-    this.db.prepare("INSERT INTO steps VALUES(?,?,?) ON CONFLICT(runId,id) DO UPDATE SET body=excluded.body").run(runId, step.id, JSON.stringify(step));
-  }
-  repairCandidate(runId, id2) {
-    const r = this.db.prepare("SELECT body FROM repair_cache WHERE runId=? AND id=?").get(runId, id2);
-    return r ? JSON.parse(r.body) : null;
-  }
-  saveRepairCandidate(runId, step) {
-    this.db.prepare("INSERT INTO repair_cache VALUES(?,?,?)").run(runId, step.id, JSON.stringify(step));
-  }
-  event(runId, type, data2 = {}) {
-    const event = { ...data2, type, time: Date.now() };
-    const seq = Number(this.db.prepare("INSERT INTO events(runId,body) VALUES(?,?)").run(runId, JSON.stringify(event)).lastInsertRowid);
-    return { seq, ...event };
-  }
-  events(runId, after = 0, limit = 150) {
-    return this.db.prepare("SELECT seq,body FROM events WHERE runId=? AND seq>? ORDER BY seq LIMIT ?").all(runId, after, limit).map((e) => ({ seq: e.seq, ...JSON.parse(e.body) }));
-  }
-  releaseLock() {
-    closeSync(this.fd);
-    try {
-      if (JSON.parse(readFileSync(this.lock, "utf8")).owner === this.owner) unlinkSync(this.lock);
-    } catch {
-    }
-  }
-  close() {
-    this.db.close();
-    this.releaseLock();
-  }
-};
+import { createHash as createHash2, randomUUID } from "node:crypto";
 
 // src/common.mjs
 import { createHash } from "node:crypto";
@@ -13584,6 +13452,197 @@ ${script}
   return { valid: true, scriptHash: hash(script), dslVersion: 1 };
 }
 
+// src/store.mjs
+var Store = class {
+  constructor(dir) {
+    mkdirSync(dir, { recursive: true, mode: 448 });
+    this.lock = join(dir, "owner.lock");
+    try {
+      this.fd = openSync(this.lock, "wx", 384);
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      let pid;
+      try {
+        pid = JSON.parse(readFileSync(this.lock, "utf8")).pid;
+      } catch {
+        throw new Error("\u72B6\u6001\u76EE\u5F55\u9501\u635F\u574F\uFF0C\u8BF7\u4EBA\u5DE5\u68C0\u67E5 owner.lock");
+      }
+      let alive2 = true;
+      try {
+        process.kill(pid, 0);
+      } catch (err) {
+        if (err.code === "ESRCH") alive2 = false;
+      }
+      if (alive2) throw new Error("\u540C\u4E00\u72B6\u6001\u76EE\u5F55\u5DF2\u6709\u8FD0\u884C\u4E2D\u7684\u670D\u52A1\uFF0C\u8BF7\u8FDE\u63A5\u65E2\u6709\u670D\u52A1");
+      unlinkSync(this.lock);
+      this.fd = openSync(this.lock, "wx", 384);
+    }
+    this.owner = randomUUID();
+    this.txDepth = 0;
+    try {
+      writeFileSync(this.fd, JSON.stringify({ pid: process.pid, owner: this.owner }));
+      this.db = new DatabaseSync(join(dir, "workflows.sqlite"));
+      this.db.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT;");
+      this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+      CREATE TABLE IF NOT EXISTS templates(id TEXT PRIMARY KEY,body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,requestId TEXT UNIQUE,requestHash TEXT NOT NULL,body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS steps(runId TEXT,id TEXT,body TEXT NOT NULL,PRIMARY KEY(runId,id));
+      CREATE TABLE IF NOT EXISTS repair_cache(runId TEXT,id TEXT,body TEXT NOT NULL,PRIMARY KEY(runId,id));
+      CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT,runId TEXT,body TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS run_events ON events(runId,seq);
+      CREATE TABLE IF NOT EXISTS integrity_rows(surface TEXT NOT NULL,pos INTEGER NOT NULL,key TEXT NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(surface,pos));`);
+      const unfinished = this.db.prepare("SELECT body FROM runs WHERE json_extract(body,'$.status') IN ('running','queued','stopping','pausing')").all();
+      for (const row of unfinished) {
+        const run = JSON.parse(row.body);
+        run.status = "needs_attention";
+        run.error = "\u4E0A\u6B21\u670D\u52A1\u5F02\u5E38\u7EC8\u6B62\u3002\u5148\u786E\u8BA4\u65E7 Agent \u5DF2\u505C\u6B62\uFF0C\u518D\u6062\u590D\u3002";
+        this.save(run);
+      }
+    } catch (error2) {
+      this.db?.close();
+      this.releaseLock();
+      throw error2;
+    }
+  }
+  transaction(fn) {
+    if (this.txDepth) return fn();
+    this.txDepth = 1;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const r = fn();
+      this.db.exec("COMMIT");
+      return r;
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    } finally {
+      this.txDepth = 0;
+    }
+  }
+  templates() {
+    return this.db.prepare("SELECT body FROM templates ORDER BY rowid DESC").all().map((r) => JSON.parse(r.body));
+  }
+  template(id2) {
+    const r = this.db.prepare("SELECT body FROM templates WHERE id=?").get(id2);
+    return r ? JSON.parse(r.body) : null;
+  }
+  saveTemplate(value) {
+    this.db.prepare("INSERT INTO templates VALUES(?,?)").run(value.id, JSON.stringify(value));
+  }
+  deleteTemplate(id2) {
+    return this.db.prepare("DELETE FROM templates WHERE id=?").run(id2).changes > 0;
+  }
+  setting(key) {
+    const row = this.db.prepare("SELECT body FROM settings WHERE key=?").get(key);
+    return row ? JSON.parse(row.body) : void 0;
+  }
+  saveSetting(key, value) {
+    this.db.prepare("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET body=excluded.body").run(key, JSON.stringify(value));
+  }
+  save(run) {
+    this.db.prepare("INSERT INTO runs VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body").run(run.id, run.requestId, run.requestHash, JSON.stringify(run));
+  }
+  get(id2) {
+    const r = this.db.prepare("SELECT body FROM runs WHERE id=?").get(id2);
+    return r ? JSON.parse(r.body) : null;
+  }
+  byRequest(id2) {
+    const r = this.db.prepare("SELECT body FROM runs WHERE requestId=?").get(id2);
+    return r ? JSON.parse(r.body) : null;
+  }
+  list() {
+    return this.db.prepare("SELECT body FROM runs ORDER BY CASE WHEN json_extract(body,'$.status') IN ('running','queued','stopping','pausing') THEN 0 WHEN json_extract(body,'$.status')='needs_attention' THEN 1 ELSE 2 END, rowid DESC LIMIT 100").all().map((r) => JSON.parse(r.body));
+  }
+  step(runId, id2) {
+    const r = this.db.prepare("SELECT body FROM steps WHERE runId=? AND id=?").get(runId, id2);
+    return r ? JSON.parse(r.body) : null;
+  }
+  steps(runId) {
+    return this.db.prepare("SELECT body FROM steps WHERE runId=? ORDER BY rowid").all(runId).map((r) => JSON.parse(r.body));
+  }
+  findCrossRunReuse({ contextHash, requestHash, excludeRunId, limit = 20 }) {
+    return this.db.prepare("SELECT s.body AS stepBody, r.body AS runBody, s.rowid AS ord FROM steps s JOIN runs r ON s.runId = r.id WHERE r.id <> ? AND json_extract(s.body,'$.kind')='agent' AND json_extract(s.body,'$.status')='succeeded' AND json_extract(s.body,'$.requestHash')=? ORDER BY s.rowid DESC LIMIT ?").all(excludeRunId, requestHash, limit).flatMap((r) => {
+      const step = JSON.parse(r.stepBody), run = JSON.parse(r.runBody);
+      return hash({ workspace: run.workspace, input: run.input, executor: run.executor, fingerprints: run.fingerprints }) === contextHash ? [{ runId: run.id, stepId: step.id, step }] : [];
+    });
+  }
+  saveStep(runId, step) {
+    this.db.prepare("INSERT INTO steps VALUES(?,?,?) ON CONFLICT(runId,id) DO UPDATE SET body=excluded.body").run(runId, step.id, JSON.stringify(step));
+  }
+  repairCandidate(runId, id2) {
+    const r = this.db.prepare("SELECT body FROM repair_cache WHERE runId=? AND id=?").get(runId, id2);
+    return r ? JSON.parse(r.body) : null;
+  }
+  saveRepairCandidate(runId, step) {
+    this.transaction(() => {
+      const rowid = Number(this.db.prepare("INSERT INTO repair_cache VALUES(?,?,?)").run(runId, step.id, JSON.stringify(step)).lastInsertRowid);
+      this.chainAdvance("repair", "repair", "SELECT rowid AS pos,runId,id,body FROM repair_cache WHERE rowid>? AND rowid<=? ORDER BY rowid", rowid, (r) => `${r.runId}/${r.id}`);
+    });
+  }
+  event(runId, type, data2 = {}) {
+    const event = { ...data2, type, time: Date.now() };
+    return this.transaction(() => {
+      const seq = Number(this.db.prepare("INSERT INTO events(runId,body) VALUES(?,?)").run(runId, JSON.stringify(event)).lastInsertRowid);
+      this.chainAdvance("event", "events", "SELECT seq AS pos,body FROM events WHERE seq>? AND seq<=? ORDER BY seq", seq, (r) => String(r.pos));
+      return { seq, ...event };
+    });
+  }
+  events(runId, after = 0, limit = 150) {
+    return this.db.prepare("SELECT seq,body FROM events WHERE runId=? AND seq>? ORDER BY seq LIMIT ?").all(runId, after, limit).map((e) => ({ seq: e.seq, ...JSON.parse(e.body) }));
+  }
+  rowHash(prev, kind, key, body) {
+    return createHash2("sha256").update(`${prev}:${kind}:${key}:${body}`).digest("hex");
+  }
+  chainAdvance(kind, surface, sql, newUpto, keyOf) {
+    const tail = this.setting(`integrity_${surface}`);
+    let prev = tail?.head ?? "0".repeat(64);
+    for (const r of this.db.prepare(sql).all(tail?.upto ?? 0, newUpto)) {
+      const k = keyOf(r);
+      prev = this.rowHash(prev, kind, k, r.body);
+      this.db.prepare("INSERT OR REPLACE INTO integrity_rows VALUES(?,?,?,?)").run(surface, r.pos, k, prev);
+    }
+    this.saveSetting(`integrity_${surface}`, { head: prev, upto: newUpto });
+  }
+  integrityHeads() {
+    return { events: this.setting("integrity_events") ?? null, repair: this.setting("integrity_repair") ?? null };
+  }
+  verifyIntegrity() {
+    const genesis = "0".repeat(64);
+    const face = (kind, surface, table, posCol) => {
+      const skey = `integrity_${surface}`;
+      const rec = this.setting(skey);
+      const total = Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n);
+      if (!rec) return { head: null, upto: 0, verified: null, checked: 0, unchained: total, firstDivergence: null };
+      const rows = this.db.prepare("SELECT pos,key,hash FROM integrity_rows WHERE surface=? ORDER BY pos").all(surface);
+      let prev = genesis, firstDivergence = null;
+      for (const r of rows) {
+        const row = this.db.prepare(`SELECT body FROM ${table} WHERE ${posCol}=?`).get(r.pos);
+        const actual = row ? this.rowHash(prev, kind, r.key, row.body) : null;
+        if (!firstDivergence && (!row || actual !== r.hash)) firstDivergence = { key: r.key, expectedHead: r.hash, actualHead: actual };
+        prev = r.hash;
+      }
+      const verified = !firstDivergence && prev === rec.head;
+      return { head: rec.head, upto: rec.upto, verified, checked: rows.length, unchained: Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${posCol}>?`).get(rec.upto).n), firstDivergence };
+    };
+    return {
+      events: face("event", "events", "events", "seq"),
+      repair: face("repair", "repair", "repair_cache", "rowid")
+    };
+  }
+  releaseLock() {
+    closeSync(this.fd);
+    try {
+      if (JSON.parse(readFileSync(this.lock, "utf8")).owner === this.owner) unlinkSync(this.lock);
+    } catch {
+    }
+  }
+  close() {
+    this.db.close();
+    this.releaseLock();
+  }
+};
+
 // src/limits.mjs
 var DEFAULT_LIMITS = Object.freeze({ maxSteps: 120, stepTimeoutMs: 30 * 6e4, runTimeoutMs: 2 * 60 * 6e4 });
 var LEGACY_LIMITS = Object.freeze({ maxSteps: 30, stepTimeoutMs: 10 * 6e4, runTimeoutMs: 30 * 6e4 });
@@ -14237,7 +14296,8 @@ var Engine = class extends EventEmitter {
     check(Number.isInteger(maxCalls) && maxCalls >= 1 && maxCalls <= 100, "\u8C03\u7528\u6570\u8303\u56F4 1\u2013100");
     const limits = resolveLimits(request, this.defaults);
     const metadata = request.metadata === void 0 ? {} : { metadata: normalizeMetadata(request.metadata) };
-    const definition = { ...limits, ...metadata, name: request.name, script: request.script, input: request.input ?? {}, executor: request.executor, concurrency, maxCalls };
+    const reuseAcrossRuns = request.reuseAcrossRuns === void 0 ? false : (check(typeof request.reuseAcrossRuns === "boolean", "reuseAcrossRuns \u5FC5\u987B\u4E3A\u5E03\u5C14"), request.reuseAcrossRuns);
+    const definition = { ...limits, ...metadata, name: request.name, script: request.script, input: request.input ?? {}, executor: request.executor, concurrency, maxCalls, ...reuseAcrossRuns ? { reuseAcrossRuns: true } : {} };
     const requestHash = hash(repair ? { ...definition, repair } : definition);
     const existing = this.store.byRequest(request.requestId);
     if (existing) {
@@ -14294,7 +14354,7 @@ var Engine = class extends EventEmitter {
     const script = request.script ?? run.script, input = request.input ?? run.input, topology = assertValidDependencies(previewTopology(script, input));
     check(input && typeof input === "object" && !Array.isArray(input), "input \u5FC5\u987B\u4E3A JSON object");
     boundedJSON(input);
-    const name = request.name ?? run.name, executor = request.executor ?? run.executor, concurrency = request.concurrency ?? run.concurrency, maxCalls = request.maxCalls ?? run.maxCalls;
+    const name = request.name ?? run.name, executor = request.executor ?? run.executor, concurrency = request.concurrency ?? run.concurrency, maxCalls = request.maxCalls ?? run.maxCalls, reuseAcrossRuns = request.reuseAcrossRuns === void 0 ? run.reuseAcrossRuns : (check(typeof request.reuseAcrossRuns === "boolean", "reuseAcrossRuns \u5FC5\u987B\u4E3A\u5E03\u5C14"), request.reuseAcrossRuns);
     check(typeof name === "string" && name.trim().length > 0 && name.length <= 120, "\u540D\u79F0\u987B\u4E3A 1\u2013120 \u5B57\u7B26");
     check(["demo", "mcode"].includes(executor), "executor \u987B\u4E3A demo \u6216 mcode");
     check(Number.isInteger(concurrency) && concurrency >= 1 && concurrency <= 16, "\u5E76\u53D1\u8303\u56F4 1\u201316");
@@ -14310,7 +14370,7 @@ var Engine = class extends EventEmitter {
       check(repair && typeof request.reason === "string" && request.reason.trim() && request.reason.length <= 2e3, "\u8BF7\u63D0\u4F9B\u4FEE\u590D\u539F\u56E0\uFF08\u6700\u591A 2000 \u5B57\u7B26\uFF09");
       repair = { ...repair, reason: request.reason.trim() };
     }
-    Object.assign(run, ...repair ? [{ repair }] : [], resolveLimits(request, runLimits(run)), metadata, { name, script, input, executor, concurrency, maxCalls, topology, scriptHash: hash(script), revision: run.revision + 1 });
+    Object.assign(run, ...repair ? [{ repair }] : [], resolveLimits(request, runLimits(run)), metadata, { name, script, input, executor, concurrency, maxCalls, reuseAcrossRuns, topology, scriptHash: hash(script), revision: run.revision + 1 });
     this.save(run);
     this.emitEvent(id2, "run.updated", { revision: run.revision });
     return this.snapshot(id2);
@@ -14605,6 +14665,33 @@ var Engine = class extends EventEmitter {
         return Promise.resolve({ status: "succeeded", output: step2.output, cached: true });
       }
     }
+    if (ctx.run.reuseAcrossRuns && !previous) {
+      const ctxHash = ctx.contextHash ?? (ctx.contextHash = hash({ workspace: ctx.run.workspace, input: ctx.run.input, executor: ctx.run.executor, fingerprints: ctx.run.fingerprints }));
+      for (const candidate2 of this.store.findCrossRunReuse({ contextHash: ctxHash, requestHash, excludeRunId: ctx.run.id })) {
+        let valid = true;
+        try {
+          if (validateOutput) valid = validateOutput(candidate2.step.output);
+        } catch {
+          valid = false;
+        }
+        if (!valid) continue;
+        const step2 = {
+          ...candidate2.step,
+          attempt: 0,
+          createdAt: Date.now(),
+          startedAt: null,
+          endedAt: candidate2.step.endedAt ?? Date.now(),
+          usage: null,
+          usageHistory: [],
+          sessionId: void 0,
+          turnId: void 0,
+          reusedFrom: candidate2.step.reusedFrom ?? { runId: candidate2.runId, stepId: candidate2.stepId, endedAt: candidate2.step.endedAt ?? null, crossRun: true }
+        };
+        this.store.saveStep(ctx.run.id, step2);
+        this.emitEvent(ctx.run.id, "step.reused", { stepId: spec.id, sourceRunId: candidate2.runId, crossRun: true });
+        return Promise.resolve({ status: "succeeded", output: step2.output, cached: true });
+      }
+    }
     check(ctx.run.attempts < ctx.run.maxCalls, `\u5DF2\u8FBE\u5230\u5DE5\u4F5C\u6D41 Agent \u603B\u8C03\u7528\u4E0A\u9650 ${ctx.run.maxCalls} \u6B21\uFF08\u5305\u62EC\u6062\u590D\u5C1D\u8BD5\uFF09\uFF0C\u8BF7\u63D0\u9AD8\u603B\u8C03\u7528\u9884\u7B97\u540E\u6062\u590D\u3002`);
     ctx.run.attempts++;
     this.save(ctx.run);
@@ -14723,7 +14810,7 @@ var Engine = class extends EventEmitter {
 };
 
 // src/http.mjs
-import { createHash as createHash2 } from "node:crypto";
+import { createHash as createHash3 } from "node:crypto";
 
 // web/graph-model.mjs
 var finished = /* @__PURE__ */ new Set(["succeeded", "completed_with_gaps", "failed", "cancelled"]);
@@ -26517,7 +26604,7 @@ async function startStdio(handler, tools = TOOLS) {
 
 // src/http.mjs
 async function startHTTP(engine, { port = 0, webRoot = new URL("../web/", import.meta.url), exampleRoot = new URL("../examples/", import.meta.url) } = {}) {
-  const reportStyleHash = createHash2("sha256").update(REPORT_STYLES).digest("base64");
+  const reportStyleHash = createHash3("sha256").update(REPORT_STYLES).digest("base64");
   let origin;
   const sockets = /* @__PURE__ */ new Set();
   const server = http.createServer(async (req, res) => {
@@ -26610,7 +26697,7 @@ async function startHTTP(engine, { port = 0, webRoot = new URL("../web/", import
 }
 
 // src/workspace-router.mjs
-import { createHash as createHash3 } from "node:crypto";
+import { createHash as createHash4 } from "node:crypto";
 import { realpath as realpath2, stat as stat2 } from "node:fs/promises";
 import { isAbsolute as isAbsolute2, relative as relative2, join as join3, sep as sep2 } from "node:path";
 
@@ -27473,7 +27560,7 @@ async function canonicalWorkspace(value, pluginRoot) {
   return workspace;
 }
 function projectDataDir(base, workspace) {
-  return join3(base, "projects", createHash3("sha256").update(workspace).digest("hex"));
+  return join3(base, "projects", createHash4("sha256").update(workspace).digest("hex"));
 }
 function createWorkspaceRouter({ binary, pluginRoot, dataRoot, extraArgs = [] }) {
   const connections = /* @__PURE__ */ new Map();
