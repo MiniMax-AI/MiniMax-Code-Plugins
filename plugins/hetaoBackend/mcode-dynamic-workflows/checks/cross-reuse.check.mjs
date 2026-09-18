@@ -153,3 +153,17 @@ test('chained adoption keeps reusedFrom on the immediate source and originalProd
  assert.equal(b3.usage,null);assert.deepEqual(b3.usageHistory,[]);
  }finally{await f.cleanup();}
 });
+test('an upstream that re-executes with a different output invalidates downstream adoption',async()=>{
+ // Maintainer's divergence shape: the upstream is not a cross-run candidate itself
+ // (mcode node without an explicit model re-executes every run) and its output
+ // differs between runs; the eligible downstream must not adopt the stale result.
+ let aOutput='old';const calls=[],f=await fixture(async s=>{calls.push(s.id);return {output:s.id==='a'?aOutput:s.id};});try{
+ const script=`const a=await ctx.agent({id:'a',prompt:'write'});const b=await ctx.agent({id:'b',prompt:'read',model:'m2',dependsOn:['a'],input:{content:a.output}});return {a:a.output,b:b.output};`;
+ const run1=await run(f.engine,script,{},{executor:'mcode'});
+ aOutput='new';
+ const run2=await run(f.engine,script,{},{executor:'mcode',reuseAcrossRuns:true});
+ assert.deepEqual(calls,['a','b','a','b'],'a re-executes (no model => never a candidate); b must not adopt the stale run-1 result');
+ assert.deepEqual(run2.result,{a:'new',b:'b'});
+ assert.ok(!run2.steps.find(s=>s.id==='b').reusedFrom,'divergent upstream output must break lineage');
+ }finally{await f.cleanup();}
+});

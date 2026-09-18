@@ -187,11 +187,12 @@ const step={id:key,kind:'checkpoint',status:'succeeded',output:payload.value,req
    if(cached){check(cached.hash===requestHash,'重复 step id 参数冲突');return cached.promise;}
    // Computed once per dispatch attempt, before any candidate lookup. contextHash is
    // stamped on every new step so the store can filter cross-run candidates in SQL
-   // before LIMIT; lineageHash pins the node to its own spec plus the lineage hashes
-   // of its succeeded dependencies (in dependsOn order), so a changed upstream
+   // before LIMIT; lineageHash pins the node to its own spec plus, for each
+   // succeeded dependency (in dependsOn order), that dependency's lineage hash
+   // AND output hash — so a changed, rerun, or differently-outcomed upstream
    // invalidates downstream candidates even when the downstream spec is unchanged.
    const ctxHash=ctx.contextHash??(ctx.contextHash=hash({workspace:ctx.run.workspace,input:ctx.run.input,executor:ctx.run.executor,fingerprints:ctx.run.fingerprints}));
-   const lineageHash=hash({requestHash,deps:deps.map(id=>{const dep=this.store.step(ctx.run.id,id);return {id,lineageHash:dep?.lineageHash??null};})});
+   const lineageHash=hash({requestHash,deps:deps.map(id=>{const dep=this.store.step(ctx.run.id,id);return {id,lineageHash:dep?.lineageHash??null,outputHash:dep?.status==='succeeded'?hash(dep.output??null):null};})});
    const repair=ctx.run.repair,candidate=!previous&&repair?.reuseStepIds.includes(spec.id)?this.store.repairCandidate(ctx.run.id,spec.id):null;
    if(candidate&&candidate.requestHash===requestHash
       &&repair.contextHash===hash({workspace:ctx.run.workspace,input:ctx.run.input,executor:ctx.run.executor,fingerprints:ctx.run.fingerprints})

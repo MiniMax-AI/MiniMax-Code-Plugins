@@ -7714,7 +7714,7 @@ import { spawn as spawn3 } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, openSync, writeFileSync, closeSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 var Store = class {
   constructor(dir) {
     mkdirSync(dir, { recursive: true, mode: 448 });
@@ -7740,7 +7740,6 @@ var Store = class {
       this.fd = openSync(this.lock, "wx", 384);
     }
     this.owner = randomUUID();
-    this.txDepth = 0;
     try {
       writeFileSync(this.fd, JSON.stringify({ pid: process.pid, owner: this.owner }));
       this.db = new DatabaseSync(join(dir, "workflows.sqlite"));
@@ -7752,8 +7751,7 @@ var Store = class {
       CREATE TABLE IF NOT EXISTS steps(runId TEXT,id TEXT,body TEXT NOT NULL,PRIMARY KEY(runId,id));
       CREATE TABLE IF NOT EXISTS repair_cache(runId TEXT,id TEXT,body TEXT NOT NULL,PRIMARY KEY(runId,id));
       CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT,runId TEXT,body TEXT NOT NULL);
-      CREATE INDEX IF NOT EXISTS run_events ON events(runId,seq);
-      CREATE TABLE IF NOT EXISTS integrity_rows(surface TEXT NOT NULL,pos INTEGER NOT NULL,key TEXT NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(surface,pos));`);
+      CREATE INDEX IF NOT EXISTS run_events ON events(runId,seq);`);
       const unfinished = this.db.prepare("SELECT body FROM runs WHERE json_extract(body,'$.status') IN ('running','queued','stopping','pausing')").all();
       for (const row of unfinished) {
         const run = JSON.parse(row.body);
@@ -7768,8 +7766,6 @@ var Store = class {
     }
   }
   transaction(fn) {
-    if (this.txDepth) return fn();
-    this.txDepth = 1;
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const r = fn();
@@ -7778,8 +7774,6 @@ var Store = class {
     } catch (e) {
       this.db.exec("ROLLBACK");
       throw e;
-    } finally {
-      this.txDepth = 0;
     }
   }
   templates() {
@@ -7841,60 +7835,15 @@ var Store = class {
     return r ? JSON.parse(r.body) : null;
   }
   saveRepairCandidate(runId, step) {
-    this.transaction(() => {
-      const rowid = Number(this.db.prepare("INSERT INTO repair_cache VALUES(?,?,?)").run(runId, step.id, JSON.stringify(step)).lastInsertRowid);
-      this.chainAdvance("repair", "repair", "SELECT rowid AS pos,runId,id,body FROM repair_cache WHERE rowid>? AND rowid<=? ORDER BY rowid", rowid, (r) => `${r.runId}/${r.id}`);
-    });
+    this.db.prepare("INSERT INTO repair_cache VALUES(?,?,?)").run(runId, step.id, JSON.stringify(step));
   }
   event(runId, type, data2 = {}) {
     const event = { ...data2, type, time: Date.now() };
-    return this.transaction(() => {
-      const seq = Number(this.db.prepare("INSERT INTO events(runId,body) VALUES(?,?)").run(runId, JSON.stringify(event)).lastInsertRowid);
-      this.chainAdvance("event", "events", "SELECT seq AS pos,body FROM events WHERE seq>? AND seq<=? ORDER BY seq", seq, (r) => String(r.pos));
-      return { seq, ...event };
-    });
+    const seq = Number(this.db.prepare("INSERT INTO events(runId,body) VALUES(?,?)").run(runId, JSON.stringify(event)).lastInsertRowid);
+    return { seq, ...event };
   }
   events(runId, after = 0, limit = 150) {
     return this.db.prepare("SELECT seq,body FROM events WHERE runId=? AND seq>? ORDER BY seq LIMIT ?").all(runId, after, limit).map((e) => ({ seq: e.seq, ...JSON.parse(e.body) }));
-  }
-  rowHash(prev, kind, key, body) {
-    return createHash("sha256").update(`${prev}:${kind}:${key}:${body}`).digest("hex");
-  }
-  chainAdvance(kind, surface, sql, newUpto, keyOf) {
-    const tail = this.setting(`integrity_${surface}`);
-    let prev = tail?.head ?? "0".repeat(64);
-    for (const r of this.db.prepare(sql).all(tail?.upto ?? 0, newUpto)) {
-      const k = keyOf(r);
-      prev = this.rowHash(prev, kind, k, r.body);
-      this.db.prepare("INSERT OR REPLACE INTO integrity_rows VALUES(?,?,?,?)").run(surface, r.pos, k, prev);
-    }
-    this.saveSetting(`integrity_${surface}`, { head: prev, upto: newUpto });
-  }
-  integrityHeads() {
-    return { events: this.setting("integrity_events") ?? null, repair: this.setting("integrity_repair") ?? null };
-  }
-  verifyIntegrity() {
-    const genesis = "0".repeat(64);
-    const face = (kind, surface, table, posCol) => {
-      const skey = `integrity_${surface}`;
-      const rec = this.setting(skey);
-      const total = Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n);
-      if (!rec) return { head: null, upto: 0, verified: null, checked: 0, unchained: total, firstDivergence: null };
-      const rows = this.db.prepare("SELECT pos,key,hash FROM integrity_rows WHERE surface=? ORDER BY pos").all(surface);
-      let prev = genesis, firstDivergence = null;
-      for (const r of rows) {
-        const row = this.db.prepare(`SELECT body FROM ${table} WHERE ${posCol}=?`).get(r.pos);
-        const actual = row ? this.rowHash(prev, kind, r.key, row.body) : null;
-        if (!firstDivergence && (!row || actual !== r.hash)) firstDivergence = { key: r.key, expectedHead: r.hash, actualHead: actual };
-        prev = r.hash;
-      }
-      const verified = !firstDivergence && prev === rec.head;
-      return { head: rec.head, upto: rec.upto, verified, checked: rows.length, unchained: Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${posCol}>?`).get(rec.upto).n), firstDivergence };
-    };
-    return {
-      events: face("event", "events", "events", "seq"),
-      repair: face("repair", "repair", "repair_cache", "rowid")
-    };
   }
   releaseLock() {
     closeSync(this.fd);
@@ -7910,7 +7859,7 @@ var Store = class {
 };
 
 // src/common.mjs
-import { createHash as createHash2 } from "node:crypto";
+import { createHash } from "node:crypto";
 
 // node_modules/acorn/dist/acorn.mjs
 var astralIdentifierCodes = [509, 0, 227, 0, 150, 4, 294, 9, 1368, 2, 2, 1, 6, 3, 41, 2, 5, 0, 166, 1, 574, 3, 9, 9, 7, 9, 32, 4, 318, 1, 78, 5, 71, 10, 50, 3, 123, 2, 54, 14, 32, 10, 3, 1, 11, 3, 46, 10, 8, 0, 46, 9, 7, 2, 37, 13, 2, 9, 6, 1, 45, 0, 13, 2, 49, 13, 9, 3, 2, 11, 83, 11, 7, 0, 3, 0, 158, 11, 6, 9, 7, 3, 56, 1, 2, 6, 3, 1, 3, 2, 10, 0, 11, 1, 3, 6, 4, 4, 68, 8, 2, 0, 3, 0, 2, 3, 2, 4, 2, 0, 15, 1, 83, 17, 10, 9, 5, 0, 82, 19, 13, 9, 214, 6, 3, 8, 28, 1, 83, 16, 16, 9, 82, 12, 9, 9, 7, 19, 58, 14, 5, 9, 243, 14, 166, 9, 71, 5, 2, 1, 3, 3, 2, 0, 2, 1, 13, 9, 120, 6, 3, 6, 4, 0, 29, 9, 41, 6, 2, 3, 9, 0, 10, 10, 47, 15, 199, 7, 137, 9, 54, 7, 2, 7, 17, 9, 57, 21, 2, 13, 123, 5, 4, 0, 2, 1, 2, 6, 2, 0, 9, 9, 49, 4, 2, 1, 2, 4, 9, 9, 55, 9, 266, 3, 10, 1, 2, 0, 49, 6, 4, 4, 14, 10, 5350, 0, 7, 14, 11465, 27, 2343, 9, 87, 9, 39, 4, 60, 6, 26, 9, 535, 9, 470, 0, 2, 54, 8, 3, 82, 0, 12, 1, 19628, 1, 4178, 9, 519, 45, 3, 22, 543, 4, 4, 5, 9, 7, 3, 6, 31, 3, 149, 2, 1418, 49, 513, 54, 5, 49, 9, 0, 15, 0, 23, 4, 2, 14, 1361, 6, 2, 16, 3, 6, 2, 1, 2, 4, 101, 0, 161, 6, 10, 9, 357, 0, 62, 13, 499, 13, 245, 1, 2, 9, 233, 0, 3, 0, 8, 1, 6, 0, 475, 6, 110, 6, 6, 9, 4759, 9, 787719, 239];
@@ -13610,7 +13559,7 @@ function parse3(input, options) {
 }
 
 // src/common.mjs
-var hash = (value) => createHash2("sha256").update(typeof value === "string" || Buffer.isBuffer(value) ? value : stable(value)).digest("hex");
+var hash = (value) => createHash("sha256").update(typeof value === "string" || Buffer.isBuffer(value) ? value : stable(value)).digest("hex");
 function stable(value) {
   return JSON.stringify(canonical(value));
 }
@@ -14641,7 +14590,7 @@ var Engine = class extends EventEmitter {
     const ctxHash = ctx.contextHash ?? (ctx.contextHash = hash({ workspace: ctx.run.workspace, input: ctx.run.input, executor: ctx.run.executor, fingerprints: ctx.run.fingerprints }));
     const lineageHash = hash({ requestHash, deps: deps.map((id2) => {
       const dep = this.store.step(ctx.run.id, id2);
-      return { id: id2, lineageHash: dep?.lineageHash ?? null };
+      return { id: id2, lineageHash: dep?.lineageHash ?? null, outputHash: dep?.status === "succeeded" ? hash(dep.output ?? null) : null };
     }) });
     const repair = ctx.run.repair, candidate = !previous && repair?.reuseStepIds.includes(spec.id) ? this.store.repairCandidate(ctx.run.id, spec.id) : null;
     if (candidate && candidate.requestHash === requestHash && repair.contextHash === hash({ workspace: ctx.run.workspace, input: ctx.run.input, executor: ctx.run.executor, fingerprints: ctx.run.fingerprints }) && deps.every((id2) => {
@@ -14821,7 +14770,7 @@ var Engine = class extends EventEmitter {
 };
 
 // src/http.mjs
-import { createHash as createHash3 } from "node:crypto";
+import { createHash as createHash2 } from "node:crypto";
 
 // web/graph-model.mjs
 var finished = /* @__PURE__ */ new Set(["succeeded", "completed_with_gaps", "failed", "cancelled"]);
@@ -26615,7 +26564,7 @@ async function startStdio(handler, tools = TOOLS) {
 
 // src/http.mjs
 async function startHTTP(engine, { port = 0, webRoot = new URL("../web/", import.meta.url), exampleRoot = new URL("../examples/", import.meta.url) } = {}) {
-  const reportStyleHash = createHash3("sha256").update(REPORT_STYLES).digest("base64");
+  const reportStyleHash = createHash2("sha256").update(REPORT_STYLES).digest("base64");
   let origin;
   const sockets = /* @__PURE__ */ new Set();
   const server = http.createServer(async (req, res) => {
@@ -26708,7 +26657,7 @@ async function startHTTP(engine, { port = 0, webRoot = new URL("../web/", import
 }
 
 // src/workspace-router.mjs
-import { createHash as createHash4 } from "node:crypto";
+import { createHash as createHash3 } from "node:crypto";
 import { realpath as realpath2, stat as stat2 } from "node:fs/promises";
 import { isAbsolute as isAbsolute2, relative as relative2, join as join3, sep as sep2 } from "node:path";
 
@@ -27571,7 +27520,7 @@ async function canonicalWorkspace(value, pluginRoot) {
   return workspace;
 }
 function projectDataDir(base, workspace) {
-  return join3(base, "projects", createHash4("sha256").update(workspace).digest("hex"));
+  return join3(base, "projects", createHash3("sha256").update(workspace).digest("hex"));
 }
 function createWorkspaceRouter({ binary, pluginRoot, dataRoot, extraArgs = [] }) {
   const connections = /* @__PURE__ */ new Map();
