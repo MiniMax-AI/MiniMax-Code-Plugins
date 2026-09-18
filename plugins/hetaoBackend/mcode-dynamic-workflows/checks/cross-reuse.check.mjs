@@ -167,3 +167,18 @@ test('an upstream that re-executes with a different output invalidates downstrea
  assert.ok(!run2.steps.find(s=>s.id==='b').reusedFrom,'divergent upstream output must break lineage');
  }finally{await f.cleanup();}
 });
+test('cross-run adoption restamps planId to the current topology node',async()=>{
+ const calls=[],f=await fixture(async s=>{calls.push(s.id);return {output:s.id};});try{
+ const body='return await ctx.agent({id:"a",prompt:"a"});';
+ const run1=await run(f.engine,body);
+ // Same agent spec, script text differs by a leading comment -> different topology planId.
+ const run2=await run(f.engine,'// shifted\n'+body,{},{reuseAcrossRuns:true});
+ assert.equal(calls.length,1,'reuse hits');
+ const a2=run2.steps.find(s=>s.id==='a');
+ assert.ok(a2.reusedFrom?.crossRun);
+ assert.notEqual(a2.planId,run1.steps.find(s=>s.id==='a').planId,'adopted step must not carry the source run planId');
+ const node=run2.topology.nodes.find(n=>n.stepId==='a');
+ assert.equal(a2.planId,node?.planId??'a','adopted step maps onto the current topology node');
+ assert.equal(run2.topology.nodes.filter(n=>n.stepId==='a'||n.id==='a').length,1,'current topology exposes exactly one node for the agent');
+ }finally{await f.cleanup();}
+});

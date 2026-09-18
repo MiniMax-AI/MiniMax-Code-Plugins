@@ -223,6 +223,10 @@ const step={id:key,kind:'checkpoint',status:'succeeded',output:payload.value,req
      // always records the immediate source in reusedFrom and the first producer in
      // originalProducer, so chained adoptions stay consistent with the emitted event.
      const step={...source,attempt:0,createdAt:Date.now(),startedAt:null,endedAt:source.endedAt??Date.now(),usage:null,usageHistory:[],sessionId:undefined,turnId:undefined,contextHash:ctxHash,
+       // planId must follow the CURRENT dispatch: keeping the source run's planId
+       // duplicates/mislabels the node against this run's topology (the repair
+       // path already restamps it).
+       ...(typeof planId==='string'?{planId}:{planId:undefined}),
        reusedFrom:{runId:candidate.runId,stepId:candidate.stepId,endedAt:source.endedAt??null,crossRun:true},
        originalProducer:source.originalProducer??(source.reusedFrom?{...source.reusedFrom}:{runId:candidate.runId,stepId:candidate.stepId,endedAt:source.endedAt??null,crossRun:true})};
      this.store.saveStep(ctx.run.id,step);this.emitEvent(ctx.run.id,'step.reused',{stepId:spec.id,sourceRunId:candidate.runId,crossRun:true});

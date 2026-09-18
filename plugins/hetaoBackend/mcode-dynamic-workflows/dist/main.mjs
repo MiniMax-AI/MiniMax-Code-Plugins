@@ -14644,6 +14644,10 @@ var Engine = class extends EventEmitter {
           sessionId: void 0,
           turnId: void 0,
           contextHash: ctxHash,
+          // planId must follow the CURRENT dispatch: keeping the source run's planId
+          // duplicates/mislabels the node against this run's topology (the repair
+          // path already restamps it).
+          ...typeof planId === "string" ? { planId } : { planId: void 0 },
           reusedFrom: { runId: candidate2.runId, stepId: candidate2.stepId, endedAt: source.endedAt ?? null, crossRun: true },
           originalProducer: source.originalProducer ?? (source.reusedFrom ? { ...source.reusedFrom } : { runId: candidate2.runId, stepId: candidate2.stepId, endedAt: source.endedAt ?? null, crossRun: true })
         };
