@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.7.7 — 2026-09-19
+
+**Tenth-round audit: the 1.7.6 "no other member of this class" claim was wrong — one more leaf existed**
+
+- **`asr.mjs` no longer writes its transcode temp next to the input file.** An independent sweep (the spec axis re-did the write-site inventory rather than trusting the changelog) found the one site the 1.7.6 sweep missed: oversized inputs are transcoded to `.asr-<name>.16k.mp3` **beside the input**, so for an input inside the project a pre-planted file symlink at that derived name would be written through by `ffmpeg -y`. The temp now goes to a per-invocation `mkdtemp` directory under `os.tmpdir()`, removed whole when the transcription attempt ends. New canary drives a real 501-second input (past the 500 s limit → real transcode, which runs **before** any network request) with the old temp name planted as a file symlink next to the input: nothing appears in the input directory, the canary is untouched. Runs on Linux CI; names its skip on stock Windows.
+- **Correction to 1.7.6's claim, stated plainly:** its changelog said a sweep found "no other member of this class". That was false — the `asr` transcode temp above was exactly such a member, missed by our own sweep and caught by an independent one. Lesson recorded: a sweep claim about absence is only as good as the inventory it ran on, and "we looked" is not evidence.
+- Disclosed without change: `build-video`'s `part-*.mp3` writes are protected **by order** (the preceding `safeOut`-jailed delete of every old `part-*` rejects a pre-planted leaf symlink before the ffmpeg write) — the invariant is now a code comment so the ordering is not accidentally reordered.
+- Tests **242 → 243 in fourteen files**, all green in the development tree and both published trees (the three file-symlink canaries name their skip where Windows lacks Developer Mode).
+
 ## 1.7.6 — 2026-09-19
 
 **Ninth-round audit: the last uncontained leaf, and a body sentence fixed to stop going stale**

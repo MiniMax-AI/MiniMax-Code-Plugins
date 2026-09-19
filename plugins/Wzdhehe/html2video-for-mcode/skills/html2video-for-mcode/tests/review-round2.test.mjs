@@ -108,6 +108,30 @@ describe('二审 · 输出收监(项目内目录段是符号链接时, 不得写
     assert.notEqual(r.status, 0, `叶子符号链接必须拒绝, 实际: ${(r.stdout + r.stderr).slice(-200)}`);
     assert.equal(fs.readFileSync(canaryFile, 'utf8'), 'ORIGINAL', 'canary 文件不得被 ffmpeg 改写');
   });
+
+  test('asr 超限转码的临时文件不落输入目录(十轮 review: 同类最后一处)', { skip: !findTool('ffmpeg') && '无 ffmpeg(需真转码 500s+ 音频)' }, async (t) => {
+    // 旧实现把 .asr-<名>.16k.mp3 写在输入文件旁边 —— 输入在项目内时, 预置的同名文件符号链接
+    // 会被 ffmpeg -y 写穿。现在临时文件进 os.tmpdir() 专属目录: 输入目录里不得出现任何转码产物。
+    const FFMPEG = findTool('ffmpeg');
+    const proj = tmpdir();
+    mkproj(proj, { slides: [] });
+    fs.mkdirSync(path.join(proj, 'audio'), { recursive: true });
+    const big = path.join(proj, 'audio', 'long.mp3');
+    assert.equal(spawnSync(FFMPEG, ['-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=32000:cl=mono',
+      '-t', '501', '-c:a', 'libmp3lame', '-b:a', '32k', '-y', big], { windowsHide: true }).status, 0,
+      '应能造出 501s 音频(超过 500s 上限 → 触发转码)');
+    const canaryFile = path.join(tmpdir(), 'victim.mp3');
+    fs.writeFileSync(canaryFile, 'ORIGINAL');
+    let made = false;
+    try { fs.symlinkSync(canaryFile, path.join(proj, 'audio', '.asr-long.16k.mp3'), 'file'); made = true; } catch { /* 需要开发者模式 */ }
+    if (!made) return t.skip('当前环境建不了文件符号链接(Windows 需开发者模式; ubuntu CI 真跑)');
+    const r = await runSkillAsync('asr.mjs', [proj, '--file', big,
+      '--allow-any-endpoint', '--base-url', 'http://127.0.0.1:9'],   // 转码后请求死端口 → 快速失败, 不碰真网
+      { env: { ...process.env, MINIMAX_API_KEY: 'fake-key-for-test' } });
+    assert.notEqual(r.status, 0, '死端口请求必须失败(转码在前, 网络在后)');
+    assert.equal(fs.existsSync(path.join(proj, 'audio', '.asr-long.16k.mp3')), false, '输入目录旁不得出现转码产物(链接被写穿会留下真文件)');
+    assert.equal(fs.readFileSync(canaryFile, 'utf8'), 'ORIGINAL', 'canary 文件不得被改写');
+  });
 });
 
 describe('二审 · 网络边界: 拒绝的目标必须一个请求都收不到', () => {

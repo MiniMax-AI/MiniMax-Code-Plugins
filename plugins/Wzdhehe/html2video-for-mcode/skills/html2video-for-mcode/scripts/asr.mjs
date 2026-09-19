@@ -14,6 +14,7 @@
 // 接口约束(官方文档): wav/aiff/flac/m4a/mp3/aac/opus/ogg; 时长 ≤500s; 大小 ≤50MB。
 //   超限时本脚本会用 ffmpeg 自动转成单声道 16k mp3 再传(识别率不受影响)。
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { flagValue, positionals, requireTool, safeId, safeOut, validateTimingsIds } from './tools.mjs';
@@ -63,16 +64,19 @@ function prepareForUpload(file) {
   const FFMPEG = requireTool('ffmpeg', dir);
   const p = spawnSync(requireTool('ffprobe', dir), ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file], { encoding: 'utf8', windowsHide: true });
   const dur = parseFloat((p.stdout || '').trim());
-  if (st.size <= 50 * 1024 * 1024 && (!Number.isFinite(dur) || dur <= 500)) return { file, tmp: null };
-  const tmp = path.join(path.dirname(file), `.asr-${path.basename(file, path.extname(file))}.16k.mp3`);
+  if (st.size <= 50 * 1024 * 1024 && (!Number.isFinite(dur) || dur <= 500)) return { file, tmpDir: null };
+  // 转码临时文件放 os.tmpdir() 专属目录(1.7.7 复查: 此前写在输入文件旁边 —— 输入在项目内时,
+  // 预置在旁边的文件符号链接(.asr-<名>.16k.mp3)会被 ffmpeg -y 写穿; 临时产物本就不该落项目)。
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asr-16k-'));
+  const tmp = path.join(tmpDir, 'audio.16k.mp3');
   const r = spawnSync(FFMPEG, ['-y', '-v', 'error', '-i', file, '-ac', '1', '-ar', '16000', '-c:a', 'libmp3lame', '-b:a', '128k', tmp], { encoding: 'utf8', windowsHide: true });
-  if (r.status !== 0) { console.error(`✗ 转码失败: ${file}`); process.exit(1); }
+  if (r.status !== 0) { fs.rmSync(tmpDir, { recursive: true, force: true }); console.error(`✗ 转码失败: ${file}`); process.exit(1); }
   console.log(`  (超限已转码: ${path.basename(file)} → 单声道 16k)`);
-  return { file: tmp, tmp };
+  return { file: tmp, tmpDir };
 }
 
 async function transcribe(file, { format = FORMAT, ts = TS, language = LANG } = {}) {
-  const { file: up, tmp } = prepareForUpload(file);
+  const { file: up, tmpDir } = prepareForUpload(file);
   try {
     const fd = new FormData();
     fd.append('model', 'asr-1.0');
@@ -100,7 +104,7 @@ async function transcribe(file, { format = FORMAT, ts = TS, language = LANG } = 
     const j = JSON.parse(raw);
     return { text: j.text ?? '', duration: j.duration, segments: j.segments, n_speakers: j.n_speakers, raw: j };
   } finally {
-    if (tmp && fs.existsSync(tmp)) fs.rmSync(tmp);
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 }
 

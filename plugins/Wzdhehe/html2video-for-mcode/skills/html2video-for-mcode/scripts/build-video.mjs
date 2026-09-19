@@ -415,6 +415,8 @@ if (srt.length) {
 if (WANT_ASR) {
   fs.mkdirSync(safeOut(dir, 'asr'), { recursive: true });
   for (const old of fs.readdirSync(path.join(dir, 'asr')).filter(f => f.startsWith('part-'))) {
+    // 注意顺序: 先逐个 safeOut 删掉旧切分(预置的叶子文件符号链接在这里就会被拒),
+    // 之后 :433 的 ffmpeg 写 part-<id>-<n>.mp3 才不会有"顺着预置链接写出去"的口子。
     fs.rmSync(safeOut(dir, 'asr', old)); // 清掉上一轮的旧切分, 避免新旧混淆
   }
   const lines = ['# ASR 反向校验(按句切分)', '',
