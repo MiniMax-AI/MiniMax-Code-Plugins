@@ -83,6 +83,31 @@ describe('二审 · 输出收监(项目内目录段是符号链接时, 不得写
     assert.notEqual(r.status, 0, `叶子符号链接必须拒绝, 实际: ${(r.stdout + r.stderr).slice(-200)}`);
     assert.equal(fs.readFileSync(canaryFile, 'utf8'), 'ORIGINAL', 'canary 文件不得被改写');
   });
+
+  test('grab-frames: introspect 叶子是文件符号链接 → 拒绝, canary 完好(九轮 review 同类收尾)', { skip: !findTool('ffmpeg') && '无 ffmpeg(需从成片抽帧; 真跑由 scoped smoke workflow 覆盖)' }, (t) => {
+    // 与 preview-page 叶子同类: 目录收监了, 但 frame-<id>-<tag>.png 若是预置的文件符号链接,
+    // ffmpeg -y 会顺着写出去。文件符号链接需要 Windows 开发者模式 —— 建不了带因跳过, CI 真跑。
+    const proj = tmpdir();
+    const canaryFile = path.join(tmpdir(), 'victim.png');
+    fs.writeFileSync(canaryFile, 'ORIGINAL');
+    mkproj(proj, { slides: [{ id: '01', html: '01.html', audio: '01.mp3', clauses: [{ stage: 1, text: 'x' }] }] });
+    fs.writeFileSync(path.join(proj, 'slides', '01.html'), '<html><head></head><body><p class="fx-fade" data-stage="1">x</p></body></html>');
+    fs.mkdirSync(path.join(proj, 'build'), { recursive: true });
+    fs.writeFileSync(path.join(proj, 'build', 'timings.json'), JSON.stringify(
+      { fps: 30, total: 1, slides: [{ id: '01', duration: 1, stages: { 1: 0 }, clauses: [{ stage: 1, start: 0, text: 'x' }] }] }));
+    const FFMPEG = findTool('ffmpeg');
+    fs.mkdirSync(path.join(proj, 'out'), { recursive: true });
+    assert.equal(spawnSync(FFMPEG, ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=0x808080:s=640x360:r=30', '-t', '1',
+      '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', path.join(proj, 'out', 'final.mp4')],
+      { windowsHide: true }).status, 0, '应能造出占位成片');
+    fs.mkdirSync(path.join(proj, 'build', 'introspect'), { recursive: true });
+    let made = false;
+    try { fs.symlinkSync(canaryFile, path.join(proj, 'build', 'introspect', 'frame-01-end.png'), 'file'); made = true; } catch { /* 需要开发者模式 */ }
+    if (!made) return t.skip('当前环境建不了文件符号链接(Windows 需开发者模式; ubuntu CI 真跑)');
+    const r = runSkill('grab-frames.mjs', [proj]);
+    assert.notEqual(r.status, 0, `叶子符号链接必须拒绝, 实际: ${(r.stdout + r.stderr).slice(-200)}`);
+    assert.equal(fs.readFileSync(canaryFile, 'utf8'), 'ORIGINAL', 'canary 文件不得被 ffmpeg 改写');
+  });
 });
 
 describe('二审 · 网络边界: 拒绝的目标必须一个请求都收不到', () => {

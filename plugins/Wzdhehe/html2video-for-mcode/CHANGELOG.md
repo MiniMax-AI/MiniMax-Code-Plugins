@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.7.6 — 2026-09-19
+
+**Ninth-round audit: the last uncontained leaf, and a body sentence fixed to stop going stale**
+
+- **`grab-frames` frame writes are now leaf-contained.** Its output *directory* was jailed, but `build/introspect/frame-<id>-<tag>.png` was written with plain `path.join` (the comment argued the `safeId` whitelist rules out path injection — true for traversal, blind to a pre-planted **file symlink**, which `ffmpeg -y` would have written through). The leaf goes through `safeOut` now, with a canary (needs ffmpeg + file symlinks → runs on Linux CI, names its skip on stock Windows). A sweep over all remaining raw write/delete sites in `scripts/` found no other member of this class.
+- **The PR body's tool-less-sandbox sentence no longer carries per-version numbers.** It named "23 / 28 skipped" — true when written (1.7.4), stale twice since, because every release adds tests and the skip count legitimately drifts with the environment. The body now states the invariant ("every test that needs a tool skips with its stated reason — nothing pretends to pass") and points at the CHANGELOG for per-version measurements.
+- Hygiene: the ancestor-link canary file in `safe-paths` is removed after the test instead of lingering in the shared temp root.
+- Tests **241 → 242 in fourteen files**, all green in the development tree and both published trees (the two file-symlink canaries name their skip where Windows lacks Developer Mode).
+
 ## 1.7.5 — 2026-09-19
 
 **Third maintainer review, current head: all four code findings fixed**

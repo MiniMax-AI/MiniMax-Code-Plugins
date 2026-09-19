@@ -109,6 +109,7 @@ describe('safeId / safeRel(退出型, subprocess 探测)', () => {
       return r.status === 0 && fs.existsSync(link);
     })();
     if (!made) return t.skip('当前环境建不了符号链接/junction(祖先链接形状无从构造)');
+    t.after(() => fs.rmSync(path.join(parent, 'canary.txt'), { force: true }));   // canary 落在共享 %TEMP% 层, 测完即清
     const mk = rel => probeHelper('safeRel', `["${path.resolve(root).replace(/\\/g, '/')}", ${JSON.stringify(rel)}, {}]`);
     const rNew = mk('link/new.txt');
     assert.notEqual(rNew.status, 0, `链接指向父目录 + 新目标必须拒绝, 实际: ${(rNew.stderr || rNew.stdout).slice(-200)}`);

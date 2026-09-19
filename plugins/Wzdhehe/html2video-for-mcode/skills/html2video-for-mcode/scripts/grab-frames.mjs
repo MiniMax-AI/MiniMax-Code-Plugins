@@ -58,7 +58,9 @@ for (const s of timings.slides) {
 
 let bad = 0;
 for (const sh of shots) {
-  const out = path.join(outDir, `frame-${sh.id}-${sh.tag}.png`);   // id 已过 safeId 白名单, 无路径注入
+  // 叶子也要过收监(1.7.5 复查同类收尾, 九轮 review 抓到): id 过了 safeId 只防"路径注入",
+  // 防不了预置在 build/introspect/ 里的**文件符号链接**把 ffmpeg -y 的输出引到项目外。
+  const out = safeOut(dir, 'build', 'introspect', `frame-${sh.id}-${sh.tag}.png`);
   const r = spawnSync(FFMPEG, ['-y', '-ss', sh.t.toFixed(2), '-i', final, '-frames:v', '1', out], { encoding: 'utf8', windowsHide: true });
   const ok = fs.existsSync(out) && fs.statSync(out).size > 1000;
   console.log(`${ok ? '✓' : '✗'} ${sh.id} @${sh.t.toFixed(2)}s (${sh.tag}) → ${path.relative(dir, out)}`);
