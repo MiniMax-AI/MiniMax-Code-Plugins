@@ -2,6 +2,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { spawnSync } from 'node:child_process';
@@ -122,15 +123,23 @@ describe('二审 · 输出收监(项目内目录段是符号链接时, 不得写
       '应能造出 501s 音频(超过 500s 上限 → 触发转码)');
     const canaryFile = path.join(tmpdir(), 'victim.mp3');
     fs.writeFileSync(canaryFile, 'ORIGINAL');
+    const planted = path.join(proj, 'audio', '.asr-long.16k.mp3');
     let made = false;
-    try { fs.symlinkSync(canaryFile, path.join(proj, 'audio', '.asr-long.16k.mp3'), 'file'); made = true; } catch { /* 需要开发者模式 */ }
+    try { fs.symlinkSync(canaryFile, planted, 'file'); made = true; } catch { /* 需要开发者模式 */ }
     if (!made) return t.skip('当前环境建不了文件符号链接(Windows 需开发者模式; ubuntu CI 真跑)');
+    // 注意: planted 本身就是个存在的路径(链接), 不能用 existsSync 断言"没出现"(必真) ——
+    // 用目录前后 diff 断言"没有**新**条目"(1.7.7 canary 的这个断言被十一轮 review 抓到不可满足)。
+    const before = new Set(fs.readdirSync(path.join(proj, 'audio')));
     const r = await runSkillAsync('asr.mjs', [proj, '--file', big,
       '--allow-any-endpoint', '--base-url', 'http://127.0.0.1:9'],   // 转码后请求死端口 → 快速失败, 不碰真网
       { env: { ...process.env, MINIMAX_API_KEY: 'fake-key-for-test' } });
     assert.notEqual(r.status, 0, '死端口请求必须失败(转码在前, 网络在后)');
-    assert.equal(fs.existsSync(path.join(proj, 'audio', '.asr-long.16k.mp3')), false, '输入目录旁不得出现转码产物(链接被写穿会留下真文件)');
-    assert.equal(fs.readFileSync(canaryFile, 'utf8'), 'ORIGINAL', 'canary 文件不得被改写');
+    const newEntries = fs.readdirSync(path.join(proj, 'audio')).filter(f => !before.has(f));
+    assert.deepEqual(newEntries, [], `输入目录不得出现转码产物: ${newEntries.join(', ')}`);
+    assert.equal(fs.readFileSync(canaryFile, 'utf8'), 'ORIGINAL', 'canary 文件不得被写穿');
+    assert.equal(fs.lstatSync(planted).isSymbolicLink(), true, '预置链接不得被替换成普通文件');
+    assert.deepEqual(fs.readdirSync(os.tmpdir()).filter(f => f.startsWith('asr-16k-')), [],
+      'os.tmpdir() 的转码临时目录必须已清理(asr 的 finally 整目录删除)');
   });
 });
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.7.8 — 2026-09-19
+
+**Eleventh-round audit: the write-site inventory converges; one shipped-in-1.7.7 canary had an unsatisfiable assertion**
+
+- **The 1.7.7 transcode canary's "nothing appears in the input directory" assertion could never pass** on any platform where it actually runs: the test itself plants a symlink at the old temp path, and `existsSync` follows the link to its existing target — so the assertion compared against the test's own plant and would have failed on Linux CI (it never executed anywhere: file symlinks are uncreatable on the author's Windows, and CI runs sit at `action_required`). The assertions are rewritten to what the fix actually guarantees: a before/after diff of the input directory shows **no new entries**, the outside canary file is byte-unchanged, the planted path is still a symlink (not replaced by a regular file), and the `os.tmpdir()` transcode directory is removed by the time the run ends.
+- **PR-body counts re-phrased as capability invariants.** "243 pass, 0 fail, 0 skip" had gone stale the same way twice before — "0 skip" is only true where file symlinks are creatable. The body now states what is invariant (**0 fail in every environment measured**) and describes skips as capability-dependent and always named, instead of carrying per-environment counts.
+- The standards axis' primitive-exhaustive write-site inventory (58 sites across 20 scripts, method changed from file-intuition to primitive enumeration) found **no exploitable unjailed write**: 47 jailed, 9 CLI-given per the documented contract, 4 internal temp, and 1 order-protected (the `build-video` `part-*` writes, disclosed in 1.7.7).
+- Test count unchanged (243 in fourteen files): the canary's assertions were corrected, not added to.
+
 ## 1.7.7 — 2026-09-19
 
 **Tenth-round audit: the 1.7.6 "no other member of this class" claim was wrong — one more leaf existed**
