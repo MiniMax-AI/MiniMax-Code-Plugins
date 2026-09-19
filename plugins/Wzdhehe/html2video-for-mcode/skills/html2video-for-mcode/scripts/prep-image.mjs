@@ -5,6 +5,8 @@
 //   node prep-image.mjs --crop <in> <out> [--ratio 16:9] [--anchor bottom|top|center]
 // 裁切硬限制(与 image-sources.md 的 SOP 一致): 主体必须完整可见、裁掉面积 ≤20%、输出严格目标比例。
 // 优先靠换图/换版式解决, 本工具只是最后的兜底手段。
+// 边界契约(1.7.5 复查④): --crop 的 in/out 都是**命令行显式给出**的路径(与你直接跑 ffmpeg 同一
+// 信任级), 不在"项目 + 派生路径"的收监范围内; 覆盖已存在 out 仍需 --force。此为 README 声明过的唯一例外。
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';

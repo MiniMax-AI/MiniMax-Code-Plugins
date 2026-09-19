@@ -6,6 +6,7 @@
 //   node asr.mjs <项目目录>                     转写 asr/part-*.mp3, 与 checklist 的预期文本比对并回填
 //   node asr.mjs <项目目录> --verify-timing     用段/字级时间戳实测每句开口时刻, 对比 timings.json(比静音检测更准)
 //   node asr.mjs --file <音频> [--format json|verbose_json|srt|vtt] [--timestamp word] [--language zh]
+//            [--out <项目内相对路径>](落盘转写结果; 已存在需 --force; 绝对路径/越出项目目录一律拒绝)
 //
 // Key 来源(按序): --api-key sk-xxx → 环境变量 MINIMAX_API_KEY
 // 区域(按序): --base-url → 环境变量 MINIMAX_BASE_URL → MINIMAX_REGION(cn=api.minimaxi.com / global=api.minimax.io)
@@ -157,10 +158,21 @@ function checkText(expected, got, lang = 'zh') {
 if (flagValue(argv, '--file')) {
   const f = flagValue(argv, '--file');
   if (!fs.existsSync(f)) { console.error(`✗ 不存在: ${f}`); process.exit(1); }
+  // --out 收监 + 不覆盖(1.7.5 复查③): 此前是任意路径裸写、静默覆盖。校验必须放在 transcribe
+  // 之前 —— 路径非法/覆盖拒绝不该等一次网络请求之后才报(测试也因此不需要网络)。
+  const outRaw = flagValue(argv, '--out');
+  let outPath = null;
+  if (outRaw) {
+    if (path.isAbsolute(outRaw)) { console.error(`✗ --out 必须是项目目录内的相对路径(收到绝对路径): ${outRaw}`); process.exit(1); }
+    outPath = safeOut(dir, outRaw);
+    if (fs.existsSync(outPath) && !argv.includes('--force')) {
+      console.error(`✗ --out 已存在, 不覆盖: ${path.relative(dir, outPath)}(要覆盖加 --force)`);
+      process.exit(1);
+    }
+  }
   let r;
   try { r = await transcribe(f); } catch (e) { console.error(`✗ ${e.message}`); process.exit(1); }
-  const out = flagValue(argv, '--out');
-  if (out) fs.writeFileSync(out, FORMAT === 'srt' || FORMAT === 'vtt' ? r.text : (r.raw ? JSON.stringify(r.raw, null, 2) : r.text));
+  if (outPath) fs.writeFileSync(outPath, FORMAT === 'srt' || FORMAT === 'vtt' ? r.text : (r.raw ? JSON.stringify(r.raw, null, 2) : r.text));
   if (FORMAT === 'srt' || FORMAT === 'vtt') console.log(r.text);
   else console.log(r.text + (r.duration ? `\n(duration ${r.duration}s${r.n_speakers ? `, ${r.n_speakers} speakers` : ''})` : ''));
   process.exit(0);

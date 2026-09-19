@@ -95,6 +95,28 @@ describe('safeId / safeRel(退出型, subprocess 探测)', () => {
     assert.match(r.stderr, /越出项目目录|符号链接/, `要点名是链接越界, 实际: ${r.stderr.slice(0, 200)}`);
     assert.equal(fs.existsSync(path.join(outside, 'x.txt')), false, '拒绝必须发生在写入之前');
   });
+
+  test('safeRel: 项目内链接指向项目"父目录"时, 链接下的新路径必须拒绝(1.7.5 复查②, 实弹复现过的洞)', (t) => {
+    // 形状: link → 项目的父目录。目标**已存在**时游走能走到完整路径, 正确拒绝;
+    // 目标**尚不存在**时旧回退 inside(real, realRoot) 被满足(根在父目录之内)→ 放行 → 写穿到项目外。
+    const root = tmpdir();
+    const parent = path.dirname(root);          // tmpdir() 每个都是独立目录, root 的父就是公共层
+    fs.writeFileSync(path.join(parent, 'canary.txt'), 'KEEP');
+    const link = path.join(root, 'link');
+    const made = (() => {
+      try { fs.symlinkSync(parent, link, 'dir'); return true; } catch { /* 退回 junction */ }
+      const r = spawnSync('cmd', ['/c', 'mklink', '/J', link, parent], { encoding: 'utf8', windowsHide: true });
+      return r.status === 0 && fs.existsSync(link);
+    })();
+    if (!made) return t.skip('当前环境建不了符号链接/junction(祖先链接形状无从构造)');
+    const mk = rel => probeHelper('safeRel', `["${path.resolve(root).replace(/\\/g, '/')}", ${JSON.stringify(rel)}, {}]`);
+    const rNew = mk('link/new.txt');
+    assert.notEqual(rNew.status, 0, `链接指向父目录 + 新目标必须拒绝, 实际: ${(rNew.stderr || rNew.stdout).slice(-200)}`);
+    const rOld = mk('link/canary.txt');
+    assert.notEqual(rOld.status, 0, '已存在目标穿过链接同样必须拒绝');
+    assert.equal(fs.existsSync(path.join(parent, 'new.txt')), false, '拒绝必须发生在写入之前');
+    assert.equal(fs.readFileSync(path.join(parent, 'canary.txt'), 'utf8'), 'KEEP', 'canary 必须完好');
+  });
 });
 
 describe('消费者脚本: 恶意 script.json 必须在干坏事之前退出', () => {

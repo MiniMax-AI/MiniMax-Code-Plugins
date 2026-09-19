@@ -66,6 +66,23 @@ describe('二审 · 输出收监(项目内目录段是符号链接时, 不得写
     assert.notEqual(r.status, 0);
     assert.deepEqual(fs.readdirSync(canary), [], 'canary 目录里不得出现任何文件');
   });
+
+  test('preview-page: outDir 里的叶子(index.html)是文件符号链接 → 拒绝, canary 文件完好(1.7.5 复查①)', { skip: CANARY_SKIP || undefined }, (t) => {
+    // 目录收监了不等于叶子安全: 预置在 preview/play/ 里的**文件**符号链接会把 writeFileSync 引到
+    // 项目外。文件符号链接不需要管理员, 但需要 Windows 开发者模式 —— 建不了就带因跳过(ubuntu CI 真跑)。
+    const proj = tmpdir();
+    const canaryFile = path.join(tmpdir(), 'victim.html');
+    fs.writeFileSync(canaryFile, 'ORIGINAL');
+    mkproj(proj, { slides: [{ id: '01', html: '01.html', audio: '01.mp3', clauses: [{ stage: 1, text: 'x' }] }] });
+    fs.writeFileSync(path.join(proj, 'slides', '01.html'), '<html><head></head><body><p class="fx-fade" data-stage="1">x</p></body></html>');
+    fs.mkdirSync(path.join(proj, 'preview', 'play'), { recursive: true });
+    let made = false;
+    try { fs.symlinkSync(canaryFile, path.join(proj, 'preview', 'play', 'index.html'), 'file'); made = true; } catch { /* 需要开发者模式 */ }
+    if (!made) return t.skip('当前环境建不了文件符号链接(Windows 需开发者模式; ubuntu CI 真跑)');
+    const r = runSkill('preview-page.mjs', [proj]);
+    assert.notEqual(r.status, 0, `叶子符号链接必须拒绝, 实际: ${(r.stdout + r.stderr).slice(-200)}`);
+    assert.equal(fs.readFileSync(canaryFile, 'utf8'), 'ORIGINAL', 'canary 文件不得被改写');
+  });
 });
 
 describe('二审 · 网络边界: 拒绝的目标必须一个请求都收不到', () => {
@@ -143,6 +160,30 @@ describe('二审 · ASR 请求错误必须算失败并非零退出', () => {
       assert.notEqual(r.status, 0, `请求失败不能被当成通过: ${r.stdout}${r.stderr}`);
       assert.match(r.stdout + r.stderr, /请求失败/, '要点名"请求失败"而不是混进通过数');
     } finally { srv.close(); }
+  });
+
+  test('asr --out: 越出项目目录 / 已存在不覆盖 → 在任何网络请求之前拒绝(1.7.5 复查③)', () => {
+    // --out 校验前置到 transcribe 之前, 所以这两条拒绝路径不需要网络也不需要 ffmpeg
+    const proj = tmpdir();
+    const outside = path.dirname(proj);
+    mkproj(proj, { slides: [] });
+    fs.writeFileSync(path.join(proj, 'asr-src.mp3'), 'stub-audio');
+    fs.writeFileSync(path.join(proj, 'exists.srt'), 'OLD');
+    const env = { ...process.env, MINIMAX_API_KEY: 'fake-key-for-test' };
+    // ① 相对路径穿越
+    const r1 = runSkill('asr.mjs', [proj, '--file', path.join(proj, 'asr-src.mp3'), '--out', '../escaped.txt'], { env });
+    assert.notEqual(r1.status, 0, '穿越项目目录的 --out 必须被拒');
+    assert.match(r1.stdout + r1.stderr, /越出项目目录|符号链接/, r1.stdout + r1.stderr);
+    assert.equal(fs.existsSync(path.join(outside, 'escaped.txt')), false, '拒绝必须发生在写入之前');
+    // ② 绝对路径
+    const r2 = runSkill('asr.mjs', [proj, '--file', path.join(proj, 'asr-src.mp3'), '--out', path.join(outside, 'abs.txt')], { env });
+    assert.notEqual(r2.status, 0, '绝对路径 --out 必须被拒');
+    assert.match(r2.stdout + r2.stderr, /相对路径/, r2.stdout + r2.stderr);
+    // ③ 项目内已存在 → 不覆盖
+    const r3 = runSkill('asr.mjs', [proj, '--file', path.join(proj, 'asr-src.mp3'), '--out', 'exists.srt'], { env });
+    assert.notEqual(r3.status, 0, '已存在的 --out 必须先拒绝');
+    assert.match(r3.stdout + r3.stderr, /不覆盖/, r3.stdout + r3.stderr);
+    assert.equal(fs.readFileSync(path.join(proj, 'exists.srt'), 'utf8'), 'OLD', '旧内容不得被改写');
   });
 });
 

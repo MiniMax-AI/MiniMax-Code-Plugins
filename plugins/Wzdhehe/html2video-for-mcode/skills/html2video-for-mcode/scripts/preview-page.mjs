@@ -569,11 +569,13 @@ function main() {
     copy = `<!-- html2video-for-mcode 放映页快照 · 由 scripts/preview-page.mjs 生成, 请勿编辑;\n     真实文件: slides/${base}(改完 slides 请重跑 preview-page.mjs) -->\n` + copy;
     copy = addStepScript(copy, stagesFromHtml(html));   // 动效开的逐级步进(?s=k 重设各级延迟)
     if (ctCss) copy = injectStyle(copy, ctCss, `图表/表格工具箱(${ctLabel})`);
-    fs.writeFileSync(path.join(outDir, base), copy);
+    // 三个叶子写点全部过 safeOut(1.7.5 复查①): outDir 本身收监了, 但目录里的**叶子**若是
+    // 预置的文件符号链接, writeFileSync 会顺着写出去 —— 叶子也要过收监, 与 capture 等一致。
+    fs.writeFileSync(safeOut(dir, 'preview', 'play', base), copy);
     const nofxName = base.replace(/\.html?$/i, '') + '.nofx.html';
     let nofx = addNoFx(copy);
     if (nofxInjected) nofx = injectStyle(nofx, nofxInjected, 'no-fx 规则');
-    fs.writeFileSync(path.join(outDir, nofxName), nofx);
+    fs.writeFileSync(safeOut(dir, 'preview', 'play', nofxName), nofx);
 
     const stageVals = Object.values(stages).filter(Number.isFinite);
     rows.push({
@@ -609,7 +611,7 @@ function main() {
     canvas: { w: cvW, h: cvH },
     generatedAt: `${now.getFullYear()}-${p2(now.getMonth() + 1)}-${p2(now.getDate())} ${p2(now.getHours())}:${p2(now.getMinutes())}`,
   });
-  fs.writeFileSync(path.join(outDir, 'index.html'), page);
+  fs.writeFileSync(safeOut(dir, 'preview', 'play', 'index.html'), page);
 
   const modes = !narration ? (NO_SCRIPT ? '关(--no-script)' : '关(本片没有 clauses)') : timing ? '口播文案(有对时)' : '口播文案(未对时)';
   console.log(`✓ 放映页 → ${path.relative(process.cwd(), path.join(outDir, 'index.html'))}`);

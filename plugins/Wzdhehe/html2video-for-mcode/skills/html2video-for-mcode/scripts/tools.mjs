@@ -117,6 +117,9 @@ export function safeRel(root, rel, { where = 'path', mustExist = false } = {}) {
   // 复查修正(1.7.0): ①回溯用 lstat 而不是 existsSync —— 悬空符号链接 existsSync=false,
   // 旧写法会把它当"不存在"继续往上走, 从而漏检(写进去就落到项目外); ②realpath 取不到时
   // **fail closed**(以前 return abs 静默放行, 正好给"造一个解不开的链接"留了门)。
+  // 复查修正(1.7.5): "real 是 root 祖先也放行"的回退只留给 **root 尚不存在** 的场景(合法:
+  // 走过 root 停在已存在祖先)。root 已存在时, 该回退会被"项目内链接指向项目父目录"穿透 ——
+  // 链接的 realpath 是 root 的祖先, 回退放行后, 链接下的**新文件**就写到项目外了(实测复现)。
   {
     let probe = abs;
     while (true) {
@@ -127,7 +130,8 @@ export function safeRel(root, rel, { where = 'path', mustExist = false } = {}) {
       if (up === probe) break;
       probe = up;
     }
-    const realRoot = fs.existsSync(root) ? fs.realpathSync(path.resolve(root)) : path.resolve(root);
+    const rootExists = fs.existsSync(root);
+    const realRoot = rootExists ? fs.realpathSync(path.resolve(root)) : path.resolve(root);
     let real = null;
     try { real = fs.realpathSync(probe); }
     catch {
@@ -141,7 +145,7 @@ export function safeRel(root, rel, { where = 'path', mustExist = false } = {}) {
       console.error(`✗ ${where} 无法解析真实路径: ${probe}(realpath 失败)`);
       process.exit(1);
     }
-    if (real !== realRoot && !inside(realRoot, real) && !inside(real, realRoot)) {
+    if (real !== realRoot && !inside(realRoot, real) && !(rootExists ? false : inside(real, realRoot))) {
       console.error(`✗ ${where} 经符号链接越出项目目录: ${JSON.stringify(rel)}`);
       process.exit(1);
     }

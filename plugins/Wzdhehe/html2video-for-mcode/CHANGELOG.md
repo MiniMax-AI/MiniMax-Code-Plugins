@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.7.5 — 2026-09-19
+
+**Third maintainer review, current head: all four code findings fixed**
+
+- **`safeRel` no longer accepts a project-local link to the project's own ancestor.** The "resolved path may sit above the root" fallback — meant for a not-yet-existing project root — also matched a link inside an existing project pointing at its parent, so a read path under the link resolved *outside* the project (reproduced live: a write through `safeRel(root, 'link/new.txt')` landed in the parent directory). The fallback now applies **only while the root itself does not exist**; once it exists, the resolved path must be the root or beneath it. Regression case in `safe-paths` covers both the new-target (the hole) and existing-target shapes.
+- **All three `preview-page` leaf writes are contained.** The output directory was jailed, but `01.html`, `01.nofx.html` and `index.html` inside it were written with plain `path.join` — a pre-planted file symlink redirected the write outside the project. All three go through `safeOut` now, with a file-symlink canary (file links need Windows Developer Mode, so the canary names its skip there and really runs on Linux CI).
+- **`asr.mjs --out` is contained and refuses to clobber.** It previously wrote any path raw and silently overwrote. It now accepts only a project-relative path inside the project (absolute paths rejected with a named error), refuses an existing output without `--force`, and — so the refusals need no network and are testable on bare CI — the checks run *before* the transcription request.
+- **`prep-image --crop` is now a declared exception, not an inconsistency.** Its input and output are given explicitly on the command line (the same trust level as running ffmpeg yourself), so both READMEs carve it out of the write-boundary promise explicitly (overwriting still needs `--force`); every *derived* path remains fully contained.
+- The review also confirmed the earlier rounds' fixes on this head, and noted the fork's CI runs sit at `action_required` — they execute only after a maintainer approves them; the scoped workflow is ready to install ffmpeg + Chromium and run the full suite on approval.
+- Tests **238 → 241 in fourteen files**, all green with 0 skips in the development tree and in both published trees.
+
 ## 1.7.4 — 2026-09-18
 
 **Eighth-round audit: no serious findings — one stale evidence line corrected, three small hardenings**

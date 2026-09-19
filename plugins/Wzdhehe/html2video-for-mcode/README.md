@@ -191,7 +191,11 @@ No telemetry, no analytics, no hidden endpoints, no installers, no native binari
   (slide `id` / `html` / `audio`, `bgm.file`) is validated first: ids must match
   `^[A-Za-z0-9_-]{1,64}$`, paths must resolve inside the project, and symlink escapes are refused —
   a hand-edited or prompt-injected `script.json` cannot make the pipeline read, write, or
-  recursively delete anything outside your project.
+  recursively delete anything outside your project. One declared exception: `prep-image.mjs --crop`
+  takes its input and output **explicitly on the command line** (the same trust level as running
+  ffmpeg yourself), so those two paths are not restricted to the project — overwriting an existing
+  output still requires `--force`. Every pipeline write whose path is *derived* (project + id,
+  `preview/`, `build/`, `out/`, `asr.mjs --out`) remains fully contained.
 - **Nothing is overwritten silently.** `init-project.mjs` refuses a non-empty target directory
   (re-initialising needs `--force`, which only resets its own five generated files);
   `fetch-official-images.mjs` and `prep-image.mjs` do not clobber existing files without `--force`
@@ -221,7 +225,7 @@ node --test "plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/te
 node --test "tests/*.test.mjs"
 ```
 
-238 tests in fourteen files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
+241 tests in fourteen files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
 escapes including a **dangling** link that must be caught rather than skipped), `no-clobber` (refusing to overwrite), `endpoint-allowlist` (key never leaves the official
 hosts — plus a local server that proves the gate sits before the request), `fetch-policy` (SSRF,
 `file://`, redirect and filename rules), `preview-page` (snapshot timing injection, `base` ordering,
