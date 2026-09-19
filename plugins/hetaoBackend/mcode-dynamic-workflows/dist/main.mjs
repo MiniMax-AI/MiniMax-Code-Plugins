@@ -7817,6 +7817,16 @@ var Store = class {
   steps(runId) {
     return this.db.prepare("SELECT body FROM steps WHERE runId=? ORDER BY rowid").all(runId).map((r) => JSON.parse(r.body));
   }
+  // All match keys (contextHash, lineageHash) are stamped on the step body at
+  // creation, so filtering happens in SQL and LIMIT applies after the full match.
+  // Rows without the stamped hashes (legacy runs) never match: cross-run reuse is
+  // an opt-in feature and older steps are not candidates.
+  findCrossRunReuse({ contextHash, requestHash, lineageHash, excludeRunId, limit = 20 }) {
+    return this.db.prepare("SELECT runId,body AS stepBody FROM steps WHERE runId<>? AND json_extract(body,'$.kind')='agent' AND json_extract(body,'$.status')='succeeded' AND json_extract(body,'$.requestHash')=? AND json_extract(body,'$.contextHash')=? AND json_extract(body,'$.lineageHash')=? ORDER BY rowid DESC LIMIT ?").all(excludeRunId, requestHash, contextHash, lineageHash, limit).map((r) => {
+      const step = JSON.parse(r.stepBody);
+      return { runId: r.runId, stepId: step.id, step };
+    });
+  }
   saveStep(runId, step) {
     this.db.prepare("INSERT INTO steps VALUES(?,?,?) ON CONFLICT(runId,id) DO UPDATE SET body=excluded.body").run(runId, step.id, JSON.stringify(step));
   }
@@ -14237,7 +14247,8 @@ var Engine = class extends EventEmitter {
     check(Number.isInteger(maxCalls) && maxCalls >= 1 && maxCalls <= 100, "\u8C03\u7528\u6570\u8303\u56F4 1\u2013100");
     const limits = resolveLimits(request, this.defaults);
     const metadata = request.metadata === void 0 ? {} : { metadata: normalizeMetadata(request.metadata) };
-    const definition = { ...limits, ...metadata, name: request.name, script: request.script, input: request.input ?? {}, executor: request.executor, concurrency, maxCalls };
+    const reuseAcrossRuns = request.reuseAcrossRuns === void 0 ? false : (check(typeof request.reuseAcrossRuns === "boolean", "reuseAcrossRuns \u5FC5\u987B\u4E3A\u5E03\u5C14"), request.reuseAcrossRuns);
+    const definition = { ...limits, ...metadata, name: request.name, script: request.script, input: request.input ?? {}, executor: request.executor, concurrency, maxCalls, ...reuseAcrossRuns ? { reuseAcrossRuns: true } : {} };
     const requestHash = hash(repair ? { ...definition, repair } : definition);
     const existing = this.store.byRequest(request.requestId);
     if (existing) {
@@ -14294,7 +14305,7 @@ var Engine = class extends EventEmitter {
     const script = request.script ?? run.script, input = request.input ?? run.input, topology = assertValidDependencies(previewTopology(script, input));
     check(input && typeof input === "object" && !Array.isArray(input), "input \u5FC5\u987B\u4E3A JSON object");
     boundedJSON(input);
-    const name = request.name ?? run.name, executor = request.executor ?? run.executor, concurrency = request.concurrency ?? run.concurrency, maxCalls = request.maxCalls ?? run.maxCalls;
+    const name = request.name ?? run.name, executor = request.executor ?? run.executor, concurrency = request.concurrency ?? run.concurrency, maxCalls = request.maxCalls ?? run.maxCalls, reuseAcrossRuns = request.reuseAcrossRuns === void 0 ? run.reuseAcrossRuns : (check(typeof request.reuseAcrossRuns === "boolean", "reuseAcrossRuns \u5FC5\u987B\u4E3A\u5E03\u5C14"), request.reuseAcrossRuns);
     check(typeof name === "string" && name.trim().length > 0 && name.length <= 120, "\u540D\u79F0\u987B\u4E3A 1\u2013120 \u5B57\u7B26");
     check(["demo", "mcode"].includes(executor), "executor \u987B\u4E3A demo \u6216 mcode");
     check(Number.isInteger(concurrency) && concurrency >= 1 && concurrency <= 16, "\u5E76\u53D1\u8303\u56F4 1\u201316");
@@ -14310,7 +14321,7 @@ var Engine = class extends EventEmitter {
       check(repair && typeof request.reason === "string" && request.reason.trim() && request.reason.length <= 2e3, "\u8BF7\u63D0\u4F9B\u4FEE\u590D\u539F\u56E0\uFF08\u6700\u591A 2000 \u5B57\u7B26\uFF09");
       repair = { ...repair, reason: request.reason.trim() };
     }
-    Object.assign(run, ...repair ? [{ repair }] : [], resolveLimits(request, runLimits(run)), metadata, { name, script, input, executor, concurrency, maxCalls, topology, scriptHash: hash(script), revision: run.revision + 1 });
+    Object.assign(run, ...repair ? [{ repair }] : [], resolveLimits(request, runLimits(run)), metadata, { name, script, input, executor, concurrency, maxCalls, reuseAcrossRuns, topology, scriptHash: hash(script), revision: run.revision + 1 });
     this.save(run);
     this.emitEvent(id2, "run.updated", { revision: run.revision });
     return this.snapshot(id2);
@@ -14545,7 +14556,8 @@ var Engine = class extends EventEmitter {
         check(old.requestHash === hash(payload), "checkpoint \u53C2\u6570\u51B2\u7A81");
         return old.output;
       }
-      const step = { id: key, kind: "checkpoint", status: "succeeded", output: payload.value, requestHash: hash(payload), label: payload.id, dependsOn: [], createdAt: Date.now() };
+      const checkpointHash = hash(payload);
+      const step = { id: key, kind: "checkpoint", status: "succeeded", output: payload.value, requestHash: checkpointHash, lineageHash: hash({ requestHash: checkpointHash, deps: [] }), label: payload.id, dependsOn: [], createdAt: Date.now() };
       this.store.saveStep(ctx.run.id, step);
       this.emitEvent(ctx.run.id, "checkpoint", { stepId: key });
       return payload.value;
@@ -14575,6 +14587,11 @@ var Engine = class extends EventEmitter {
       check(cached2.hash === requestHash, "\u91CD\u590D step id \u53C2\u6570\u51B2\u7A81");
       return cached2.promise;
     }
+    const ctxHash = ctx.contextHash ?? (ctx.contextHash = hash({ workspace: ctx.run.workspace, input: ctx.run.input, executor: ctx.run.executor, fingerprints: ctx.run.fingerprints }));
+    const lineageHash = hash({ requestHash, deps: deps.map((id2) => {
+      const dep = this.store.step(ctx.run.id, id2);
+      return { id: id2, lineageHash: dep?.lineageHash ?? null, outputHash: dep?.status === "succeeded" ? hash(dep.output ?? null) : null };
+    }) });
     const repair = ctx.run.repair, candidate = !previous && repair?.reuseStepIds.includes(spec.id) ? this.store.repairCandidate(ctx.run.id, spec.id) : null;
     if (candidate && candidate.requestHash === requestHash && repair.contextHash === hash({ workspace: ctx.run.workspace, input: ctx.run.input, executor: ctx.run.executor, fingerprints: ctx.run.fingerprints }) && deps.every((id2) => {
       const dep = this.store.step(ctx.run.id, id2);
@@ -14598,17 +14615,58 @@ var Engine = class extends EventEmitter {
           usageHistory: [],
           sessionId: void 0,
           turnId: void 0,
-          reusedFrom: { runId: repair.sourceRunId, stepId: spec.id, endedAt: candidate.endedAt ?? null }
+          contextHash: ctxHash,
+          reusedFrom: { runId: repair.sourceRunId, stepId: spec.id, endedAt: candidate.endedAt ?? null },
+          // The first producer survives repair chains: R2/R3 relay the output but
+          // only the original execution produced it.
+          originalProducer: candidate.originalProducer ?? (candidate.reusedFrom ? { ...candidate.reusedFrom } : { runId: repair.sourceRunId, stepId: spec.id, endedAt: candidate.endedAt ?? null })
         };
         this.store.saveStep(ctx.run.id, step2);
         this.emitEvent(ctx.run.id, "step.reused", { stepId: step2.id, sourceRunId: repair.sourceRunId });
         return Promise.resolve({ status: "succeeded", output: step2.output, cached: true });
       }
     }
+    const depsAllAdopted = deps.every((id2) => {
+      const dep = this.store.step(ctx.run.id, id2);
+      return dep?.kind === "checkpoint" || dep?.reusedFrom;
+    });
+    if (ctx.run.reuseAcrossRuns && !previous && depsAllAdopted && !(ctx.run.executor === "mcode" && !spec.model)) {
+      for (const candidate2 of this.store.findCrossRunReuse({ contextHash: ctxHash, requestHash, lineageHash, excludeRunId: ctx.run.id })) {
+        let valid = true;
+        try {
+          if (validateOutput) valid = validateOutput(candidate2.step.output);
+        } catch {
+          valid = false;
+        }
+        if (!valid) continue;
+        const source = candidate2.step;
+        const step2 = {
+          ...source,
+          attempt: 0,
+          createdAt: Date.now(),
+          startedAt: null,
+          endedAt: source.endedAt ?? Date.now(),
+          usage: null,
+          usageHistory: [],
+          sessionId: void 0,
+          turnId: void 0,
+          contextHash: ctxHash,
+          // planId must follow the CURRENT dispatch: keeping the source run's planId
+          // duplicates/mislabels the node against this run's topology (the repair
+          // path already restamps it).
+          ...typeof planId === "string" ? { planId } : { planId: void 0 },
+          reusedFrom: { runId: candidate2.runId, stepId: candidate2.stepId, endedAt: source.endedAt ?? null, crossRun: true },
+          originalProducer: source.originalProducer ?? (source.reusedFrom ? { ...source.reusedFrom } : { runId: candidate2.runId, stepId: candidate2.stepId, endedAt: source.endedAt ?? null, crossRun: true })
+        };
+        this.store.saveStep(ctx.run.id, step2);
+        this.emitEvent(ctx.run.id, "step.reused", { stepId: spec.id, sourceRunId: candidate2.runId, crossRun: true });
+        return Promise.resolve({ status: "succeeded", output: step2.output, cached: true });
+      }
+    }
     check(ctx.run.attempts < ctx.run.maxCalls, `\u5DF2\u8FBE\u5230\u5DE5\u4F5C\u6D41 Agent \u603B\u8C03\u7528\u4E0A\u9650 ${ctx.run.maxCalls} \u6B21\uFF08\u5305\u62EC\u6062\u590D\u5C1D\u8BD5\uFF09\uFF0C\u8BF7\u63D0\u9AD8\u603B\u8C03\u7528\u9884\u7B97\u540E\u6062\u590D\u3002`);
     ctx.run.attempts++;
     this.save(ctx.run);
-    const step = { id: spec.id, ...typeof planId === "string" ? { planId } : {}, label: spec.label ?? spec.id, phase: spec.phase ?? null, kind: "agent", dependsOn: deps, requestHash, status: "queued", attempt: (previous?.attempt ?? 0) + 1, createdAt: previous?.createdAt ?? Date.now(), startedAt: null, endedAt: null, prompt: spec.prompt, input: spec.input ?? null, output: null, error: null, errorDetails: null, ...runLimits(ctx.run), timeoutMs: runLimits(ctx.run).stepTimeoutMs, usage: null, usageHistory: [...previous?.usageHistory ?? [], ...previous?.usage ? [previous.usage] : []] };
+    const step = { id: spec.id, ...typeof planId === "string" ? { planId } : {}, label: spec.label ?? spec.id, phase: spec.phase ?? null, kind: "agent", dependsOn: deps, requestHash, contextHash: ctxHash, lineageHash, status: "queued", attempt: (previous?.attempt ?? 0) + 1, createdAt: previous?.createdAt ?? Date.now(), startedAt: null, endedAt: null, prompt: spec.prompt, input: spec.input ?? null, output: null, error: null, errorDetails: null, ...runLimits(ctx.run), timeoutMs: runLimits(ctx.run).stepTimeoutMs, usage: null, usageHistory: [...previous?.usageHistory ?? [], ...previous?.usage ? [previous.usage] : []] };
     this.store.saveStep(ctx.run.id, step);
     this.emitEvent(ctx.run.id, "step.queued", { stepId: step.id });
     const promise = (async () => {
@@ -26429,8 +26487,8 @@ var string3 = { type: "string" };
 var id = { runId: string3 };
 var TOOLS = [
   { name: "workflow_validate", description: "\u9759\u6001\u68C0\u67E5\u811A\u672C\u5E76\u751F\u6210\u7ED3\u6784\u62D3\u6251\uFF0C\u4E0D\u6267\u884C\u811A\u672C\u6216 Agent\u3002DSL: await ctx.phase({id,label}); await ctx.agent({id,label,phase,dependsOn,prompt,input,schema}); ctx.map(items,fn); ctx.log(message,{stepId,phase}); ctx.checkpoint(id,value)\u3002dependsOn \u53EF\u4E3A\u5355\u4E2A ID \u5B57\u7B26\u4E32\u6216 ID \u6570\u7EC4\uFF0C\u63A8\u8350\u6570\u7EC4\uFF1B\u4F9D\u8D56\u987B\u5148\u6210\u529F\u3002agent \u8FD4\u56DE status/output/error\uFF1B\u987B\u663E\u5F0F\u5904\u7406\u5931\u8D25\u3002", inputSchema: obj({ script: string3 }, ["script"]) },
-  { name: "workflow_start", description: "\u521B\u5EFA\u5F85\u5BA1\u6838\u5DE5\u4F5C\u6D41\u548C\u7ED3\u6784\u62D3\u6251\uFF0C\u4E0D\u6267\u884C Agent\u3002\u5FC5\u987B\u63D0\u4F9B\u9762\u677F\u8BA9\u7528\u6237\u5BA1\u9605\u3001\u4FEE\u6539\u5E76\u70B9\u51FB\u5F00\u59CB\u6267\u884C\u3002mcode \u6A21\u5F0F\u4F1A\u542F\u52A8\u771F\u5B9E MCode\uFF0C\u4F1A\u4F7F\u7528\u5DF2\u767B\u5F55\u8EAB\u4EFD\u4E0E smart \u6743\u9650\uFF0C\u4E0D\u63D0\u4F9B\u53EA\u8BFB OS \u6C99\u7BB1\u3002demo \u6A21\u5F0F\u4E0D\u8C03\u7528\u6A21\u578B\u3002\u663E\u5F0F requestId \u5E42\u7B49\u3002", inputSchema: obj({ requestId: string3, name: string3, script: string3, input: { type: "object" }, metadata: METADATA_SCHEMA, executor: { enum: ["mcode", "demo"] }, concurrency: { type: "integer", minimum: 1, maximum: 16 }, maxCalls: { type: "integer", minimum: 1, maximum: 100 }, ...LIMIT_SCHEMAS }, ["requestId", "name", "script", "executor"]) },
-  { name: "workflow_update", description: "\u4FEE\u6539\u5F85\u5BA1\u6838\u5DE5\u4F5C\u6D41\u7684\u811A\u672C\u3001\u8F93\u5165\u6216\u9884\u7B97\u5E76\u91CD\u5EFA\u62D3\u6251\uFF0C\u4FDD\u5B58\u540E\u4ECD\u5F85\u5BA1\u6838\uFF1Brevision \u5FC5\u987B\u5339\u914D\u5F53\u524D\u7248\u672C\u3002\u4E0D\u53EF\u4FEE\u6539\u5DF2\u5F00\u59CB\u7684\u8FD0\u884C\u3002", inputSchema: obj({ ...id, revision: { type: "integer", minimum: 1 }, reason: { type: "string", maxLength: 2e3 }, reuseStepIds: { type: "array", items: string3, maxItems: 100, uniqueItems: true }, name: string3, script: string3, input: { type: "object" }, metadata: METADATA_SCHEMA, executor: { enum: ["mcode", "demo"] }, concurrency: { type: "integer", minimum: 1, maximum: 16 }, maxCalls: { type: "integer", minimum: 1, maximum: 100 }, ...LIMIT_SCHEMAS }, ["runId", "revision"]) },
+  { name: "workflow_start", description: "\u521B\u5EFA\u5F85\u5BA1\u6838\u5DE5\u4F5C\u6D41\u548C\u7ED3\u6784\u62D3\u6251\uFF0C\u4E0D\u6267\u884C Agent\u3002\u5FC5\u987B\u63D0\u4F9B\u9762\u677F\u8BA9\u7528\u6237\u5BA1\u9605\u3001\u4FEE\u6539\u5E76\u70B9\u51FB\u5F00\u59CB\u6267\u884C\u3002mcode \u6A21\u5F0F\u4F1A\u542F\u52A8\u771F\u5B9E MCode\uFF0C\u4F1A\u4F7F\u7528\u5DF2\u767B\u5F55\u8EAB\u4EFD\u4E0E smart \u6743\u9650\uFF0C\u4E0D\u63D0\u4F9B\u53EA\u8BFB OS \u6C99\u7BB1\u3002demo \u6A21\u5F0F\u4E0D\u8C03\u7528\u6A21\u578B\u3002\u663E\u5F0F requestId \u5E42\u7B49\u3002", inputSchema: obj({ requestId: string3, name: string3, script: string3, input: { type: "object" }, metadata: METADATA_SCHEMA, executor: { enum: ["mcode", "demo"] }, concurrency: { type: "integer", minimum: 1, maximum: 16 }, maxCalls: { type: "integer", minimum: 1, maximum: 100 }, reuseAcrossRuns: { type: "boolean", description: "Opt-in: adopt succeeded nodes from prior runs in the same workspace when context and spec hashes match" }, ...LIMIT_SCHEMAS }, ["requestId", "name", "script", "executor"]) },
+  { name: "workflow_update", description: "\u4FEE\u6539\u5F85\u5BA1\u6838\u5DE5\u4F5C\u6D41\u7684\u811A\u672C\u3001\u8F93\u5165\u6216\u9884\u7B97\u5E76\u91CD\u5EFA\u62D3\u6251\uFF0C\u4FDD\u5B58\u540E\u4ECD\u5F85\u5BA1\u6838\uFF1Brevision \u5FC5\u987B\u5339\u914D\u5F53\u524D\u7248\u672C\u3002\u4E0D\u53EF\u4FEE\u6539\u5DF2\u5F00\u59CB\u7684\u8FD0\u884C\u3002", inputSchema: obj({ ...id, revision: { type: "integer", minimum: 1 }, reason: { type: "string", maxLength: 2e3 }, reuseStepIds: { type: "array", items: string3, maxItems: 100, uniqueItems: true }, name: string3, script: string3, input: { type: "object" }, metadata: METADATA_SCHEMA, executor: { enum: ["mcode", "demo"] }, concurrency: { type: "integer", minimum: 1, maximum: 16 }, maxCalls: { type: "integer", minimum: 1, maximum: 100 }, reuseAcrossRuns: { type: "boolean", description: "Opt-in: adopt succeeded nodes from prior runs in the same workspace when context and spec hashes match" }, ...LIMIT_SCHEMAS }, ["runId", "revision"]) },
   { name: "workflow_repair", description: "\u57FA\u4E8E\u505C\u6B62\u540E\u7684\u8FD0\u884C\u521B\u5EFA\u4FEE\u590D\u8349\u7A3F\uFF0C\u4FDD\u7559\u6E90\u8FD0\u884C\uFF1B\u63D0\u4F9B\u5B8C\u6574\u4FEE\u590D\u811A\u672C\u3001\u5931\u8D25\u539F\u56E0\u4E0E sourceUpdatedAt\u3002\u663E\u5F0F reuseStepIds \u4EC5\u9009\u62E9\u786E\u8BA4\u4ECD\u9002\u7528\u7684\u6210\u529F\u8282\u70B9\uFF0C\u9ED8\u8BA4\u4E0D\u590D\u7528\u3002\u8FD0\u884C\u65F6\u91CD\u65B0\u6821\u9A8C\u8F93\u5165\u3001\u6587\u4EF6\u3001\u53C2\u6570\u4E0E\u4F9D\u8D56\uFF1B\u53D8\u66F4\u6216\u91CD\u8DD1\u7684\u4E0A\u6E38\u4F7F\u4E0B\u6E38\u5931\u6548\u3002\u5FC5\u987B\u6253\u5F00\u9762\u677F\u4EA4\u7528\u6237\u5BA1\u6838\u540E\u5F00\u59CB\uFF0C\u4E0D\u80FD\u81EA\u52A8\u6267\u884C\u3002", inputSchema: obj({ ...id, requestId: string3, sourceUpdatedAt: { type: "integer" }, script: string3, reason: { type: "string", maxLength: 2e3 }, reuseStepIds: { type: "array", items: string3, maxItems: 100, uniqueItems: true }, input: { type: "object" }, ...LIMIT_SCHEMAS, maxCalls: { type: "integer", minimum: 1, maximum: 100 } }, ["runId", "requestId", "sourceUpdatedAt", "script", "reason"]) },
   { name: "workflow_status", description: "\u8BFB\u53D6\u8FD0\u884C\u72B6\u6001\u3001\u9636\u6BB5\u548C\u8282\u70B9\uFF1B\u8F93\u51FA\u4E0D\u542B\u5B8C\u6574 prompt/result\u3002\u65E0 runId \u65F6\u5217\u51FA\u6700\u8FD1\u8FD0\u884C\u3002", inputSchema: obj(id) },
   { name: "workflow_results", description: "\u5206\u9875\u8BFB\u53D6\u8282\u70B9\u7ED3\u679C\uFF1B\u7EC8\u6001\u62A5\u544A\u4E0E\u5931\u8D25\u660E\u786E\u5206\u5F00\u3002", inputSchema: obj({ ...id, includeDefinition: { type: "boolean" }, offset: { type: "integer", minimum: 0 }, limit: { type: "integer", minimum: 1, maximum: 20 } }, ["runId"]) },
