@@ -43,22 +43,23 @@ describe('safeId / safeRel(退出型, subprocess 探测)', () => {
       assert.notEqual(r.status, 0, `safeRel(${JSON.stringify(rel)}) 必须拒绝`);
     }
   });
-  test('safeRel: 符号链接逃逸拒绝(建不了符号链接则 skip)', () => {
+  test('safeRel: 符号链接逃逸拒绝(建不了链接则 skip)', (t) => {
     const root = tmpdir();
     const outside = tmpdir();
     fs.writeFileSync(path.join(outside, 'secret.txt'), 'x');
-    let link;
-    try {
-      link = path.join(root, 'assets-link');
-      fs.symlinkSync(outside, link, 'dir');
-    } catch {
-      return; // Windows 无开发者模式/管理员权限时建不了 symlink
-    }
+    const link = path.join(root, 'assets-link');
+    // symlink 需要开发者模式, junction(mklink /J)不需要 —— 两条路都试, 尽量真跑而不是跳过
+    const made = (() => {
+      try { fs.symlinkSync(outside, link, 'dir'); return true; } catch { /* 退回 junction */ }
+      const r = spawnSync('cmd', ['/c', 'mklink', '/J', link, outside], { encoding: 'utf8', windowsHide: true });
+      return r.status === 0 && fs.existsSync(link);
+    })();
+    if (!made) return t.skip('当前环境建不了符号链接/junction');
     const r = probeHelper('safeRel', `["${path.resolve(root).replace(/\\/g, '/')}", "assets-link/secret.txt", {}]`);
     assert.notEqual(r.status, 0, '指向项目外的符号链接必须拒绝');
   });
 
-  test('safeRel: 悬空链接(目标已删除)必须拒绝 —— existsSync 看不出它, 旧回溯会当"不存在"跳过', () => {
+  test('safeRel: 悬空链接(目标已删除)必须拒绝 —— existsSync 看不出它, 旧回溯会当"不存在"跳过', (t) => {
     // 复查 B3: 旧实现用 existsSync 回溯祖先 —— 悬空链接的 existsSync 是 **false**, 于是它被跳过、
     // 链接本身从未被复核, 写进去就落到项目外。现在改用 lstat 停住 + realpath 解不开即 fail closed。
     const root = tmpdir();
@@ -69,7 +70,7 @@ describe('safeId / safeRel(退出型, subprocess 探测)', () => {
       const r = spawnSync('cmd', ['/c', 'mklink', '/J', link, target], { encoding: 'utf8', windowsHide: true });
       return r.status === 0 && fs.existsSync(link);
     })();
-    if (!made) return;                                     // 平台建不了链接就跳过(与上一条同一策略)
+    if (!made) return t.skip('当前环境建不了符号链接/junction(悬空链接场景无从构造)');
     fs.rmSync(target, { recursive: true, force: true });   // 目标消失 → 链接悬空
     assert.equal(fs.existsSync(link), false, '前置: 悬空链接的 existsSync 必须是 false(旧实现的盲区正在这里)');
     assert.ok(fs.lstatSync(link).isSymbolicLink(), '前置: lstat 仍能看到这个 reparse point');
@@ -77,7 +78,7 @@ describe('safeId / safeRel(退出型, subprocess 探测)', () => {
     assert.notEqual(r.status, 0, '悬空链接必须拒绝(解不开就无法证明它落在项目内)');
   });
 
-  test('safeOut 单元级: 项目内的目录段是指向项目外的链接 → 直接调用即拒绝, 且外面没有留下任何文件', () => {
+  test('safeOut 单元级: 项目内的目录段是指向项目外的链接 → 直接调用即拒绝, 且外面没有留下任何文件', (t) => {
     // 复查 B4 收尾: 收监此前只有"跑某个脚本"的集成用例。这里直接调 safeOut(不经任何流水线),
     // 确认拒绝发生在这一层 —— 集成用例可能因为别的校验先退出, 从而给出假绿灯。
     const root = tmpdir();
@@ -88,7 +89,7 @@ describe('safeId / safeRel(退出型, subprocess 探测)', () => {
       const r = spawnSync('cmd', ['/c', 'mklink', '/J', linked, outside], { encoding: 'utf8', windowsHide: true });
       return r.status === 0 && fs.existsSync(linked);
     })();
-    if (!made) return;
+    if (!made) return t.skip('当前环境建不了符号链接/junction(safeOut 拒绝无从观察)');
     const r = probeHelper('safeOut', `["${path.resolve(root).replace(/\\/g, '/')}", "out", "x.txt"]`);
     assert.notEqual(r.status, 0, 'safeOut 必须自己拒绝, 而不是把判断留给调用方');
     assert.match(r.stderr, /越出项目目录|符号链接/, `要点名是链接越界, 实际: ${r.stderr.slice(0, 200)}`);

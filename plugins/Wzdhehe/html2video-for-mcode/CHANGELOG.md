@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.7.3 — 2026-09-18
+
+**Fifth-round audit: five containment tests could pass vacuously where links cannot be created**
+
+- Five tests that build a symlink/junction to exercise the path jail (`safeRel` escape, `safeRel` dangling link, unit-level `safeOut`, `init-project --upgrade-css` containment, `init-project` skeleton containment) ended with a bare early `return` when the link could not be created — green, but testing nothing, which contradicts the README's "nothing pretends to pass" promise (the seventh-round review caught it; two of the five were pointed out, a repo-wide grep found all five). They now skip **with a named reason**, and the `safeRel` escape test gained the junction fallback so it really runs on stock Windows instead of skipping there.
+- Verified in both tool-less sandbox shapes: links creatable → 237 tests, 0 fail, 23 skipped; links not creatable → 209 pass, 0 fail, 28 skipped — the five formerly vacuous passes are now the five extra named skips, and no shape reports a pass it did not earn.
+- Small dedups from the same pass: `build-video` reads `--transition` through the shared `flagValue` instead of an inline reimplementation; the e2e image-listing fixture builds its `file://` URL with `pathToFileURL` (temp paths with spaces/non-ASCII). Disclosed, not changed: the `--get` download loop re-walks redirects without self-loop detection — it is bounded by `MAX_REDIRECTS`, so this is redundancy, not a hole; the test-side Playwright probe runs one synchronous `npm root -g` at discovery.
+
 ## 1.7.2 — 2026-09-18
 
 **Final audit round: one silent feature regression, one environment-dependent test, and a corrected evidence claim**

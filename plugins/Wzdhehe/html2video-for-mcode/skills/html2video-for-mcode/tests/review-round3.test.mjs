@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runSkill, mkproj, tmpdir, SCRIPTS, LEGACY_TOKENS } from './helpers.mjs';
+import { pathToFileURL } from 'node:url';
 import { findTool, loadPackage } from '../scripts/tools.mjs';
 
 const FFMPEG = findTool('ffmpeg');
@@ -144,7 +145,7 @@ describe('D3 · fetch-official-images 的参数与退出码', () => {
       Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'));
     fs.writeFileSync(path.join(d, 'page.html'),
       '<!doctype html><html><body><img src="pic.png" alt="fixture"></body></html>');
-    const pageUrl = 'file:///' + path.join(d, 'page.html').replace(/\\/g, '/');
+    const pageUrl = pathToFileURL(path.join(d, 'page.html')).href;   // 临时路径含空格/非 ASCII 也安全
     for (const args of [[pageUrl, '--allow-file', '--json'], ['--json', pageUrl, '--allow-file']]) {
       const r = runSkill('fetch-official-images.mjs', args, { cwd: d });
       assert.equal(r.status, 0, `--json 位置 ${args[0]}: ${r.stdout}${r.stderr}`);
@@ -326,7 +327,7 @@ describe('复查补充 · 取值型 flag 清单 + 落盘收监 + transition 两�
     assert.deepEqual(positionals(['--check', 'a.png', 'b.png']), ['a.png', 'b.png'], 'prep-image 的文件名是位置参数');
   });
 
-  test('init-project --upgrade-css 也要落盘收监: slides/ 是悬空链接时不得写到项目外', () => {
+  test('init-project --upgrade-css 也要落盘收监: slides/ 是悬空链接时不得写到项目外', (t) => {
     // 复查 B4: 计划里点名 init-project 与 fetch-official-images, 但两者此前都没有 safeOut ——
     // CHANGELOG 却宣称"每个写入点都收监", 属于文档与代码不符(第三轮 review 抓到的)。
     const proj = mkproj(tmpdir(), { tokens: LEGACY_TOKENS });
@@ -338,7 +339,7 @@ describe('复查补充 · 取值型 flag 清单 + 落盘收监 + transition 两�
       const r = spawnSync('cmd', ['/c', 'mklink', '/J', slidesReal, outside], { encoding: 'utf8', windowsHide: true });
       return r.status === 0 && fs.existsSync(slidesReal);
     })();
-    if (!made) return;   // 平台建不了链接就跳过
+    if (!made) return t.skip('当前环境建不了符号链接/junction(收监拒绝无从观察)');
     // 让 slides 指向项目外(外面先放一份 tokens.css, 好走到"升级"分支)
     fs.writeFileSync(path.join(outside, 'tokens.css'), LEGACY_TOKENS);
     const r = runSkill('init-project.mjs', [proj, '--upgrade-css']);
@@ -388,7 +389,7 @@ describe('复查补充 · 取值型 flag 清单 + 落盘收监 + transition 两�
     assert.ok(!/script\.transition/.test(badFlag.stderr), `不该甩锅给 script.json: ${badFlag.stderr}`);
   });
 
-  test('init-project 骨架写点也收监: assets/ 指向项目外时 --force 重建不得写到项目外', () => {
+  test('init-project 骨架写点也收监: assets/ 指向项目外时 --force 重建不得写到项目外', (t) => {
     // 与上一条同源(复查 B4): 收监是逐个写点做的, --upgrade-css 只是其中之一。骨架那次创建
     // 8 个目录 + 5 个文件, 这些路径此前都是裸 path.join —— 目标目录里预置一个指向项目外的
     // assets 链接(用户共享素材的常见做法), 生成物就会落到项目外。
@@ -400,7 +401,7 @@ describe('复查补充 · 取值型 flag 清单 + 落盘收监 + transition 两�
       const r = spawnSync('cmd', ['/c', 'mklink', '/J', assets, outside], { encoding: 'utf8', windowsHide: true });
       return r.status === 0 && fs.existsSync(assets);
     })();
-    if (!made) return;   // 平台建不了链接就跳过
+    if (!made) return t.skip('当前环境建不了符号链接/junction(骨架写点收监无从观察)');
     const r = runSkill('init-project.mjs', [proj, '--force']);
     assert.equal(r.status, 1, `项目内的目录段指向项目外时必须拒绝: ${r.stdout}${r.stderr}`);
     assert.match(r.stderr + r.stdout, /越出|符号链接|收监/, r.stderr + r.stdout);

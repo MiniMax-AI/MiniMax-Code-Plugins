@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { XFADE_DEFAULT_DUR, positionalDir, readTransition, requireFreshCss, requireTool, safeId, safeOut, safeRel, validateScriptPaths, validateTimingsIds } from './tools.mjs';
+import { XFADE_DEFAULT_DUR, flagValue, positionalDir, readTransition, requireFreshCss, requireTool, safeId, safeOut, safeRel, validateScriptPaths, validateTimingsIds } from './tools.mjs';
 
 const argv = process.argv.slice(2);
 const dir = positionalDir(argv);
@@ -87,7 +87,7 @@ fs.mkdirSync(safeOut(dir, 'build'), { recursive: true });
 // 以及裸字符串与 {type,duration} 两种写法, 闸门(check-slides)与这里必须得到完全一致的结论(D6)。
 const TRANSITION = (() => {
   const a = argv.find(x => x.startsWith('--transition='));
-  const cli = argv.includes('--transition') ? argv[argv.indexOf('--transition') + 1] : null;
+  const cli = flagValue(argv, '--transition', null);
   const v = (a ? a.split('=')[1] : cli) ?? script.transition ?? null;
   // CLI(或裸字符串)只给了类型时, 时长仍取 script.transition.duration —— 老行为:
   // {duration:1.5} + --transition xfade = 1.5s; 不能因为换了解析函数就悄悄退回 0.4s
