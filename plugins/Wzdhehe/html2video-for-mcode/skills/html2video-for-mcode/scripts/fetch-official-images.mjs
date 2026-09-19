@@ -74,16 +74,18 @@ if (!inside(CWD_REAL, OUT_REAL) && OUT_REAL !== CWD_REAL) {
 // 与 --get 同一套纪律: 逐跳复核 host 策略、响应大小上限、文件名清洗、已存在不覆盖。
 // 顺序: 跟完重定向拿到响应头 → 按 content-type 定文件名 → **查重** → 才读 body 落盘
 // (否则"已存在"会白下一遍, 网络抖动时还会把"已存在"报成"下载失败")。
-async function openUrl(src) {
+// ── 逐跳策略 + 重定向循环的单一实现(第十三轮 review 去重: fetch 直下与 --get(浏览器请求)曾各写一份,
+// 第二份缺环守卫与 0 字节守卫)── get(url) 由调用方注入, 返回归一化的
+// { status, location, header(name), arrayBuffer() }, 两个客户端共用同一套跳数/环/上限纪律。
+async function followRedirects(src, get, { where = '下载' } = {}) {
   let current = src, res = null;
   const seen = new Set([src]);   // 见过就说明在绕圈(A→B→A 这种 ping-pong 靠单步自比较抓不到)
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    assertFetchableUrl(current, { allowFile: false, where: `下载(第 ${hop + 1} 跳)` });
-    await assertResolvedHost(current, { where: `下载(第 ${hop + 1} 跳)` });
-    res = await fetch(current, { redirect: 'manual', headers: { 'user-agent': 'html2video-for-mcode/image-fetch' } });
-    if (res.status === 0) throw new Error(`重定向响应读不出状态(跨域重定向常见): ${current}\n     改用图片最终地址(内置浏览器里右键复制图片地址)再试`);
+    assertFetchableUrl(current, { allowFile: false, where: `${where}(第 ${hop + 1} 跳)` });
+    await assertResolvedHost(current, { where: `${where}(第 ${hop + 1} 跳)` });
+    res = await get(current);
     if (res.status >= 300 && res.status < 400) {
-      const loc = res.headers.get('location');
+      const loc = res.location;
       if (!loc) throw new Error(`HTTP ${res.status} 无 Location`);
       const next = new URL(loc, current).href;
       if (next === current) throw new Error(`重定向指向自身(死循环): ${current}`);
@@ -96,10 +98,19 @@ async function openUrl(src) {
   }
   if (!res || res.status >= 300) throw new Error(`重定向超过 ${MAX_REDIRECTS} 跳, 最后停在: ${current}(多半是站点把不存在的图片转到了错误页)`);
   if (res.status >= 400) throw new Error(`HTTP ${res.status} ${current}`);
-  const declared = parseInt(res.headers.get('content-length') || '0', 10);
+  const declared = parseInt(res.header('content-length') || '0', 10);
   if (declared > MAX_BYTES) throw new Error(`响应 ${(declared / 1048576).toFixed(0)}MB 超过上限 ${Math.round(MAX_BYTES / 1048576)}MB(--max-mb 可调)`);
-  const type = String(res.headers.get('content-type') || '').split(';')[0].trim();
-  if (!/^image\//.test(type) && !/octet-stream/.test(type)) console.warn(`  ⚠ content-type 不是图片(${type || '未知'})—— 人眼确认一下再登记`);
+  return res;
+}
+
+async function openUrl(src) {
+  const res = await followRedirects(src, async u => {
+    const r = await fetch(u, { redirect: 'manual', headers: { 'user-agent': 'html2video-for-mcode/image-fetch' } });
+    if (r.status === 0) throw new Error(`重定向响应读不出状态(跨域重定向常见): ${u}\n     改用图片最终地址(内置浏览器里右键复制图片地址)再试`);
+    return { status: r.status, location: r.headers.get('location'), header: n => r.headers.get(n) || '', arrayBuffer: () => r.arrayBuffer() };
+  }, { where: '下载' });
+  const type = String(res.header('content-type') || '').split(';')[0].trim();
+  if (!/^image\//.test(type) && !/octet-stream/.test(type)) console.warn(`  ⚠ content-type 不是图片(${type || '未知类型'})—— 人眼确认一下再登记`);
   return { res, type };
 }
 
@@ -243,26 +254,13 @@ try {
         if (c.src.startsWith('file:')) {
           fs.copyFileSync(new URL(c.src), out); // 本地页面(file://, 需 --allow-file)直拷
         } else {
-          // 手动跟重定向: 每一跳都重新过 host 策略, 不让重定向绕开内网拦截
-          let current = c.src;
-          let res = null;
-          for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-            assertFetchableUrl(current, { allowFile: false, where: `下载(第 ${hop + 1} 跳)` });
-            await assertResolvedHost(current, { where: `下载(第 ${hop + 1} 跳)` });
-            res = await context.request.get(current, { timeout: 30000, maxRedirects: 0 });
-            if (res.status() >= 300 && res.status() < 400) {
-              const loc = res.headers()['location'];
-              if (!loc) throw new Error(`HTTP ${res.status()} 无 Location`);
-              current = new URL(loc, current).href;
-              continue;
-            }
-            break;
-          }
-          if (!res || res.status() >= 300) throw new Error(`重定向超过 ${MAX_REDIRECTS} 跳`);
-          if (res.status() >= 400) throw new Error(`HTTP ${res.status()}`);
-          const declared = parseInt(res.headers()['content-length'] || '0', 10);
-          if (declared > MAX_BYTES) throw new Error(`响应 ${ (declared / 1048576).toFixed(0)}MB 超过上限 ${Math.round(MAX_BYTES / 1048576)}MB(--max-mb 可调)`);
-          const body = await res.body();
+          // 与 --url 直下共用同一套逐跳策略 + 环守卫 + 0 字节守卫(followRedirects 单一实现)
+          const res = await followRedirects(c.src, async u => {
+            const r = await context.request.get(u, { timeout: 30000, maxRedirects: 0 });
+            return { status: r.status(), location: r.headers()['location'], header: n => r.headers()[n] || '', arrayBuffer: () => r.body() };
+          }, { where: '下载' });
+          const body = Buffer.from(await res.arrayBuffer());
+          if (!body.length) throw new Error('响应为空(0 字节)—— 多半是 404 错误页或防盗链, 别写空文件');
           if (body.length > MAX_BYTES) { throw new Error(`响应 ${(body.length / 1048576).toFixed(0)}MB 超过上限 ${Math.round(MAX_BYTES / 1048576)}MB(--max-mb 可调)`); }
           fs.writeFileSync(out, body);
         }

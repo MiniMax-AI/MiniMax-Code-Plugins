@@ -1,13 +1,13 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "html2video-for-mcode",
-  "version": "1.7.9",
+  "version": "1.8.0",
   "description": "Turn a topic, outline, or script into a narrated MP4: HTML slides with staged entrance animations, TTS voiceover, ffmpeg assembly, and ASR verification.",
   "author": {
     "name": "Wzdhehe",
     "url": "https://github.com/Wzdhehe"
   },
-  "homepage": "https://github.com/Wzdhehe/html2video-for-mcode",
+  "homepage": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins/tree/main/plugins/Wzdhehe/html2video-for-mcode",
   "repository": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins",
   "license": "MIT",
   "keywords": [

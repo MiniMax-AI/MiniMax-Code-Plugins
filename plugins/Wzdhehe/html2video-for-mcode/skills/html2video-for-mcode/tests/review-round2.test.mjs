@@ -83,6 +83,21 @@ describe('二审 · 输出收监(项目内目录段是符号链接时, 不得写
     const r = runSkill('preview-page.mjs', [proj]);
     assert.notEqual(r.status, 0, `叶子符号链接必须拒绝, 实际: ${(r.stdout + r.stderr).slice(-200)}`);
     assert.equal(fs.readFileSync(canaryFile, 'utf8'), 'ORIGINAL', 'canary 文件不得被改写');
+
+    // 场景②: 逐张叶子(01.html)同样收监 —— 三个叶子写点中 index.html 之外的路径(十三轮 review 指出
+    // canary 只埋了 index 一个)。独立项目, 埋 01.html, expect 拒绝且 canary 完好。
+    const proj2 = tmpdir();
+    const canary2 = path.join(tmpdir(), 'victim2.html');
+    fs.writeFileSync(canary2, 'ORIGINAL');
+    mkproj(proj2, { slides: [{ id: '01', html: '01.html', audio: '01.mp3', clauses: [{ stage: 1, text: 'x' }] }] });
+    fs.writeFileSync(path.join(proj2, 'slides', '01.html'), '<html><head></head><body><p class="fx-fade" data-stage="1">x</p></body></html>');
+    fs.mkdirSync(path.join(proj2, 'preview', 'play'), { recursive: true });
+    try { fs.symlinkSync(canary2, path.join(proj2, 'preview', 'play', '01.html'), 'file'); } catch {
+      return t.skip('当前环境建不了文件符号链接(Windows 需开发者模式; ubuntu CI 真跑)');
+    }
+    const r2 = runSkill('preview-page.mjs', [proj2]);
+    assert.notEqual(r2.status, 0, `逐张叶子符号链接必须拒绝, 实际: ${(r2.stdout + r2.stderr).slice(-200)}`);
+    assert.equal(fs.readFileSync(canary2, 'utf8'), 'ORIGINAL', 'canary 文件不得被改写');
   });
 
   test('grab-frames: introspect 叶子是文件符号链接 → 拒绝, canary 完好(九轮 review 同类收尾)', { skip: !findTool('ffmpeg') && '无 ffmpeg(需从成片抽帧; 真跑由 scoped smoke workflow 覆盖)' }, (t) => {

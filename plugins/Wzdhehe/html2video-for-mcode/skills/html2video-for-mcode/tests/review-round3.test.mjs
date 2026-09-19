@@ -173,6 +173,19 @@ describe('D3 · fetch-official-images 的参数与退出码', () => {
     assert.equal(r.status, 1);
     assert.deepEqual(fs.readdirSync(path.join(d, 'assets')), [], '拒绝时不得落盘');
   });
+
+  test('--url 重定向循环守卫: 只存在于 followRedirects 单一实现(--url 与 --get 共用; 十三轮 review 去重)', () => {
+    // 行为级环测试无法本地构造: --url 路径的 SSRF 策略拒绝 loopback(设计使然, 没有测试例外),
+    // 公网 URL 在 CI 不可靠。退而求其次钉住结构: 逐跳循环只有一份, 环守卫/0 字节守卫在共享核心里,
+    // 两条下载路径(--url 直下与 --get 浏览器)都必须走它 —— 第二份拷贝再出现就红。
+    const src = fs.readFileSync(path.join(SCRIPTS, 'fetch-official-images.mjs'), 'utf8');
+    assert.equal((src.match(/for \(let hop = 0/g) || []).length, 1, '逐跳循环必须只有一份实现');
+    assert.match(src, /async function followRedirects\(/, '共享核心必须存在');
+    assert.match(src, /seen\.has\(next\)/, '环守卫(ping-pong)必须在共享核心里');
+    assert.match(src, /await followRedirects\(c\.src/, '--get(浏览器)路径必须走共享核心');
+    assert.match(src, /await followRedirects\(src, async u => \{/, '--url 直下路径必须走共享核心');
+    assert.equal((src.match(/响应为空\(0 字节\)/g) || []).length, 2, '--url 与 --get 两条下载路径必须各有一条 0 字节守卫(此前 --get 路径缺这条)');
+  });
 });
 
 describe('D4 · --mode / --dsf / --at 的非法值必须在入口被拒', () => {

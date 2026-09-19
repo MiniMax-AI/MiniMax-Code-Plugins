@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { flagValue, positionals, requireTool } from './tools.mjs';
+import { flagValue, positionals, probeSize, requireTool } from './tools.mjs';
 
 const argv = process.argv.slice(2);
 // --check / --crop 是布尔开关, 它们后面那串文件名本来就是位置参数(所以不在 tools.VALUE_FLAGS 里)
@@ -22,10 +22,8 @@ const FFPROBE = requireTool('ffprobe', process.cwd());
 const win = { encoding: 'utf8', windowsHide: true };
 
 function probe(file) {
-  const r = spawnSync(FFPROBE, ['-v', 'error', '-select_streams', 'v:0',
-    '-show_entries', 'stream=width,height', '-of', 'csv=p=0', file], win);
-  const m = (r.stdout || '').trim().match(/(\d+),(\d+)/);
-  return m ? { w: +m[1], h: +m[2] } : null;
+  const s = probeSize(FFPROBE, file);   // 探测收进 tools.mjs 单一实现(第十三轮 review 去重)
+  return s ? { w: s[0], h: s[1] } : null;
 }
 const gcd = (a, b) => (b ? gcd(b, a % b) : a);
 const ratioLabel = (w, h) => { const g = gcd(w, h); return `${w / g}:${h / g} (${(w / h).toFixed(2)})`; };

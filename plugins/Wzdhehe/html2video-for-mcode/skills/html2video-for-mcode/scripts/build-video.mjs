@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { XFADE_DEFAULT_DUR, flagValue, positionalDir, readTransition, requireFreshCss, requireTool, safeId, safeOut, safeRel, validateScriptPaths, validateTimingsIds } from './tools.mjs';
+import { XFADE_DEFAULT_DUR, flagValue, positionalDir, probeDuration as ffprobeDuration, probeSize as ffprobeDims, readTransition, requireFreshCss, requireTool, safeId, safeOut, safeRel, validateScriptPaths, validateTimingsIds } from './tools.mjs';
 
 const argv = process.argv.slice(2);
 const dir = positionalDir(argv);
@@ -65,16 +65,9 @@ const bgmNum = bgmCfgRaw ? {
 const FFMPEG = requireTool('ffmpeg', dir);
 const FFPROBE = requireTool('ffprobe', dir);
 
-const probeDur = f => {
-  const out = run(FFPROBE, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', f], `ffprobe ${path.basename(f)}`);
-  const d = parseFloat((out || '').trim().split('\n')[0]);
-  return Number.isFinite(d) ? d : null;
-};
-const probeSize = f => {
-  const out = run(FFPROBE, ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', f], `ffprobe size ${path.basename(f)}`);
-  const m = (out || '').trim().match(/(\d+),(\d+)/);
-  return m ? [parseInt(m[1], 10), parseInt(m[2], 10)] : null;
-};
+// ffprobe 探测收进 tools.mjs 单一实现(第十三轮 review 去重); 这里保留本地薄封装, 调用点不动。
+const probeDur = f => ffprobeDuration(FFPROBE, f);
+const probeSize = f => ffprobeDims(FFPROBE, f);
 
 fs.mkdirSync(safeOut(dir, 'out'), { recursive: true });
 fs.mkdirSync(safeOut(dir, 'build'), { recursive: true });

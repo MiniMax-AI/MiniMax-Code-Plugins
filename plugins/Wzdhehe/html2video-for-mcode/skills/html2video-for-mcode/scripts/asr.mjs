@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { flagValue, positionals, requireTool, safeId, safeOut, validateTimingsIds } from './tools.mjs';
+import { flagValue, positionals, probeDuration, requireTool, safeId, safeOut, validateTimingsIds } from './tools.mjs';
 import { assertAsrEndpoint, PolicyError } from './url-policy.mjs';
 
 const argv = process.argv.slice(2);
@@ -62,8 +62,7 @@ if (!KEY) {
 function prepareForUpload(file) {
   const st = fs.statSync(file);
   const FFMPEG = requireTool('ffmpeg', dir);
-  const p = spawnSync(requireTool('ffprobe', dir), ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file], { encoding: 'utf8', windowsHide: true });
-  const dur = parseFloat((p.stdout || '').trim());
+  const dur = probeDuration(requireTool('ffprobe', dir), file);   // 探测收进 tools.mjs 单一实现(第十三轮 review 去重)
   if (st.size <= 50 * 1024 * 1024 && (!Number.isFinite(dur) || dur <= 500)) return { file, tmpDir: null };
   // 转码临时文件放 os.tmpdir() 专属目录(1.7.7 复查: 此前写在输入文件旁边 —— 输入在项目内时,
   // 预置在旁边的文件符号链接(.asr-<名>.16k.mp3)会被 ffmpeg -y 写穿; 临时产物本就不该落项目)。

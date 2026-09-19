@@ -86,17 +86,18 @@ replacement), the generated-body template with its content fingerprint, and the 
 
 ## Install
 
-**As a plugin (MiniMax Code):** add `plugins/Wzdhehe/html2video-for-mcode` from this repository, or
-install it from the community catalog once merged.
+**As a plugin (MiniMax Code):** install `plugins/Wzdhehe/html2video-for-mcode` from the
+[MiniMax-Code-Plugins catalog](https://github.com/MiniMax-AI/MiniMax-Code-Plugins/tree/main/plugins/Wzdhehe/html2video-for-mcode) — that hosted
+directory is the publication unit, and the copy reviewed there is the one users get.
 
-**As a standalone skill (any AgentSkills host):**
+**As a standalone skill (any AgentSkills host):** copy the reviewed skill directory **out of that
+hosted plugin** into your host's skills directory — not from any other source:
 
 ```bash
-cp -r html2video-for-mcode ~/.claude/skills/          # or ~/.openclaw/skills/
+# from a checkout of the MiniMax-Code-Plugins repository:
+cp -r plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode ~/.claude/skills/
 # project-level
-cp -r html2video-for-mcode <your-project>/.claude/skills/
-# or from GitHub
-npx skills add Wzdhehe/html2video-for-mcode
+cp -r plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode <your-project>/.claude/skills/
 ```
 
 Then install the two dependencies **in your video project** (not in the skill directory):
@@ -117,9 +118,11 @@ npm i playwright && npx playwright install chromium
   the project directory, the working directory, or the global npm root.
 - **Voice synthesis**, one of: mcode platform connectors, `mmx-cli`
   (`npm i -g mmx-cli && mmx auth login --api-key sk-...`), or your own TTS written to
-  `audio/<id>.mp3`.
+  `audio/<id>.mp3`. Both mcode connectors and `mmx-cli`/REST spend a **MiniMax account's paid,
+  quota-metered balance** — the account is a required, billable service charged per character/minute.
 - Optional: `MINIMAX_API_KEY` for `scripts/asr.mjs`, which transcribes the voiceover and compares
-  it against the script (numbers, proper nouns, and spoken language).
+  it against the script (numbers, proper nouns, and spoken language). The key belongs to the same
+  **paid, quota-metered MiniMax account**; each transcription call is billed by audio duration.
 
 ## Quick start
 
@@ -225,7 +228,7 @@ node --test "plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/te
 node --test "tests/*.test.mjs"
 ```
 
-243 tests in fourteen files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
+244 tests in fourteen files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
 escapes including a **dangling** link that must be caught rather than skipped), `no-clobber` (refusing to overwrite), `endpoint-allowlist` (key never leaves the official
 hosts — plus a local server that proves the gate sits before the request), `fetch-policy` (SSRF,
 `file://`, redirect and filename rules), `preview-page` (snapshot timing injection, `base` ordering,
@@ -252,7 +255,7 @@ with its stated reason** (a tool is absent, or the filesystem forbids creating a
 pretends to pass, and the pipeline scripts themselves exit with `找不到 ffmpeg` instead of running
 half a pipeline. The scoped workflow
 `.github/workflows/html2video-for-mcode-smoke.yml` — which lives in the **MiniMax-Code-Plugins
-monorepo** (this standalone repo has no workflows) and runs on the plugin PR and on main —
+monorepo**) and runs on the plugin PR and on main —
 installs them and runs everything for real.
 
 ## Troubleshooting

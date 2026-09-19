@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { positionalDir, requireTool, safeId, safeOut, safeRel, validateScriptPaths } from './tools.mjs';
+import { positionalDir, probeDuration, requireTool, safeId, safeOut, safeRel, validateScriptPaths } from './tools.mjs';
 
 // 语种相关的计量基准。中文按"字", 英文按"字符"(含词间节奏, 与音节时长大致成正比)。
 // pacing = 每单位每秒的常见语速; subMax = 字幕单行建议上限; pace 区间用于语速异常预警。
@@ -41,12 +41,7 @@ const SPEED = (() => {
   return Number.isFinite(n) && n > 0 ? n : 1.0;
 })();
 
-function probeDur(file) {
-  const r = spawnSync(FFPROBE, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file], { encoding: 'utf8', windowsHide: true });
-  if (r.status !== 0 || !r.stdout) return null;
-  const d = parseFloat(r.stdout.trim().split('\n')[0]);
-  return Number.isFinite(d) ? d : null;
-}
+const probeDur = file => probeDuration(FFPROBE, file);   // 探测收进 tools.mjs 单一实现(第十三轮 review 去重)
 const charCount = s => String(s ?? '').replace(/\s+/g, '').length;
 const r3 = x => Math.round(x * 1000) / 1000;
 

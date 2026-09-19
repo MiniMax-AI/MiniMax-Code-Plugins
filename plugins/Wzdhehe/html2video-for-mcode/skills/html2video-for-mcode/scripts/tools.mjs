@@ -203,6 +203,22 @@ export function safeOut(root, ...segs) {
   return assertContained(root, abs, { where: `输出 ${segs.join('/')}` });
 }
 
+// ── ffprobe 探测(第十三轮 review 去重: duration 三处、尺寸两处逐字重复) ──────────
+// 失败统一返回 null —— 各调用方自己决定报错还是回退, 与既有实现逐字等价。
+export function probeDuration(ffprobe, file) {
+  const r = spawnSync(ffprobe, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file],
+    { encoding: 'utf8', windowsHide: true });
+  if (r.status !== 0 || !r.stdout) return null;
+  const d = parseFloat(r.stdout.trim().split('\n')[0]);
+  return Number.isFinite(d) ? d : null;
+}
+export function probeSize(ffprobe, file) {
+  const r = spawnSync(ffprobe, ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', file],
+    { encoding: 'utf8', windowsHide: true });
+  const m = (r.stdout || '').trim().match(/(\d+),(\d+)/);
+  return m ? [parseInt(m[1], 10), parseInt(m[2], 10)] : null;
+}
+
 // ── 路径规范化(比较用) ─────────────────────────────────────────────────
 // 取最深已存在祖先的 realpath 再拼回来: macOS 上 /var/... 与 /private/var/... 是同一目录的两种
 // 写法, 纯字符串比较会把"项目内的合法路径"误判成越界(二审 P2 在官方 CI 的 macOS 上实测踩到)。
