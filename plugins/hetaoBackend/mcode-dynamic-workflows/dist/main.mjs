@@ -13976,6 +13976,16 @@ async function executablePath(command, env = process.env, platform = process.pla
   }
   return null;
 }
+async function launcherEntry(script, dir) {
+  try {
+    const ref2 = (await readFile(script, "utf8")).match(/[^\s"'*]*node_modules[^\s"'*]*cli\.js/)?.[0];
+    if (!ref2) return null;
+    const entry = resolve(dir, ref2.replace(/%~dp0/gi, () => `${dir.replace(/\\/g, "/")}/`).replace(/\\/g, "/"));
+    return await fileExists(entry) ? entry : null;
+  } catch {
+    return null;
+  }
+}
 async function resolveMcode(command = "mcode", { env = process.env, home = homedir(), platform = process.platform } = {}) {
   let path = await executablePath(command, env, platform);
   let source = "path";
@@ -13985,36 +13995,57 @@ async function resolveMcode(command = "mcode", { env = process.env, home = homed
   }
   if (path) {
     if (platform === "win32" && /\.(cmd|bat)$/i.test(path)) {
+      const active = await launcherEntry(join2(dirname(path), ".mcode-launcher.cmd"), dirname(path));
+      if (active) return { command: process.execPath, args: [active], source };
       const root = officialRoot(home, env);
       const candidates = [
-        join2(dirname(path), "node_modules", "@minimax-ai", "code", "cli.js"),
-        join2(root, "lib", "node_modules", "@minimax-ai", "code", "cli.js"),
-        join2(root, "node_modules", "@minimax-ai", "code", "cli.js")
+        { entry: join2(dirname(path), "node_modules", "@minimax-ai", "code", "cli.js"), tie: "" },
+        { entry: join2(root, "lib", "node_modules", "@minimax-ai", "code", "cli.js"), tie: "" },
+        { entry: join2(root, "node_modules", "@minimax-ai", "code", "cli.js"), tie: "" }
       ];
       try {
         for (const entry of await readdir(join2(root, "releases"), { withFileTypes: true }))
-          if (entry.isDirectory()) candidates.push(join2(root, "releases", entry.name, "node_modules", "@minimax-ai", "code", "cli.js"));
+          if (entry.isDirectory()) candidates.push({ entry: join2(root, "releases", entry.name, "node_modules", "@minimax-ai", "code", "cli.js"), tie: entry.name });
       } catch {
       }
+      const parseSemVer = (value) => {
+        const m2 = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(String(value ?? "").trim());
+        if (!m2) return null;
+        return {
+          core: [Number(m2[1]), Number(m2[2]), Number(m2[3])],
+          pre: m2[4] === void 0 ? null : m2[4].split(".").map((id2) => ({ numeric: /^\d+$/.test(id2), value: id2 }))
+        };
+      };
+      const cmpSemVer = (a, b2) => {
+        if (!a || !b2) return !a && !b2 ? 0 : a ? 1 : -1;
+        if (!a.pre !== !b2.pre) return a.pre ? -1 : 1;
+        const core = a.core[0] - b2.core[0] || a.core[1] - b2.core[1] || a.core[2] - b2.core[2];
+        if (core) return core;
+        if (!a.pre) return 0;
+        for (let i2 = 0; i2 < Math.max(a.pre.length, b2.pre.length); i2++) {
+          const x2 = a.pre[i2], y2 = b2.pre[i2];
+          if (!x2 || !y2) return x2 ? 1 : -1;
+          if (x2.numeric && y2.numeric) {
+            if (x2.value !== y2.value) return Number(x2.value) - Number(y2.value);
+          } else if (x2.numeric !== y2.numeric) return x2.numeric ? -1 : 1;
+          else if (x2.value !== y2.value) return x2.value < y2.value ? -1 : 1;
+        }
+        return 0;
+      };
       const versionOf = async (entry) => {
         try {
-          const pkg = JSON.parse(await readFile(join2(entry, "..", "package.json"), "utf8"));
-          return String(pkg.version ?? "0.0.0").split(".").map((n) => Number.parseInt(n, 10) || 0);
+          return parseSemVer(JSON.parse(await readFile(join2(entry, "..", "package.json"), "utf8")).version);
         } catch {
-          return [0, 0, 0];
+          return null;
         }
       };
-      const cmp = (a, b2) => a[0] - b2[0] || (a[1] ?? 0) - (b2[1] ?? 0) || (a[2] ?? 0) - (b2[2] ?? 0) || b2.length - a.length;
-      let best = null, bestVersion = null;
-      for (const entry of candidates) {
-        if (!await fileExists(entry)) continue;
-        const version3 = await versionOf(entry);
-        if (!best || cmp(version3, bestVersion) > 0) {
-          best = entry;
-          bestVersion = version3;
-        }
+      let best = null;
+      for (const candidate of candidates) {
+        if (!await fileExists(candidate.entry)) continue;
+        const version3 = await versionOf(candidate.entry);
+        if (!best || cmpSemVer(version3, best.version) > 0 || cmpSemVer(version3, best.version) === 0 && candidate.tie > best.tie) best = { ...candidate, version: version3 };
       }
-      if (best) return { command: process.execPath, args: [best], source };
+      if (best) return { command: process.execPath, args: [best.entry], source };
       const launcher = join2(dirname(path), "mcode.ps1");
       if (await fileExists(launcher)) {
         const powershell = await executablePath("pwsh.exe", env, platform) ?? await executablePath("powershell.exe", env, platform);
