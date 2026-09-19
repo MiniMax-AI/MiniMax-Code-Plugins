@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.8.1 — 2026-09-19
+
+**Thirteenth-review residue (found by the independent sweep over the published `e845cbd8` tree): `SKILL.md` was the one install surface 1.8.0 left behind**
+
+- **The 1.8.0 channel fix did not reach the file the agent actually reads.** That change collapsed both READMEs' install sections to "copy the reviewed skill directory out of the hosted plugin — not from any other source", but `SKILL.md`'s "Installing into other Agent environments" block still carried a bare `cp -r` whose source was unstated, plus a generic skills-CLI route — which re-admits exactly the "install it from a repository of your choosing" path 1.8.0 removed. It matters more than a README here: `.claude-plugin/plugin.json` points `skills` at this file. Both routes are gone; the block now sources the copy from the hosted plugin directory, worded like the READMEs.
+- No code or test changes (nothing asserts on this block); the version is bumped so published copies carry the corrected text. The removed routes now occur in the published trees only inside the changelog entries that describe their removal.
+
 ## 1.8.0 — 2026-09-19
 
 **Thirteenth review (both axes at the exact head): two documented-contract violations fixed, three duplications closed, the rest disclosed**

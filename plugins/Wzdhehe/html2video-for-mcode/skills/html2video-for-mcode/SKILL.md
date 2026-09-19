@@ -55,15 +55,13 @@ Requirements: Node 18+ (scripts use fileURLToPath for compatibility, so they don
 
 ## Installing into other Agent environments
 
-This skill is the standard "one folder + SKILL.md at the root" shape (the frontmatter `name` / `description` are already written to spec), so dropping it into the corresponding skills directory is enough for it to be discovered:
+This skill is the standard "one folder + SKILL.md at the root" shape (the frontmatter `name` / `description` are already written to spec), so dropping it into the corresponding skills directory is enough for it to be discovered. **Copy the reviewed skill directory out of the hosted plugin — not from any other source**: the hosted directory is the publication unit, and a copy taken from anywhere else has not been reviewed.
 
 ```bash
-# Claude Code (personal scope) / OpenClaw / other AgentSkills-compatible tools
-cp -r html2video-for-mcode ~/.claude/skills/        # or ~/.openclaw/skills/
+# from a checkout of the MiniMax-Code-Plugins repository:
+cp -r plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode ~/.claude/skills/        # Claude Code (personal scope) / OpenClaw / other AgentSkills hosts
 # project-scope install
-cp -r html2video-for-mcode <your project>/.claude/skills/
-# or push it to a git repo and use the skills CLI
-npx skills add <repo-url> --skill html2video-for-mcode
+cp -r plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode <your project>/.claude/skills/
 ```
 
 After installing, you only need to add two **dependencies** (in your video project, not in the skill directory):
