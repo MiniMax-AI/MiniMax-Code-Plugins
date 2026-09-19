@@ -95,6 +95,86 @@ test('deleting the smaller of two event rows reports the first divergence at its
  }finally{await f.cleanup();}
 });
 
+test('deleting the last of three anchored event rows fails closed at that row identity with a null actual head; restoring the row heals',async()=>{
+ const f=await fixture(async s=>({output:s.id}));try{
+ const runId=randomUUID();
+ f.store.event(runId,'run.created',{name:'n'});
+ f.store.event(runId,'run.started');
+ f.store.event(runId,'run.finished');
+ const tail=f.store.db.prepare('SELECT seq,runId,body FROM events ORDER BY seq DESC LIMIT 1').get();
+ assert.equal(tail.seq,3);
+ f.store.db.prepare('DELETE FROM events WHERE seq=?').run(tail.seq);
+ const v=f.store.verifyIntegrity().events;
+ assert.equal(v.verified,false);
+ assert.equal(v.checked,3);assert.equal(v.unchained,0,'deletion inside the anchored prefix is a chain divergence, not an unanchored tail');
+ assert.equal(v.firstDivergence.key,`${runId}:${tail.seq}`);
+ assert.match(v.firstDivergence.expectedHead,/^[0-9a-f]{64}$/);
+ assert.equal(v.firstDivergence.expectedHead,v.head,'the deleted tail row carried the current head');
+ assert.equal(v.firstDivergence.actualHead,null,'no live row remains at the recorded position');
+ f.store.db.prepare('INSERT INTO events(seq,runId,body) VALUES(?,?,?)').run(tail.seq,tail.runId,tail.body);
+ assert.equal(f.store.verifyIntegrity().events.verified,true,'restoring the exact row heals');
+ }finally{await f.cleanup();}
+});
+
+test('deleting the middle of three anchored event rows fails closed at its identity key with an intermediate expected head',async()=>{
+ const f=await fixture(async s=>({output:s.id}));try{
+ const runId=randomUUID();
+ f.store.event(runId,'run.created',{name:'n'});
+ f.store.event(runId,'run.started');
+ f.store.event(runId,'run.finished');
+ const rows=f.store.db.prepare('SELECT seq,runId,body FROM events ORDER BY seq').all();
+ const middle=rows[1];
+ assert.equal(middle.seq,2);
+ f.store.db.prepare('DELETE FROM events WHERE seq=?').run(middle.seq);
+ const v=f.store.verifyIntegrity().events;
+ assert.equal(v.verified,false);
+ assert.equal(v.checked,3);assert.equal(v.unchained,0);
+ assert.equal(v.firstDivergence.key,`${runId}:${middle.seq}`);
+ assert.equal(v.firstDivergence.actualHead,null);
+ assert.notEqual(v.firstDivergence.expectedHead,v.head,'a middle row records an intermediate hash, not the head');
+ f.store.db.prepare('INSERT INTO events(seq,runId,body) VALUES(?,?,?)').run(middle.seq,middle.runId,middle.body);
+ assert.equal(f.store.verifyIntegrity().events.verified,true,'restoring the exact row heals');
+ }finally{await f.cleanup();}
+});
+
+test('deleting the highest-rowid anchored repair_cache row fails closed at its row key; restoring the row heals',async()=>{
+ const f=await fixture(async s=>({output:s.id}));try{
+ const runId=randomUUID();
+ for(const id of ['a','b','c'])f.store.saveRepairCandidate(runId,candidate(id));
+ const rows=f.store.db.prepare('SELECT rowid,runId,id,body FROM repair_cache ORDER BY rowid').all();
+ const tail=rows.at(-1);
+ assert.equal(tail.id,'c','rowid order matches insertion order');
+ f.store.db.prepare('DELETE FROM repair_cache WHERE rowid=?').run(tail.rowid);
+ const r=f.store.verifyIntegrity().repair;
+ assert.equal(r.verified,false);
+ assert.equal(r.checked,3);assert.equal(r.unchained,0,'deletion inside the anchored prefix is a chain divergence, not an unanchored tail');
+ assert.equal(r.firstDivergence.key,`${runId}/${tail.id}`);
+ assert.equal(r.firstDivergence.expectedHead,r.head,'the deleted tail row carried the current head');
+ assert.equal(r.firstDivergence.actualHead,null,'no live row remains at the recorded position');
+ f.store.db.prepare('INSERT INTO repair_cache(rowid,runId,id,body) VALUES(?,?,?,?)').run(tail.rowid,tail.runId,tail.id,tail.body);
+ assert.equal(f.store.verifyIntegrity().repair.verified,true,'restoring the exact row heals');
+ }finally{await f.cleanup();}
+});
+
+test('deleting the middle anchored repair_cache row fails closed at its row key with an intermediate expected head',async()=>{
+ const f=await fixture(async s=>({output:s.id}));try{
+ const runId=randomUUID();
+ for(const id of ['a','b','c'])f.store.saveRepairCandidate(runId,candidate(id));
+ const rows=f.store.db.prepare('SELECT rowid,runId,id,body FROM repair_cache ORDER BY rowid').all();
+ const middle=rows[1];
+ assert.equal(middle.id,'b');
+ f.store.db.prepare('DELETE FROM repair_cache WHERE rowid=?').run(middle.rowid);
+ const r=f.store.verifyIntegrity().repair;
+ assert.equal(r.verified,false);
+ assert.equal(r.checked,3);assert.equal(r.unchained,0);
+ assert.equal(r.firstDivergence.key,`${runId}/${middle.id}`);
+ assert.equal(r.firstDivergence.actualHead,null);
+ assert.notEqual(r.firstDivergence.expectedHead,r.head,'a middle row records an intermediate hash, not the head');
+ f.store.db.prepare('INSERT INTO repair_cache(rowid,runId,id,body) VALUES(?,?,?,?)').run(middle.rowid,middle.runId,middle.id,middle.body);
+ assert.equal(f.store.verifyIntegrity().repair.verified,true,'restoring the exact row heals');
+ }finally{await f.cleanup();}
+});
+
 test('a forged integrity_events head fails verification while integrityHeads light-read mirrors settings',async()=>{
  const f=await fixture(async s=>({output:s.id}));try{
  const runId=randomUUID();
