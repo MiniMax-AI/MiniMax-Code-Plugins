@@ -7714,7 +7714,7 @@ import { spawn as spawn3 } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, openSync, writeFileSync, closeSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 var Store = class {
   constructor(dir) {
     mkdirSync(dir, { recursive: true, mode: 448 });
@@ -7740,6 +7740,7 @@ var Store = class {
       this.fd = openSync(this.lock, "wx", 384);
     }
     this.owner = randomUUID();
+    this.txDepth = 0;
     try {
       writeFileSync(this.fd, JSON.stringify({ pid: process.pid, owner: this.owner }));
       this.db = new DatabaseSync(join(dir, "workflows.sqlite"));
@@ -7751,7 +7752,8 @@ var Store = class {
       CREATE TABLE IF NOT EXISTS steps(runId TEXT,id TEXT,body TEXT NOT NULL,PRIMARY KEY(runId,id));
       CREATE TABLE IF NOT EXISTS repair_cache(runId TEXT,id TEXT,body TEXT NOT NULL,PRIMARY KEY(runId,id));
       CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT,runId TEXT,body TEXT NOT NULL);
-      CREATE INDEX IF NOT EXISTS run_events ON events(runId,seq);`);
+      CREATE INDEX IF NOT EXISTS run_events ON events(runId,seq);
+      CREATE TABLE IF NOT EXISTS integrity_rows(surface TEXT NOT NULL,pos INTEGER NOT NULL,key TEXT NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(surface,pos));`);
       const unfinished = this.db.prepare("SELECT body FROM runs WHERE json_extract(body,'$.status') IN ('running','queued','stopping','pausing')").all();
       for (const row of unfinished) {
         const run = JSON.parse(row.body);
@@ -7766,6 +7768,8 @@ var Store = class {
     }
   }
   transaction(fn) {
+    if (this.txDepth) return fn();
+    this.txDepth = 1;
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const r = fn();
@@ -7774,6 +7778,8 @@ var Store = class {
     } catch (e) {
       this.db.exec("ROLLBACK");
       throw e;
+    } finally {
+      this.txDepth = 0;
     }
   }
   templates() {
@@ -7835,15 +7841,73 @@ var Store = class {
     return r ? JSON.parse(r.body) : null;
   }
   saveRepairCandidate(runId, step) {
-    this.db.prepare("INSERT INTO repair_cache VALUES(?,?,?)").run(runId, step.id, JSON.stringify(step));
+    this.transaction(() => {
+      const rowid = Number(this.db.prepare("INSERT INTO repair_cache VALUES(?,?,?)").run(runId, step.id, JSON.stringify(step)).lastInsertRowid);
+      this.chainAdvance("repair", "repair", "SELECT rowid AS pos,runId,id,body FROM repair_cache WHERE rowid>? AND rowid<=? ORDER BY rowid", rowid, (r) => `${r.runId}/${r.id}`);
+    });
   }
   event(runId, type, data2 = {}) {
     const event = { ...data2, type, time: Date.now() };
-    const seq = Number(this.db.prepare("INSERT INTO events(runId,body) VALUES(?,?)").run(runId, JSON.stringify(event)).lastInsertRowid);
-    return { seq, ...event };
+    return this.transaction(() => {
+      const seq = Number(this.db.prepare("INSERT INTO events(runId,body) VALUES(?,?)").run(runId, JSON.stringify(event)).lastInsertRowid);
+      this.chainAdvance("event", "events", "SELECT seq AS pos,runId,body FROM events WHERE seq>? AND seq<=? ORDER BY seq", seq, (r) => `${r.runId}:${r.pos}`);
+      return { seq, ...event };
+    });
   }
   events(runId, after = 0, limit = 150) {
     return this.db.prepare("SELECT seq,body FROM events WHERE runId=? AND seq>? ORDER BY seq LIMIT ?").all(runId, after, limit).map((e) => ({ seq: e.seq, ...JSON.parse(e.body) }));
+  }
+  rowHash(prev, kind, key, body) {
+    return createHash("sha256").update(`${prev}:${kind}:${key}:${body}`).digest("hex");
+  }
+  // Bulk adoption of pre-existing rows is an initial-creation behavior only: it
+  // anchors whatever the table held when the chain first appears. Once a head
+  // exists, each write anchors ONLY its own new position — rows injected into the
+  // range between the head and a later write stay unanchored and verification
+  // keeps failing closed on them instead of silently legitimizing them.
+  chainAdvance(kind, surface, sql, newUpto, keyOf) {
+    const tail = this.setting(`integrity_${surface}`);
+    let prev = tail?.head ?? "0".repeat(64);
+    const range = tail ? `SELECT * FROM (${sql}) WHERE pos=${newUpto}` : sql;
+    for (const r of this.db.prepare(range).all(tail?.upto ?? 0, newUpto)) {
+      const k = keyOf(r);
+      prev = this.rowHash(prev, kind, k, r.body);
+      this.db.prepare("INSERT OR REPLACE INTO integrity_rows VALUES(?,?,?,?)").run(surface, r.pos, k, prev);
+    }
+    this.saveSetting(`integrity_${surface}`, { head: prev, upto: newUpto });
+  }
+  integrityHeads() {
+    return { events: this.setting("integrity_events") ?? null, repair: this.setting("integrity_repair") ?? null };
+  }
+  verifyIntegrity() {
+    const genesis = "0".repeat(64);
+    const face = (kind, surface, table, posCol, rowSql, keyOf) => {
+      const skey = `integrity_${surface}`;
+      const rec = this.setting(skey);
+      const total = Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n);
+      if (!rec) return { head: null, upto: 0, verified: null, checked: 0, unchained: total, firstDivergence: null };
+      const rows = this.db.prepare("SELECT pos,key,hash FROM integrity_rows WHERE surface=? ORDER BY pos").all(surface);
+      const unchained = Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${posCol}>?`).get(rec.upto).n);
+      let prev = genesis, firstDivergence = null;
+      for (const r of rows) {
+        const row = this.db.prepare(rowSql).get(r.pos);
+        const key = row ? keyOf(row, r.pos) : null;
+        const actual = row ? this.rowHash(prev, kind, key, row.body) : null;
+        if (!firstDivergence && (!row || key !== r.key || actual !== r.hash)) firstDivergence = { key: r.key, expectedHead: r.hash, actualHead: actual };
+        prev = r.hash;
+      }
+      if (!firstDivergence) {
+        const anchored = new Set(rows.map((r) => r.pos));
+        const gap = this.db.prepare(`SELECT ${posCol} AS __pos, * FROM ${table} WHERE ${posCol}<=? ORDER BY ${posCol}`).all(rec.upto).find((r) => !anchored.has(r.__pos));
+        if (gap) firstDivergence = { key: keyOf(gap, gap.__pos), expectedHead: null, actualHead: null };
+      }
+      const verified = !firstDivergence && prev === rec.head && unchained === 0;
+      return { head: rec.head, upto: rec.upto, verified, checked: rows.length, unchained, firstDivergence };
+    };
+    return {
+      events: face("event", "events", "events", "seq", "SELECT runId,body FROM events WHERE seq=?", (row, pos) => `${row.runId}:${pos}`),
+      repair: face("repair", "repair", "repair_cache", "rowid", "SELECT runId,id,body FROM repair_cache WHERE rowid=?", (row) => `${row.runId}/${row.id}`)
+    };
   }
   releaseLock() {
     closeSync(this.fd);
@@ -7859,7 +7923,7 @@ var Store = class {
 };
 
 // src/common.mjs
-import { createHash } from "node:crypto";
+import { createHash as createHash2 } from "node:crypto";
 
 // node_modules/acorn/dist/acorn.mjs
 var astralIdentifierCodes = [509, 0, 227, 0, 150, 4, 294, 9, 1368, 2, 2, 1, 6, 3, 41, 2, 5, 0, 166, 1, 574, 3, 9, 9, 7, 9, 32, 4, 318, 1, 78, 5, 71, 10, 50, 3, 123, 2, 54, 14, 32, 10, 3, 1, 11, 3, 46, 10, 8, 0, 46, 9, 7, 2, 37, 13, 2, 9, 6, 1, 45, 0, 13, 2, 49, 13, 9, 3, 2, 11, 83, 11, 7, 0, 3, 0, 158, 11, 6, 9, 7, 3, 56, 1, 2, 6, 3, 1, 3, 2, 10, 0, 11, 1, 3, 6, 4, 4, 68, 8, 2, 0, 3, 0, 2, 3, 2, 4, 2, 0, 15, 1, 83, 17, 10, 9, 5, 0, 82, 19, 13, 9, 214, 6, 3, 8, 28, 1, 83, 16, 16, 9, 82, 12, 9, 9, 7, 19, 58, 14, 5, 9, 243, 14, 166, 9, 71, 5, 2, 1, 3, 3, 2, 0, 2, 1, 13, 9, 120, 6, 3, 6, 4, 0, 29, 9, 41, 6, 2, 3, 9, 0, 10, 10, 47, 15, 199, 7, 137, 9, 54, 7, 2, 7, 17, 9, 57, 21, 2, 13, 123, 5, 4, 0, 2, 1, 2, 6, 2, 0, 9, 9, 49, 4, 2, 1, 2, 4, 9, 9, 55, 9, 266, 3, 10, 1, 2, 0, 49, 6, 4, 4, 14, 10, 5350, 0, 7, 14, 11465, 27, 2343, 9, 87, 9, 39, 4, 60, 6, 26, 9, 535, 9, 470, 0, 2, 54, 8, 3, 82, 0, 12, 1, 19628, 1, 4178, 9, 519, 45, 3, 22, 543, 4, 4, 5, 9, 7, 3, 6, 31, 3, 149, 2, 1418, 49, 513, 54, 5, 49, 9, 0, 15, 0, 23, 4, 2, 14, 1361, 6, 2, 16, 3, 6, 2, 1, 2, 4, 101, 0, 161, 6, 10, 9, 357, 0, 62, 13, 499, 13, 245, 1, 2, 9, 233, 0, 3, 0, 8, 1, 6, 0, 475, 6, 110, 6, 6, 9, 4759, 9, 787719, 239];
@@ -13559,7 +13623,7 @@ function parse3(input, options) {
 }
 
 // src/common.mjs
-var hash = (value) => createHash("sha256").update(typeof value === "string" || Buffer.isBuffer(value) ? value : stable(value)).digest("hex");
+var hash = (value) => createHash2("sha256").update(typeof value === "string" || Buffer.isBuffer(value) ? value : stable(value)).digest("hex");
 function stable(value) {
   return JSON.stringify(canonical(value));
 }
@@ -14781,7 +14845,7 @@ var Engine = class extends EventEmitter {
 };
 
 // src/http.mjs
-import { createHash as createHash2 } from "node:crypto";
+import { createHash as createHash3 } from "node:crypto";
 
 // web/graph-model.mjs
 var finished = /* @__PURE__ */ new Set(["succeeded", "completed_with_gaps", "failed", "cancelled"]);
@@ -26490,7 +26554,7 @@ var TOOLS = [
   { name: "workflow_start", description: "\u521B\u5EFA\u5F85\u5BA1\u6838\u5DE5\u4F5C\u6D41\u548C\u7ED3\u6784\u62D3\u6251\uFF0C\u4E0D\u6267\u884C Agent\u3002\u5FC5\u987B\u63D0\u4F9B\u9762\u677F\u8BA9\u7528\u6237\u5BA1\u9605\u3001\u4FEE\u6539\u5E76\u70B9\u51FB\u5F00\u59CB\u6267\u884C\u3002mcode \u6A21\u5F0F\u4F1A\u542F\u52A8\u771F\u5B9E MCode\uFF0C\u4F1A\u4F7F\u7528\u5DF2\u767B\u5F55\u8EAB\u4EFD\u4E0E smart \u6743\u9650\uFF0C\u4E0D\u63D0\u4F9B\u53EA\u8BFB OS \u6C99\u7BB1\u3002demo \u6A21\u5F0F\u4E0D\u8C03\u7528\u6A21\u578B\u3002\u663E\u5F0F requestId \u5E42\u7B49\u3002", inputSchema: obj({ requestId: string3, name: string3, script: string3, input: { type: "object" }, metadata: METADATA_SCHEMA, executor: { enum: ["mcode", "demo"] }, concurrency: { type: "integer", minimum: 1, maximum: 16 }, maxCalls: { type: "integer", minimum: 1, maximum: 100 }, reuseAcrossRuns: { type: "boolean", description: "Opt-in: adopt succeeded nodes from prior runs in the same workspace when context and spec hashes match" }, ...LIMIT_SCHEMAS }, ["requestId", "name", "script", "executor"]) },
   { name: "workflow_update", description: "\u4FEE\u6539\u5F85\u5BA1\u6838\u5DE5\u4F5C\u6D41\u7684\u811A\u672C\u3001\u8F93\u5165\u6216\u9884\u7B97\u5E76\u91CD\u5EFA\u62D3\u6251\uFF0C\u4FDD\u5B58\u540E\u4ECD\u5F85\u5BA1\u6838\uFF1Brevision \u5FC5\u987B\u5339\u914D\u5F53\u524D\u7248\u672C\u3002\u4E0D\u53EF\u4FEE\u6539\u5DF2\u5F00\u59CB\u7684\u8FD0\u884C\u3002", inputSchema: obj({ ...id, revision: { type: "integer", minimum: 1 }, reason: { type: "string", maxLength: 2e3 }, reuseStepIds: { type: "array", items: string3, maxItems: 100, uniqueItems: true }, name: string3, script: string3, input: { type: "object" }, metadata: METADATA_SCHEMA, executor: { enum: ["mcode", "demo"] }, concurrency: { type: "integer", minimum: 1, maximum: 16 }, maxCalls: { type: "integer", minimum: 1, maximum: 100 }, reuseAcrossRuns: { type: "boolean", description: "Opt-in: adopt succeeded nodes from prior runs in the same workspace when context and spec hashes match" }, ...LIMIT_SCHEMAS }, ["runId", "revision"]) },
   { name: "workflow_repair", description: "\u57FA\u4E8E\u505C\u6B62\u540E\u7684\u8FD0\u884C\u521B\u5EFA\u4FEE\u590D\u8349\u7A3F\uFF0C\u4FDD\u7559\u6E90\u8FD0\u884C\uFF1B\u63D0\u4F9B\u5B8C\u6574\u4FEE\u590D\u811A\u672C\u3001\u5931\u8D25\u539F\u56E0\u4E0E sourceUpdatedAt\u3002\u663E\u5F0F reuseStepIds \u4EC5\u9009\u62E9\u786E\u8BA4\u4ECD\u9002\u7528\u7684\u6210\u529F\u8282\u70B9\uFF0C\u9ED8\u8BA4\u4E0D\u590D\u7528\u3002\u8FD0\u884C\u65F6\u91CD\u65B0\u6821\u9A8C\u8F93\u5165\u3001\u6587\u4EF6\u3001\u53C2\u6570\u4E0E\u4F9D\u8D56\uFF1B\u53D8\u66F4\u6216\u91CD\u8DD1\u7684\u4E0A\u6E38\u4F7F\u4E0B\u6E38\u5931\u6548\u3002\u5FC5\u987B\u6253\u5F00\u9762\u677F\u4EA4\u7528\u6237\u5BA1\u6838\u540E\u5F00\u59CB\uFF0C\u4E0D\u80FD\u81EA\u52A8\u6267\u884C\u3002", inputSchema: obj({ ...id, requestId: string3, sourceUpdatedAt: { type: "integer" }, script: string3, reason: { type: "string", maxLength: 2e3 }, reuseStepIds: { type: "array", items: string3, maxItems: 100, uniqueItems: true }, input: { type: "object" }, ...LIMIT_SCHEMAS, maxCalls: { type: "integer", minimum: 1, maximum: 100 } }, ["runId", "requestId", "sourceUpdatedAt", "script", "reason"]) },
-  { name: "workflow_status", description: "\u8BFB\u53D6\u8FD0\u884C\u72B6\u6001\u3001\u9636\u6BB5\u548C\u8282\u70B9\uFF1B\u8F93\u51FA\u4E0D\u542B\u5B8C\u6574 prompt/result\u3002\u65E0 runId \u65F6\u5217\u51FA\u6700\u8FD1\u8FD0\u884C\u3002", inputSchema: obj(id) },
+  { name: "workflow_status", description: "\u8BFB\u53D6\u8FD0\u884C\u72B6\u6001\u3001\u9636\u6BB5\u548C\u8282\u70B9\uFF1B\u8F93\u51FA\u4E0D\u542B\u5B8C\u6574 prompt/result\u3002\u65E0 runId \u65F6\u5217\u51FA\u6700\u8FD1\u8FD0\u884C\uFF0C\u9ED8\u8BA4\u8FD4\u56DE\u6570\u7EC4\uFF08\u65E2\u6709\u5F62\u72B6\u4E0D\u53D8\uFF09\u3002verifyIntegrity:true \u65F6\u6539\u8FD4 {runs,integrityHeads,integrity} \u5BF9\u8C61\u5F62\u5E76\u5168\u91CF\u91CD\u7B97\u4E24\u6761\u5B8C\u6574\u6027\u94FE\uFF1B\u6821\u9A8C\u8986\u76D6\u5DF2\u951A\u5B9A\u524D\u7F00\uFF0C\u4EFB\u4F55\u672A\u951A\u5B9A\u884C fail-closed\uFF08unchained>0 \u5373 verified:false\uFF09\u3002\u5B8C\u6574\u6027\u662F\u5E93\u5185\u7BE1\u6539\u8BC1\u636E\u4FE1\u53F7\uFF0C\u4E0D\u662F\u5BF9\u6297\u80FD\u91CD\u5199\u6574\u5E93\u8005\u7684\u4FE1\u4EFB\u951A\u3002", inputSchema: obj({ ...id, verifyIntegrity: { type: "boolean", description: "\u5168\u91CF\u91CD\u7B97\u5B8C\u6574\u6027\u94FE\uFF0C\u8FD4\u56DE {runs,integrityHeads,integrity} \u5BF9\u8C61\u5F62\uFF08\u9ED8\u8BA4\u4E3A\u7EAF\u6570\u7EC4\uFF09" } }) },
   { name: "workflow_results", description: "\u5206\u9875\u8BFB\u53D6\u8282\u70B9\u7ED3\u679C\uFF1B\u7EC8\u6001\u62A5\u544A\u4E0E\u5931\u8D25\u660E\u786E\u5206\u5F00\u3002", inputSchema: obj({ ...id, includeDefinition: { type: "boolean" }, offset: { type: "integer", minimum: 0 }, limit: { type: "integer", minimum: 1, maximum: 20 } }, ["runId"]) },
   { name: "workflow_wait", description: "\u6309\u4E8B\u4EF6\u6E38\u6807\u7B49\u5F85\u53D8\u5316\uFF0C\u6700\u957F25\u79D2\u3002\u9700\u8981\u7EE7\u7EED\u5173\u6CE8\u65F6\u4F7F\u7528\u8FD4\u56DE\u7684nextSequence\u3002", inputSchema: obj({ ...id, afterSequence: { type: "integer", minimum: 0 }, timeoutMs: { type: "integer", minimum: 0, maximum: 25e3 } }, ["runId"]) },
   { name: "workflow_cancel", description: "\u53D6\u6D88\u672C\u63D2\u4EF6\u5DE5\u4F5C\u6D41\uFF0C\u7B49\u5F85\u5728\u9014 exec \u9000\u51FA\uFF1B\u4E0D\u53D6\u6D88\u5176\u4ED6 MCode \u4F1A\u8BDD\u3002", inputSchema: obj(id, ["runId"]) },
@@ -26533,7 +26597,9 @@ function createToolHandler(engine, getURL) {
       case "workflow_repair":
         return summary(await engine.repair(args.runId, args));
       case "workflow_status":
-        return args.runId ? summary(engine.snapshot(args.runId)) : engine.store.list().map((r) => summary(r));
+        if (args.runId) return summary(engine.snapshot(args.runId));
+        if (args.verifyIntegrity === true) return { runs: engine.store.list().map((r) => summary(r)), integrityHeads: engine.store.integrityHeads(), integrity: engine.store.verifyIntegrity() };
+        return engine.store.list().map((r) => summary(r));
       case "workflow_results": {
         const r = engine.snapshot(args.runId);
         const offset2 = args.offset ?? 0, limit = args.limit ?? 10;
@@ -26575,7 +26641,7 @@ async function startStdio(handler, tools = TOOLS) {
 
 // src/http.mjs
 async function startHTTP(engine, { port = 0, webRoot = new URL("../web/", import.meta.url), exampleRoot = new URL("../examples/", import.meta.url) } = {}) {
-  const reportStyleHash = createHash2("sha256").update(REPORT_STYLES).digest("base64");
+  const reportStyleHash = createHash3("sha256").update(REPORT_STYLES).digest("base64");
   let origin;
   const sockets = /* @__PURE__ */ new Set();
   const server = http.createServer(async (req, res) => {
@@ -26668,7 +26734,7 @@ async function startHTTP(engine, { port = 0, webRoot = new URL("../web/", import
 }
 
 // src/workspace-router.mjs
-import { createHash as createHash3 } from "node:crypto";
+import { createHash as createHash4 } from "node:crypto";
 import { realpath as realpath2, stat as stat2 } from "node:fs/promises";
 import { isAbsolute as isAbsolute2, relative as relative2, join as join3, sep as sep2 } from "node:path";
 
@@ -27531,7 +27597,7 @@ async function canonicalWorkspace(value, pluginRoot) {
   return workspace;
 }
 function projectDataDir(base, workspace) {
-  return join3(base, "projects", createHash3("sha256").update(workspace).digest("hex"));
+  return join3(base, "projects", createHash4("sha256").update(workspace).digest("hex"));
 }
 function createWorkspaceRouter({ binary, pluginRoot, dataRoot, extraArgs = [] }) {
   const connections = /* @__PURE__ */ new Map();
