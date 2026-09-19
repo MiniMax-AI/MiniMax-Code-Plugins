@@ -1,0 +1,164 @@
+// 安全边界 · 抓图 URL 策略(SSRF / 本地文件读 / 重定向 / 文件名)
+// 对应评审意见 4: SSRF and local-file-read behavior in fetch-official-images.mjs。
+import { test, describe } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  isBlockedHost, assertFetchableUrl, assertRedirectTarget, sanitizeFilename, imageNameFromUrl, MAX_REDIRECTS, PolicyError,
+} from '../scripts/url-policy.mjs';
+
+describe('isBlockedHost(内网/本地/元数据/裸主机名)', () => {
+  const blocked = [
+    '127.0.0.1', '127.8.9.10',            // loopback
+    '169.254.169.254', '169.254.0.9',     // 链路本地(含云元数据)
+    '10.0.0.5', '172.16.0.1', '172.31.9.9', '192.168.1.1', // 私网
+    '100.64.0.1',                          // CGNAT
+    '0.0.0.0',
+    '::1', '::', 'fe80::1', 'fc00::1', 'fd12:3456::1', // IPv6 loopback/链路本地/ULA
+    '::ffff:127.0.0.1', '::ffff:10.0.0.1', // IPv4-mapped
+    'localhost', 'intranet-app',           // 无点主机名
+    'box.local', 'corp.internal', 'x.home.arpa',
+    '',                                    // 空
+  ];
+  const allowed = [
+    '8.8.8.8', '1.1.1.1', '172.32.0.1', '172.15.0.1', // 公网(含私网段边界外)
+    'api.minimaxi.com', 'example.com', 'cdn.example.co.uk',
+    '::ffff:8.8.8.8', '2606:4700::1111',
+  ];
+  for (const h of blocked) test(`拦 ${h}`, () => assert.equal(isBlockedHost(h), true, h));
+  for (const h of allowed) test(`放 ${h}`, () => assert.equal(isBlockedHost(h), false, h));
+});
+
+describe('assertFetchableUrl', () => {
+  test('公网 https/http 放行', () => {
+    assertFetchableUrl('https://example.com/a.png');
+    assertFetchableUrl('http://example.com/a.png');
+  });
+  test('内网/元数据/裸名拒绝', () => {
+    for (const u of ['https://127.0.0.1/x', 'http://169.254.169.254/latest', 'https://192.168.0.1/', 'http://localhost/', 'http://intranet/x']) {
+      assert.throws(() => assertFetchableUrl(u), PolicyError, u);
+    }
+  });
+  test('file:// 默认拒绝, --allow-file 放行', () => {
+    assert.throws(() => assertFetchableUrl('file:///C:/page.html'), PolicyError);
+    assertFetchableUrl('file:///C:/page.html', { allowFile: true });
+  });
+  test('带 userinfo 的 URL 拒绝(凭据会泄漏进日志)', () => {
+    assert.throws(() => assertFetchableUrl('https://user:pw@example.com/a.png'), PolicyError);
+  });
+  test('非 http(s)/file 协议拒绝', () => {
+    for (const u of ['ftp://example.com/a', 'javascript:alert(1)', 'data:text/html,x']) {
+      assert.throws(() => assertFetchableUrl(u), PolicyError, u);
+    }
+  });
+});
+
+describe('重定向目标逐跳校验', () => {
+  test('重定向到私网/元数据/file: 拒绝', () => {
+    for (const loc of ['http://10.0.0.5/x.png', 'http://169.254.169.254/a', 'file:///C:/Windows/win.ini', 'https://evil.example']) {
+      if (loc === 'https://evil.example') continue; // 公网第三方在抓图语境是允许的(offsite 仅标注)
+      assert.throws(() => assertRedirectTarget(loc), PolicyError, loc);
+    }
+  });
+  test('重定向到公网放行; MAX_REDIRECTS 有上限', () => {
+    assertRedirectTarget('https://cdn.example.com/a.png');
+    assert.equal(typeof MAX_REDIRECTS, 'number');
+    assert.ok(MAX_REDIRECTS >= 1 && MAX_REDIRECTS <= 10, '重定向上限应在 1–10 跳');
+  });
+});
+
+describe('sanitizeFilename(页面控制的 alt → 落盘名)', () => {
+  test('路径分隔符与控制字符被替换', () => {
+    const n = sanitizeFilename('brand/logo\\main v2');
+    assert.ok(!n.includes('/') && !n.includes('\\'), n);
+  });
+  test('Windows 保留名被替换', () => {
+    for (const bad of ['CON', 'con', 'NUL', 'com1', 'LPT9']) {
+      assert.ok(sanitizeFilename(bad) !== bad, `保留名 ${bad} 必须被换掉`);
+    }
+  });
+  test('开头点/空格被剥(不产生隐藏文件)', () => {
+    assert.ok(!sanitizeFilename('  .hidden').startsWith('.'), sanitizeFilename('  .hidden'));
+  });
+  test('空/undefined → fallback', () => {
+    assert.equal(sanitizeFilename(''), 'official');
+    assert.equal(sanitizeFilename(undefined), 'official');
+  });
+  test('长度有上限', () => {
+    assert.ok(sanitizeFilename('x'.repeat(500)).length <= 30);
+  });
+});
+
+describe('imageNameFromUrl(零散图片 URL → 落盘文件名)', () => {
+  test('URL 自己的扩展名优先', () => {
+    assert.equal(imageNameFromUrl('https://cdn.x/img/hero-2026.png'), 'hero-2026.png');
+    assert.equal(imageNameFromUrl('https://cdn.x/a/CEO%20photo.jpg?v=2'), 'CEO-photo.jpg');
+  });
+  test('没有扩展名 → 按 content-type 推', () => {
+    assert.equal(imageNameFromUrl('https://cdn.x/image', 'image/webp; charset=binary'), 'image.webp');
+    assert.equal(imageNameFromUrl('https://cdn.x/image', 'image/svg+xml'), 'image.svg');
+    assert.equal(imageNameFromUrl('https://cdn.x/image', 'text/html'), 'image.bin');
+  });
+  test('路径穿越 / 保留名 / 空路径都不会逃出 out-dir', () => {
+    assert.equal(imageNameFromUrl('https://cdn.x/../../etc/passwd'), 'passwd.bin');
+    assert.equal(imageNameFromUrl('https://cdn.x/CON.png'), 'official.png');
+    assert.equal(imageNameFromUrl('https://cdn.x/', 'image/png'), 'official.png');
+    assert.ok(!imageNameFromUrl('https://cdn.x/%2e%2e%2fescape.png').includes('/'));
+  });
+  test('长度有上限且不含路径分隔符', () => {
+    const n = imageNameFromUrl('https://cdn.x/' + 'a'.repeat(300) + '.png');
+    assert.ok(n.length <= 34, n);
+    assert.ok(!/[\/:*?"<>|]/.test(n), n);
+  });
+});
+
+describe('IPv4-mapped IPv6 的十六进制形式(经 new URL() 规范化后的真实到达形态)', () => {
+  // WHATWG URL 会把 http://[::ffff:127.0.0.1]/ 的 hostname 规范化成 ::ffff:7f00:1 再送检 ——
+  // 只测点分形式会漏掉这条真实穿透路径(2026-09-18 安全审计端到端打到了 loopback 与云元数据)
+  const blocked = [
+    'http://[::ffff:7f00:1]/x',                    // 127.0.0.1 loopback
+    'http://[::ffff:a9fe:a9fe]/latest/meta-data/', // 169.254.169.254 云元数据
+    'http://[::ffff:c0a8:101]/router',             // 192.168.1.1
+    'http://[::ffff:a00:5]/internal',              // 10.0.0.5
+    'http://[0:0:0:0:0:ffff:a9fe:a9fe]/',          // 长形式(解析器会压缩)
+  ];
+  for (const u of blocked) {
+    test(`拦 ${u}`, () => assert.throws(() => assertFetchableUrl(u), PolicyError));
+  }
+  test('放 公网映射形式 [::ffff:808:808](= 8.8.8.8): 换算回点分后判定, 不是一刀切', () => {
+    assert.doesNotThrow(() => assertFetchableUrl('http://[::ffff:808:808]/pub.png'));
+  });
+});
+
+describe('2026-09-18 复查补全: 尾点 FQDN / NAT64 / 6to4 / 保留段', () => {
+  // 这一组是把"外部评审打穿的两例 + 同类载体"固化成负例: 尾点 FQDN 与 NAT64 当时都是实测放行
+  const blocked = [
+    'localhost.',                       // 尾点绝对名, 与 localhost 同一主机
+    'LOCALHOST.',                       // 大小写
+    '127.0.0.1.',                       // 字面量带尾点
+    '10.0.0.1.',
+    'printer.local.',
+    '240.0.0.1',                        // 240/4 保留
+    '255.255.255.255',
+    '224.0.0.1',                        // 组播
+    '198.18.0.1',                       // 基准测试段
+    '192.0.0.1',                        // IETF 保留
+    '192.0.2.5',                        // TEST-NET-1
+    '198.51.100.7',                     // TEST-NET-2
+    '203.0.113.9',                      // TEST-NET-3
+    '[fec0::1]',                        // 站点本地(废弃)
+    '[2001:db8::1]',                    // 文档段
+    '[64:ff9b::7f00:1]',                // NAT64 内嵌 127.0.0.1(实测曾放行)
+    '[64:ff9b::a9fe:a9fe]',             // NAT64 内嵌 169.254.169.254
+    '[2002:7f00:0001::]',               // 6to4 内嵌 127.0.0.1
+    '[2002:c0a8:0101::]',               // 6to4 内嵌 192.168.1.1
+  ];
+  for (const h of blocked) test(`拦 ${h}`, () => assert.equal(isBlockedHost(h), true, h));
+
+  const allowed = [
+    '93.184.216.34',                    // 公网 IPv4
+    'cdn.example.com.',                 // 公网域名的尾点写法照常放行
+    '[2001:4860:4860::8888]',           // 公网 IPv6 (Google DNS)
+    '[2002:0808:0808::]',               // 6to4 内嵌 8.8.8.8 —— 换算后是公网, 不该一刀切拦
+  ];
+  for (const h of allowed) test(`放 ${h}`, () => assert.equal(isBlockedHost(h), false, h));
+});

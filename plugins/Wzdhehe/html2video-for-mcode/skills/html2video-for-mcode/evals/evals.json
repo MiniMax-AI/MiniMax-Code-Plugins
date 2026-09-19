@@ -1,0 +1,194 @@
+{
+  "skill_name": "html2video-for-mcode",
+  "evals": [
+    {
+      "id": 0,
+      "name": "full-run-from-outline",
+      "prompt": "帮我把这份大纲做成一条一分钟的中文口播视频,1920×1080:介绍 OpenAI——十年时间、三大产品线、九亿周活、25B 年化营收、92% 财富500强渗透、一句 Altman 引语收尾。",
+      "expected_output": "走完整工作流且顺序正确: 事实性题材先搜集过 Gate 0 → 逐张填 script.json(内容量硬规则: 每张标题层+展开层, 口播 25-48 字)过 Gate 1 → TTS 落 audio/ → plan-timings 实测时长过 Gate 2 → 按 authoring.md 写 8 张 HTML(data-stage+fx-*, 不写死延迟) → capture still 过 Gate 4 → capture motion + build-video --asr → ASR 逐段比对过 Gate 5。全程不手写任何时长数字。",
+      "files": []
+    },
+    {
+      "id": 1,
+      "name": "long-tail-silence",
+      "prompt": "之前用别的方法做的幻灯片视频有个毛病:每页 TTS 念完以后画面还要呆等三四秒才切页,很拖。你这套能解决吗?",
+      "expected_output": "解释根因是时长靠估算而非实测。给出本流水线的解法: TTS 先行 + ffprobe 实测 + slide 时长=实测+tail(默认0.8s), tail 可按紧凑/舒缓调 0.4/1.2; 并说明 stage 入场时刻按字数占比从实测时长推出, 音画同源。",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "title-only-slide",
+      "prompt": "我看你出的第 3 张只有一个大标题,口播念了一整句,画面什么都没有,能不能这页先出标题,然后跟着口播出几条细节?",
+      "expected_output": "判定为违反内容量硬规则(画面视觉块≥2 且分属不同 stage)。修正: 补展开层(如 bullets 三条)挂 data-stage=2 + fx-up, 口播拆成引入句(clause stage=1)+展开句(clause stage=2), 入场时刻由 plan-timings 按展开句开口时间自动注入, 不手写延迟。",
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "tts-partial-failure",
+      "prompt": "batch_text_to_audio 返回 8 条里成功 5 条失败 3 条, 报 rate limit, 怎么重试?",
+      "expected_output": "sleep 10-30s 后只把失败的 3 条重新组一个小批重试, 绝不重发整批; 全部落盘 audio/ 后重跑 plan-timings 再继续。",
+      "files": []
+    },
+    {
+      "id": 4,
+      "name": "asr-mismatch",
+      "prompt": "ASR 校验发现第 5 张转写里 '92%' 听成了 '九二', 数字对不上, 怎么处理?",
+      "expected_output": "改口播写法(如 '九成二')→ 只重做该段 TTS → 重跑 plan-timings → 删 build/frames/05 与 out/slide-05.mp4 → 该张重 capture + build-video, 不整片重做。若确认是同音字级微小差异可接受, 数字/产品名不一致必须返工。",
+      "files": []
+    },
+    {
+      "id": 5,
+      "name": "asset-gate-browser-route",
+      "prompt": "做一条介绍某中国 AI 公司的视频, 需要他们的 logo、CEO 照片和产品截图。素材这块你怎么弄?",
+      "expected_output": "按优先级执行: 官方渠道(brand kit/simple-icons/官方文档截图)优先; 缺的用内置浏览器或 Playwright 打开官网 inspect DOM 提取官方 CDN 资源(2026-09 实测中国 AI 公司 6/6 相关); image-downloader(Bing)默认不用(中文题材实测系统性返回无关图); 每个素材查合规(水印/商标语境/照片授权/截图出处), 落盘 assets/ 并逐条登记 MANIFEST.md; 素材清单+预览过 Gate 3, 明确问用户来源与授权是否 OK, 过了才写 HTML。禁止凭空造图; 无合适素材降级纯排版。",
+      "files": []
+    },
+    {
+      "id": 6,
+      "name": "subtitle-burn-and-srt",
+      "prompt": "成片需要有字幕(很多人在静音场景看), 还要能传抖音/B站。字幕怎么加?",
+      "expected_output": "不需要在 HTML 里写字幕: capture 默认把 timings.json 的 clauses 逐句烧进画面(底部居中胶囊, 显示窗=该句开口到下句开口, --no-subs 可关), build-video 同时输出 out/subs.srt 供平台上传。单句建议 ≤18 字(plan-timings 超限会警告)。Gate 5 用静音播放验收字幕可读性。",
+      "files": []
+    },
+    {
+      "id": 7,
+      "name": "voice-language-verification",
+      "prompt": "音色列表里选了个'新闻女声 Chinese (Mandarin)_News_Anchor', 标着普通话, 直接用可以吗?",
+      "expected_output": "不可以, 标签不可信(该音色 2026-09 实测输出粤语)。Phase 1 试听必须带 ASR 验音: 3 个候选各单条 TTS 同一句探针文案(含数字专名) → listen_audio 转写 → 检查简体/繁体、数字念对; 把实测语种标进试听清单给用户三选一。tts-and-timing.md 附实测音色表可作起点。",
+      "files": []
+    },
+    {
+      "id": 8,
+      "name": "bilingual-subtitles",
+      "prompt": "成片要中英双语字幕, 给海外同事看。怎么加?",
+      "expected_output": "不用改 HTML: script.json 每个 clause 加 text2(同一句的翻译, 不重排语序, ≤60 字符), capture 自动把字幕渲染成两行(中文主行+次行小字号), build-video 的 out/subs.srt 同步双行。plan-timings 对超长 text2 会预警。只做部分句子也可以。",
+      "files": []
+    },
+    {
+      "id": 9,
+      "name": "bgm-mix",
+      "prompt": "想给成片加个背景音乐, 别盖过人声。",
+      "expected_output": "用 connector__matrix__batch_text_to_music 生成无人声、可循环的 BGM 放 assets/bgm.mp3(或用户自备并确认授权), script.json 顶层加 bgm 配置; build-video 自动循环补满+淡入淡出+按 volume(默认 0.12)垫在人声下, 混音失败退回纯人声; ASR 校验仍走纯人声轨不受干扰。Gate 5 验人声清晰度。",
+      "files": []
+    },
+    {
+      "id": 10,
+      "name": "image-sourcing-sop",
+      "prompt": "配一张学校大门的实景图, 搜到的图主体都在画面边缘或者只有半截, 比例也不对。怎么办?",
+      "expected_output": "按 references/image-sources.md 的 SOP: 核心原则是'先重搜全貌图, 别硬裁硬用'。query 加正向词(全景/全貌/正面/远景)排除词(特写/近景/一角/半截); 下载前缩略图筛(主体居中/比例接近/无水印无无关logo/≥1200px), 不合适就换; 拿到图跑 prep-image.mjs --check; 图片一律套 .img-frame, 用 --img-pos 控制主体可见区或 .contain 留白, 不要裸放 img 或硬裁(裁切硬限: 裁掉≤20%、不放大补边); 都不行就换题材(数字卡/大字/引言)。",
+      "files": []
+    },
+    {
+      "id": 11,
+      "name": "vertical-canvas",
+      "prompt": "同一条内容还要出一版竖屏的, 发给视频号。要改多少东西?",
+      "expected_output": "只改 script.json 的 width:1080 / height:1920 —— 渲染管线自动注入 --stage-w/--stage-h, 字幕几何(位置/宽度/字号)跟随画布自动收窄, 不用改代码。但版式要重排: 横屏左右分栏改上下堆叠, 内容边距 ~90px, 标题降到 --fs-h2 量级, 每屏信息量减一档(3条→2条), 图片框用 3/4 或 1/1。竖版注意事项见 authoring.md。",
+      "files": []
+    },
+    {
+      "id": 12,
+      "name": "stage-delay-covered-by-shorthand",
+      "prompt": "成片里有些元素一开页就入场了, 另一些却按口播节奏入场, 时序很乱。是 plan-timings 估错了吗?",
+      "expected_output": "不像估算问题(估算偏差通常 <0.3s)。典型根因是 tokens.css 里入场延迟被覆盖: [data-stage=N] 的 animation-delay 与 .fx-* 的 animation 简写同为 (0,1,0) 优先级, 简写更靠后会把延迟重置为 0 —— 于是只写了内联 calc(var(--t2)+…) 的元素时序正确, 纯靠属性声明的元素 0 秒入场。修法: 用新版 tokens.css(延迟走 shorthand 的变量槽 --fx-delay), 不要把延迟写成独立的 animation-delay。先抽成片帧确认, 再决定要不要动算法。",
+      "files": []
+    },
+    {
+      "id": 13,
+      "name": "non-mcode-environment-via-mmx",
+      "prompt": "我在 Claude Code 里, 没有 mcode 的 connector。这个技能还能跑吗? TTS 和 ASR 怎么办?",
+      "expected_output": "能跑 —— 脚本层(截图/渲染/合成/校验/配图)完全环境无关, 只有 TTS/音乐/ASR 依赖平台。TTS 用 mmx-cli: mmx speech synthesize --text ... --voice <id> --speed 1.1 --out audio/01.mp3(音色 mmx speech voices); ASR 用技能自带 node scripts/asr.mjs <项目>(同一把 API Key 直调 /v1/speech_to_text, 自动比对 checklist, 数字/繁体字不符判 ✗); 音乐生成 mmx-cli 没有 → 用户自备或跳过; 配图可用 mmx image(仅限抽象图, 禁生成 logo/截图/真人头像)。首次配置 npm i -g mmx-cli + mmx auth login, 401 时设 region。纪律不变: 时长实测、字幕来自 clauses、音色要试听验语种、Gate 不跳。",
+      "files": []
+    },
+    {
+      "id": 14,
+      "name": "asr-rest-and-timing-verify",
+      "prompt": "ASR 校验怎么跑? 我想顺便确认动画到底有没有对上口播。",
+      "expected_output": "build-video --asr 先按句切出 asr/part-<id>-<k>.mp3; 然后 MINIMAX_API_KEY=sk-xxx node scripts/asr.mjs <项目> 直调 REST 转写, 自动与 checklist 预期文本比对并回填(数字/繁体字不符 → ✗ 非 0 退出; 超 500s/50MB 自动转码)。要确认对轴: node scripts/asr.mjs <项目> --verify-timing 用接口的字级时间戳(verbose_json + timestamp_level=word)实测每句开口, 与 timings.json 的 clauses[].start 对比; 偏差大就校准后重渲染。也可先用 check-timing.mjs(静音法, 离线免费)。",
+      "files": []
+    },
+    {
+      "id": 15,
+      "name": "english-narration",
+      "prompt": "这条视频要发给海外同事, 口播改成英语。要改哪些地方?",
+      "expected_output": "开工对齐时就该问清语言(铁律 4 的语言行: 中文/英语/粤语/其他)。改动四处: ① script.json 设 lang:'en'; ② 口播稿改写英语并按英文基准控量 —— plan-timings 自动切换(约 14 字符/秒、常见 9–18、字幕单行 42 字符, 每张约 14–26 词); ③ 音色换成 English_* 前缀(Chinese (Mandarin)_* 配英文会出怪腔调), 做完用 asr.mjs --language en 验语种; ④ 若开双语, 主行=英语口播、text2 放中文。排版、脚本、渲染流程都不用动; 数字写法反过来(口播 nine hundred million, 画面 900M)。",
+      "files": []
+    },
+    {
+      "id": 16,
+      "name": "subtitle-readability-verification",
+      "prompt": "字幕到底怎么验收? 我怕深色主题下看不清。",
+      "expected_output": "三件套缺一不可: ① 数值关 —— node scripts/check-theme.mjs <项目> 算\"字幕文字 vs 胶囊合成到背景后\"的对比度, <4.5:1 直接不通过(深色主题若不足, 覆写 --sub-bg 更深 + --sub-ring 分隔); ② 帧关 —— 字幕只在成片出现(still 会 finish 掉), 抽 motion 帧 crop 底部条带看: 是否出现/是否被裁/是否与页码重叠(capture 在缺 clauses 时会告警, 不会静默出无字幕片); ③ 静音关(Gate 5)—— 关声看整片, 只靠字幕能否看懂。",
+      "files": []
+    },
+    {
+      "id": 17,
+      "name": "custom-brand-accent",
+      "prompt": "客户给了品牌色 #C2410C, 能用上吗?",
+      "expected_output": "能: 主题主色是令牌。在项目自己的 slides/tokens.css 末尾追加 [data-theme=\"...\"] 覆写 --accent/--accent-ink/--accent-2/--accent-3/--grad(改项目副本不动技能模板), 然后必须跑 check-theme.mjs 验对比度 —— accent-ink 对 accent ≥3:1 才可接受(实测 #C2410C+白字 5.18:1 通过; 浅色如 #FFB84D+白字只有 1.72:1 会被判 ✗ 并退出码 1)。深色主题另看 --sub-bg 字幕胶囊是否仍分得开。",
+      "files": []
+    },
+    {
+      "id": 18,
+      "name": "undefined-css-variable-invisible-text",
+      "prompt": "成片里那个大数字 42% 完全看不见, 但 HTML 里明明写了, 也不报错。为什么?",
+      "expected_output": "未定义 CSS 变量: background:linear-gradient(...,var(--coral-a),var(--coral-b)) 里有个变量没定义 → 整条声明计算为 none; 该元素又用了 -webkit-text-fill-color:transparent(渐变数字的标准写法) → 文字彻底隐形且无任何报错。常见诱因是从外部单页 HTML 抄配色, 变量名不在 tokens.css 里。修法: 项目 tokens.css 补定义, 或写 var(--coral-a, #ED3366) 带默认值; 之后跑 node scripts/check-slides.mjs <项目> 复验(它会静态抓出所有未定义且无 fallback 的变量)。",
+      "files": []
+    },
+    {
+      "id": 19,
+      "name": "broken-image-and-svg-under-file",
+      "prompt": "架构图的 SVG 在截图里显示成 broken image, 是 file:// 的兼容性问题吗?",
+      "expected_output": "不是协议问题 —— 实测 file:// 下 <img src=\"x.svg\"> 正常加载(400px), PNG 同样正常。broken 的真因通常是 SVG 文件自身: XML 有误、依赖外部资源或 Web 字体(inline 到 img 时被禁)、缺 width/height、或下载失败存成了 HTML。建议一律 inline 进 HTML(彻底绕开)。防线有两道: check-slides.mjs 静态查图片路径缺失/外链并提示 SVG 建议 inline; capture 渲染时会点名哪张图没加载出来(以前是静默出 broken 图标)。",
+      "files": []
+    },
+    {
+      "id": 20,
+      "name": "research-hard-rules",
+      "prompt": "这条片子里有个数字\"九亿周活\", 我直接写进口播稿行不行?",
+      "expected_output": "先过 references/research.md 的四条硬规则: ① 关键数字至少 2 个独立来源(只有一个来源就改限定措辞\"官方口径为…\"或降级为约数); ② 优先一手(官方公告/财报/技术报告/政府统计), 二手转述要回溯原文; ③ 标注口径与日期(周活≠月活, 年化≠单季, 币种要写清); ④ 查不到出处或无法判定 → 进 research/notes.md 的\"不确定项\", 绝不进口播稿。数字类断言还要注意时效(优先 12 个月内)与\"最快/第一\"这类需要新来源的表述。Gate 0 让用户确认数字/名称/口径。",
+      "files": []
+    },
+    {
+      "id": 21,
+      "name": "regulated-domain-kickoff",
+      "prompt": "帮我做一条港股上市公司二季度财报的 60 秒口播视频, 中文, 重点讲营收和净利的变化。",
+      "expected_output": "开工对齐除了常规项(语言/风格/字幕/画布/音色/素材边界), 必须先确认领域并问免责: 题材落在财经/投研 → 读 references/compliance.md, 问\"要不要免责声明与数据出处标注\"(默认要), 并按受众确认涨跌色(A股/港股=红涨绿跌, 指标卡改用 var(--up)/var(--down) 并在项目 tokens.css 覆写, 而不是默认的绿涨红跌)。数字必须带三要件: 口径(同比/环比、单季/累计、GAAP/非GAAP)+ 币种(港元)+ 时点(财报披露日, 不能写\"目前营收\")。口播不给操作建议、不预测股价、不用绝对化用语。结尾用 .disclaimer 小字行(停留 ≥3s, 口播不念、不进字幕)。check-slides.mjs 命中财经关键词而全片没有免责行时会给整片级提示。",
+      "files": []
+    },
+    {
+      "id": 22,
+      "name": "finance-updown-color",
+      "prompt": "这条财经视频里我用绿色表示上涨、红色表示下跌, 可以吧?",
+      "expected_output": "要看受众市场。tokens.css 的语义色默认 --good 绿 / --bad 红, 即欧美读法(绿涨红跌); A 股/港股受众是红涨绿跌, 用反了整片观感颠倒。做法: 指标卡一律写 var(--up)/var(--down)(模板已定义 --up:var(--good)/--down:var(--bad)), 需要翻转时在项目 slides/tokens.css 末尾追加 :root{--up:#D92B2B;--down:#12A150}(旧项目缺这两个变量要补定义, check-slides 会报未定义)。同时在 Gate 3 素材确认时问清受众市场, 并把结论记进 research/notes.md。依据见 references/compliance.md。",
+      "files": []
+    },
+    {
+      "id": 23,
+      "name": "chart-animation-and-no-fx",
+      "prompt": "财务页要画营收对比图和一条三年趋势线, 要有点动效; 但老板说这版赶时间, 最好能一个开关把动画全关掉, 画面别变。",
+      "expected_output": "图表全部纯 CSS/SVG 自绘(禁外链 Chart.js/ECharts: 离线取不到 + canvas 动画逐帧 seek 不到)。动效走现成 fx 类且逐帧可 seek: 带标签的条形 fx-grow-w 按 width 生长(数字不变形)、纯色块 fx-grow-x、柱状 fx-grow-y 从底长出、折线 fx-draw 描边画入(SVG 自设 stroke-dasharray:800)、环形/进度 fx-sweep 扫出 + fx-count 数字滚动(见 authoring.md 动效选型表); 错峰用 --fx-delay:calc(var(--t2)+N×120ms)。开关: 根元素加 class=\"no-fx\" 一键全关(单张容器加则只关该张), 关掉后 motion 捕获检测不到动画窗、自动按静态帧出片, 时长与音画同步不变, 字幕照常烧录; 实测动画终态与 no-fx 帧 PSNR 51.7dB(画面一致)。⚠ 两个必踩的坑: ① 只做 transform/描边的关键帧必须显式写 opacity:1, 否则 [data-stage] 的 opacity:0 基础态抬不回来 → 元素永久隐形(check-slides 5b 项会报); ② 柱状图外层容器不能写 align-items:flex-end(列 wrapper 高度塌陷 → 柱子百分比高度变 0), 要用默认 stretch + 列内 justify-content:flex-end。见 references/authoring.md 的\"纯 CSS/SVG 图表\"与\"动效开关\"两节。",
+      "files": []
+    },
+    {
+      "id": 24,
+      "name": "preview-before-render",
+      "prompt": "片子渲染要等好几分钟, 我想先自己把八张连着放一遍看看动效节奏对不对, 别每次都等出片。",
+      "expected_output": "跑 node <技能>/scripts/preview-page.mjs <项目目录> --open → 生成自包含放映页 preview/play/index.html(file:// 双击即看, 零依赖、不需起服务)。页面只做「把 HTML 画面放一遍」: ←→ 或触屏左右滑翻页(动效开时箭头是**逐级步进**: 先出下一级、出完才翻页)、T 现场对比硬切/交叉溶解、X 动效/关动效对照、P 口播文案开/关、O 总览、F 全屏(刻意不做「重播本张」——逐级步进已经能回到任意一级); 刻意不做计时器/进度条/逐句跟读高亮 —— 要看时间或节奏就直接看成片, 预览页里跑计时器只会让人盯秒表(实测标签页放着就变成 204.2s / 6.3s)。口播 UI 按数据自动决定: 有 clauses + 有 timings.json → 列出该张口播文案; 有 clauses 没对时 → 只列文案并标「(未对时)」; 没有 clauses 或 --no-script → 面板与按钮完全不出现, 画面占满整宽。布局自适应: 窄窗口/手机上口播面板收成底部抽屉且默认收起, 手机给触摸条按钮+左右滑动翻页, 总览网格自动列数, 高度用 100dvh。⚠ 关键: 不要直接双击 slides/*.html —— 动画延迟 --t1/--t2/--t3 是管线按 timings.json 注入的, 原文件里只有占位值(--t2:800ms), 看到的是「所有动画挤在开头两秒」的假象; 放映页的副本把实测延迟写进 <html style> 并加 <base href=\"../../slides/\">, 浏览器里的时序才等于成片时序(实测同一张 t=3.0s: 副本第二层 opacity 0 未入场, 原文件已入场)。还没对时则按 HTML 里用到的 stage 等间隔(0.3/1.3/2.3s)预览, 页面顶部黄条如实标注。副本是快照, 改完 slides 必须重跑(两个开关都在底栏, 顶部不再有动效开关)。X 切过去若画面变空, 说明有关键帧没把 opacity:0 基础态抬回来; 老项目(受管区落后)先跑 init-project.mjs <项目> --upgrade-css 补规则(幂等, 不碰 script.json); 放映页只是快照兜底, **成片仍用项目里的旧 CSS**, 所以升级要在 capture/build-video 之前做。",
+      "files": []
+    },
+    {
+      "id": 25,
+      "name": "chart-elegance",
+      "prompt": "你这几张图表看着有点业余, 能不能做得更讲究一点? 图表库不给用(离线), 但只要 CSS/SVG。",
+      "expected_output": "用 tokens.css 里的图表工具箱(`.chart*` 原语 + `fx-grow-w/h · fx-sweep · fx-count · fx-dot`;老项目先 `init-project --upgrade-css` 补齐)。优雅不是加特效, 是九条纪律: ①同类同色、只强调关键一条(其余 `.dim` 用不透明同色系; 彩虹色条形=业余感来源); ②数值等宽(`.chart-num`)且绝不放进被缩放的元素(`scaleX` 会把数字拉扁 → 带标签的条用 `fx-grow-w` 按 `width` 生长); ③有基线与**看得见**的细网格(网格画在 `.chart-plot-cell` 上, 与柱高共用一把尺子, 顶边即轴上限); ④一图只讲一件事(`.chart-note` 写在标题行右侧); ⑤零值/极小值保底; ⑥图注写口径与时点(`.chart-cap`)。另有四条版面纪律: **避开字幕安全区**(1080 高下底部 84–168px、居中 73% 宽留给字幕, 容器 `padding-bottom:190px` 起步); 在安全区内**垂直居中**(别堆在顶部); 数值统一右对齐同一列(都用 `.chart-val.out`); **柱高 = 数值 ÷ 轴上限、轴从 0 起**, 并把轴上限写进标题(凭手感写百分比 = 数据失真)。动效选型: 条形 `fx-grow-w`(带标签)/`fx-grow-x`(纯色块); 柱状 `fx-grow-y`(标签在外)/`fx-grow-h`(标签在内); 折线 `fx-draw` + `fx-dot`(标记规则统一: 全标或只标末点); 环形 `fx-sweep`(**真扫出**, 不用 `fx-pop` 硬弹)+ 中心 `fx-count`; 错峰 `--fx-delay:calc(var(--t2) + N×120ms)`。禁外链图表库(离线取不到、canvas 动画逐帧 seek 不到)、禁 AI 生图当图表、数值必须来自已核实口径。可加图表类型: bullet(实际 vs 目标, `.chart-target` 虚线)、slope(前后对比)、sparkline(数字旁迷你趋势)。",
+      "files": []
+    },
+    {
+      "id": 26,
+      "name": "table-forms",
+      "prompt": "这个季度的数据我想用表格讲, 但我们的模板里表格好像只有一种样式?",
+      "expected_output": "表格有五种形态, 都走 tokens.css 的原语(老项目先 `init-project --upgrade-css` 补): ① 数据表 `.tbl`(多期/多主体对比: 表头弱化、数值列 `.num` 右对齐 + 等宽数字、涨跌 `.up/.down` 走 `var(--up)/var(--down)` 并按受众市场翻转、当前行 `.key` 高亮、合计行 `.sum`); ② 规格表 `.kv`(无表头, 左标签右值 —— 参数/条款); ③ 对比矩阵 `.matrix`(行维度 × 列方案, 单元格只放勾叉, `.hi` 高亮本方案列); ④ 排名表 `.rank`(名次 + 内联微缩条 + 数值, 条长 = 数值 ÷ 轴上限); ⑤ 时间事件表(用 `.kv` 两列)。七条纪律: 主数据正文号 ≥30px(视频要在手机上看; 实测 caption 24px 吃力)、行高 ≥72px、一页一表 ≤6 行、数值右对齐等宽、涨跌走令牌、只画横线不画竖线不要斑马纹、高亮只给一行、表注写口径与时点。表格不要和图表放同一页(一页一件事)。",
+      "files": []
+    }
+  ]
+}
