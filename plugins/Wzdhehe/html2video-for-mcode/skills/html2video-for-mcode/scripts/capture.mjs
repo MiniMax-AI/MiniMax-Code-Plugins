@@ -38,6 +38,14 @@ if (!fs.existsSync(timingsPath)) {
 const timings = JSON.parse(fs.readFileSync(timingsPath, 'utf8'));
 validateTimingsIds(timings);
 
+// 画布值会进 playwright viewport(与 preview-page 的 CSS/JS、build-video 的 ffmpeg filter 同一信任级),
+// 先验后用; 放在 playwright 加载之前 —— 无 playwright 的 CI 上这道门也测得到(第八轮复查 F3)
+const cvW = Number(script.width ?? 1920), cvH = Number(script.height ?? 1080);
+if (!Number.isInteger(cvW) || cvW < 16 || cvW > 16384 || !Number.isInteger(cvH) || cvH < 16 || cvH > 16384) {
+  console.error(`✗ script.width/height 非法: ${JSON.stringify(script.width)} × ${JSON.stringify(script.height)} — 需要 16–16384 的整数(与 preview-page / build-video 同一道门)`);
+  process.exit(1);
+}
+
 const slides = script.slides.filter(s => !idsFilter || idsFilter.includes(s.id));
 const firstId = script.slides[0]?.id;   // 封面图取自成片第 1 段(与 --ids 无关)
 if (!slides.length) { console.error('✗ 没有匹配的 slide'); process.exit(1); }

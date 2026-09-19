@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.7.4 — 2026-09-18
+
+**Eighth-round audit: no serious findings — one stale evidence line corrected, three small hardenings**
+
+- **The PR body's sandbox sentence had gone stale**: it still said both tool-less sandbox shapes report "0 fail and 23 skipped", which the 1.7.3 evidence itself supersedes (the links-not-creatable shape reports 28 skipped). The body now carries both shape numbers.
+- **`capture` now validates `script.width`/`script.height`** the same way `preview-page` and `build-video` already do (integer, 16–16384) — previously a non-integer died with a raw Playwright stack deep in the browser launch, and an out-of-range value silently produced off-canvas frames. The gate sits **before** the Playwright load, so the new regression case runs on tool-less CI as well.
+- Test-infra hygiene: the two remaining string-concatenated `file://` imports in the test helpers now go through `pathToFileURL` (a checkout path containing `#` or `%` used to break them loudly), and the suite's temp directories are removed on process exit instead of accumulating in `%TEMP%`.
+- Disclosed, not changed: `preview-page`'s `?s=k` step-stepping silently disables itself when a hand-written slide has no `<head>` for the script to attach to (generated slides always have one).
+- Tests **237 → 238 in fourteen files**, all green with 0 skips in the development tree and in both published trees; both tool-less sandbox shapes 0 fail (23 and 28 skipped, reasons stated).
+
 ## 1.7.3 — 2026-09-18
 
 **Fifth-round audit: five containment tests could pass vacuously where links cannot be created**

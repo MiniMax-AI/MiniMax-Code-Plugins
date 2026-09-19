@@ -17,7 +17,7 @@ import { findTool, loadPackage } from '../scripts/tools.mjs';
 
 const FFMPEG = findTool('ffmpeg');
 const { positionals, readTransition, positionalDir, VALUE_FLAGS } = await import(
-  'file://' + path.join(SCRIPTS, 'tools.mjs').replace(/\\/g, '/'));
+  pathToFileURL(path.join(SCRIPTS, 'tools.mjs')).href);
 
 const SLIDE = `<!doctype html><html data-theme="a"><head><meta charset="utf-8"><link rel="stylesheet" href="tokens.css"></head>
 <body><div class="stage"><h1 class="fx-rise" data-stage="1">标题</h1></div></body></html>`;
@@ -181,6 +181,26 @@ describe('D4 · --mode / --dsf / --at 的非法值必须在入口被拒', () => 
     fs.writeFileSync(path.join(p, 'slides', '01.html'), SLIDE);
     return p;
   };
+
+  test('capture 的 script.width/height 必须是 16–16384 整数(与 preview-page/build-video 同一道门)', () => {
+    // 第八轮复查 F3: capture 曾对同一字段裸用(非整数一路带进 viewport)。闸门在 playwright
+    // 加载之前, 所以本用例不需要任何外部工具 —— 无工具 CI 上照样真跑。
+    const p = proj();
+    fs.mkdirSync(path.join(p, 'build'), { recursive: true });
+    fs.writeFileSync(path.join(p, 'build', 'timings.json'), JSON.stringify(
+      { fps: 30, total: 1, slides: [{ id: '01', duration: 1, stages: { 1: 0 }, clauses: [] }] }));
+    const setWH = (w, h) => {
+      const s = JSON.parse(fs.readFileSync(path.join(p, 'script.json'), 'utf8'));
+      s.width = w; s.height = h;
+      fs.writeFileSync(path.join(p, 'script.json'), JSON.stringify(s, null, 2));
+    };
+    for (const [w, h] of [[99999, 1080], [8, 1080], [1920, 1079.5], [0, 0]]) {
+      setWH(w, h);
+      const r = runSkill('capture.mjs', [p]);
+      assert.equal(r.status, 1, `width=${JSON.stringify(w)}, height=${JSON.stringify(h)} 必须被拒`);
+      assert.ok(r.stderr.includes('width/height'), r.stderr);
+    }
+  });
 
   test('capture --mode 只收 still/motion', () => {
     const p = proj();

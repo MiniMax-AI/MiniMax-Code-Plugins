@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { wrapTokens } from '../scripts/css-kit.mjs';
 import { generateTokensCss, TOKENS_REV } from '../scripts/tokens-template.mjs';
 
@@ -31,13 +31,19 @@ export function runSkillAsync(name, args, opts = {}) {
   });
 }
 
-// 临时目录
-export const tmpdir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'h2v-test-'));
+// 临时目录(进程退出时统一清理 —— 此前上万个 h2v-test-* 堆在 %TEMP%, 第八轮复查 F2)
+const madeDirs = new Set();
+export const tmpdir = () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'h2v-test-'));
+  madeDirs.add(d);
+  return d;
+};
+process.once('exit', () => { for (const d of madeDirs) fs.rmSync(d, { recursive: true, force: true }); });
 
 // 在 subprocess 里调用 tools.mjs 的退出型助手(safeId/safeRel 会 process.exit, 只能这样测)
 export function probeHelper(expr, argsJson) {
   const code = `
-    import { ${expr} } from ${JSON.stringify('file://' + skill('tools.mjs').replace(/\\\\/g, '/'))};
+    import { ${expr} } from ${JSON.stringify(pathToFileURL(skill('tools.mjs')).href)};
     const args = ${argsJson};
     const v = ${expr}(...args);
     process.stdout.write('RETURN:' + String(v));
