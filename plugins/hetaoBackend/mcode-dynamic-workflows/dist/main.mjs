@@ -7707,7 +7707,7 @@ import { parseArgs } from "node:util";
 import { resolve as resolve3, join as join4 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir as homedir2 } from "node:os";
-import { readFile as readFile2, writeFile, mkdir, open as open3, rename } from "node:fs/promises";
+import { readFile as readFile3, writeFile, mkdir, open as open3, rename } from "node:fs/promises";
 import { spawn as spawn3 } from "node:child_process";
 
 // src/store.mjs
@@ -13949,7 +13949,7 @@ import { constants as constants2 } from "node:fs";
 import { resolve as resolve2, relative, isAbsolute, sep } from "node:path";
 
 // src/mcode-location.mjs
-import { access, stat } from "node:fs/promises";
+import { access, stat, readFile, readdir } from "node:fs/promises";
 import { constants } from "node:fs";
 import { delimiter, dirname, join as join2, resolve } from "node:path";
 import { homedir } from "node:os";
@@ -13968,12 +13968,23 @@ async function executablePath(command, env = process.env, platform = process.pla
   if (typeof command !== "string" || !command) return null;
   const direct = /[\\/]/.test(command);
   const dirs = direct ? [""] : (env.PATH ?? env.Path ?? "").split(platform === "win32" ? ";" : delimiter).filter(Boolean);
-  const extensions = platform === "win32" ? ["", ...(env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";")] : [""];
+  const dotted = /\.[a-z0-9]+$/i.test(command);
+  const extensions = platform === "win32" ? [...dotted ? [""] : [], ...(env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";").filter(Boolean)] : [""];
   for (const dir of dirs) for (const ext of extensions) {
     const file = direct ? resolve(command + ext) : resolve(join2(dir, command + ext));
     if (await fileExists(file, true, platform)) return file;
   }
   return null;
+}
+async function launcherEntry(script, dir) {
+  try {
+    const ref2 = (await readFile(script, "utf8")).match(/[^\s"'*]*node_modules[^\s"'*]*cli\.js/)?.[0];
+    if (!ref2) return null;
+    const entry = resolve(dir, ref2.replace(/%~dp0/gi, () => `${dir.replace(/\\/g, "/")}/`).replace(/\\/g, "/"));
+    return await fileExists(entry) ? entry : null;
+  } catch {
+    return null;
+  }
 }
 async function resolveMcode(command = "mcode", { env = process.env, home = homedir(), platform = process.platform } = {}) {
   let path = await executablePath(command, env, platform);
@@ -13984,15 +13995,64 @@ async function resolveMcode(command = "mcode", { env = process.env, home = homed
   }
   if (path) {
     if (platform === "win32" && /\.(cmd|bat)$/i.test(path)) {
+      const active = await launcherEntry(join2(dirname(path), ".mcode-launcher.cmd"), dirname(path));
+      if (active) return { command: process.execPath, args: [active], source };
+      const root = officialRoot(home, env);
+      const candidates = [
+        { entry: join2(dirname(path), "node_modules", "@minimax-ai", "code", "cli.js"), tie: "" },
+        { entry: join2(root, "lib", "node_modules", "@minimax-ai", "code", "cli.js"), tie: "" },
+        { entry: join2(root, "node_modules", "@minimax-ai", "code", "cli.js"), tie: "" }
+      ];
+      try {
+        for (const entry of await readdir(join2(root, "releases"), { withFileTypes: true }))
+          if (entry.isDirectory()) candidates.push({ entry: join2(root, "releases", entry.name, "node_modules", "@minimax-ai", "code", "cli.js"), tie: entry.name });
+      } catch {
+      }
+      const parseSemVer = (value) => {
+        const m2 = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(String(value ?? "").trim());
+        if (!m2) return null;
+        return {
+          core: [Number(m2[1]), Number(m2[2]), Number(m2[3])],
+          pre: m2[4] === void 0 ? null : m2[4].split(".").map((id2) => ({ numeric: /^\d+$/.test(id2), value: id2 }))
+        };
+      };
+      const cmpSemVer = (a, b2) => {
+        if (!a || !b2) return !a && !b2 ? 0 : a ? 1 : -1;
+        if (!a.pre !== !b2.pre) return a.pre ? -1 : 1;
+        const core = a.core[0] - b2.core[0] || a.core[1] - b2.core[1] || a.core[2] - b2.core[2];
+        if (core) return core;
+        if (!a.pre) return 0;
+        for (let i2 = 0; i2 < Math.max(a.pre.length, b2.pre.length); i2++) {
+          const x2 = a.pre[i2], y2 = b2.pre[i2];
+          if (!x2 || !y2) return x2 ? 1 : -1;
+          if (x2.numeric && y2.numeric) {
+            if (x2.value !== y2.value) return Number(x2.value) - Number(y2.value);
+          } else if (x2.numeric !== y2.numeric) return x2.numeric ? -1 : 1;
+          else if (x2.value !== y2.value) return x2.value < y2.value ? -1 : 1;
+        }
+        return 0;
+      };
+      const versionOf = async (entry) => {
+        try {
+          return parseSemVer(JSON.parse(await readFile(join2(entry, "..", "package.json"), "utf8")).version);
+        } catch {
+          return null;
+        }
+      };
+      let best = null;
+      for (const candidate of candidates) {
+        if (!await fileExists(candidate.entry)) continue;
+        const version3 = await versionOf(candidate.entry);
+        if (!best || cmpSemVer(version3, best.version) > 0 || cmpSemVer(version3, best.version) === 0 && candidate.tie > best.tie) best = { ...candidate, version: version3 };
+      }
+      if (best) return { command: process.execPath, args: [best.entry], source };
       const launcher = join2(dirname(path), "mcode.ps1");
       if (await fileExists(launcher)) {
-        const powershell = await executablePath("powershell.exe", env, platform) ?? await executablePath("pwsh.exe", env, platform);
+        const powershell = await executablePath("pwsh.exe", env, platform) ?? await executablePath("powershell.exe", env, platform);
         if (!powershell) throw new Error("\u53D1\u73B0 MCode PowerShell \u542F\u52A8\u5668\uFF0C\u4F46\u627E\u4E0D\u5230 PowerShell\u3002");
         return { command: powershell, args: ["-NoProfile", "-File", launcher], source };
       }
-      const entry = join2(dirname(path), "node_modules", "@minimax-ai", "code", "cli.js");
-      if (!await fileExists(entry)) throw new Error(`\u53D1\u73B0 ${path}\uFF0C\u4F46\u627E\u4E0D\u5230\u53EF\u76F4\u63A5\u6267\u884C\u7684 cli.js\uFF1B\u8BF7\u4FEE\u590D\u8BE5 CLI \u5B89\u88C5\u3002`);
-      return { command: process.execPath, args: [entry], source };
+      throw new Error(`\u53D1\u73B0 ${path}\uFF0C\u4F46\u627E\u4E0D\u5230\u53EF\u76F4\u63A5\u6267\u884C\u7684 cli.js\uFF1B\u8BF7\u4FEE\u590D\u8BE5 CLI \u5B89\u88C5\u3002`);
     }
     return { command: path, args: [], source };
   }
@@ -16755,7 +16815,7 @@ var REPORT_STYLES = contentStyles + reportStyles;
 
 // src/http.mjs
 import http from "node:http";
-import { readFile } from "node:fs/promises";
+import { readFile as readFile2 } from "node:fs/promises";
 
 // node_modules/zod/v4/core/util.js
 var util_exports = {};
@@ -26589,7 +26649,7 @@ async function startHTTP(engine, { port = 0, webRoot = new URL("../web/", import
       const url = new URL(req.url, origin);
       if (url.pathname.startsWith("/api/")) {
         if (req.headers["x-workflow-client"] !== "1" || ["cross-site", "same-site"].includes(req.headers["sec-fetch-site"])) return json({ error: "\u8BF7\u4ECE\u672C\u5730 Workflow Studio \u9762\u677F\u8BBF\u95EE\u3002" }, 403);
-        if (req.method === "GET" && url.pathname === "/api/config") return json({ serviceProtocol: 2, features: { workflowRepair: true }, pid: process.pid, workspace: engine.options.workspace, executor: engine.options.command, defaults: engine.defaults, scheduler: engine.schedulerStatus(), mcodeAvailable: !!await resolveMcode(engine.options.command ?? "mcode"), example: await readFile(new URL("audit.js", exampleRoot), "utf8") });
+        if (req.method === "GET" && url.pathname === "/api/config") return json({ serviceProtocol: 2, features: { workflowRepair: true }, pid: process.pid, workspace: engine.options.workspace, executor: engine.options.command, defaults: engine.defaults, scheduler: engine.schedulerStatus(), mcodeAvailable: !!await resolveMcode(engine.options.command ?? "mcode"), example: await readFile2(new URL("audit.js", exampleRoot), "utf8") });
         if (req.method === "GET" && url.pathname === "/api/templates") return json(engine.store.templates().map(({ definition, ...t }) => ({ ...t, objective: definition.metadata?.objective ?? "" })));
         const template = url.pathname.match(/^\/api\/templates\/([a-f0-9-]+)$/);
         if (template && req.method === "GET") {
@@ -26644,7 +26704,7 @@ async function startHTTP(engine, { port = 0, webRoot = new URL("../web/", import
         res.writeHead(404);
         return res.end();
       }
-      const data2 = await readFile(new URL(name, webRoot));
+      const data2 = await readFile2(new URL(name, webRoot));
       res.writeHead(200, { "Content-Type": name.endsWith(".js") ? "text/javascript; charset=utf-8" : name.endsWith(".css") ? "text/css; charset=utf-8" : "text/html; charset=utf-8", "Content-Security-Policy": `default-src 'self'; script-src 'self'; style-src 'self' 'sha256-${reportStyleHash}'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`, "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store" });
       res.end(data2);
     } catch (e) {
@@ -27580,7 +27640,7 @@ function createWorkspaceRouter({ binary, pluginRoot, dataRoot, extraArgs = [] })
 
 // src/main.mjs
 var { values } = parseArgs({ options: { stdio: { type: "boolean" }, "stop-service": { type: "boolean" }, settings: { type: "string" }, workspace: { type: "string" }, "data-dir": { type: "string" }, port: { type: "string" }, "mcode-script": { type: "string" }, "worker-config": { type: "string" } } });
-var settings = values.settings ? JSON.parse(await readFile2(resolve3(values.settings), "utf8")) : {};
+var settings = values.settings ? JSON.parse(await readFile3(resolve3(values.settings), "utf8")) : {};
 for (const key of Object.keys(settings)) if (!["workspace", "dataDir"].includes(key) || typeof settings[key] !== "string") throw Error("settings \u53EA\u5141\u8BB8 workspace/dataDir \u5B57\u7B26\u4E32");
 if (values.port !== void 0 && (!/^\d+$/.test(values.port) || Number(values.port) > 65535)) throw Error("port \u5FC5\u987B\u662F 0\u201365535 \u7684\u6574\u6570");
 var delay3 = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -27595,7 +27655,7 @@ var alive = (pid) => {
 };
 async function readJSON(path) {
   try {
-    return JSON.parse(await readFile2(path, "utf8"));
+    return JSON.parse(await readFile3(path, "utf8"));
   } catch (e) {
     if (e.code === "ENOENT") return null;
     throw e;
