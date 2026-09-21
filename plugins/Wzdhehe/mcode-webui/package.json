@@ -1,0 +1,41 @@
+{
+  "name": "mcode-webui",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "v2.0.0 industrializes the v1.x surface with append-only event stream + SHA-256 hash chain, per-request authorize() gate (fail-closed audit), independent anomaly SSE channel, write-ahead intent/outcome audit events, interaction/feedback subsystem split, plugin metadata drift detector, local SBOM + CVE gates, rate limiting, virtual chat list, cross-workspace session search, session export (Markdown / JSON), quota forecast, and token-onboarding modal. Zero npm dependencies; runs on Node 22+.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "node --experimental-test-module-mocks --test test/*.test.js checks/*.check.mjs test/integration/*.test.js test/matrix/*.test.js",
+    "test:unit": "node --test test/*.test.js",
+    "test:mocked": "node --experimental-test-module-mocks --test checks/*.check.mjs",
+    "test:integration": "node --experimental-test-module-mocks --test test/integration/*.test.js test/matrix/*.test.js",
+    "check": "node scripts/check-docs-alignment.mjs",
+    "check:ci": "node scripts/check-docs-alignment.mjs --ci",
+    "sbom": "node scripts/gen-sbom.mjs",
+    "coverage": "c8 --reporter=text --reporter=lcov node --experimental-test-module-mocks --test test/*.test.js checks/*.check.mjs test/integration/*.test.js test/matrix/*.test.js"
+  },
+  "engines": {
+    "node": ">=22.19 <23 || >=24 <27"
+  },
+  "devDependencies": {
+    "c8": "^12.0.0"
+  },
+  "c8": {
+    "include": [
+      "server/**/*.js"
+    ],
+    "exclude": [
+      "server/lib/mcode-acp.js",
+      "server/lib/mcode-exec.js",
+      "server/lib/mcode-rpc.js",
+      "server/acp.mjs"
+    ],
+    "reporter": [
+      "text",
+      "lcov"
+    ]
+  }
+}
