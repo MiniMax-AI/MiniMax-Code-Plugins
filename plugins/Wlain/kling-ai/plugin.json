@@ -1,0 +1,20 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "kling-ai",
+  "version": "0.1.0",
+  "description": "通过 MiniMax Code 中的可灵远程 MCP 创建和查询图片、视频与动作任务。",
+  "author": {
+    "name": "KLING AI Pte Ltd",
+    "url": "https://klingai.com"
+  },
+  "homepage": "https://klingai.com",
+  "repository": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins/tree/main/plugins/Wlain/kling-ai",
+  "license": "MIT",
+  "keywords": [
+    "minimax-code",
+    "kling-ai",
+    "image-generation",
+    "video-generation",
+    "mcp"
+  ]
+}
