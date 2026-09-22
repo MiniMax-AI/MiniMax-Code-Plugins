@@ -7712,218 +7712,12 @@ import { spawn as spawn3 } from "node:child_process";
 
 // src/store.mjs
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, openSync, writeFileSync, closeSync, readFileSync, unlinkSync } from "node:fs";
+import { mkdirSync, openSync, writeFileSync, closeSync, readFileSync, unlinkSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { createHash, randomUUID } from "node:crypto";
-var Store = class {
-  constructor(dir) {
-    mkdirSync(dir, { recursive: true, mode: 448 });
-    this.lock = join(dir, "owner.lock");
-    try {
-      this.fd = openSync(this.lock, "wx", 384);
-    } catch (e) {
-      if (e.code !== "EEXIST") throw e;
-      let pid;
-      try {
-        pid = JSON.parse(readFileSync(this.lock, "utf8")).pid;
-      } catch {
-        throw new Error("\u72B6\u6001\u76EE\u5F55\u9501\u635F\u574F\uFF0C\u8BF7\u4EBA\u5DE5\u68C0\u67E5 owner.lock");
-      }
-      let alive2 = true;
-      try {
-        process.kill(pid, 0);
-      } catch (err) {
-        if (err.code === "ESRCH") alive2 = false;
-      }
-      if (alive2) throw new Error("\u540C\u4E00\u72B6\u6001\u76EE\u5F55\u5DF2\u6709\u8FD0\u884C\u4E2D\u7684\u670D\u52A1\uFF0C\u8BF7\u8FDE\u63A5\u65E2\u6709\u670D\u52A1");
-      unlinkSync(this.lock);
-      this.fd = openSync(this.lock, "wx", 384);
-    }
-    this.owner = randomUUID();
-    this.txDepth = 0;
-    try {
-      writeFileSync(this.fd, JSON.stringify({ pid: process.pid, owner: this.owner }));
-      this.db = new DatabaseSync(join(dir, "workflows.sqlite"));
-      this.db.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT;");
-      this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
-      CREATE TABLE IF NOT EXISTS templates(id TEXT PRIMARY KEY,body TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,body TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,requestId TEXT UNIQUE,requestHash TEXT NOT NULL,body TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS steps(runId TEXT,id TEXT,body TEXT NOT NULL,PRIMARY KEY(runId,id));
-      CREATE TABLE IF NOT EXISTS repair_cache(runId TEXT,id TEXT,body TEXT NOT NULL,PRIMARY KEY(runId,id));
-      CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT,runId TEXT,body TEXT NOT NULL);
-      CREATE INDEX IF NOT EXISTS run_events ON events(runId,seq);
-      CREATE TABLE IF NOT EXISTS integrity_rows(surface TEXT NOT NULL,pos INTEGER NOT NULL,key TEXT NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(surface,pos));`);
-      const unfinished = this.db.prepare("SELECT body FROM runs WHERE json_extract(body,'$.status') IN ('running','queued','stopping','pausing')").all();
-      for (const row of unfinished) {
-        const run = JSON.parse(row.body);
-        run.status = "needs_attention";
-        run.error = "\u4E0A\u6B21\u670D\u52A1\u5F02\u5E38\u7EC8\u6B62\u3002\u5148\u786E\u8BA4\u65E7 Agent \u5DF2\u505C\u6B62\uFF0C\u518D\u6062\u590D\u3002";
-        this.save(run);
-      }
-    } catch (error2) {
-      this.db?.close();
-      this.releaseLock();
-      throw error2;
-    }
-  }
-  transaction(fn) {
-    if (this.txDepth) return fn();
-    this.txDepth = 1;
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const r = fn();
-      this.db.exec("COMMIT");
-      return r;
-    } catch (e) {
-      this.db.exec("ROLLBACK");
-      throw e;
-    } finally {
-      this.txDepth = 0;
-    }
-  }
-  templates() {
-    return this.db.prepare("SELECT body FROM templates ORDER BY rowid DESC").all().map((r) => JSON.parse(r.body));
-  }
-  template(id2) {
-    const r = this.db.prepare("SELECT body FROM templates WHERE id=?").get(id2);
-    return r ? JSON.parse(r.body) : null;
-  }
-  saveTemplate(value) {
-    this.db.prepare("INSERT INTO templates VALUES(?,?)").run(value.id, JSON.stringify(value));
-  }
-  deleteTemplate(id2) {
-    return this.db.prepare("DELETE FROM templates WHERE id=?").run(id2).changes > 0;
-  }
-  setting(key) {
-    const row = this.db.prepare("SELECT body FROM settings WHERE key=?").get(key);
-    return row ? JSON.parse(row.body) : void 0;
-  }
-  saveSetting(key, value) {
-    this.db.prepare("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET body=excluded.body").run(key, JSON.stringify(value));
-  }
-  save(run) {
-    this.db.prepare("INSERT INTO runs VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body").run(run.id, run.requestId, run.requestHash, JSON.stringify(run));
-  }
-  get(id2) {
-    const r = this.db.prepare("SELECT body FROM runs WHERE id=?").get(id2);
-    return r ? JSON.parse(r.body) : null;
-  }
-  byRequest(id2) {
-    const r = this.db.prepare("SELECT body FROM runs WHERE requestId=?").get(id2);
-    return r ? JSON.parse(r.body) : null;
-  }
-  list() {
-    return this.db.prepare("SELECT body FROM runs ORDER BY CASE WHEN json_extract(body,'$.status') IN ('running','queued','stopping','pausing') THEN 0 WHEN json_extract(body,'$.status')='needs_attention' THEN 1 ELSE 2 END, rowid DESC LIMIT 100").all().map((r) => JSON.parse(r.body));
-  }
-  step(runId, id2) {
-    const r = this.db.prepare("SELECT body FROM steps WHERE runId=? AND id=?").get(runId, id2);
-    return r ? JSON.parse(r.body) : null;
-  }
-  steps(runId) {
-    return this.db.prepare("SELECT body FROM steps WHERE runId=? ORDER BY rowid").all(runId).map((r) => JSON.parse(r.body));
-  }
-  // All match keys (contextHash, lineageHash) are stamped on the step body at
-  // creation, so filtering happens in SQL and LIMIT applies after the full match.
-  // Rows without the stamped hashes (legacy runs) never match: cross-run reuse is
-  // an opt-in feature and older steps are not candidates.
-  findCrossRunReuse({ contextHash, requestHash, lineageHash, excludeRunId, limit = 20 }) {
-    return this.db.prepare("SELECT runId,body AS stepBody FROM steps WHERE runId<>? AND json_extract(body,'$.kind')='agent' AND json_extract(body,'$.status')='succeeded' AND json_extract(body,'$.requestHash')=? AND json_extract(body,'$.contextHash')=? AND json_extract(body,'$.lineageHash')=? ORDER BY rowid DESC LIMIT ?").all(excludeRunId, requestHash, contextHash, lineageHash, limit).map((r) => {
-      const step = JSON.parse(r.stepBody);
-      return { runId: r.runId, stepId: step.id, step };
-    });
-  }
-  saveStep(runId, step) {
-    this.db.prepare("INSERT INTO steps VALUES(?,?,?) ON CONFLICT(runId,id) DO UPDATE SET body=excluded.body").run(runId, step.id, JSON.stringify(step));
-  }
-  repairCandidate(runId, id2) {
-    const r = this.db.prepare("SELECT body FROM repair_cache WHERE runId=? AND id=?").get(runId, id2);
-    return r ? JSON.parse(r.body) : null;
-  }
-  saveRepairCandidate(runId, step) {
-    this.transaction(() => {
-      const rowid = Number(this.db.prepare("INSERT INTO repair_cache VALUES(?,?,?)").run(runId, step.id, JSON.stringify(step)).lastInsertRowid);
-      this.chainAdvance("repair", "repair", "SELECT rowid AS pos,runId,id,body FROM repair_cache WHERE rowid>? AND rowid<=? ORDER BY rowid", rowid, (r) => `${r.runId}/${r.id}`);
-    });
-  }
-  event(runId, type, data2 = {}) {
-    const event = { ...data2, type, time: Date.now() };
-    return this.transaction(() => {
-      const seq = Number(this.db.prepare("INSERT INTO events(runId,body) VALUES(?,?)").run(runId, JSON.stringify(event)).lastInsertRowid);
-      this.chainAdvance("event", "events", "SELECT seq AS pos,runId,body FROM events WHERE seq>? AND seq<=? ORDER BY seq", seq, (r) => `${r.runId}:${r.pos}`);
-      return { seq, ...event };
-    });
-  }
-  events(runId, after = 0, limit = 150) {
-    return this.db.prepare("SELECT seq,body FROM events WHERE runId=? AND seq>? ORDER BY seq LIMIT ?").all(runId, after, limit).map((e) => ({ seq: e.seq, ...JSON.parse(e.body) }));
-  }
-  rowHash(prev, kind, key, body) {
-    return createHash("sha256").update(`${prev}:${kind}:${key}:${body}`).digest("hex");
-  }
-  // Bulk adoption of pre-existing rows is an initial-creation behavior only: it
-  // anchors whatever the table held when the chain first appears. Once a head
-  // exists, each write anchors ONLY its own new position — rows injected into the
-  // range between the head and a later write stay unanchored and verification
-  // keeps failing closed on them instead of silently legitimizing them.
-  chainAdvance(kind, surface, sql, newUpto, keyOf) {
-    const tail = this.setting(`integrity_${surface}`);
-    let prev = tail?.head ?? "0".repeat(64);
-    const range = tail ? `SELECT * FROM (${sql}) WHERE pos=${newUpto}` : sql;
-    for (const r of this.db.prepare(range).all(tail?.upto ?? 0, newUpto)) {
-      const k = keyOf(r);
-      prev = this.rowHash(prev, kind, k, r.body);
-      this.db.prepare("INSERT OR REPLACE INTO integrity_rows VALUES(?,?,?,?)").run(surface, r.pos, k, prev);
-    }
-    this.saveSetting(`integrity_${surface}`, { head: prev, upto: newUpto });
-  }
-  integrityHeads() {
-    return { events: this.setting("integrity_events") ?? null, repair: this.setting("integrity_repair") ?? null };
-  }
-  verifyIntegrity() {
-    const genesis = "0".repeat(64);
-    const face = (kind, surface, table, posCol, rowSql, keyOf) => {
-      const skey = `integrity_${surface}`;
-      const rec = this.setting(skey);
-      const total = Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n);
-      if (!rec) return { head: null, upto: 0, verified: null, checked: 0, unchained: total, firstDivergence: null };
-      const rows = this.db.prepare("SELECT pos,key,hash FROM integrity_rows WHERE surface=? ORDER BY pos").all(surface);
-      const unchained = Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${posCol}>?`).get(rec.upto).n);
-      let prev = genesis, firstDivergence = null;
-      for (const r of rows) {
-        const row = this.db.prepare(rowSql).get(r.pos);
-        const key = row ? keyOf(row, r.pos) : null;
-        const actual = row ? this.rowHash(prev, kind, key, row.body) : null;
-        if (!firstDivergence && (!row || key !== r.key || actual !== r.hash)) firstDivergence = { key: r.key, expectedHead: r.hash, actualHead: actual };
-        prev = r.hash;
-      }
-      if (!firstDivergence) {
-        const anchored = new Set(rows.map((r) => r.pos));
-        const gap = this.db.prepare(`SELECT ${posCol} AS __pos, * FROM ${table} WHERE ${posCol}<=? ORDER BY ${posCol}`).all(rec.upto).find((r) => !anchored.has(r.__pos));
-        if (gap) firstDivergence = { key: keyOf(gap, gap.__pos), expectedHead: null, actualHead: null };
-      }
-      const verified = !firstDivergence && prev === rec.head && unchained === 0;
-      return { head: rec.head, upto: rec.upto, verified, checked: rows.length, unchained, firstDivergence };
-    };
-    return {
-      events: face("event", "events", "events", "seq", "SELECT runId,body FROM events WHERE seq=?", (row, pos) => `${row.runId}:${pos}`),
-      repair: face("repair", "repair", "repair_cache", "rowid", "SELECT runId,id,body FROM repair_cache WHERE rowid=?", (row) => `${row.runId}/${row.id}`)
-    };
-  }
-  releaseLock() {
-    closeSync(this.fd);
-    try {
-      if (JSON.parse(readFileSync(this.lock, "utf8")).owner === this.owner) unlinkSync(this.lock);
-    } catch {
-    }
-  }
-  close() {
-    this.db.close();
-    this.releaseLock();
-  }
-};
+import { createHash as createHash2, randomUUID } from "node:crypto";
 
 // src/common.mjs
-import { createHash as createHash2 } from "node:crypto";
+import { createHash } from "node:crypto";
 
 // node_modules/acorn/dist/acorn.mjs
 var astralIdentifierCodes = [509, 0, 227, 0, 150, 4, 294, 9, 1368, 2, 2, 1, 6, 3, 41, 2, 5, 0, 166, 1, 574, 3, 9, 9, 7, 9, 32, 4, 318, 1, 78, 5, 71, 10, 50, 3, 123, 2, 54, 14, 32, 10, 3, 1, 11, 3, 46, 10, 8, 0, 46, 9, 7, 2, 37, 13, 2, 9, 6, 1, 45, 0, 13, 2, 49, 13, 9, 3, 2, 11, 83, 11, 7, 0, 3, 0, 158, 11, 6, 9, 7, 3, 56, 1, 2, 6, 3, 1, 3, 2, 10, 0, 11, 1, 3, 6, 4, 4, 68, 8, 2, 0, 3, 0, 2, 3, 2, 4, 2, 0, 15, 1, 83, 17, 10, 9, 5, 0, 82, 19, 13, 9, 214, 6, 3, 8, 28, 1, 83, 16, 16, 9, 82, 12, 9, 9, 7, 19, 58, 14, 5, 9, 243, 14, 166, 9, 71, 5, 2, 1, 3, 3, 2, 0, 2, 1, 13, 9, 120, 6, 3, 6, 4, 0, 29, 9, 41, 6, 2, 3, 9, 0, 10, 10, 47, 15, 199, 7, 137, 9, 54, 7, 2, 7, 17, 9, 57, 21, 2, 13, 123, 5, 4, 0, 2, 1, 2, 6, 2, 0, 9, 9, 49, 4, 2, 1, 2, 4, 9, 9, 55, 9, 266, 3, 10, 1, 2, 0, 49, 6, 4, 4, 14, 10, 5350, 0, 7, 14, 11465, 27, 2343, 9, 87, 9, 39, 4, 60, 6, 26, 9, 535, 9, 470, 0, 2, 54, 8, 3, 82, 0, 12, 1, 19628, 1, 4178, 9, 519, 45, 3, 22, 543, 4, 4, 5, 9, 7, 3, 6, 31, 3, 149, 2, 1418, 49, 513, 54, 5, 49, 9, 0, 15, 0, 23, 4, 2, 14, 1361, 6, 2, 16, 3, 6, 2, 1, 2, 4, 101, 0, 161, 6, 10, 9, 357, 0, 62, 13, 499, 13, 245, 1, 2, 9, 233, 0, 3, 0, 8, 1, 6, 0, 475, 6, 110, 6, 6, 9, 4759, 9, 787719, 239];
@@ -13623,7 +13417,7 @@ function parse3(input, options) {
 }
 
 // src/common.mjs
-var hash = (value) => createHash2("sha256").update(typeof value === "string" || Buffer.isBuffer(value) ? value : stable(value)).digest("hex");
+var hash = (value) => createHash("sha256").update(typeof value === "string" || Buffer.isBuffer(value) ? value : stable(value)).digest("hex");
 function stable(value) {
   return JSON.stringify(canonical(value));
 }
@@ -13657,6 +13451,414 @@ ${script}
   walk(ast);
   return { valid: true, scriptHash: hash(script), dslVersion: 1 };
 }
+
+// src/store.mjs
+var ROTATE_TOMBSTONE_THRESHOLD = 500;
+var ROTATE_RUNS_BYTES_THRESHOLD = 100 * 1024 * 1024;
+function archiveManifestHash(entries) {
+  return hash(entries);
+}
+var Store = class {
+  constructor(dir) {
+    mkdirSync(dir, { recursive: true, mode: 448 });
+    this.lock = join(dir, "owner.lock");
+    try {
+      this.fd = openSync(this.lock, "wx", 384);
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      let pid;
+      try {
+        pid = JSON.parse(readFileSync(this.lock, "utf8")).pid;
+      } catch {
+        throw new Error("\u72B6\u6001\u76EE\u5F55\u9501\u635F\u574F\uFF0C\u8BF7\u4EBA\u5DE5\u68C0\u67E5 owner.lock");
+      }
+      let alive2 = true;
+      try {
+        process.kill(pid, 0);
+      } catch (err) {
+        if (err.code === "ESRCH") alive2 = false;
+      }
+      if (alive2) throw new Error("\u540C\u4E00\u72B6\u6001\u76EE\u5F55\u5DF2\u6709\u8FD0\u884C\u4E2D\u7684\u670D\u52A1\uFF0C\u8BF7\u8FDE\u63A5\u65E2\u6709\u670D\u52A1");
+      unlinkSync(this.lock);
+      this.fd = openSync(this.lock, "wx", 384);
+    }
+    this.owner = randomUUID();
+    this.txDepth = 0;
+    this.archivePath = join(dir, "archive.db");
+    try {
+      writeFileSync(this.fd, JSON.stringify({ pid: process.pid, owner: this.owner }));
+      this.db = new DatabaseSync(join(dir, "workflows.sqlite"));
+      this.db.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT;");
+      this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+      CREATE TABLE IF NOT EXISTS templates(id TEXT PRIMARY KEY,body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,requestId TEXT UNIQUE,requestHash TEXT NOT NULL,body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS steps(runId TEXT,id TEXT,body TEXT NOT NULL,PRIMARY KEY(runId,id));
+      CREATE TABLE IF NOT EXISTS repair_cache(runId TEXT,id TEXT,body TEXT NOT NULL,PRIMARY KEY(runId,id));
+      CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT,runId TEXT,body TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS run_events ON events(runId,seq);
+      CREATE TABLE IF NOT EXISTS integrity_rows(surface TEXT NOT NULL,pos INTEGER NOT NULL,key TEXT NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(surface,pos));`);
+      const unfinished = this.db.prepare("SELECT body FROM runs WHERE json_extract(body,'$.status') IN ('running','queued','stopping','pausing')").all();
+      for (const row of unfinished) {
+        const run = JSON.parse(row.body);
+        run.status = "needs_attention";
+        run.error = "\u4E0A\u6B21\u670D\u52A1\u5F02\u5E38\u7EC8\u6B62\u3002\u5148\u786E\u8BA4\u65E7 Agent \u5DF2\u505C\u6B62\uFF0C\u518D\u6062\u590D\u3002";
+        this.save(run);
+      }
+    } catch (error2) {
+      this.db?.close();
+      this.releaseLock();
+      throw error2;
+    }
+  }
+  transaction(fn) {
+    if (this.txDepth) return fn();
+    this.txDepth = 1;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const r = fn();
+      this.db.exec("COMMIT");
+      return r;
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    } finally {
+      this.txDepth = 0;
+    }
+  }
+  templates() {
+    return this.db.prepare("SELECT body FROM templates ORDER BY rowid DESC").all().map((r) => JSON.parse(r.body));
+  }
+  template(id2) {
+    const r = this.db.prepare("SELECT body FROM templates WHERE id=?").get(id2);
+    return r ? JSON.parse(r.body) : null;
+  }
+  saveTemplate(value) {
+    this.db.prepare("INSERT INTO templates VALUES(?,?)").run(value.id, JSON.stringify(value));
+  }
+  deleteTemplate(id2) {
+    return this.db.prepare("DELETE FROM templates WHERE id=?").run(id2).changes > 0;
+  }
+  setting(key) {
+    const row = this.db.prepare("SELECT body FROM settings WHERE key=?").get(key);
+    return row ? JSON.parse(row.body) : void 0;
+  }
+  saveSetting(key, value) {
+    this.db.prepare("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET body=excluded.body").run(key, JSON.stringify(value));
+  }
+  save(run) {
+    this.db.prepare("INSERT INTO runs VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body").run(run.id, run.requestId, run.requestHash, JSON.stringify(run));
+  }
+  get(id2) {
+    const r = this.db.prepare("SELECT body FROM runs WHERE id=?").get(id2);
+    return r ? JSON.parse(r.body) : null;
+  }
+  byRequest(id2) {
+    const r = this.db.prepare("SELECT body FROM runs WHERE requestId=?").get(id2);
+    return r ? JSON.parse(r.body) : null;
+  }
+  // Tombstoned runs (deletedAt stamped) never appear in the live list; the
+  // trash listing below is their only index face.
+  list() {
+    return this.db.prepare("SELECT body FROM runs WHERE json_extract(body,'$.deletedAt') IS NULL ORDER BY CASE WHEN json_extract(body,'$.status') IN ('running','queued','stopping','pausing') THEN 0 WHEN json_extract(body,'$.status')='needs_attention' THEN 1 ELSE 2 END, rowid DESC LIMIT 100").all().map((r) => JSON.parse(r.body));
+  }
+  listTrash() {
+    return this.db.prepare("SELECT body FROM runs WHERE json_extract(body,'$.deletedAt') IS NOT NULL ORDER BY json_extract(body,'$.deletedAt') DESC LIMIT 100").all().map((r) => JSON.parse(r.body));
+  }
+  restampTrashPurge(days) {
+    this.transaction(() => {
+      for (const row of this.db.prepare("SELECT id,body FROM runs WHERE json_extract(body,'$.deletedAt') IS NOT NULL").all()) {
+        const run = JSON.parse(row.body);
+        this.db.prepare("UPDATE runs SET body=? WHERE id=?").run(JSON.stringify({ ...run, purgeAfter: run.deletedAt + days * 864e5 }), row.id);
+      }
+    });
+  }
+  tombstoneCount() {
+    return Number(this.db.prepare("SELECT COUNT(*) AS n FROM runs WHERE json_extract(body,'$.deletedAt') IS NOT NULL").get().n);
+  }
+  // Lineage face: every family member of a root still in the live library.
+  // Tombstoned members are included on purpose — trash hides runs from the
+  // live listings but never breaks a family.
+  lineageMembers(root) {
+    return this.db.prepare("SELECT body FROM runs WHERE id=? OR json_extract(body,'$.lineageRoot')=? ORDER BY COALESCE(json_extract(body,'$.rerunSeq'),0),rowid").all(root, root).map((r) => JSON.parse(r.body));
+  }
+  // Family members that exist only in the sidecar archive (rotated away, not
+  // yet restored): latest archive copy per runId, never including runs that
+  // are live again, so a restored member is never listed twice.
+  archivedLineageMembers(root) {
+    if (!existsSync(this.archivePath)) return [];
+    const live = new Set(this.db.prepare("SELECT id FROM runs").all().map((r) => r.id));
+    const latest = /* @__PURE__ */ new Map();
+    for (const row of this.archive().prepare("SELECT a.runId AS runId,a.rotationId AS rotationId,a.body AS body FROM archive_runs a JOIN rotations r ON r.rotationId=a.rotationId WHERE a.runId=? OR json_extract(a.body,'$.lineageRoot')=? ORDER BY r.rotatedAt,a.rotationId").all(root, root))
+      if (!live.has(row.runId)) latest.set(row.runId, { run: JSON.parse(row.body), rotationId: row.rotationId });
+    return [...latest.values()];
+  }
+  // One archived run's latest copy, or null. Read-only; does not create the
+  // archive database just to answer negatively.
+  archivedRun(runId) {
+    if (!existsSync(this.archivePath)) return null;
+    const row = this.archive().prepare("SELECT a.rotationId AS rotationId,a.body AS body FROM archive_runs a JOIN rotations r ON r.rotationId=a.rotationId WHERE a.runId=? ORDER BY r.rotatedAt DESC,a.rotationId DESC LIMIT 1").get(runId);
+    return row ? { run: JSON.parse(row.body), rotationId: row.rotationId } : null;
+  }
+  // First run.started / last run.finished timestamps from the events ledger.
+  // Events never leave the live database (rotation only moves runs/steps), so
+  // archived family members keep resolving through this face.
+  runTimes(runId) {
+    return {
+      startedAt: this.db.prepare("SELECT json_extract(body,'$.time') AS t FROM events WHERE runId=? AND json_extract(body,'$.type')='run.started' ORDER BY seq LIMIT 1").get(runId)?.t ?? null,
+      finishedAt: this.db.prepare("SELECT json_extract(body,'$.time') AS t FROM events WHERE runId=? AND json_extract(body,'$.type')='run.finished' ORDER BY seq DESC LIMIT 1").get(runId)?.t ?? null
+    };
+  }
+  // Size proxy for the runs table: body bytes plus a fixed per-row overhead
+  // allowance (row header, id/request columns). SQLite exposes no exact
+  // per-table page accounting; a proxy is sufficient for a coarse trigger.
+  runsBytes() {
+    return Number(this.db.prepare("SELECT COALESCE(SUM(LENGTH(body)),0)+COUNT(*)*100 AS n FROM runs").get().n);
+  }
+  step(runId, id2) {
+    const r = this.db.prepare("SELECT body FROM steps WHERE runId=? AND id=?").get(runId, id2);
+    return r ? JSON.parse(r.body) : null;
+  }
+  steps(runId) {
+    return this.db.prepare("SELECT body FROM steps WHERE runId=? ORDER BY rowid").all(runId).map((r) => JSON.parse(r.body));
+  }
+  // All match keys (contextHash, lineageHash) are stamped on the step body at
+  // creation, so filtering happens in SQL and LIMIT applies after the full match.
+  // Rows without the stamped hashes (legacy runs) never match: cross-run reuse is
+  // an opt-in feature and older steps are not candidates. Tombstoned source runs
+  // are excluded here too: a trashed run's steps must not resurface as reuse
+  // candidates (ghost data) until the run is restored.
+  findCrossRunReuse({ contextHash, requestHash, lineageHash, excludeRunId, limit = 20 }) {
+    return this.db.prepare("SELECT runId,body AS stepBody FROM steps WHERE runId<>? AND json_extract(body,'$.kind')='agent' AND json_extract(body,'$.status')='succeeded' AND json_extract(body,'$.requestHash')=? AND json_extract(body,'$.contextHash')=? AND json_extract(body,'$.lineageHash')=? AND NOT EXISTS(SELECT 1 FROM runs WHERE runs.id=steps.runId AND json_extract(runs.body,'$.deletedAt') IS NOT NULL) ORDER BY rowid DESC LIMIT ?").all(excludeRunId, requestHash, contextHash, lineageHash, limit).map((r) => {
+      const step = JSON.parse(r.stepBody);
+      return { runId: r.runId, stepId: step.id, step };
+    });
+  }
+  saveStep(runId, step) {
+    this.db.prepare("INSERT INTO steps VALUES(?,?,?) ON CONFLICT(runId,id) DO UPDATE SET body=excluded.body").run(runId, step.id, JSON.stringify(step));
+  }
+  repairCandidate(runId, id2) {
+    const r = this.db.prepare("SELECT body FROM repair_cache WHERE runId=? AND id=?").get(runId, id2);
+    return r ? JSON.parse(r.body) : null;
+  }
+  saveRepairCandidate(runId, step) {
+    this.transaction(() => {
+      const rowid = Number(this.db.prepare("INSERT INTO repair_cache VALUES(?,?,?)").run(runId, step.id, JSON.stringify(step)).lastInsertRowid);
+      this.chainAdvance("repair", "repair", "SELECT rowid AS pos,runId,id,body FROM repair_cache WHERE rowid>? AND rowid<=? ORDER BY rowid", rowid, (r) => `${r.runId}/${r.id}`);
+    });
+  }
+  event(runId, type, data2 = {}) {
+    const event = { ...data2, type, time: Date.now() };
+    return this.transaction(() => {
+      const seq = Number(this.db.prepare("INSERT INTO events(runId,body) VALUES(?,?)").run(runId, JSON.stringify(event)).lastInsertRowid);
+      this.chainAdvance("event", "events", "SELECT seq AS pos,runId,body FROM events WHERE seq>? AND seq<=? ORDER BY seq", seq, (r) => `${r.runId}:${r.pos}`);
+      return { seq, ...event };
+    });
+  }
+  events(runId, after = 0, limit = 150) {
+    return this.db.prepare("SELECT seq,body FROM events WHERE runId=? AND seq>? ORDER BY seq LIMIT ?").all(runId, after, limit).map((e) => ({ seq: e.seq, ...JSON.parse(e.body) }));
+  }
+  rowHash(prev, kind, key, body) {
+    return createHash2("sha256").update(`${prev}:${kind}:${key}:${body}`).digest("hex");
+  }
+  // Bulk adoption of pre-existing rows is an initial-creation behavior only: it
+  // anchors whatever the table held when the chain first appears. Once a head
+  // exists, each write anchors ONLY its own new position — rows injected into the
+  // range between the head and a later write stay unanchored and verification
+  // keeps failing closed on them instead of silently legitimizing them.
+  chainAdvance(kind, surface, sql, newUpto, keyOf) {
+    const tail = this.setting(`integrity_${surface}`);
+    let prev = tail?.head ?? "0".repeat(64);
+    const range = tail ? `SELECT * FROM (${sql}) WHERE pos=${newUpto}` : sql;
+    for (const r of this.db.prepare(range).all(tail?.upto ?? 0, newUpto)) {
+      const k = keyOf(r);
+      prev = this.rowHash(prev, kind, k, r.body);
+      this.db.prepare("INSERT OR REPLACE INTO integrity_rows VALUES(?,?,?,?)").run(surface, r.pos, k, prev);
+    }
+    this.saveSetting(`integrity_${surface}`, { head: prev, upto: newUpto });
+  }
+  integrityHeads() {
+    return { events: this.setting("integrity_events") ?? null, repair: this.setting("integrity_repair") ?? null };
+  }
+  verifyIntegrity() {
+    const genesis = "0".repeat(64);
+    const face = (kind, surface, table, posCol, rowSql, keyOf) => {
+      const skey = `integrity_${surface}`;
+      const rec = this.setting(skey);
+      const total = Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n);
+      if (!rec) return { head: null, upto: 0, verified: null, checked: 0, unchained: total, firstDivergence: null };
+      const rows = this.db.prepare("SELECT pos,key,hash FROM integrity_rows WHERE surface=? ORDER BY pos").all(surface);
+      const unchained = Number(this.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${posCol}>?`).get(rec.upto).n);
+      let prev = genesis, firstDivergence = null;
+      for (const r of rows) {
+        const row = this.db.prepare(rowSql).get(r.pos);
+        const key = row ? keyOf(row, r.pos) : null;
+        const actual = row ? this.rowHash(prev, kind, key, row.body) : null;
+        if (!firstDivergence && (!row || key !== r.key || actual !== r.hash)) firstDivergence = { key: r.key, expectedHead: r.hash, actualHead: actual };
+        prev = r.hash;
+      }
+      if (!firstDivergence) {
+        const anchored = new Set(rows.map((r) => r.pos));
+        const gap = this.db.prepare(`SELECT ${posCol} AS __pos, * FROM ${table} WHERE ${posCol}<=? ORDER BY ${posCol}`).all(rec.upto).find((r) => !anchored.has(r.__pos));
+        if (gap) firstDivergence = { key: keyOf(gap, gap.__pos), expectedHead: null, actualHead: null };
+      }
+      const verified = !firstDivergence && prev === rec.head && unchained === 0;
+      return { head: rec.head, upto: rec.upto, verified, checked: rows.length, unchained, firstDivergence };
+    };
+    return {
+      events: face("event", "events", "events", "seq", "SELECT runId,body FROM events WHERE seq=?", (row, pos) => `${row.runId}:${pos}`),
+      repair: face("repair", "repair", "repair_cache", "rowid", "SELECT runId,id,body FROM repair_cache WHERE rowid=?", (row) => `${row.runId}/${row.id}`),
+      // Archive face: the events/repair ledgers are untouched by rotation
+      // (events never move), so this face only cross-checks the sidecar
+      // archive against the manifest hashes anchored on the events chain.
+      archive: this.verifyArchive()
+    };
+  }
+  // Sidecar archive for rotated tombstones: same data directory, separate
+  // database. runs/steps rows move here verbatim; events NEVER leave the live
+  // database. Each rotation writes its own copies keyed by (rotationId, runId)
+  // rather than a plain runs PK, so a run that is restored, re-deleted and
+  // re-rotated can never rewrite rows an earlier rotation's manifestHash still
+  // covers — every historical manifest stays independently verifiable.
+  archive() {
+    if (this.archiveDb) return this.archiveDb;
+    const db = new DatabaseSync(this.archivePath);
+    db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+     CREATE TABLE IF NOT EXISTS archive_runs(rotationId TEXT NOT NULL,runId TEXT NOT NULL,requestId TEXT NOT NULL,requestHash TEXT NOT NULL,body TEXT NOT NULL,PRIMARY KEY(rotationId,runId));
+     CREATE TABLE IF NOT EXISTS archive_steps(rotationId TEXT NOT NULL,runId TEXT NOT NULL,id TEXT NOT NULL,body TEXT NOT NULL,PRIMARY KEY(rotationId,runId,id));
+     CREATE TABLE IF NOT EXISTS rotations(rotationId TEXT PRIMARY KEY,rotatedAt INTEGER NOT NULL,manifestHash TEXT NOT NULL,runCount INTEGER NOT NULL,bytes INTEGER NOT NULL);`);
+    this.archiveDb = db;
+    return db;
+  }
+  // Rotate every due tombstone (purgeAfter <= now) into the archive and drop
+  // its live runs/steps rows. Ordering is archive-first, live-delete-second: a
+  // crash in between only leaves tombstones in place; the next rotation
+  // supersedes the stale archive copy under a fresh rotationId. The audit
+  // event is appended in the SAME live transaction as the deletes, so the
+  // events chain always reflects exactly what left the library.
+  rotateDue({ now = Date.now() } = {}) {
+    const due = this.db.prepare("SELECT id,requestId,requestHash,body FROM runs WHERE json_extract(body,'$.deletedAt') IS NOT NULL AND json_extract(body,'$.purgeAfter')<=? ORDER BY id").all(now);
+    if (!due.length) return { rotated: false, runCount: 0, runs: [], rotationId: null, manifestHash: null, bytes: 0 };
+    const rotationId = randomUUID(), readSteps = this.db.prepare("SELECT id,body FROM steps WHERE runId=? ORDER BY id");
+    const entries = due.map((r) => ({ run: { id: r.id, requestId: r.requestId, requestHash: r.requestHash, body: r.body }, steps: readSteps.all(r.id) }));
+    const manifestHash = archiveManifestHash(entries);
+    const bytes = entries.reduce((n, e) => n + Buffer.byteLength(e.run.body) + e.steps.reduce((m2, s) => m2 + Buffer.byteLength(s.body), 0), 0);
+    const archive = this.archive();
+    archive.exec("BEGIN IMMEDIATE");
+    try {
+      const insertRun = archive.prepare("INSERT OR REPLACE INTO archive_runs VALUES(?,?,?,?,?)"), insertStep = archive.prepare("INSERT OR REPLACE INTO archive_steps VALUES(?,?,?,?)");
+      for (const entry of entries) {
+        insertRun.run(rotationId, entry.run.id, entry.run.requestId, entry.run.requestHash, entry.run.body);
+        for (const step of entry.steps) insertStep.run(rotationId, entry.run.id, step.id, step.body);
+      }
+      archive.prepare("INSERT INTO rotations VALUES(?,?,?,?,?)").run(rotationId, Date.now(), manifestHash, entries.length, bytes);
+      archive.exec("COMMIT");
+    } catch (e) {
+      archive.exec("ROLLBACK");
+      throw e;
+    }
+    this.transaction(() => {
+      const deleteSteps = this.db.prepare("DELETE FROM steps WHERE runId=?"), deleteRun = this.db.prepare("DELETE FROM runs WHERE id=?");
+      for (const entry of entries) {
+        deleteSteps.run(entry.run.id);
+        deleteRun.run(entry.run.id);
+      }
+      this.event(rotationId, "archive.rotated", { runs: entries.map((entry) => entry.run.id), manifestHash, runCount: entries.length, bytes });
+    });
+    return { rotated: true, runCount: entries.length, runs: entries.map((entry) => entry.run.id), rotationId, manifestHash, bytes };
+  }
+  // Single-rotation verification shared by the whole-archive sweep below and
+  // by restoreArchived()'s fail-closed gate: recomputes THIS rotation's
+  // manifest from the archived rows (same archiveManifestHash face rotation
+  // itself uses — never a second hash implementation) and cross-checks it
+  // against BOTH the rotations record (tamperable sidecar) and the chained
+  // archive.rotated event (the trust anchor). Returns {verified,problems} and
+  // never throws — callers decide what a failed verdict means.
+  verifyRotation(rotationId) {
+    const archive = this.archive();
+    const rotation = archive.prepare("SELECT rotationId,manifestHash,runCount FROM rotations WHERE rotationId=?").get(rotationId);
+    if (!rotation) return { rotationId, runCount: null, verified: false, problems: ["rotations record missing"] };
+    const audit = this.db.prepare("SELECT body FROM events WHERE runId=?").all(rotationId).map((e) => JSON.parse(e.body)).filter((e) => e.type === "archive.rotated");
+    const entries = archive.prepare("SELECT runId AS id,requestId,requestHash,body FROM archive_runs WHERE rotationId=? ORDER BY runId").all(rotationId).map((run) => ({ run, steps: archive.prepare("SELECT id,body FROM archive_steps WHERE rotationId=? AND runId=? ORDER BY id").all(rotationId, run.id) }));
+    const actual = archiveManifestHash(entries), event = audit[0], problems = [];
+    if (audit.length !== 1) problems.push(`expected exactly one archive.rotated event, found ${audit.length}`);
+    if (event && event.manifestHash !== rotation.manifestHash) problems.push("rotations.manifestHash differs from the chained event");
+    if (event && event.manifestHash !== actual) problems.push("archived rows recompute to a different manifest");
+    if (event && event.runCount !== rotation.runCount) problems.push("event runCount differs from the rotations record");
+    if (entries.length !== rotation.runCount) problems.push(`archived ${entries.length} run rows for runCount ${rotation.runCount}`);
+    return { rotationId, runCount: rotation.runCount, verified: problems.length === 0, problems };
+  }
+  // Archive verification recomputes each rotation's manifest from the archived
+  // rows and compares it against BOTH the rotations record (tamperable sidecar)
+  // and the archive.rotated event anchored on the events hash chain (the trust
+  // anchor). Extra cross-checks: every chained rotation must still have its
+  // rotations record, and archive rows may not exist outside known rotations,
+  // so deleting archive history fails closed too.
+  verifyArchive() {
+    if (!existsSync(this.archivePath)) return { exists: false, rotations: 0, checked: 0, verified: true, results: [], divergences: [] };
+    const archive = this.archive();
+    const rotations = archive.prepare("SELECT rotationId FROM rotations ORDER BY rotationId").all();
+    const results = [], divergences = [];
+    for (const { rotationId } of rotations) {
+      const verdict = this.verifyRotation(rotationId);
+      if (!verdict.verified) divergences.push(`rotation ${rotationId}: ${verdict.problems.join("; ")}`);
+      results.push({ rotationId, runCount: verdict.runCount, verified: verdict.verified });
+    }
+    const chained = this.db.prepare("SELECT runId FROM events WHERE json_extract(body,'$.type')='archive.rotated'").all().map((e) => e.runId);
+    for (const runId of chained) if (!rotations.some((rotation) => rotation.rotationId === runId)) divergences.push(`rotation ${runId} is chained but missing from the archive`);
+    for (const orphan of archive.prepare("SELECT DISTINCT rotationId FROM archive_runs WHERE rotationId NOT IN (SELECT rotationId FROM rotations)").all()) divergences.push(`archive rows exist for unknown rotation ${orphan.rotationId}`);
+    return { exists: true, rotations: rotations.length, checked: rotations.length, verified: divergences.length === 0, results, divergences };
+  }
+  // Latest rotation that archived the run, or null when the run was never
+  // archived. Does not create the archive database for a negative answer.
+  archiveOrigin(runId) {
+    if (!existsSync(this.archivePath)) return null;
+    const row = this.archive().prepare("SELECT a.rotationId AS rotationId FROM archive_runs a JOIN rotations r ON r.rotationId=a.rotationId WHERE a.runId=? ORDER BY r.rotatedAt DESC,a.rotationId DESC LIMIT 1").get(runId);
+    return row ? { rotationId: row.rotationId } : null;
+  }
+  // Copy a run's archived runs/steps rows back into the live library (id
+  // idempotent through upserts), clear its tombstone and append one
+  // run.restored {origin:'archive'} audit event — all in one transaction.
+  // The archive keeps its copy: restore is a copy-back, not a move.
+  // Before ANY live write, the rotation this copy was exported under must
+  // re-verify (verifyRotation): a valid-JSON but modified archived run/step
+  // would otherwise re-enter the library as trusted live data even though
+  // verifyArchive() reports the tampering. Refusal is fail-closed: nothing is
+  // written and no run.restored event is appended.
+  restoreArchived(runId, { by = "cli" } = {}) {
+    if (!existsSync(this.archivePath)) return null;
+    const row = this.archive().prepare("SELECT a.rotationId AS rotationId,a.requestId AS requestId,a.requestHash AS requestHash,a.body AS body FROM archive_runs a JOIN rotations r ON r.rotationId=a.rotationId WHERE a.runId=? ORDER BY r.rotatedAt DESC,a.rotationId DESC LIMIT 1").get(runId);
+    if (!row) return null;
+    const verdict = this.verifyRotation(row.rotationId);
+    if (!verdict.verified) throw new Error(`\u8F6E\u8F6C ${row.rotationId} \u6821\u9A8C\u5931\u8D25\uFF0C\u62D2\u7EDD\u4ECE\u5F52\u6863\u6062\u590D ${runId}\uFF1A${verdict.problems.join("\uFF1B")}`);
+    const conflict = this.db.prepare("SELECT id FROM runs WHERE requestId=? AND id<>?").get(row.requestId, runId);
+    if (conflict) throw new Error(`requestId \u5DF2\u88AB\u65B0\u7684\u5DE5\u4F5C\u6D41\uFF08${conflict.id}\uFF09\u5360\u7528\uFF0C\u65E0\u6CD5\u4ECE\u5F52\u6863\u6062\u590D ${runId}\uFF1B\u8BF7\u5148\u5904\u7406\u5360\u7528\u7684\u8FD0\u884C`);
+    const run = JSON.parse(row.body);
+    delete run.deletedAt;
+    delete run.deletedBy;
+    delete run.purgeAfter;
+    const steps = this.archive().prepare("SELECT id,body FROM archive_steps WHERE rotationId=? AND runId=? ORDER BY id").all(row.rotationId, runId);
+    this.transaction(() => {
+      this.save(run);
+      const insert = this.db.prepare("INSERT INTO steps VALUES(?,?,?) ON CONFLICT(runId,id) DO UPDATE SET body=excluded.body");
+      for (const step of steps) insert.run(runId, step.id, step.body);
+      this.event(runId, "run.restored", { by, origin: "archive", rotationId: row.rotationId });
+    });
+    return { id: runId, rotationId: row.rotationId, steps: steps.length };
+  }
+  releaseLock() {
+    closeSync(this.fd);
+    try {
+      if (JSON.parse(readFileSync(this.lock, "utf8")).owner === this.owner) unlinkSync(this.lock);
+    } catch {
+    }
+  }
+  close() {
+    this.archiveDb?.close();
+    this.db.close();
+    this.releaseLock();
+  }
+};
 
 // src/limits.mjs
 var DEFAULT_LIMITS = Object.freeze({ maxSteps: 120, stepTimeoutMs: 30 * 6e4, runTimeoutMs: 2 * 60 * 6e4 });
@@ -14256,6 +14458,8 @@ ${JSON.stringify(spec.input ?? {})}`);
 }
 
 // src/engine.mjs
+var DELETABLE = /* @__PURE__ */ new Set(["succeeded", "failed", "completed_with_gaps", "cancelled", "interrupted"]);
+var TRASH_SOURCES = /* @__PURE__ */ new Set(["studio", "cli", "mcp"]);
 var Engine = class extends EventEmitter {
   constructor(store, options) {
     super();
@@ -14298,7 +14502,7 @@ var Engine = class extends EventEmitter {
     }
     return out;
   }
-  async start(request, repair = null, candidates = []) {
+  async start(request, repair = null, candidates = [], lineage = null) {
     check(!this.closing, "\u670D\u52A1\u6B63\u5728\u5173\u95ED");
     validateScript(request.script);
     boundedJSON(request.input ?? {});
@@ -14316,6 +14520,7 @@ var Engine = class extends EventEmitter {
     const requestHash = hash(repair ? { ...definition, repair } : definition);
     const existing = this.store.byRequest(request.requestId);
     if (existing) {
+      check(!existing.deletedAt, "requestId \u5DF2\u7528\u4E8E\u5DF2\u5220\u9664\u7684\u5DE5\u4F5C\u6D41\uFF1A\u8BF7\u5148\u5728\u56DE\u6536\u7AD9\u6062\u590D\u5B83\uFF0C\u6216\u66F4\u6362 requestId");
       const legacyDefinition = { ...definition };
       for (const key of Object.keys(DEFAULT_LIMITS)) delete legacyDefinition[key];
       check(existing.requestHash === requestHash || existing.maxSteps === void 0 && Object.keys(DEFAULT_LIMITS).every((k) => request[k] === void 0) && existing.requestHash === hash(legacyDefinition), "requestId \u5DF2\u7528\u4E8E\u4E0D\u540C\u53C2\u6570");
@@ -14324,11 +14529,11 @@ var Engine = class extends EventEmitter {
     const fingerprints = {};
     const topology = assertValidDependencies(previewTopology(request.script, request.input ?? {}));
     check(!this.closing, "\u670D\u52A1\u6B63\u5728\u5173\u95ED");
-    const run = { ...repair ? { repair } : {}, id: randomUUID2(), requestId: request.requestId, requestHash, ...definition, scriptHash: hash(request.script), fingerprints, workspace: this.options.workspace, revision: 1, topology, status: "pending_review", createdAt: Date.now(), updatedAt: Date.now(), attempts: 0, phases: [], result: null, error: null };
+    const run = { ...repair ? { repair } : {}, ...lineage ? { rerunOf: lineage.rerunOf, lineageRoot: lineage.lineageRoot, rerunSeq: lineage.rerunSeq } : {}, id: randomUUID2(), requestId: request.requestId, requestHash, ...definition, scriptHash: hash(request.script), fingerprints, workspace: this.options.workspace, revision: 1, topology, status: "pending_review", createdAt: Date.now(), updatedAt: Date.now(), attempts: 0, phases: [], result: null, error: null };
     this.store.transaction(() => {
       this.store.save(run);
       for (const step of candidates) this.store.saveRepairCandidate(run.id, step);
-      this.store.event(run.id, "run.created", { name: run.name });
+      this.store.event(run.id, "run.created", { name: run.name, ...lineage ? { rerunOf: lineage.rerunOf, lineageRoot: lineage.lineageRoot, rerunSeq: lineage.rerunSeq } : {} });
     });
     return this.snapshot(run.id);
   }
@@ -14336,6 +14541,7 @@ var Engine = class extends EventEmitter {
     check(!this.closing, "\u670D\u52A1\u6B63\u5728\u5173\u95ED");
     const source = this.store.get(id2);
     check(source, "\u5DE5\u4F5C\u6D41\u4E0D\u5B58\u5728");
+    check(!source.deletedAt, "\u5DE5\u4F5C\u6D41\u5DF2\u5220\u9664\uFF0C\u8BF7\u5148\u5728\u56DE\u6536\u7AD9\u6062\u590D\u540E\u518D\u4FEE\u590D");
     check(!this.active.has(id2) && ["failed", "paused", "interrupted", "cancelled", "completed_with_gaps", "succeeded"].includes(source.status), "\u8BF7\u5148\u505C\u6B62\u8FD0\u884C\uFF1B\u5F02\u5E38\u9000\u51FA\u987B\u5148\u786E\u8BA4\u65E7 Agent \u5DF2\u505C\u6B62\u5E76\u6062\u590D\u6216\u6682\u505C");
     check(source.workspace === this.options.workspace, "\u5DE5\u4F5C\u533A\u4E0D\u5339\u914D");
     check(request.sourceUpdatedAt === source.updatedAt, "\u6E90\u8FD0\u884C\u5DF2\u66F4\u65B0\uFF0C\u8BF7\u5237\u65B0\u540E\u518D\u4FEE\u590D");
@@ -14427,6 +14633,7 @@ var Engine = class extends EventEmitter {
   snapshot(id2) {
     const run = this.store.get(id2);
     check(run, "\u5DE5\u4F5C\u6D41\u4E0D\u5B58\u5728");
+    check(!run.deletedAt, "\u5DE5\u4F5C\u6D41\u5DF2\u5220\u9664\uFF0C\u53EF\u5728\u56DE\u6536\u7AD9\u6062\u590D\u540E\u67E5\u770B");
     const limits = runLimits(run), topology = run.topology?.version === 3 ? run.topology : previewTopology(run.script, run.input);
     return { ...run, topology, ...historicalFailure(run, topology), ...limits, legacyLimits: run.maxSteps === void 0, scheduler: this.schedulerStatus(), steps: this.store.steps(id2).map((stored) => {
       const s = stored.kind === "agent" ? { ...stored, maxSteps: stored.maxSteps ?? LEGACY_LIMITS.maxSteps, timeoutMs: stored.timeoutMs ?? LEGACY_LIMITS.stepTimeoutMs } : stored;
@@ -14475,6 +14682,149 @@ var Engine = class extends EventEmitter {
     this.globalConcurrency = globalConcurrency;
     this.drain();
     return this.schedulerStatus();
+  }
+  // Trash retention in days. Default 30; 0 disables the expiry clock entirely
+  // (tombstones then leave only through explicit manual rotation). A corrupted
+  // stored value falls back to the default instead of poisoning purge stamps.
+  trashRetentionDays() {
+    const value = this.store.setting("trashRetentionDays");
+    return Number.isInteger(value) && value >= 0 && value <= 3650 ? value : 30;
+  }
+  configureTrash({ trashRetentionDays }) {
+    check(!this.closing, "\u670D\u52A1\u6B63\u5728\u5173\u95ED");
+    check(Number.isInteger(trashRetentionDays) && trashRetentionDays >= 0 && trashRetentionDays <= 3650, "\u56DE\u6536\u7AD9\u4FDD\u7559\u671F\u987B\u4E3A 0\u20133650 \u7684\u6574\u6570\u5929\uFF080 \u8868\u793A\u4EC5\u624B\u52A8\u8F6E\u8F6C\uFF09");
+    this.store.saveSetting("trashRetentionDays", trashRetentionDays);
+    this.store.restampTrashPurge(trashRetentionDays);
+    return { trashRetentionDays };
+  }
+  // Tombstone soft delete. Steps, events, result and the integrity ledger all
+  // stay untouched — only the run body gains deletedAt/deletedBy/purgeAfter and
+  // one append-only run.deleted audit event. Repeat deletes are idempotent and
+  // never append a second event.
+  async deleteRun(id2, { by = "studio" } = {}) {
+    check(!this.closing, "\u670D\u52A1\u6B63\u5728\u5173\u95ED");
+    check(TRASH_SOURCES.has(by), "\u65E0\u6548\u7684\u5220\u9664\u6765\u6E90");
+    const run = this.store.get(id2);
+    if (!run) {
+      const archived = this.store.archiveOrigin(id2);
+      check(archived, "\u5DE5\u4F5C\u6D41\u4E0D\u5B58\u5728");
+      return { id: id2, deleted: true, alreadyDeleted: true, archived: true, rotationId: archived.rotationId };
+    }
+    if (run.deletedAt) return { id: id2, deleted: true, alreadyDeleted: true, deletedAt: run.deletedAt, deletedBy: run.deletedBy, purgeAfter: run.purgeAfter };
+    check(!this.active.has(id2), "\u5DE5\u4F5C\u6D41\u4ECD\u5728\u8FD0\u884C\uFF0C\u8BF7\u5148\u6682\u505C\u6216\u53D6\u6D88\u540E\u518D\u5220\u9664");
+    check(DELETABLE.has(run.status), "\u4EC5\u5DF2\u5B8C\u6210\u7684\u5DE5\u4F5C\u6D41\u53EF\u5220\u9664\uFF08\u8FD0\u884C\u4E2D\u6216\u5F85\u5BA1\u6838\u4E0D\u53EF\u5220\u9664\uFF09");
+    const days = this.trashRetentionDays();
+    run.deletedAt = Date.now();
+    run.deletedBy = by;
+    run.purgeAfter = run.deletedAt + days * 864e5;
+    this.save(run);
+    this.emitEvent(id2, "run.deleted", { by, purgeAfter: run.purgeAfter });
+    return { id: id2, deleted: true, alreadyDeleted: false, deletedAt: run.deletedAt, purgeAfter: run.purgeAfter };
+  }
+  // Restore clears the tombstone and appends run.restored. Everything else was
+  // never removed, so the run reappears byte-identical on every query face.
+  async restoreRun(id2, { by = "studio" } = {}) {
+    check(!this.closing, "\u670D\u52A1\u6B63\u5728\u5173\u95ED");
+    check(TRASH_SOURCES.has(by), "\u65E0\u6548\u7684\u6062\u590D\u6765\u6E90");
+    const run = this.store.get(id2);
+    if (run) {
+      check(run.deletedAt, "\u5DE5\u4F5C\u6D41\u672A\u5220\u9664\uFF0C\u65E0\u9700\u6062\u590D");
+      delete run.deletedAt;
+      delete run.deletedBy;
+      delete run.purgeAfter;
+      this.save(run);
+      this.emitEvent(id2, "run.restored", { by, origin: "trash" });
+      return this.snapshot(id2);
+    }
+    const archived = this.store.restoreArchived(id2, { by });
+    check(archived, "\u5DE5\u4F5C\u6D41\u4E0D\u5B58\u5728\u6216\u672A\u5F52\u6863");
+    return this.snapshot(id2);
+  }
+  // Rerun: start a NEW pending_review run from the source's script+input. The
+  // source is never modified — the child only carries rerunOf/lineageRoot/
+  // rerunSeq so the family stays queryable and comparable. The synthesized
+  // requestId is `<root>#rerun-<n>` (n = highest existing seq + 1, tombstoned
+  // AND archived members counted so a seq is never reused); a collision with
+  // an already-claimed requestId retries with a numeric suffix.
+  async rerun(id2, { input, reuseAcrossRuns, name } = {}) {
+    check(!this.closing, "\u670D\u52A1\u6B63\u5728\u5173\u95ED");
+    check(input === void 0 || input && typeof input === "object" && !Array.isArray(input), "input \u5FC5\u987B\u4E3A JSON object");
+    check(reuseAcrossRuns === void 0 || typeof reuseAcrossRuns === "boolean", "reuseAcrossRuns \u5FC5\u987B\u4E3A\u5E03\u5C14");
+    check(name === void 0 || typeof name === "string" && name.trim().length > 0 && name.length <= 120, "\u540D\u79F0\u987B\u4E3A 1\u2013120 \u5B57\u7B26");
+    const source = this.store.get(id2);
+    if (!source) {
+      const archived2 = this.store.archivedRun(id2);
+      check(archived2, "\u5DE5\u4F5C\u6D41\u4E0D\u5B58\u5728");
+      check(false, "\u5DE5\u4F5C\u6D41\u5DF2\u8F6E\u8F6C\u5F52\u6863\uFF0C\u8BF7\u5148\u4ECE\u5F52\u6863\u6062\u590D\u540E\u518D\u590D\u8DD1");
+    }
+    check(!source.deletedAt, "\u6E90\u5DE5\u4F5C\u6D41\u5DF2\u5220\u9664\uFF0C\u8BF7\u5148\u5728\u56DE\u6536\u7AD9\u6062\u590D\u540E\u518D\u590D\u8DD1");
+    check(source.workspace === this.options.workspace, "\u5DE5\u4F5C\u533A\u4E0D\u5339\u914D");
+    const rootId = source.lineageRoot ?? source.id;
+    const live = this.store.lineageMembers(rootId), archived = this.store.archivedLineageMembers(rootId);
+    const seq = Math.max(0, ...live.map((m2) => m2.rerunSeq ?? 0), ...archived.map(({ run }) => run.rerunSeq ?? 0)) + 1;
+    const root = live.find((m2) => m2.id === rootId)?.requestId ?? archived.find(({ run }) => run.id === rootId)?.run.requestId ?? source.requestId;
+    const suffix = `#rerun-${seq}`;
+    const base = (root.length + suffix.length <= 150 ? root : root.slice(0, 150 - suffix.length)) + suffix;
+    let requestId = base;
+    for (let attempt = 2; this.store.byRequest(requestId); attempt++) requestId = `${base}-${attempt}`.slice(0, 150);
+    return this.start({ ...templateDefinition(source), ...input !== void 0 ? { input } : {}, ...name !== void 0 ? { name } : {}, ...reuseAcrossRuns === void 0 ? {} : { reuseAcrossRuns }, requestId }, null, [], { rerunOf: source.id, lineageRoot: rootId, rerunSeq: seq });
+  }
+  // Family face: the lineage root plus every member (live, tombstoned and
+  // archived), ordered by rerunSeq. Deleting or rotating a member never removes
+  // it from the family — it is only annotated. Resolvable from any member id,
+  // including tombstoned and archived ones. `results` adds each member's full
+  // result for the read-only compare face (summaries otherwise).
+  lineage(id2, { results = false } = {}) {
+    const liveHit = this.store.get(id2);
+    let rootId;
+    if (liveHit) rootId = liveHit.lineageRoot ?? liveHit.id;
+    else {
+      const archived = this.store.archivedRun(id2);
+      check(archived, "\u5DE5\u4F5C\u6D41\u4E0D\u5B58\u5728");
+      rootId = archived.run.lineageRoot ?? archived.run.id;
+    }
+    const entry = (run, rotationId) => {
+      const times = this.store.runTimes(run.id);
+      return {
+        id: run.id,
+        requestId: run.requestId,
+        name: run.name,
+        rerunOf: run.rerunOf ?? null,
+        rerunSeq: run.rerunSeq ?? 0,
+        status: run.status,
+        executor: run.executor,
+        createdAt: run.createdAt,
+        updatedAt: run.updatedAt,
+        startedAt: times.startedAt,
+        finishedAt: times.finishedAt,
+        durationMs: times.startedAt != null && times.finishedAt != null ? times.finishedAt - times.startedAt : null,
+        resultPreview: run.result == null ? null : String(typeof run.result === "string" ? run.result : JSON.stringify(run.result)).slice(0, 200),
+        ...results ? { result: run.result ?? null } : {},
+        deleted: run.deletedAt ? { deletedAt: run.deletedAt, deletedBy: run.deletedBy, purgeAfter: run.purgeAfter } : null,
+        archived: rotationId ? { rotationId } : null
+      };
+    };
+    const members2 = [...this.store.lineageMembers(rootId).map((run) => entry(run, null)), ...this.store.archivedLineageMembers(rootId).map(({ run, rotationId }) => entry(run, rotationId))];
+    members2.sort((a, b2) => a.rerunSeq - b2.rerunSeq || (a.createdAt ?? 0) - (b2.createdAt ?? 0) || (a.id < b2.id ? -1 : 1));
+    return { lineageRoot: rootId, members: members2 };
+  }
+  // Manual rotation face: rotate due tombstones now, optionally returning the
+  // archive and integrity verdicts alongside the rotation summary.
+  rotateArchive({ verify = false } = {}) {
+    check(!this.closing, "\u670D\u52A1\u6B63\u5728\u5173\u95ED");
+    const result = this.store.rotateDue({ now: Date.now() });
+    return verify ? { ...result, archive: this.store.verifyArchive(), integrity: this.store.verifyIntegrity() } : result;
+  }
+  // Startup compaction: when trash volume or runs-table size crosses the
+  // documented thresholds, expired tombstones are rotated into archive.db
+  // before the dashboard starts serving. trashRetentionDays=0 disables the
+  // expiry clock entirely (manual rotation only) and with it this auto path.
+  autoRotateAtStartup() {
+    const days = this.trashRetentionDays();
+    if (days <= 0) return { autoRotated: false, reason: "manual-only", tombstones: this.store.tombstoneCount(), bytes: this.store.runsBytes() };
+    const tombstones = this.store.tombstoneCount(), bytes = this.store.runsBytes();
+    if (tombstones <= ROTATE_TOMBSTONE_THRESHOLD && bytes <= ROTATE_RUNS_BYTES_THRESHOLD) return { autoRotated: false, tombstones, bytes };
+    return { ...this.store.rotateDue({ now: Date.now() }), autoRotated: true, tombstones, bytes };
   }
   drain() {
     while (this.slots < this.globalConcurrency) {
@@ -14819,6 +15169,7 @@ var Engine = class extends EventEmitter {
     check(!this.closing, "\u670D\u52A1\u6B63\u5728\u5173\u95ED");
     const run = this.store.get(id2);
     check(run, "\u5DE5\u4F5C\u6D41\u4E0D\u5B58\u5728");
+    check(!run.deletedAt, "\u5DE5\u4F5C\u6D41\u5DF2\u5220\u9664\uFF0C\u8BF7\u5148\u5728\u56DE\u6536\u7AD9\u6062\u590D");
     check(!this.active.has(id2), "\u5DE5\u4F5C\u6D41\u4ECD\u5728\u8FD0\u884C");
     check(run.workspace === this.options.workspace, "\u5DE5\u4F5C\u533A\u5DF2\u6539\u53D8\uFF0C\u8BF7\u521B\u5EFA\u65B0\u5DE5\u4F5C\u6D41");
     check(!run.revision || run.approvedRevision === run.revision, "\u672A\u5BA1\u6838\u5DE5\u4F5C\u6D41\u4E0D\u80FD\u6062\u590D\uFF0C\u8BF7\u521B\u5EFA\u65B0\u8349\u7A3F");
@@ -15328,6 +15679,12 @@ Object.assign(messages.zh, { "templates": "\u6A21\u677F\u5E93", "saveTemplate": 
 Object.assign(messages.en, { "templates": "Templates", "saveTemplate": "Save as template", "latestProgress": "Latest progress", "taskBrief": "Task brief", "objective": "Objective", "inputDescription": "Input description", "deliverables": "Expected deliverables", "deliverablesHelp": "One per line, up to 12 items of 300 characters each.", "downloadHTML": "Download HTML report", "downloadMD": "Download Markdown report", "reportExportHelp": "Export saved results with run status, node outputs, and failures. Execution does not prove factual accuracy.", "templatesHelp": "Local templates include the script, current input, brief, and budgets, but no run results. Using a template opens an editable form; saving still requires review.", "templateName": "Template name", "saveCurrentTemplate": "Save current workflow as template", "useTemplate": "Use template", "deleteTemplate": "Delete", "emptyTemplates": "No templates yet. Open a workflow to save one.", "templateSaved": "Template saved", "deleteTemplateConfirm": "Delete this local template? Run history is unaffected.", "exportUnavailable": "Reports can be downloaded after completion or pause.", "demoReportNotice": "Demo results: no model was called. These are not real task findings.", "reportCoverage": "{done}/{total} agents succeeded; failed or incomplete: {failed}.", "reportResult": "Result", "reportFailures": "Failed or incomplete nodes", "defaultObjective": "Review material from several perspectives, verify each independently, and synthesize findings.", "defaultInputDescription": "Provide the code or material to review in the JSON material field.", "defaultDeliverables": "Review and verification results\nA synthesis report with coverage gaps" });
 Object.assign(messages.zh, { "reviewCompact": "\u7B49\u5F85\u5BA1\u6838", "reviewCompactHelp": "\u68C0\u67E5\u4E0B\u65B9\u6D41\u7A0B\uFF0C\u786E\u8BA4\u540E\u5F00\u59CB\u3002", "reviewDetails": "\u4EFB\u52A1\u8BE6\u60C5\u4E0E\u6267\u884C\u8BBE\u7F6E", "reviewBudgets": "\u5E76\u53D1 {concurrency} \xB7 \u6700\u591A {calls} \u6B21\u8C03\u7528 \xB7 \u6BCF\u8282\u70B9 {steps} \u6B65 / {minutes} \u5206\u949F", "status.awaiting": "\u5C1A\u672A\u5F00\u59CB", "status.blocked": "\u4F9D\u8D56\u53D7\u963B", "status.not_run": "\u672A\u6267\u884C", "awaitingHelp": "\u8BE5\u8282\u70B9\u5C1A\u672A\u521B\u5EFA\u6267\u884C\u4EFB\u52A1\u3002\u542F\u52A8\u540E\u4F1A\u5728\u8FD9\u91CC\u66F4\u65B0\u72B6\u6001\u3002", "blockedHelp": "\u5DF2\u58F0\u660E\u7684\u4E0A\u6E38\u8282\u70B9\u672A\u6210\u529F\uFF0C\u5F53\u524D\u8282\u70B9\u5C1A\u672A\u6267\u884C\u3002", "notRunHelp": "\u672C\u6B21\u8FD0\u884C\u5DF2\u7ECF\u7ED3\u675F\uFF0C\u672A\u89E6\u53D1\u8FD9\u4E2A\u8BA1\u5212\u8282\u70B9\u3002", "dynamicHelp": "\u8282\u70B9\u6570\u91CF\u7531\u8FD0\u884C\u7ED3\u679C\u51B3\u5B9A\uFF1B\u5DF2\u521B\u5EFA\u7684\u8282\u70B9\u4F1A\u5728\u6B64\u5206\u7EC4\u4E2D\u5C55\u5F00\u3002" });
 Object.assign(messages.en, { "reviewCompact": "Ready for review", "reviewCompactHelp": "Check the flow below, then start.", "reviewDetails": "Task details & execution settings", "reviewBudgets": "Concurrency {concurrency} \xB7 Up to {calls} calls \xB7 {steps} steps / {minutes} min per agent", "status.awaiting": "Not started", "status.blocked": "Dependency blocked", "status.not_run": "Not executed", "awaitingHelp": "This planned node has not been dispatched. Its status will update here when it starts.", "blockedHelp": "A declared upstream node did not succeed; this node has not executed.", "notRunHelp": "This run ended without triggering this planned node.", "dynamicHelp": "The number of nodes depends on runtime results. Created nodes expand within this group." });
+Object.assign(messages.zh, { "trash": "\u56DE\u6536\u7AD9", "trashHelp": "\u5220\u9664\u7684\u5DE5\u4F5C\u6D41\u5148\u8FDB\u5165\u56DE\u6536\u7AD9\uFF1A\u4E8B\u4EF6\u3001\u8282\u70B9\u4E0E\u7ED3\u679C\u5168\u90E8\u4FDD\u7559\uFF0C\u53EF\u968F\u65F6\u6062\u590D\u3002\u5230\u671F\u540E\u7531\u5F52\u6863\u8F6E\u8F6C\u56DE\u6536\u5B58\u50A8\uFF1B\u5BA1\u8BA1\u4E8B\u4EF6\u6C38\u4E0D\u5220\u9664\u3002", "trashEmpty": "\u56DE\u6536\u7AD9\u4E3A\u7A7A\u3002", "trashRestore": "\u6062\u590D", "trashRemaining": "\u4FDD\u7559\u5269\u4F59 {days} \u5929", "trashExpired": "\u5DF2\u5230\u671F\uFF0C\u7B49\u5F85\u5F52\u6863\u8F6E\u8F6C", "trashDeleted": "\u5220\u9664\u4E8E {date}", "trashRetention": "\u56DE\u6536\u7AD9\u4FDD\u7559\u671F\uFF08\u5929\uFF09", "trashRetentionHelp": "\u9ED8\u8BA4 30 \u5929\uFF1B0 \u8868\u793A\u4E0D\u5230\u671F\uFF0C\u4EC5\u624B\u52A8\u8F6E\u8F6C\u5F52\u6863\u3002\u4FEE\u6539\u4F1A\u540C\u6B65\u66F4\u65B0\u56DE\u6536\u7AD9\u4E2D\u5DF2\u6709\u6761\u76EE\u7684\u5230\u671F\u65F6\u95F4\u3002", "event.run.deleted": "\u5DF2\u5220\u9664\u5230\u56DE\u6536\u7AD9", "event.run.restored": "\u5DF2\u6062\u590D" });
+Object.assign(messages.en, { "trash": "Trash", "trashHelp": "Deleted workflows move to the trash first: events, nodes, and results are all kept and restorable at any time. Expired entries are rotated into the local archive to reclaim storage; audit events are never deleted.", "trashEmpty": "Trash is empty.", "trashRestore": "Restore", "trashRemaining": "{days} days left", "trashExpired": "Expired; waiting for archive rotation", "trashDeleted": "Deleted {date}", "trashRetention": "Trash retention (days)", "trashRetentionHelp": "Default 30 days; 0 disables expiry, leaving only manual archive rotation. Changes restamp entries already in the trash.", "event.run.deleted": "Moved to trash", "event.run.restored": "Restored" });
+Object.assign(messages.zh, { "lineage": "\u590D\u8DD1\u8C31\u7CFB", "lineageCount": "{count} \u6B21\u8FD0\u884C", "lineageRootRun": "\u539F\u59CB\u8FD0\u884C", "lineageRerun": "\u590D\u8DD1 \u7B2C {seq} \u6B21", "lineageOpen": "\u6253\u5F00", "lineageMemberDeleted": "\u5DF2\u5220\u9664\uFF08\u56DE\u6536\u7AD9\uFF09", "lineageMemberArchived": "\u5DF2\u5F52\u6863", "lineageCompareHint": "\u540C\u8C31\u7CFB\u5386\u6B21\u8FD0\u884C", "lineageCompare": "\u5BF9\u6BD4\u7ED3\u679C", "lineageCompareLeft": "\u5BF9\u6BD4\u5DE6\u4FA7\u8FD0\u884C", "lineageCompareRight": "\u5BF9\u6BD4\u53F3\u4FA7\u8FD0\u884C", "lineageVersus": "\u5BF9\u6BD4", "lineageNoResult": "\u6682\u65E0\u7ED3\u679C" });
+Object.assign(messages.zh, { "event.archive.rotated": "\u56DE\u6536\u7AD9\u5F52\u6863\u8F6E\u8F6C" });
+Object.assign(messages.en, { "lineage": "Rerun lineage", "lineageCount": "{count} runs", "lineageRootRun": "Original run", "lineageRerun": "Rerun #{seq}", "lineageOpen": "Open", "lineageMemberDeleted": "Deleted (in trash)", "lineageMemberArchived": "Archived", "lineageCompareHint": "Every rerun of this workflow", "lineageCompare": "Compare results", "lineageCompareLeft": "Left run to compare", "lineageCompareRight": "Right run to compare", "lineageVersus": "vs", "lineageNoResult": "No result yet" });
+Object.assign(messages.en, { "event.archive.rotated": "Archive rotation" });
 function translate(language, key, vars = {}) {
   if (language === "en" && vars.count === 1 && ["tasks", "eventsCount"].includes(key)) return key === "tasks" ? "1 task" : "1 event";
   return (messages[language]?.[key] ?? messages.en[key] ?? key).replace(/\{(\w+)\}/g, (_2, name) => String(vars[name] ?? `{${name}}`));
@@ -26560,6 +26917,9 @@ var TOOLS = [
   { name: "workflow_cancel", description: "\u53D6\u6D88\u672C\u63D2\u4EF6\u5DE5\u4F5C\u6D41\uFF0C\u7B49\u5F85\u5728\u9014 exec \u9000\u51FA\uFF1B\u4E0D\u53D6\u6D88\u5176\u4ED6 MCode \u4F1A\u8BDD\u3002", inputSchema: obj(id, ["runId"]) },
   { name: "workflow_pause", description: "\u505C\u6B62\u6D3E\u53D1\u5E76\u4E2D\u65AD\u5728\u9014\u8C03\u7528\uFF0C\u4FDD\u7559\u5DF2\u5B8C\u6210\u8282\u70B9\uFF0C\u53EF\u6062\u590D\u3002", inputSchema: obj(id, ["runId"]) },
   { name: "workflow_resume", description: "\u539F\u811A\u672C\u4E0E\u539F\u8F93\u5165\u6062\u590D\uFF0C\u590D\u7528\u5DF2\u6210\u529F\u8282\u70B9\u3002\u53EF\u8C03\u6574 maxSteps/stepTimeoutMs/runTimeoutMs/maxCalls \u540E\u91CD\u8BD5\uFF0C\u6210\u529F\u8282\u70B9\u590D\u7528\uFF0C\u5931\u8D25\u8282\u70B9\u4ECE\u5934\u6267\u884C\u3002\u5F02\u5E38\u9000\u51FA\u9700\u8981\u7528\u6237\u5148\u786E\u8BA4\u65E7 Agent \u5DF2\u505C\u6B62\u3002", inputSchema: obj({ ...id, confirmStopped: { type: "boolean" }, ...LIMIT_SCHEMAS, maxCalls: { type: "integer", minimum: 1, maximum: 100 } }, ["runId"]) },
+  { name: "workflow_delete", description: "\u5220\u9664\u5DF2\u5B8C\u6210\u7684\u5DE5\u4F5C\u6D41\u5230\u56DE\u6536\u7AD9\uFF08\u5893\u7891\u8F6F\u5220\uFF09\uFF1A\u4E8B\u4EF6\u3001\u8282\u70B9\u4E0E\u7ED3\u679C\u5168\u90E8\u4FDD\u7559\uFF0C\u53EF\u968F\u65F6\u6062\u590D\uFF1B\u8FD0\u884C\u4E2D\u6216\u5F85\u5BA1\u6838\u7684\u5DE5\u4F5C\u6D41\u62D2\u7EDD\u5220\u9664\uFF1B\u91CD\u590D\u5220\u9664\u5E42\u7B49\u3002\u5230\u671F\u540E\u7531\u5F52\u6863\u8F6E\u8F6C\u56DE\u6536\u5B58\u50A8\uFF0C\u4E8B\u4EF6\u94FE\u6C38\u4E0D\u5220\u9664\u3002", inputSchema: obj({ ...id, by: { type: "string", description: "\u5220\u9664\u6765\u6E90\uFF08studio/cli/mcp\uFF09\uFF0C\u9ED8\u8BA4 mcp" } }, ["runId"]) },
+  { name: "workflow_restore", description: "\u4ECE\u56DE\u6536\u7AD9\u6216\u5F52\u6863\u6062\u590D\u5DE5\u4F5C\u6D41\uFF1A\u56DE\u6536\u7AD9\u6062\u590D\u6E05\u9664\u5893\u7891\uFF1B\u5DF2\u8F6E\u8F6C\u5F52\u6863\u7684\u4ECE\u672C\u673A\u5F52\u6863\u5E93\u5BFC\u56DE\u8282\u70B9\u6570\u636E\u3002\u8FD4\u56DE\u6062\u590D\u540E\u7684\u8FD0\u884C\u72B6\u6001\uFF1B\u5DF2\u5F52\u6863\u672A\u6062\u590D\u524D workflow_status \u4E0D\u8FD4\u56DE\u8BE5\u8FD0\u884C\u3002", inputSchema: obj({ ...id, by: { type: "string", description: "\u6062\u590D\u6765\u6E90\uFF08studio/cli/mcp\uFF09\uFF0C\u9ED8\u8BA4 mcp" } }, ["runId"]) },
+  { name: "workflow_rerun", description: "\u590D\u8DD1\u5DE5\u4F5C\u6D41\uFF1A\u4EE5\u539F\u8FD0\u884C\u7684\u811A\u672C\u4E0E\u8F93\u5165\u521B\u5EFA\u65B0\u7684\u5F85\u5BA1\u6838\u8FD0\u884C\uFF0C\u539F\u8FD0\u884C\u6C38\u4E0D\u6539\u5199\u3002\u65B0\u8FD0\u884C\u5E26 rerunOf/lineageRoot/rerunSeq \u5F52\u5165\u540C\u4E00\u8C31\u7CFB\uFF0C\u53EF\u65E0\u9650\u6B21\u590D\u8DD1\uFF0C\u65CF\u8C31\u7ECF GET /api/runs/:id/lineage \u67E5\u8BE2\u3002\u65B0\u8FD0\u884C\u987B\u9762\u677F\u5BA1\u6838\u540E\u624D\u4F1A\u6267\u884C\u3002\u9ED8\u8BA4\u4E0D\u590D\u7528\u8DE8\u8FD0\u884C\u7ED3\u679C\uFF08\u4FDD\u8BC1\u771F\u5B9E\u91CD\u8DD1\u4E0E\u7ED3\u679C\u5BF9\u6BD4\uFF09\uFF1B\u663E\u5F0F reuseAcrossRuns:true \u624D\u590D\u7528\u3002\u6E90\u8FD0\u884C\u5728\u56DE\u6536\u7AD9\u6216\u5DF2\u5F52\u6863\u65F6\u5148\u6062\u590D\u3002", inputSchema: obj({ ...id, input: { type: "object", description: "\u53EF\u9009\uFF1A\u66FF\u6362\u539F\u8FD0\u884C\u7684 input" }, reuseAcrossRuns: { type: "boolean", description: "Opt-in: adopt succeeded nodes from prior runs when context and spec hashes match; default false so reruns execute for real" } }, ["runId"]) },
   { name: "workflow_dashboard", description: "\u8FD4\u56DE\u53EF\u6536\u85CF\u7684\u672C\u673A\u53EF\u89C6\u5316\u9762\u677F\u5730\u5740\uFF0C\u65E0\u9700 token\u3002\u670D\u52A1\u72EC\u7ACB\u4E8E\u804A\u5929\u4F1A\u8BDD\uFF0C\u91CD\u542F\u540E\u590D\u7528\u7AEF\u53E3\u3002", inputSchema: obj({}) }
 ];
 function summary(snapshot) {
@@ -26615,6 +26975,12 @@ function createToolHandler(engine, getURL) {
         return summary(await engine.stop(args.runId));
       case "workflow_pause":
         return summary(await engine.stop(args.runId, "paused"));
+      case "workflow_delete":
+        return await engine.deleteRun(args.runId, { by: args.by ?? "mcp" });
+      case "workflow_restore":
+        return await engine.restoreRun(args.runId, { by: args.by ?? "mcp" });
+      case "workflow_rerun":
+        return summary(await engine.rerun(args.runId, args));
       case "workflow_resume":
         return summary(await engine.resume(args.runId, args));
       case "workflow_dashboard":
@@ -26655,7 +27021,7 @@ async function startHTTP(engine, { port = 0, webRoot = new URL("../web/", import
       const url = new URL(req.url, origin);
       if (url.pathname.startsWith("/api/")) {
         if (req.headers["x-workflow-client"] !== "1" || ["cross-site", "same-site"].includes(req.headers["sec-fetch-site"])) return json({ error: "\u8BF7\u4ECE\u672C\u5730 Workflow Studio \u9762\u677F\u8BBF\u95EE\u3002" }, 403);
-        if (req.method === "GET" && url.pathname === "/api/config") return json({ serviceProtocol: 2, features: { workflowRepair: true }, pid: process.pid, workspace: engine.options.workspace, executor: engine.options.command, defaults: engine.defaults, scheduler: engine.schedulerStatus(), mcodeAvailable: !!await resolveMcode(engine.options.command ?? "mcode"), example: await readFile(new URL("audit.js", exampleRoot), "utf8") });
+        if (req.method === "GET" && url.pathname === "/api/config") return json({ serviceProtocol: 2, features: { workflowRepair: true, trashManagement: true, rerunLineage: true }, pid: process.pid, workspace: engine.options.workspace, executor: engine.options.command, defaults: engine.defaults, scheduler: engine.schedulerStatus(), mcodeAvailable: !!await resolveMcode(engine.options.command ?? "mcode"), example: await readFile(new URL("audit.js", exampleRoot), "utf8") });
         if (req.method === "GET" && url.pathname === "/api/templates") return json(engine.store.templates().map(({ definition, ...t }) => ({ ...t, objective: definition.metadata?.objective ?? "" })));
         const template = url.pathname.match(/^\/api\/templates\/([a-f0-9-]+)$/);
         if (template && req.method === "GET") {
@@ -26670,12 +27036,18 @@ async function startHTTP(engine, { port = 0, webRoot = new URL("../web/", import
           return res.end(file.body);
         }
         if (req.method === "GET" && url.pathname === "/api/scheduler") return json(engine.schedulerStatus());
-        if (req.method === "GET" && url.pathname === "/api/runs") return json(engine.store.list().map(({ script, input, result, fingerprints, ...r }) => r));
-        const match = url.pathname.match(/^\/api\/runs\/([a-f0-9-]+)(?:\/(wait|pause|cancel|resume|edit|approve|repair))?$/);
+        if (req.method === "GET" && url.pathname === "/api/trash") return json({ trashRetentionDays: engine.trashRetentionDays() });
+        if (req.method === "GET" && url.pathname === "/api/runs") {
+          if (url.searchParams.get("trash") === "1") return json(engine.store.listTrash().map(({ script, input, result, fingerprints, ...r }) => r));
+          return json(engine.store.list().map(({ script, input, result, fingerprints, ...r }) => r));
+        }
+        const match = url.pathname.match(/^\/api\/runs\/([a-f0-9-]+)(?:\/(wait|pause|cancel|resume|edit|approve|repair|restore|lineage))?$/);
         if (match && req.method === "GET") {
           if (match[2] === "wait") return json(await waitEvents(engine, match[1], Math.max(0, Number(url.searchParams.get("after")) || 0), 2e4));
+          if (match[2] === "lineage") return json(engine.lineage(match[1], { results: url.searchParams.get("results") === "1" }));
           return json(engine.snapshot(match[1]));
         }
+        if (match && req.method === "DELETE") return json(await engine.deleteRun(match[1], { by: url.searchParams.get("by") ?? "studio" }));
         if (req.method === "POST") {
           check(req.headers["content-type"]?.startsWith("application/json"), "\u9700\u8981 application/json");
           req.setEncoding("utf8");
@@ -26692,10 +27064,13 @@ async function startHTTP(engine, { port = 0, webRoot = new URL("../web/", import
             return json({ deleted: true });
           }
           if (url.pathname === "/api/scheduler") return json(engine.configureScheduler(data3));
+          if (url.pathname === "/api/trash") return json(engine.configureTrash(data3));
+          if (url.pathname === "/api/archive/rotate") return json(engine.rotateArchive({ verify: data3.verify === true }));
           if (url.pathname === "/api/tools") return json(await createToolHandler(engine, () => `${origin}/`)(data3.name, data3.arguments));
           if (url.pathname === "/api/validate") return json(assertValidDependencies(previewTopology(data3.script)));
           if (url.pathname === "/api/runs") return json(await engine.start(data3), 201);
           if (match && match[2] === "repair") return json(await engine.repair(match[1], data3));
+          if (match && match[2] === "restore") return json(await engine.restoreRun(match[1], { by: data3.by ?? "studio" }));
           if (match && match[2] === "edit") return json(await engine.update(match[1], data3));
           if (match && match[2] === "approve") return json(await engine.approve(match[1], data3));
           if (match && match[2] === "resume") return json(await engine.resume(match[1], data3));
@@ -27645,7 +28020,7 @@ function createWorkspaceRouter({ binary, pluginRoot, dataRoot, extraArgs = [] })
 }
 
 // src/main.mjs
-var { values } = parseArgs({ options: { stdio: { type: "boolean" }, "stop-service": { type: "boolean" }, settings: { type: "string" }, workspace: { type: "string" }, "data-dir": { type: "string" }, port: { type: "string" }, "mcode-script": { type: "string" }, "worker-config": { type: "string" } } });
+var { values } = parseArgs({ options: { stdio: { type: "boolean" }, "stop-service": { type: "boolean" }, settings: { type: "string" }, workspace: { type: "string" }, "data-dir": { type: "string" }, port: { type: "string" }, "mcode-script": { type: "string" }, "worker-config": { type: "string" }, "rotate-archive": { type: "boolean" }, restore: { type: "string" }, verify: { type: "boolean" } } });
 var settings = values.settings ? JSON.parse(await readFile2(resolve3(values.settings), "utf8")) : {};
 for (const key of Object.keys(settings)) if (!["workspace", "dataDir"].includes(key) || typeof settings[key] !== "string") throw Error("settings \u53EA\u5141\u8BB8 workspace/dataDir \u5B57\u7B26\u4E32");
 if (values.port !== void 0 && (!/^\d+$/.test(values.port) || Number(values.port) > 65535)) throw Error("port \u5FC5\u987B\u662F 0\u201365535 \u7684\u6574\u6570");
@@ -27746,13 +28121,49 @@ if (values.stdio && process.env.MCODE_WORKFLOW_CHILD === "1") {
       if (!service) throw Error(`\u672C\u5730\u670D\u52A1\u542F\u52A8\u5931\u8D25\u3002\u4E0A\u6B21\u7AEF\u53E3\u53EF\u80FD\u88AB\u5360\u7528\uFF1B\u4E0D\u4F1A\u81EA\u52A8\u66F4\u6362\u5730\u5740\u3002\u8BF7\u67E5\u770B ${join4(dataDir, "service.log")}`);
     }
     const mcp = await startStdio(async (name, args) => {
-      if ((name === "workflow_repair" || name === "workflow_results" && args?.includeDefinition) && !service.config.features?.workflowRepair) throw Error("WORKFLOW_SERVICE_UPGRADE_REQUIRED: \u5F53\u524D\u540E\u53F0\u670D\u52A1\u7248\u672C\u4E0D\u652F\u6301\u811A\u672C\u4FEE\u590D\u3002\u9000\u51FA\u804A\u5929\u4E0D\u4F1A\u91CD\u542F\u670D\u52A1\u3002\u8BF7\u5148\u6682\u505C\u6216\u53D6\u6D88\u6D3B\u52A8\u5DE5\u4F5C\u6D41\uFF0C\u4F7F\u7528\u65B0\u7248\u63D2\u4EF6\u7684 --stop-service\uFF08\u76F8\u540C --workspace \u548C --data-dir\uFF09\u505C\u6B62\u6B64\u9879\u76EE\u670D\u52A1\uFF0C\u518D\u91CD\u65B0\u8FDE\u63A5 MCP\uFF1B\u7AEF\u53E3\u548C\u5386\u53F2\u4F1A\u4FDD\u7559\u3002data-dir: " + dataDir);
+      if ((name === "workflow_repair" || name === "workflow_results" && args?.includeDefinition) && !service.config.features?.workflowRepair || (name === "workflow_delete" || name === "workflow_restore") && !service.config.features?.trashManagement || name === "workflow_rerun" && !service.config.features?.rerunLineage) throw Error("WORKFLOW_SERVICE_UPGRADE_REQUIRED: \u5F53\u524D\u540E\u53F0\u670D\u52A1\u7248\u672C\u4E0D\u652F\u6301\u6B64\u64CD\u4F5C\u3002\u9000\u51FA\u804A\u5929\u4E0D\u4F1A\u91CD\u542F\u670D\u52A1\u3002\u8BF7\u5148\u6682\u505C\u6216\u53D6\u6D88\u6D3B\u52A8\u5DE5\u4F5C\u6D41\uFF0C\u4F7F\u7528\u65B0\u7248\u63D2\u4EF6\u7684 --stop-service\uFF08\u76F8\u540C --workspace \u548C --data-dir\uFF09\u505C\u6B62\u6B64\u9879\u76EE\u670D\u52A1\uFF0C\u518D\u91CD\u65B0\u8FDE\u63A5 MCP\uFF1B\u7AEF\u53E3\u548C\u5386\u53F2\u4F1A\u4FDD\u7559\u3002data-dir: " + dataDir);
       const res = await fetch(service.u.origin + "/api/tools", { method: "POST", headers: headersFor(service.u), body: JSON.stringify({ name, arguments: args }), signal: AbortSignal.timeout(65e3) });
       const v2 = await res.json();
       if (!res.ok) throw Error(v2.error);
       return v2;
     });
     process.stdin.once("end", () => void mcp.close());
+  } else if (values["rotate-archive"] || values.restore !== void 0) {
+    const service = await existing();
+    if (service) {
+      const call = async (path, init) => {
+        const res = await fetch(new URL(path, service.u.origin), { ...init, headers: headersFor(service.u), signal: AbortSignal.timeout(65e3) });
+        const v2 = await res.json();
+        if (!res.ok) throw Error(v2.error);
+        return v2;
+      };
+      if (values.restore !== void 0) {
+        const v2 = await call(`/api/runs/${encodeURIComponent(values.restore)}/restore`, { method: "POST", body: JSON.stringify({ by: "cli" }) });
+        process.stdout.write(JSON.stringify({ id: v2.id, status: v2.status, restored: true }) + "\n");
+      } else {
+        const v2 = await call("/api/archive/rotate", { method: "POST", body: JSON.stringify({ verify: values.verify === true }) });
+        process.stdout.write(JSON.stringify(v2) + "\n");
+        if (values.verify === true && (v2.archive?.verified === false || v2.integrity?.events?.verified === false || v2.integrity?.repair?.verified === false)) process.exitCode = 1;
+      }
+    } else {
+      await mkdir(dataDir, { recursive: true, mode: 448 });
+      const store = new Store(dataDir);
+      let engine;
+      try {
+        engine = new Engine(store, { workspace });
+        if (values.restore !== void 0) {
+          const v2 = await engine.restoreRun(values.restore, { by: "cli" });
+          process.stdout.write(JSON.stringify({ id: v2.id, status: v2.status, restored: true }) + "\n");
+        } else {
+          const v2 = engine.rotateArchive({ verify: values.verify === true });
+          process.stdout.write(JSON.stringify(v2) + "\n");
+          if (values.verify === true && (v2.archive?.verified === false || v2.integrity?.events?.verified === false || v2.integrity?.repair?.verified === false)) process.exitCode = 1;
+        }
+      } finally {
+        await engine?.close();
+        store.close();
+      }
+    }
   } else {
     const previous = await readJSON(endpointPath) ?? await readJSON(addressPath);
     if (previous?.workspace && previous.workspace !== workspace) throw Error("\u72B6\u6001\u76EE\u5F55\u7ED1\u5B9A\u4E86\u4E0D\u540C\u5DE5\u4F5C\u533A\uFF0C\u8BF7\u914D\u7F6E\u72EC\u7ACB data-dir");
@@ -27762,6 +28173,9 @@ if (values.stdio && process.env.MCODE_WORKFLOW_CHILD === "1") {
     let engine, panel;
     try {
       engine = new Engine(store, { workspace, command: values["mcode-script"] ? process.execPath : "mcode", args: values["mcode-script"] ? [resolve3(values["mcode-script"])] : [], configPath: values["worker-config"] ? resolve3(values["worker-config"]) : void 0 });
+      const compaction = engine.autoRotateAtStartup();
+      if (compaction.rotated) process.stdout.write(`Rotated ${compaction.runCount} trashed workflow(s) into archive.db (rotation ${compaction.rotationId}).
+`);
       panel = await startHTTP(engine, { port });
       await saveAddress(panel.url);
       const temp = endpointPath + "." + process.pid + ".tmp";
