@@ -200,4 +200,19 @@ async function openTemplates(){const f=$('#template-form');f.hidden=!current;f.e
 $('#open-templates').onclick=openTemplates;$('#save-template').onclick=openTemplates;$('#close-templates').onclick=()=>$('#templates-dialog').close();
 $('#template-form').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget,button=e.submitter??f.querySelector('button[type=submit]');button.disabled=true;try{await api('/templates','POST',{runId:f.dataset.runId,name:f.elements.name.value,...(f.dataset.revision?{revision:Number(f.dataset.revision)}:{})});await renderTemplates();$('#templates-error').hidden=false;$('#templates-error').textContent=t('templateSaved');}catch(e){$('#templates-error').hidden=false;$('#templates-error').textContent=apiMessage(e.message);}finally{button.disabled=false;}};
 
+async function renderTrash(){
+ const list=$('#trash-list');list.replaceChildren();
+ const runs=await api('/runs?trash=1');
+ if(!runs.length)list.append(el('p',{class:'subtle'},t('trashEmpty')));
+ for(const r of runs){const row=el('article',{class:'template-card'}),text=el('div');
+  const days=Math.ceil((r.purgeAfter-Date.now())/86400000);
+  text.append(el('h3',{},r.name),el('p',{},`${labels[r.status]??r.status} · ${t('trashDeleted',{date:new Date(r.deletedAt).toLocaleString(language==='zh'?'zh-CN':'en-US')})} · ${days>0?t('trashRemaining',{days}):t('trashExpired')}`));
+  const restore=el('button',{type:'button'},t('trashRestore'));
+  restore.onclick=async()=>{restore.disabled=true;try{await api(`/runs/${r.id}/restore`,'POST',{by:'studio'});await renderTrash();await refreshList();}catch(e){$('#trash-error').hidden=false;$('#trash-error').textContent=apiMessage(e.message);restore.disabled=false;}};
+  const actions=el('div',{class:'template-actions'});actions.append(restore);row.append(text,actions);list.append(row);}
+}
+$('#open-trash').onclick=async()=>{$('#trash-error').hidden=true;$('#trash-dialog').showModal();try{const {trashRetentionDays}=await api('/trash');$('#trash-form').elements.trashRetentionDays.value=String(trashRetentionDays);await renderTrash();}catch(e){$('#trash-error').hidden=false;$('#trash-error').textContent=apiMessage(e.message);}};
+$('#close-trash').onclick=()=>$('#trash-dialog').close();
+$('#trash-form').onsubmit=async e=>{e.preventDefault();const button=e.submitter??$('#trash-form').querySelector('button[type=submit]');button.disabled=true;try{await api('/trash','POST',{trashRetentionDays:Number(e.currentTarget.elements.trashRetentionDays.value)});$('#trash-error').hidden=true;await renderTrash();}catch(e){$('#trash-error').hidden=false;$('#trash-error').textContent=apiMessage(e.message);}finally{button.disabled=false;}};
+
 function renderLegend(steps){const box=$('#graph-legend');box.replaceChildren();const states=showPlan||current?.status==='pending_review'?['planned']:['awaiting','queued','running','succeeded','failed',...(steps.some(s=>['blocked','not_run','interrupted'].includes(s.status))?['not_run']:[])];for(const state of states){const item=el('span',{class:`legend-state ${state}`});item.append(el('i',{'aria-hidden':'true'}),document.createTextNode(labels[state]));box.append(item);}}

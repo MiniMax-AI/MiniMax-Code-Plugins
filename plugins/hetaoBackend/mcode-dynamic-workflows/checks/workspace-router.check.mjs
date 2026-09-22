@@ -33,7 +33,7 @@ test('packaged MCP launched in plugin root routes concurrent projects and execut
  async function connect(){const client=new Client({name:'project-test',version:'1'});clients.push(client);await client.connect(new StdioClientTransport({command:process.execPath,args:[binary,'--stdio','--data-dir',dataRoot,'--mcode-script',fake],cwd:pluginRoot,stderr:'pipe'}));return client;}
  try{
   const a=await connect();const tools=(await a.listTools()).tools;
-  assert.equal(tools.length,11);for(const tool of tools.filter(t=>t.name!=='workflow_validate'))assert.ok(tool.inputSchema.required.includes('workspace'));
+  assert.equal(tools.length,13);for(const tool of tools.filter(t=>t.name!=='workflow_validate'))assert.ok(tool.inputSchema.required.includes('workspace'));
   await value(a,'workflow_validate',{script:'return 1;'});
   assert.equal((await a.callTool({name:'workflow_dashboard',arguments:{}})).isError,true);
   await assert.rejects(readdir(dataRoot),{code:'ENOENT'});

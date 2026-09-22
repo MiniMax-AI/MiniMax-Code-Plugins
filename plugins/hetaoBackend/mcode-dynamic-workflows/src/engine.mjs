@@ -16,8 +16,13 @@ import { resolveMcode } from './availability.mjs';
 import { DEFAULT_LIMITS, LEGACY_LIMITS, resolveLimits, runLimits, durationLabel } from './limits.mjs';
 import { agentFailure,failureError } from './failure.mjs';
 import { demoExecute, mcodeExecute } from './executor.mjs';
+import { ROTATE_TOMBSTONE_THRESHOLD,ROTATE_RUNS_BYTES_THRESHOLD,ROTATE_MAX_BATCHES } from './store.mjs';
+// Only finished runs may enter the trash. needs_attention stays out: its old
+// agents may still require user confirmation, and the run is not done yet.
+const DELETABLE=new Set(['succeeded','failed','completed_with_gaps','cancelled','interrupted']);
+const TRASH_SOURCES=new Set(['studio','cli','mcp']);
 export class Engine extends EventEmitter {
- constructor(store,options){super();this.store=store;this.options=options;this.defaults=resolveLimits(options,DEFAULT_LIMITS);this.globalConcurrency=this.store.setting('globalConcurrency')??8;this.lastServedRun=null;this.approving=new Set();this.active=new Map();this.slots=0;this.queue=[];this.closing=false;}
+ constructor(store,options){super();this.store=store;this.options=options;this.defaults=resolveLimits(options,DEFAULT_LIMITS);this.globalConcurrency=this.store.setting('globalConcurrency')??8;this.lastServedRun=null;this.approving=new Set();this.active=new Map();this.slots=0;this.queue=[];this.closing=false;this.rotationDrain=false;}
  async fingerprints(files=[]) {
    check(Array.isArray(files)&&files.length<=100,'files 最多 100 项');const root=await realpath(this.options.workspace);const out=Object.create(null);
    for(const path of files){
@@ -47,7 +52,7 @@ export class Engine extends EventEmitter {
    // Absent unless explicitly true: an always-present default key would change requestHash and break legacy idempotent replays.
    const reuseAcrossRuns=request.reuseAcrossRuns===undefined?false:(check(typeof request.reuseAcrossRuns==='boolean','reuseAcrossRuns 必须为布尔'),request.reuseAcrossRuns);
    const definition={...limits,...metadata,name:request.name,script:request.script,input:request.input??{},executor:request.executor,concurrency,maxCalls,...(reuseAcrossRuns?{reuseAcrossRuns:true}:{})};const requestHash=hash(repair?{...definition,repair}:definition);
-   const existing=this.store.byRequest(request.requestId);if(existing){const legacyDefinition={...definition};for(const key of Object.keys(DEFAULT_LIMITS))delete legacyDefinition[key];check(existing.requestHash===requestHash||(existing.maxSteps===undefined&&Object.keys(DEFAULT_LIMITS).every(k=>request[k]===undefined)&&existing.requestHash===hash(legacyDefinition)),'requestId 已用于不同参数');return this.snapshot(existing.id);}
+   const existing=this.store.byRequest(request.requestId);if(existing){check(!existing.deletedAt,'requestId 已用于已删除的工作流：请先在回收站恢复它，或更换 requestId');const legacyDefinition={...definition};for(const key of Object.keys(DEFAULT_LIMITS))delete legacyDefinition[key];check(existing.requestHash===requestHash||(existing.maxSteps===undefined&&Object.keys(DEFAULT_LIMITS).every(k=>request[k]===undefined)&&existing.requestHash===hash(legacyDefinition)),'requestId 已用于不同参数');return this.snapshot(existing.id);}
    const fingerprints={};const topology=assertValidDependencies(previewTopology(request.script,request.input??{}));
    check(!this.closing,'服务正在关闭');
    const run={...(repair?{repair}:{}),id:randomUUID(),requestId:request.requestId,requestHash,...definition,scriptHash:hash(request.script),fingerprints,workspace:this.options.workspace,revision:1,topology,status:'pending_review',createdAt:Date.now(),updatedAt:Date.now(),attempts:0,phases:[],result:null,error:null};
@@ -55,6 +60,7 @@ export class Engine extends EventEmitter {
  }
  async repair(id,request) {
    check(!this.closing,'服务正在关闭');const source=this.store.get(id);check(source,'工作流不存在');
+   check(!source.deletedAt,'工作流已删除，请先在回收站恢复后再修复');
    check(!this.active.has(id)&&['failed','paused','interrupted','cancelled','completed_with_gaps','succeeded'].includes(source.status),'请先停止运行；异常退出须先确认旧 Agent 已停止并恢复或暂停');
    check(source.workspace===this.options.workspace,'工作区不匹配');
    check(request.sourceUpdatedAt===source.updatedAt,'源运行已更新，请刷新后再修复');
@@ -103,7 +109,7 @@ export class Engine extends EventEmitter {
     Object.assign(run,{fingerprints,approvedRevision:revision,approvedAt:Date.now()});this.save(run);this.emitEvent(id,'run.approved',{revision});this.launch(run);return this.snapshot(id);
    } finally {this.approving.delete(id);}
  }
- snapshot(id){const run=this.store.get(id);check(run,'工作流不存在');const limits=runLimits(run),topology=run.topology?.version===3?run.topology:previewTopology(run.script,run.input);return {...run,topology,...historicalFailure(run,topology),...limits,legacyLimits:run.maxSteps===undefined,scheduler:this.schedulerStatus(),steps:this.store.steps(id).map(stored=>{const s=stored.kind==='agent'?{...stored,maxSteps:stored.maxSteps??LEGACY_LIMITS.maxSteps,timeoutMs:stored.timeoutMs??LEGACY_LIMITS.stepTimeoutMs}:stored;if(!s.errorDetails&&/^MCode (limit_exceeded|timeout)$/.test(s.error??'')){const errorDetails=agentFailure(s.error.slice(6),{maxSteps:s.maxSteps??limits.maxSteps,timeoutMs:s.timeoutMs??limits.stepTimeoutMs,sessionId:s.sessionId,turnId:s.turnId});return {...s,error:errorDetails.message,errorDetails};}return s.status==='queued'?{...s,queueInfo:this.queueInfo(id,s.id)}:s;})};}
+ snapshot(id){const run=this.store.get(id);check(run,'工作流不存在');check(!run.deletedAt,'工作流已删除，可在回收站恢复后查看');const limits=runLimits(run),topology=run.topology?.version===3?run.topology:previewTopology(run.script,run.input);return {...run,topology,...historicalFailure(run,topology),...limits,legacyLimits:run.maxSteps===undefined,scheduler:this.schedulerStatus(),steps:this.store.steps(id).map(stored=>{const s=stored.kind==='agent'?{...stored,maxSteps:stored.maxSteps??LEGACY_LIMITS.maxSteps,timeoutMs:stored.timeoutMs??LEGACY_LIMITS.stepTimeoutMs}:stored;if(!s.errorDetails&&/^MCode (limit_exceeded|timeout)$/.test(s.error??'')){const errorDetails=agentFailure(s.error.slice(6),{maxSteps:s.maxSteps??limits.maxSteps,timeoutMs:s.timeoutMs??limits.stepTimeoutMs,sessionId:s.sessionId,turnId:s.turnId});return {...s,error:errorDetails.message,errorDetails};}return s.status==='queued'?{...s,queueInfo:this.queueInfo(id,s.id)}:s;})};}
  queueInfo(runId,stepId){
   const ticket=this.queue.find(t=>t.ctx.run.id===runId&&t.stepId===stepId),ctx=this.active.get(runId);
   return {reason:this.slots>=this.globalConcurrency?'global_capacity':ctx&&ctx.slots>=ctx.run.concurrency?'run_capacity':'dispatch',globalActive:this.slots,globalLimit:this.globalConcurrency,runActive:ctx?.slots??0,runLimit:ctx?.run.concurrency??0,position:ticket?this.queue.indexOf(ticket)+1:null,blockingRuns:[...this.active.values()].filter(c=>c.slots>0).map(c=>({id:c.run.id,name:c.run.name,active:c.slots}))};
@@ -116,10 +122,104 @@ export class Engine extends EventEmitter {
  });}
  schedulerStatus(){return {active:this.slots,limit:this.globalConcurrency,queued:this.queue.length,perRunDefault:4,perRunMax:16};}
  configureScheduler({globalConcurrency}){
-  check(!this.closing,'服务正在关闭');check(Number.isInteger(globalConcurrency)&&globalConcurrency>=1&&globalConcurrency<=32,'全局并发须为 1–32 的整数');
-  this.store.saveSetting('globalConcurrency',globalConcurrency);this.globalConcurrency=globalConcurrency;
-  // Reducing capacity never interrupts a running agent. Only new dispatch is limited.
-  this.drain();return this.schedulerStatus();
+   check(!this.closing,'服务正在关闭');check(Number.isInteger(globalConcurrency)&&globalConcurrency>=1&&globalConcurrency<=32,'全局并发须为 1–32 的整数');
+   this.store.saveSetting('globalConcurrency',globalConcurrency);this.globalConcurrency=globalConcurrency;
+   // Reducing capacity never interrupts a running agent. Only new dispatch is limited.
+   this.drain();return this.schedulerStatus();
+ }
+ // Trash retention in days. Default 30; 0 disables the expiry clock entirely
+ // (tombstones then leave only through explicit manual rotation). A corrupted
+ // stored value falls back to the default instead of poisoning purge stamps.
+ trashRetentionDays() {const value=this.store.setting('trashRetentionDays');return Number.isInteger(value)&&value>=0&&value<=3650?value:30;}
+ configureTrash({trashRetentionDays}) {
+   check(!this.closing,'服务正在关闭');check(Number.isInteger(trashRetentionDays)&&trashRetentionDays>=0&&trashRetentionDays<=3650,'回收站保留期须为 0–3650 的整数天（0 表示仅手动轮转）');
+   this.store.saveSetting('trashRetentionDays',trashRetentionDays);
+   // The setting governs trash that already exists, not only future deletions:
+   // pending tombstones are restamped so the displayed countdown stays truthful.
+   this.store.restampTrashPurge(trashRetentionDays);return {trashRetentionDays};
+ }
+ // Tombstone soft delete. Steps, events, result and the integrity ledger all
+ // stay untouched — only the run body gains deletedAt/deletedBy/purgeAfter and
+ // one append-only run.deleted audit event. Body change and audit event are
+ // committed by ONE transaction (store.tombstoneRun): an event-insert failure
+ // rolls the tombstone back too, so the operation fails closed with zero state
+ // change. Repeat deletes are idempotent and never append a second event.
+ async deleteRun(id,{by='studio'}={}) {
+   check(!this.closing,'服务正在关闭');check(TRASH_SOURCES.has(by),'无效的删除来源');
+   const run=this.store.get(id);
+   if(!run){
+    // Already rotated past the trash: report the archive state truthfully.
+    const archived=this.store.archiveOrigin(id);check(archived,'工作流不存在');
+    return {id,deleted:true,alreadyDeleted:true,archived:true,rotationId:archived.rotationId};
+   }
+   if(run.deletedAt)return {id,deleted:true,alreadyDeleted:true,deletedAt:run.deletedAt,deletedBy:run.deletedBy,purgeAfter:run.purgeAfter};
+   check(!this.active.has(id),'工作流仍在运行，请先暂停或取消后再删除');
+   check(DELETABLE.has(run.status),'仅已完成的工作流可删除（运行中或待审核不可删除）');
+   const days=this.trashRetentionDays();
+   run.deletedAt=Date.now();run.deletedBy=by;run.purgeAfter=run.deletedAt+days*86400000;run.updatedAt=Date.now();
+   const event=this.store.tombstoneRun(run,{by,purgeAfter:run.purgeAfter});
+   this.emit('change',{runId:id,...event});
+   return {id,deleted:true,alreadyDeleted:false,deletedAt:run.deletedAt,purgeAfter:run.purgeAfter};
+ }
+ // Restore clears the tombstone and appends run.restored — atomically via
+ // store.untombstoneRun, so a failing audit event leaves the tombstone exactly
+ // as it was. Everything else was never removed, so the run reappears
+ // byte-identical on every query face.
+ async restoreRun(id,{by='studio'}={}) {
+   check(!this.closing,'服务正在关闭');check(TRASH_SOURCES.has(by),'无效的恢复来源');
+   const run=this.store.get(id);
+   if(run){
+    check(run.deletedAt,'工作流未删除，无需恢复');
+    delete run.deletedAt;delete run.deletedBy;delete run.purgeAfter;run.updatedAt=Date.now();
+    const event=this.store.untombstoneRun(run,{by,origin:'trash'});
+    this.emit('change',{runId:id,...event});
+    return this.snapshot(id);
+   }
+   // Not live: restore from the sidecar archive when the run was rotated.
+   const archived=this.store.restoreArchived(id,{by});
+   check(archived,'工作流不存在或未归档');
+   return this.snapshot(id);
+ }
+ // Manual rotation face: rotate due tombstones now in bounded batches (at
+ // most ROTATE_MAX_BATCHES per call; callers may pass fewer), reporting the
+ // remaining backlog honestly in `remaining`, optionally returning the
+ // archive and integrity verdicts alongside the rotation summary.
+ rotateArchive({verify=false,batches}={}) {
+  check(!this.closing,'服务正在关闭');
+  const limit=batches===undefined?ROTATE_MAX_BATCHES:(check(Number.isInteger(batches)&&batches>=1&&batches<=ROTATE_MAX_BATCHES,`单次轮转批数须为 1–${ROTATE_MAX_BATCHES} 的整数`),batches);
+  const result=this.store.rotateDue({now:Date.now(),maxBatches:limit});
+  return verify?{...result,archive:this.store.verifyArchive(),integrity:this.store.verifyIntegrity()}:result;
+ }
+ // Startup compaction: when trash volume or runs-table size crosses the
+ // documented thresholds, expired tombstones are rotated into archive.db
+ // before the dashboard starts serving — bounded to exactly ONE batch so
+ // startup blocking time is bounded by one batch, never by the backlog size;
+ // the honest `remaining` count tells the caller how much is still due.
+ // trashRetentionDays=0 disables the expiry clock entirely (manual rotation
+ // only) and with it this auto path.
+ autoRotateAtStartup() {
+  const days=this.trashRetentionDays();
+  if(days<=0)return {autoRotated:false,reason:'manual-only',tombstones:this.store.tombstoneCount(),bytes:this.store.runsBytes(),remaining:this.store.dueTombstoneCount()};
+  const tombstones=this.store.tombstoneCount(),bytes=this.store.runsBytes();
+  if(tombstones<=ROTATE_TOMBSTONE_THRESHOLD&&bytes<=ROTATE_RUNS_BYTES_THRESHOLD)return {autoRotated:false,tombstones,bytes,remaining:this.store.dueTombstoneCount()};
+  return {...this.store.rotateDue({now:Date.now(),maxBatches:1}),autoRotated:true,tombstones,bytes};
+ }
+ // Background drain for the backlog the bounded startup pass leaves behind:
+ // one batch per tick, throttled by intervalMs, until nothing is due. The
+ // service is already serving when this runs, so a failing batch is logged
+ // to stderr and stops the drain — rotation is idempotent, so the next
+ // startup pass or manual rotation retries without loss.
+ drainRotationsInBackground({intervalMs=250}={}) {
+  if(this.closing||this.rotationDrain)return;
+  this.rotationDrain=true;
+  const tick=()=>{
+   if(this.closing){this.rotationDrain=false;return;}
+   let result;try{result=this.store.rotateDue({now:Date.now(),maxBatches:1});}
+   catch(e){this.rotationDrain=false;process.stderr.write(`Archive rotation drain failed: ${e.message}\n`);return;}
+   if(result.remaining>0){const timer=setTimeout(tick,intervalMs);timer.unref?.();}
+   else this.rotationDrain=false;
+  };
+  const timer=setTimeout(tick,intervalMs);timer.unref?.();
  }
  drain(){
   while(this.slots<this.globalConcurrency){
@@ -262,7 +362,7 @@ const step={id:key,kind:'checkpoint',status:'succeeded',output:payload.value,req
  }
  async stop(id,intent='cancelled'){const ctx=this.active.get(id);if(!ctx){const run=this.store.get(id);if(run?.status==='pending_review'&&intent==='cancelled'){run.status='cancelled';this.save(run);this.emitEvent(id,'run.finished',{status:'cancelled'});}return this.snapshot(id);}if(ctx.intent==='needs_attention'){await ctx.done;return this.snapshot(id);}ctx.intent=intent;ctx.reason=intent==='paused'?'用户暂停，已完成结果可复用':'用户取消';ctx.run.status=intent==='paused'?'pausing':'stopping';this.save(ctx.run);this.emitEvent(id,'run.stopping',{intent});ctx.controller.abort();void ctx.finish(false,ctx.reason);await ctx.done;return this.snapshot(id);}
  async resume(id,options={}){
-   check(!this.closing,'服务正在关闭');const run=this.store.get(id);check(run,'工作流不存在');check(!this.active.has(id),'工作流仍在运行');check(run.workspace===this.options.workspace,'工作区已改变，请创建新工作流');
+   check(!this.closing,'服务正在关闭');const run=this.store.get(id);check(run,'工作流不存在');check(!run.deletedAt,'工作流已删除，请先在回收站恢复');check(!this.active.has(id),'工作流仍在运行');check(run.workspace===this.options.workspace,'工作区已改变，请创建新工作流');
    check(!run.revision||run.approvedRevision===run.revision,'未审核工作流不能恢复，请创建新草稿');
    check(['paused','failed','interrupted','cancelled','needs_attention','completed_with_gaps'].includes(run.status),'当前状态不能恢复');check(run.status!=='needs_attention'||options.confirmStopped===true,'上次异常退出，需确认旧 Agent 已停止');
    if(run.executor==='mcode'&&!this.options.execute)check(await resolveMcode(this.options.command??'mcode'),'找不到 MCode CLI，请安装并登录后恢复。');

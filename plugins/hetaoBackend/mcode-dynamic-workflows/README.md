@@ -2,7 +2,7 @@
 
 Turn a complex task into a reviewable multi-agent workflow. Inspect and edit the topology before execution, follow each agent's progress and output, then repair a failed script without discarding valid completed work.
 
-Version **0.8.0** · Apache-2.0 · one English Skill and one local MCP server with 11 tools.
+Version **0.8.0** · Apache-2.0 · one English Skill and one local MCP server with 13 tools.
 
 ## Try it
 
@@ -82,6 +82,6 @@ Verification covers isolated demo execution, approval gating, selective reuse an
 
 ## MCP tools
 
-`workflow_validate`, `workflow_start`, `workflow_update`, `workflow_repair`, `workflow_status`, `workflow_results`, `workflow_wait`, `workflow_pause`, `workflow_cancel`, `workflow_resume`, `workflow_dashboard`.
+`workflow_validate`, `workflow_start`, `workflow_update`, `workflow_repair`, `workflow_status`, `workflow_results`, `workflow_wait`, `workflow_pause`, `workflow_cancel`, `workflow_resume`, `workflow_delete`, `workflow_restore`, `workflow_dashboard`.
 
 Read the [Skill](skills/dynamic-workflow/SKILL.md), [English example](examples/audit-en.js) and [Chinese example](examples/audit.js). The dashboard is a local web page, not a native Mini App or TUI extension.
