@@ -1,0 +1,29 @@
+{
+  "$schema": "https://minimax.io/schemas/mcode-hooks/0.1.0/hooks.schema.json",
+  "hooks": {
+    "SessionStart": [
+      {
+        "command": "node",
+        "args": [
+          "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/session-start.mjs",
+          "--state",
+          "${PLUGIN_DATA}/state.json"
+        ],
+        "timeout": 5000,
+        "once": false
+      }
+    ],
+    "PreCompact": [
+      {
+        "command": "node",
+        "args": [
+          "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/pre-compact.mjs",
+          "--state",
+          "${PLUGIN_DATA}/state.json"
+        ],
+        "timeout": 5000,
+        "once": false
+      }
+    ]
+  }
+}

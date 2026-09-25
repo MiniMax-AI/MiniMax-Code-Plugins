@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "mcode-think-filter",
+  "version": "0.1.0",
+  "description": "Constrain the model so only the LAST thinking block per turn survives in the transcript. Earlier scratch reasoning is steered into single-line tool calls (e.g. writing to PLUGIN_DATA/scratch).",
+  "author": {
+    "name": "bro"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["mcode", "thinking", "transcript", "context"]
+}

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "mcode-computer-use",
+  "version": "0.1.0",
+  "description": "Drive the user's desktop through a noise-grid MCP protocol. Screenshots, clicks, scrolls, drag, keyboard input — all addressed by (color1, color2, pos) tuples. Bundles a trajectory summarizer that runs every N turns.",
+  "author": {
+    "name": "bro"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["mcode", "computer-use", "screenshot", "gui", "automation", "agent"]
+}

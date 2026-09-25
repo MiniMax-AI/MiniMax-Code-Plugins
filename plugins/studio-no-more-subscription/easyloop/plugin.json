@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "easyloop",
+  "version": "0.1.0",
+  "description": "Self-orchestrating loop Skill. When invoked, the LLM picks a loop pattern, quality level, and optional plugins, then calls finish_plugin_selection to compact the selection menu out of context under a context_compacted_id. Ships with three Skills: easyloop, easyloop-prototype, easyloop-release.",
+  "author": {
+    "name": "bro"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["mcode", "loop", "orchestration", "planner", "subagent"]
+}

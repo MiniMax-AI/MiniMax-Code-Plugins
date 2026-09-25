@@ -1,0 +1,33 @@
+{
+  "$schema": "https://minimax.io/schemas/mcode-hooks/0.1.0/hooks.schema.json",
+  "hooks": {
+    "SessionStart": [
+      {
+        "command": "node",
+        "args": [
+          "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/log-loop.mjs",
+          "--data",
+          "${PLUGIN_DATA}",
+          "--phase",
+          "session-start"
+        ],
+        "timeout": 5000,
+        "once": false
+      }
+    ],
+    "Stop": [
+      {
+        "command": "node",
+        "args": [
+          "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/log-loop.mjs",
+          "--data",
+          "${PLUGIN_DATA}",
+          "--phase",
+          "stop"
+        ],
+        "timeout": 5000,
+        "once": false
+      }
+    ]
+  }
+}

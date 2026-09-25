@@ -1,0 +1,10 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "mcode-computer-use": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["./server/computer-use.mjs"]
+    }
+  }
+}
