@@ -1,0 +1,24 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "scansci-pdf",
+  "version": "1.17.0",
+  "description": "Search, triage, and download academic papers: DOI/arXiv/keyword lookup, 20+ racing sources with a hedged cascade, open-access resolution, batch queues with lane scheduling, citation export, and user-authorized institutional access (Elsevier API / WebVPN / CARSI), exposed through a local MCP server. / 学术论文检索与下载：DOI/arXiv/关键词解析、20+ 数据源对冲级联竞速、开放获取解析、批量车道调度、引文导出与机构授权访问（Elsevier API/WebVPN/CARSI），通过本地 MCP server 提供工具。",
+  "author": {
+    "name": "Rimagination",
+    "url": "https://github.com/Rimagination"
+  },
+  "homepage": "https://github.com/Rimagination/scansci-pdf",
+  "repository": "https://github.com/Rimagination/scansci-pdf",
+  "license": "Apache-2.0",
+  "keywords": [
+    "minimax-code",
+    "plugin",
+    "academic-papers",
+    "literature-search",
+    "open-access",
+    "doi",
+    "arxiv",
+    "batch-download",
+    "mcp"
+  ]
+}
