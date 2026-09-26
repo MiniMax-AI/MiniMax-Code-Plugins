@@ -1,0 +1,14 @@
+{"test":"pre.daemon_sighting","ok":true,"port_3741":{"reachable":true,"version":"3.32.0","pid":47417},"dead_port_48171":{"reachable":false}}
+{"test":"handshake.initialize","ok":true,"serverVersion":"3.31.5","expected":"3.31.5"}
+{"test":"index.ready","ok":true,"indexedFiles":28,"healthKeys":["totalFiles","totalSymbols","totalEdges","totalNodes","totalRoutes","totalResourceRoutes","totalTestFixtureRoutes","totalComponents","totalMigrations","partialFiles","errorFiles"]}
+{"test":"surface.default_preset","ok":true,"tool_count":29,"leaked":[]}
+{"test":"surface.dev_preset","ok":true,"tool_count":46,"missing":[],"dry_run_defaults":{"apply_rename":true,"remove_dead_code":true,"extract_function":true,"apply_codemod":true,"apply_move":true,"change_signature":true}}
+{"test":"surface.mutator_annotations","ok":true,"annotations":{"apply_rename":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false},"remove_dead_code":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":false},"extract_function":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false},"apply_codemod":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":false},"apply_move":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false},"change_signature":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false}}}
+{"test":"read.search","ok":true,"hit":true,"tree_unchanged":true}
+{"test":"read.get_outline","ok":true,"symbolId":"shared.js::sharedTarget#function"}
+{"test":"boundary.codemod_traversal","ok":true,"dry_success":false,"apply_success":false,"canary_unchanged":true,"tree_unchanged":true}
+{"test":"boundary.symlink_write","ok":true,"success":false,"error":"Refusing to write through symlink: /private/tmp/multica-task-2825211594/trace-mcp-smoke-EE1Axy/proj/link-out.js","canary_unchanged":true,"tree_unchanged":true}
+{"test":"mutation.extract_applies","ok":true,"success":true,"error":"","files_modified":["main.js"]}
+{"test":"gate.rename_dryrun","ok":true,"success":true}
+{"test":"gate.rename_confirm_large","ok":true,"success":false,"error":"Rename affects 28 files (>20). Pass confirm_large: true to proceed.","files_modified":["shared.js","main.js","mod0.js","mod1.js","mod10.js","mod11.js","mod12.js","mod13.js","mod14.js","mod15.js","mod16.js","mod17.js","mod18.js","mod19.js","mod2.js","mod20.js","mod21.js","mod22.js","mod23.js","mod24.js","mod25.js","mod3.js","mod4.js","mod5.js","mod6.js","mod7.js","mod8.js","mod9.js"]}
+{"test":"telemetry.opt_out","ok":true,"state_written":false}
