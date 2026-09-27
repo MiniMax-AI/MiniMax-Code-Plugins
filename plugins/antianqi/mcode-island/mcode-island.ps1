@@ -290,6 +290,10 @@ $stateMap = @{
 # 工具家族配色：working 态下用 family 色盖掉 state 色，一眼分辨"在读"和"在改"。
 # 只覆盖 dot/ring（视觉识别），不动 stateText 文案。
 # family 名与 detector 的 $TOOL_FAMILIES 值一一对应；缺 family 时回落到 state 色。
+#
+# 色相分布刻意拉开：绿(shell) / 蓝(read) / 黄(write) / 紫(search) / 青(task) /
+# 粉(web) / 灰蓝(plan)。plan 早先用的是 #8B5CF6，和 search 的 #A855F7 在深色
+# pill 上几乎分不开，换成去饱和的灰蓝。
 $familyMap = @{
   shell  = '#FF22C55E'   # bash / shell  → 绿
   read   = '#FF3B82F6'   # read         → 蓝
@@ -297,7 +301,7 @@ $familyMap = @{
   search = '#FFA855F7'   # grep / glob  → 紫
   task   = '#FF06B6D4'   # task         → 青
   web    = '#FFEC4899'   # web_search/fetch → 粉
-  plan   = '#FF8B5CF6'   # todowrite    → 紫罗兰
+  plan   = '#FF94A3B8'   # todowrite    → 灰蓝
 }
 
 # 颜色转 brush

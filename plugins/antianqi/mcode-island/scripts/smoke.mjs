@@ -617,12 +617,15 @@ const main = async () => {
         out('FAIL', 'mcode-island.ps1 missing (family-tint drift lock skipped)');
     } else {
         const widget = await readFile(widgetPath, 'utf8');
-        if (!/\$familyMap\s*=\s*@\{/.test(widget)) {
+        // Hoisted out of the if/else below: the hue-separation check further
+        // down needs the same slice, and a block-scoped const would be out of
+        // scope by then.
+        const famBlock = widget.match(/\$familyMap\s*=\s*@\{([\s\S]*?)\n\}/);
+        if (!famBlock) {
             out('FAIL', 'mcode-island.ps1: $familyMap table missing');
         } else {
-            const famBlock = widget.match(/\$familyMap\s*=\s*@\{([\s\S]*?)\n\}/);
             for (const fam of ['shell', 'read', 'write', 'search', 'task', 'web', 'plan']) {
-                if (famBlock && new RegExp(`^\\s*${fam}\\s*=`, 'm').test(famBlock[1])) {
+                if (new RegExp(`^\\s*${fam}\\s*=`, 'm').test(famBlock[1])) {
                     out('PASS', `$familyMap covers "${fam}"`);
                 } else {
                     out('FAIL', `$familyMap does not cover "${fam}"`);
@@ -649,6 +652,63 @@ const main = async () => {
             out('PASS', 'mcode-island.ps1: dot/ring are painted from the resolved color (family-aware)');
         } else {
             out('FAIL', 'mcode-island.ps1: dot/ring still read $s.dot directly, bypassing family tinting');
+        }
+
+        // Perceptual separation. Two families landing on near-identical colors
+        // are indistinguishable on the pill, which defeats the point of
+        // tinting. Measured with CIE76 dE in CIELAB, NOT raw luminance:
+        // luminance alone calls blue and purple "identical" (0.02 apart) even
+        // though they are plainly different hues, so a luminance threshold
+        // just produces false alarms. dE < 20 is the usual "not the same color
+        // to a human eye" cutoff for flat UI fills.
+        const famColors = new Map();
+        // No `^` anchor: with the `m` flag a leading `\s*` is free to swallow
+        // the preceding newline and match mid-line, and with a greedy
+        // [\s\S]* body it can also skip the first entry. A `g`-only scan with
+        // a `[ \t]*` (not `\s*`) indent keeps one match per table row.
+        // Colors in the table are 8-digit #AARRGGBB (the alpha byte is FF),
+        // so the pattern has to be {8} or the closing quote never lines up.
+        const colorRe = /[ \t]*([a-z]+)[ \t]*=[ \t]*'(#[0-9A-Fa-f]{8})'/g;
+        let cm;
+        while ((cm = colorRe.exec(famBlock[1])) !== null) {
+            famColors.set(cm[1], cm[2].slice(3).toUpperCase()); // drop #FF alpha
+        }
+        if (famColors.size < 7) {
+            out('FAIL', `$familyMap: parsed only ${famColors.size}/7 family colors; the separation check below would be vacuous`);
+        } else {
+            out('PASS', `$familyMap: parsed all ${famColors.size} family colors`);
+        }
+        // sRGB -> XYZ (D65) -> CIELAB
+        const toLab = (hex) => {
+            const ch = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+            const lin = ch.map((v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+            const [r, g, b] = lin;
+            const X = (0.4124564 * r + 0.3575761 * g + 0.1804375 * b) / 0.95047;
+            const Y = (0.2126729 * r + 0.7151522 * g + 0.0721750 * b);
+            const Z = (0.0193339 * r + 0.1191920 * g + 0.9503041 * b) / 1.08883;
+            const f = (t) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
+            const [fx, fy, fz] = [f(X), f(Y), f(Z)];
+            return [116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)];
+        };
+        const deltaE = (a, b) => {
+            const [la, aa, ba] = toLab(a);
+            const [lb, ab, bb] = toLab(b);
+            return Math.hypot(la - lb, aa - ab, ba - bb);
+        };
+        const MIN_DE = 20;
+        const keys = [...famColors.keys()];
+        let tooClose = 0;
+        for (let i = 0; i < keys.length; i++) {
+            for (let j = i + 1; j < keys.length; j++) {
+                const d = deltaE(famColors.get(keys[i]), famColors.get(keys[j]));
+                if (d < MIN_DE) {
+                    out('FAIL', `$familyMap colors "${keys[i]}" (#${famColors.get(keys[i])}) and "${keys[j]}" (#${famColors.get(keys[j])}) are only dE ${d.toFixed(1)} apart (< ${MIN_DE}); they read as the same color on the pill`);
+                    tooClose++;
+                }
+            }
+        }
+        if (tooClose === 0) {
+            out('PASS', `$familyMap: all ${keys.length} family colors are perceptually distinct (min pairwise CIELAB dE >= ${MIN_DE})`);
         }
     }
 
