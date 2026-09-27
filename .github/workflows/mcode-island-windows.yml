@@ -411,3 +411,44 @@ jobs:
           }
           Write-Host "test c (no token): OK returned null"
           Write-Host "Get-5hUsage via dot-source + matching fixture + token-source precedence: 3/3 OK"
+
+      # 5) Behavioral sub-step + redaction suite (round-19 review #5).
+      #
+      # scripts/test-substep-progress.mjs existed but no workflow ran it, so
+      # its 20 assertions never gated anything. It is the only suite that
+      # executes the PowerShell under test rather than grepping for
+      # substrings, and it carries the secret canary for review item #1, so
+      # leaving it unwired meant a redaction regression could land silently.
+      #
+      # The suite resolves its own PowerShell: it uses $env:PS_BIN if set,
+      # otherwise the value if it is an existing path, otherwise it probes
+      # pwsh / powershell.exe / powershell on PATH and SKIPS the behavioral
+      # checks loudly if none is found. It never assumes a
+      # user-specific absolute path.
+      #
+      # Negative-injection: restore the `$detail = "$act '$txt'"` line in
+      # _lib.ps1, or drop SWP_NOMOVE from Toggle-CallerWindow, and this step
+      # fails on the canary / the flag assertion respectively.
+      - name: Behavioral sub-step + redaction suite (round-19 requirement #5)
+        run: |
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $OutputEncoding = [System.Text.Encoding]::UTF8
+          try { chcp 65001 | Out-Null } catch {}
+
+          # Report which PowerShell the suite will use. Not a hard requirement:
+          # the suite does its own resolution and falls back to PATH.
+          $candidates = @('pwsh', 'powershell.exe', 'powershell')
+          $chosen = $null
+          foreach ($c in $candidates) {
+            if (Get-Command $c -ErrorAction SilentlyContinue) { $chosen = $c; break }
+          }
+          if ($chosen) {
+            Write-Host "PowerShell on PATH: $chosen ($((& $c -NoProfile -Command '$PSVersionTable.PSVersion.ToString()')))"
+          } else {
+            Write-Host "No PowerShell found on PATH; the suite will skip its behavioral checks and fail"
+          }
+
+          node scripts/test-substep-progress.mjs
+          if ($LASTEXITCODE -ne 0) {
+            throw "test-substep-progress.mjs failed with exit code $LASTEXITCODE"
+          }
