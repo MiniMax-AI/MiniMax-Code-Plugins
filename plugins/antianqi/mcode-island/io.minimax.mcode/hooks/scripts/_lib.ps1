@@ -100,13 +100,22 @@ function Format-ToolSummary {
             'WebSearch'     { $detail = [string]$Event.tool_input.query }
             'Task'          { $detail = [string]$Event.tool_input.description }
             'NotebookEdit'  { $detail = [string]$Event.tool_input.notebook_path }
-            # mcode-internal: Computer Use 抽 action + coordinate/text
+            # mcode-internal: Computer Use 抽 action + coordinate。
             # 例: "mcode-computer-use : click at (1024,768)"
-            #     "mcode-computer-use : type 'hello'"
             # 注意：coordinate 是 array,PowerShell 默认 $OFS=' ' 会让
             # "$coord" 渲染成 "(1024 768)" 不是 "(1024,768)"。必须
             # 显式 -join ','。' ' 在 pill 上看起来像数字被截断,
             # 影响用户判断坐标。
+            #
+            # SECURITY: `tool_input.text` is whatever the user typed. It
+            # reaches this function verbatim, and its output is written to
+            # status.json, the append-only island.log, and rendered on an
+            # always-on-top pill. That surface is shared-screen visible, so
+            # any password / token / verification code typed through Computer
+            # Use ends up in a screenshot, a screen share, or a screen
+            # recording. Never echo the raw text. Report the action and a
+            # length only, so the pill still answers "is the agent typing?"
+            # without carrying the secret.
             'mcode-computer-use' {
                 $act = if ($Event.tool_input.action) { [string]$Event.tool_input.action } else { '' }
                 if ($Event.tool_input.coordinate) {
@@ -114,8 +123,10 @@ function Format-ToolSummary {
                     $coordStr = "($($coord -join ','))"
                     $detail = "$act at $coordStr"
                 } elseif ($Event.tool_input.text) {
-                    $txt = [string]$Event.tool_input.text
-                    $detail = "$act '$txt'"
+                    # Length only. No substring, no length bucketing that
+                    # could leak content shape, no echo of the value.
+                    $len = ([string]$Event.tool_input.text).Length
+                    $detail = "$act <$len chars, redacted>"
                 } else {
                     $detail = $act
                 }
