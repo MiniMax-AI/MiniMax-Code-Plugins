@@ -287,6 +287,19 @@ $stateMap = @{
   error    = @{ dot='#FFEF4444'; ring='#FFEF4444'; label='mcode · 出错';       icon='✕' }
 }
 
+# 工具家族配色：working 态下用 family 色盖掉 state 色，一眼分辨"在读"和"在改"。
+# 只覆盖 dot/ring（视觉识别），不动 stateText 文案。
+# family 名与 detector 的 $TOOL_FAMILIES 值一一对应；缺 family 时回落到 state 色。
+$familyMap = @{
+  shell  = '#FF22C55E'   # bash / shell  → 绿
+  read   = '#FF3B82F6'   # read         → 蓝
+  write  = '#FFEAB308'   # edit / write → 黄
+  search = '#FFA855F7'   # grep / glob  → 紫
+  task   = '#FF06B6D4'   # task         → 青
+  web    = '#FFEC4899'   # web_search/fetch → 粉
+  plan   = '#FF8B5CF6'   # todowrite    → 紫罗兰
+}
+
 # 颜色转 brush
 function C($hex) { return (New-Object System.Windows.Media.SolidColorBrush([System.Windows.Media.ColorConverter]::ConvertFromString($hex))) }
 
@@ -453,12 +466,21 @@ function Update-State {
     [int]$TodoProgress = -2,
     [int]$Step = -1,
     [int]$Total = -1,
-    [string]$Detail = ''
+    [string]$Detail = '',
+    [string]$Family = ''
   )
   $s = $script:stateMap[$State]
   if (!$s) { $s = $script:stateMap['idle'] }
-  $script:statusDot.Fill = C $s.dot
-  $script:pulseRing.Fill = C $s.ring
+  # 家族色只作用于 active 态（thinking/working/waiting），这样 done 绿 / error 红
+  # 依然是"结果"语义，家族色只用来区分"在做什么"。
+  $dotHex  = $s.dot
+  $ringHex = $s.ring
+  if ($Family -and $State -in @('thinking','working','waiting')) {
+    $famHex = $script:familyMap[$Family]
+    if ($famHex) { $dotHex = $famHex; $ringHex = $famHex }
+  }
+  $script:statusDot.Fill = C $dotHex
+  $script:pulseRing.Fill = C $ringHex
   $script:stateText.Text = $s.label
   $script:messageText.Text = Build-DisplayMessage -Message $Message -Step $Step -Total $Total -Detail $Detail
   $script:actionIcon.Text = $s.icon
@@ -514,20 +536,20 @@ function Update-State {
     $script:progressFill.Visibility = 'Visible'
     $script:progressIndeterminate.Visibility = 'Collapsed'
     $script:progressScale.ScaleX = $clamped / 100.0
-    $script:progressFill.Background = C $s.dot
+    $script:progressFill.Background = C $dotHex
     Stop-IndeterminateShimmer
   } elseif ($isActive -and $hasTodoProgress) {
     $script:progressBar.Visibility = 'Visible'
     $script:progressFill.Visibility = 'Visible'
     $script:progressIndeterminate.Visibility = 'Collapsed'
     $script:progressScale.ScaleX = $todoClamped / 100.0
-    $script:progressFill.Background = C $s.dot
+    $script:progressFill.Background = C $dotHex
     Stop-IndeterminateShimmer
   } elseif ($isActive) {
     $script:progressBar.Visibility = 'Visible'
     $script:progressFill.Visibility = 'Collapsed'
     $script:progressIndeterminate.Visibility = 'Visible'
-    $script:progressShimmer.Fill = C $s.dot
+    $script:progressShimmer.Fill = C $dotHex
     $script:progressScale.ScaleX = 0
     Start-IndeterminateShimmer
   } else {
@@ -829,11 +851,14 @@ $timer.Add_Tick({
     if ($data.PSObject.Properties['step'] -and $null -ne $data.step) { $step = [int]$data.step }
     if ($data.PSObject.Properties['total'] -and $null -ne $data.total) { $total = [int]$data.total }
     if ($data.PSObject.Properties['detail'] -and $null -ne $data.detail) { $detail = [string]$data.detail }
-    $sig = "$($data.state)|$($data.message)|$prog|$usage|$resetMs|$todoP|$step|$total|$detail|$($data.ts)"
+    # family 也进 sig，否则同一工具连续 working 但换了家族不会重新上色
+    $family = ''
+    if ($data.PSObject.Properties['family'] -and $data.family) { $family = [string]$data.family }
+    $sig = "$($data.state)|$($data.message)|$family|$prog|$usage|$resetMs|$todoP|$step|$total|$detail|$($data.ts)"
     if ($sig -eq $script:lastStatusSig) { return }
     $script:lastStatusSig = $sig
-    Dbg "POLL: $($data.state) :: $($data.message) step=$step/$total detail=$detail (progress=$prog usage5h=$usage resetMs=$resetMs todoProgress=$todoP)"
-    Update-State -State $data.state -Message $data.message -Progress $prog -Usage5h $usage -Usage5hResetMs $resetMs -TodoProgress $todoP -Step $step -Total $total -Detail $detail
+    Dbg "POLL: $($data.state) :: $($data.message) family=$family step=$step/$total detail=$detail (progress=$prog usage5h=$usage resetMs=$resetMs todoProgress=$todoP)"
+    Update-State -State $data.state -Message $data.message -Progress $prog -Usage5h $usage -Usage5hResetMs $resetMs -TodoProgress $todoP -Step $step -Total $total -Detail $detail -Family $family
   } catch {
     Dbg "POLL ERR: $($_.Exception.Message)"
   }
@@ -859,9 +884,11 @@ if (Test-Path $statusFile) {
     if ($init.PSObject.Properties['step'] -and $null -ne $init.step) { $initStep = [int]$init.step }
     if ($init.PSObject.Properties['total'] -and $null -ne $init.total) { $initTotal = [int]$init.total }
     if ($init.PSObject.Properties['detail'] -and $null -ne $init.detail) { $initDetail = [string]$init.detail }
-    $script:lastStatusSig = "$($init.state)|$($init.message)|$initProg|$initUsage|$initReset|$initTodo|$initStep|$initTotal|$initDetail|$($init.ts)"
+    $initFamily = ''
+    if ($init.PSObject.Properties['family'] -and $init.family) { $initFamily = [string]$init.family }
+    $script:lastStatusSig = "$($init.state)|$($init.message)|$initFamily|$initProg|$initUsage|$initReset|$initTodo|$initStep|$initTotal|$initDetail|$($init.ts)"
     $script:lastStatusMtime = (Get-Item $statusFile).LastWriteTimeUtc.Ticks
-    Update-State -State $init.state -Message $init.message -Progress $initProg -Usage5h $initUsage -Usage5hResetMs $initReset -TodoProgress $initTodo -Step $initStep -Total $initTotal -Detail $initDetail
+    Update-State -State $init.state -Message $init.message -Progress $initProg -Usage5h $initUsage -Usage5hResetMs $initReset -TodoProgress $initTodo -Step $initStep -Total $initTotal -Detail $initDetail -Family $initFamily
   } catch {}
 } else {
   Update-State -State 'idle' -Message ''

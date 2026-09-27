@@ -497,6 +497,161 @@ const main = async () => {
         }
     }
 
+    // 5d. Drift lock: the round-18 tool-verb table. The pill shows a
+    // present-tense verb ("Running") while a tool is in flight and a
+    // past-tense one ("Ran") once it returns, mirroring the mcode CLI TUI
+    // descriptor table (launcher-GHPADSKI.js HL[]). Before this the pill
+    // showed the bare tool name for every phase, so "working" and "done"
+    // were indistinguishable at a glance.
+    //
+    // These locks are deliberately text-shaped rather than behavioral: a
+    // behavioral test would need a real mcode session log. What we can
+    // cheaply guarantee is that (a) the table exists, (b) it covers the
+    // tools the detector actually infers, and (c) all three Infer-State
+    // branches route through the verb lookup instead of hardcoding names.
+    const detectPath = join(PLUGIN_ROOT, 'mcode-status-detect.ps1');
+    if (!(await exists(detectPath))) {
+        out('FAIL', 'mcode-status-detect.ps1 missing (tool-verb drift lock skipped)');
+    } else {
+        const detect = await readFile(detectPath, 'utf8');
+
+        // (a) table + helpers present
+        for (const [label, re] of [
+            ['$TOOL_ACTIONS table', /\$TOOL_ACTIONS\s*=\s*@\{/],
+            ['$TOOL_FAMILIES table', /\$TOOL_FAMILIES\s*=\s*@\{/],
+            ['Get-ToolKey helper', /function Get-ToolKey\s*\(/],
+            ['Get-ToolVerb helper', /function Get-ToolVerb\s*\(/],
+            ['Get-ToolVerbFallback helper', /function Get-ToolVerbFallback\s*\(/],
+            ['Get-ToolFamily helper', /function Get-ToolFamily\s*\(/],
+        ]) {
+            if (re.test(detect)) {
+                out('PASS', `mcode-status-detect.ps1: ${label} present`);
+            } else {
+                out('FAIL', `mcode-status-detect.ps1: ${label} missing (round-18 tool-verb contract broken)`);
+            }
+        }
+
+        // (b) the table covers the tools users actually see. Each entry must
+        // carry all three phases; a partial entry would render an empty
+        // message and the pill would silently go blank for that tool.
+        const actionsMatch = detect.match(/\$TOOL_ACTIONS\s*=\s*@\{([\s\S]*?)\n\}/);
+        if (!actionsMatch) {
+            out('FAIL', 'mcode-status-detect.ps1: cannot slice $TOOL_ACTIONS body');
+        } else {
+            const body = actionsMatch[1];
+            const entryRe = /'([a-z0-9_]+)'\s*=\s*@\{\s*running\s*=\s*'([^']*)'\s*;\s*done\s*=\s*'([^']*)'\s*;\s*fail\s*=\s*'([^']*)'\s*\}/g;
+            const found = new Map();
+            let m;
+            while ((m = entryRe.exec(body)) !== null) {
+                found.set(m[1], { running: m[2], done: m[3], fail: m[4] });
+            }
+            out('PASS', `mcode-status-detect.ps1: $TOOL_ACTIONS has ${found.size} entries with all 3 phases`);
+
+            for (const required of ['bash', 'read', 'write', 'edit', 'grep', 'glob', 'task']) {
+                if (found.has(required)) {
+                    out('PASS', `$TOOL_ACTIONS covers "${required}"`);
+                } else {
+                    out('FAIL', `$TOOL_ACTIONS is missing "${required}" (the pill would show a bare name for it)`);
+                }
+            }
+            // Every mapped family must resolve to a family, otherwise the
+            // widget's $familyMap lookup silently falls back to the state
+            // color and the round-18 tinting never happens.
+            const famMatch = detect.match(/\$TOOL_FAMILIES\s*=\s*@\{([\s\S]*?)\n\}/);
+            if (!famMatch) {
+                out('FAIL', 'mcode-status-detect.ps1: cannot slice $TOOL_FAMILIES body');
+            } else {
+                for (const [key, fam] of Object.entries({
+                    bash: 'shell', read: 'read', edit: 'write', write: 'write',
+                    grep: 'search', glob: 'search', task: 'task',
+                    task_output: 'task', ask_user: 'task',
+                    web_search: 'web', web_fetch: 'web', todowrite: 'plan',
+                })) {
+                    const re = new RegExp(`'${key}'\\s*=\\s*'${fam}'`);
+                    if (re.test(famMatch[1])) {
+                        out('PASS', `$TOOL_FAMILIES maps "${key}" -> "${fam}"`);
+                    } else {
+                        out('FAIL', `$TOOL_FAMILIES does not map "${key}" -> "${fam}" (widget tinting will not fire for it)`);
+                    }
+                }
+            }
+        }
+
+        // (c) all three Infer-State branches must route through the verb
+        // lookup. This is the actual regression: reverting any one branch to
+        // `"$($m.toolName) $MSG_OK"` would still pass a "table exists" check
+        // while the pill went back to showing a bare name.
+        //
+        // There are TWO sites per state (the ledger.jsonl branch and the
+        // messages.jsonl branch), so a presence test is not enough -- breaking
+        // only the ledger branch leaves the messages branch matching and the
+        // check stays green. These locks assert a minimum occurrence count so
+        // that reverting EITHER site goes red.
+        for (const [label, re, min] of [
+            ['WORKING branch uses Get-ToolVerb', /state=\$S_WORKING;\s*message="\$verb\s/g, 2],
+            ['DONE branch uses Get-ToolVerb', /state=\$S_DONE;\s*message=\$verb/g, 2],
+            ['ERROR branch uses Get-ToolVerb', /state=\$S_ERROR;\s*message=\$verb/g, 2],
+        ]) {
+            const hits = detect.match(re);
+            const n = hits ? hits.length : 0;
+            if (n >= min) {
+                out('PASS', `mcode-status-detect.ps1: ${label} (${n}/${min} sites)`);
+            } else {
+                out('FAIL', `mcode-status-detect.ps1: ${label} -- only ${n}/${min} sites use the verb lookup; a branch was reverted to a hardcoded tool name`);
+            }
+        }
+
+        // (d) family must be threaded to disk, or the widget can never tint.
+        if (/family\s*=\s*\$famField/.test(detect)) {
+            out('PASS', 'mcode-status-detect.ps1: Write-Status emits the family field');
+        } else {
+            out('FAIL', 'mcode-status-detect.ps1: Write-Status does not emit `family` (widget tinting is dead code)');
+        }
+    }
+
+    // 5e. Drift lock: the widget must consume `family` and apply it ONLY to
+    // active states. Tinting `done`/`error` by family would destroy the
+    // green=success / red=failure signal the user relies on.
+    const widgetPath = join(PLUGIN_ROOT, 'mcode-island.ps1');
+    if (!(await exists(widgetPath))) {
+        out('FAIL', 'mcode-island.ps1 missing (family-tint drift lock skipped)');
+    } else {
+        const widget = await readFile(widgetPath, 'utf8');
+        if (!/\$familyMap\s*=\s*@\{/.test(widget)) {
+            out('FAIL', 'mcode-island.ps1: $familyMap table missing');
+        } else {
+            const famBlock = widget.match(/\$familyMap\s*=\s*@\{([\s\S]*?)\n\}/);
+            for (const fam of ['shell', 'read', 'write', 'search', 'task', 'web', 'plan']) {
+                if (famBlock && new RegExp(`^\\s*${fam}\\s*=`, 'm').test(famBlock[1])) {
+                    out('PASS', `$familyMap covers "${fam}"`);
+                } else {
+                    out('FAIL', `$familyMap does not cover "${fam}"`);
+                }
+            }
+        }
+        if (/\[string\]\$Family\s*=\s*''/.test(widget)) {
+            out('PASS', 'mcode-island.ps1: Update-State takes a $Family parameter');
+        } else {
+            out('FAIL', 'mcode-island.ps1: Update-State has no $Family parameter');
+        }
+        // The gate must be checked on the *family tint* line specifically.
+        // `$State -in @('thinking','working','waiting')` also appears on the
+        // pulse / elapsed / progress branches, so a bare substring test stays
+        // green after the tint is ungated -- a false green this section exists
+        // to prevent. Anchor on the `$Family -and $State` conjunction instead.
+        if (/\$Family\s+-and\s+\$State\s+-in\s+@\('thinking','working','waiting'\)/.test(widget)) {
+            out('PASS', 'mcode-island.ps1: family tint is gated to active states (done/error keep their result color)');
+        } else {
+            out('FAIL', 'mcode-island.ps1: family tint is not gated to active states (done/error would lose their green/red result signal)');
+        }
+        if (/\$script:statusDot\.Fill\s*=\s*C\s+\$dotHex/.test(widget)
+            && /\$script:pulseRing\.Fill\s*=\s*C\s+\$ringHex/.test(widget)) {
+            out('PASS', 'mcode-island.ps1: dot/ring are painted from the resolved color (family-aware)');
+        } else {
+            out('FAIL', 'mcode-island.ps1: dot/ring still read $s.dot directly, bypassing family tinting');
+        }
+    }
+
     // 5b. Drift lock: permission-request.ps1 must emit `{"decision":"ask"}`,
     // not `allow` or `deny`. The 0.2.4 Runtime default for PermissionRequest
     // is fail-closed; an observer Hook that returns `allow` or `deny`

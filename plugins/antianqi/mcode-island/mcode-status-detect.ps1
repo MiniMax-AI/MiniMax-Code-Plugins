@@ -1,4 +1,4 @@
-﻿# mcode-status-detect.ps1 - 后台守护进程 (v0.2.1)
+# mcode-status-detect.ps1 - 后台守护进程 (v0.2.1)
 # 监听 mcode session log，实时推断 agent 状态，写到 status.json
 # 让 widget 不依赖 agent 主动调 notify-island.ps1 也能跟着动
 #
@@ -78,8 +78,6 @@ $S_DETECTOR  = _s (0x64,0x65,0x74,0x65,0x63,0x74,0x6F,0x72)
 # messages (UTF-8 encoded Chinese)
 $MSG_USER_WAIT  = _s (0xE7,0xAD,0x89,0xE7,0x94,0xA8,0xE6,0x88,0xB7)              # 等用户
 $MSG_AGENT_DONE = _s (0x61,0x67,0x65,0x6E,0x74,0x20,0xE5,0x88,0x9A,0xE5,0x9B,0x9E,0xE5,0xA4,0x8D,0xEF,0xBC,0x8C,0xE7,0xAD,0x89,0xE7,0x94,0xA8,0xE6,0x88,0xB7)  # agent 刚回复，等用户
-$MSG_FAIL       = _s (0xE5,0xA4,0xB1,0xE8,0xB4,0xA5)                              # 失败
-$MSG_OK         = _s (0xE5,0xAE,0x8C,0xE6,0x88,0x90)                              # 完成
 $MSG_COMPACT    = _s (0x73,0x65,0x73,0x73,0x69,0x6F,0x6E,0x20,0xE5,0x8E,0x8B,0xE7,0xBC,0xA9)  # session 压缩
 $MSG_MCODE_EXIT = _s (0x6D,0x63,0x6F,0x64,0x65,0x20,0xE8,0xBF,0x9B,0xE7,0xA8,0x8B,0xE5,0xB7,0xB2,0xE9,0x80,0x80,0xE5,0x87,0xBA)  # mcode 进程已退出
 $MSG_IDLE_FMT   = _s (0xE5,0xB7,0xB2,0xE9,0x9D,0x99,0xE9,0x9C,0xA8,0x20,0x7B,0x30,0x7D,0x73)  # 已静默 {0}s
@@ -94,6 +92,47 @@ $R_TAKEOVER      = _s (0x74,0x61,0x6B,0x65,0x6F,0x76,0x65,0x72,0x20,0x74,0x6F,0x
 # session log file names (优先 ledger)
 $FNAME_LEDGER    = _s (0x6C,0x65,0x64,0x67,0x65,0x72,0x2E,0x6A,0x73,0x6F,0x6E,0x6C)   # ledger.jsonl
 $FNAME_MESSAGES  = _s (0x6D,0x65,0x73,0x73,0x61,0x67,0x65,0x73,0x2E,0x6A,0x73,0x6F,0x6E,0x6C)  # messages.jsonl
+# tool action verbs (ASCII — matches the mcode CLI TUI descriptor table HL)
+# Mirrors @minimax-ai/code launcher-GHPADSKI.js HL[] so the pill shows the same
+# present-tense verb ("Running") while the tool is in flight and the same
+# past-tense verb ("Ran") once it returns, instead of a generic tool name.
+$TOOL_ACTIONS = @{
+  'bash'        = @{ running='Running';     done='Ran';          fail='Command failed' }
+  'shell'       = @{ running='Running';     done='Ran';          fail='Command failed' }
+  'edit'        = @{ running='Editing';     done='Edited';       fail='Edit failed' }
+  'write'       = @{ running='Writing';     done='Wrote';        fail='Write failed' }
+  'read'        = @{ running='Reading';     done='Read';         fail='Read failed' }
+  'grep'        = @{ running='Searching';   done='Searched';     fail='Search failed' }
+  'search'      = @{ running='Searching';   done='Searched';     fail='Search failed' }
+  'glob'        = @{ running='Listing';     done='Listed';       fail='List failed' }
+  'list'        = @{ running='Listing';     done='Listed';       fail='List failed' }
+  'task'        = @{ running='Delegating';  done='Delegated';    fail='Delegation failed' }
+  'web_search'  = @{ running='Web searching'; done='Web searched'; fail='Web search failed' }
+  'web_fetch'   = @{ running='Fetching';     done='Fetched';      fail='Fetch failed' }
+  'todowrite'   = @{ running='Planning';    done='Planned';      fail='Plan update failed' }
+  'task_output' = @{ running='Reading task'; done='Read task';    fail='Task read failed' }
+  'task_append' = @{ running='Steering task'; done='Steered task'; fail='Task steer failed' }
+  'task_query'  = @{ running='Checking tasks'; done='Checked tasks'; fail='Task check failed' }
+  'ask_user'    = @{ running='Asking';      done='Asked';        fail='Question failed' }
+  'request_feature_enable' = @{ running='Requesting access'; done='Access requested'; fail='Access request failed' }
+}
+# Tool family — the pill tints its dot by family instead of by state, so a
+# read looks different from a write at a glance. Mirrors the `family` field
+# of the mcode CLI TUI descriptor table (launcher-GHPADSKI.js HL[]).
+# Unknown tools get no family (null) and fall back to the state color.
+$TOOL_FAMILIES = @{
+  'bash' = 'shell';  'shell' = 'shell'
+  'read' = 'read'
+  'edit' = 'write';  'write' = 'write'
+  'grep' = 'search'; 'search' = 'search'; 'glob' = 'search'; 'list' = 'search'
+  'task' = 'task'; 'task_output' = 'task'; 'task_append' = 'task'; 'ask_user' = 'task'
+  'web_search' = 'web'; 'web_fetch' = 'web'
+  'todowrite' = 'plan'
+  'request_feature_enable' = 'plan'
+}
+# default for tools not in the table (kept lowercase so it reads like a name)
+$TOOL_FALLBACK_RUNNING = _s (0x55,0x73,0x69,0x6E,0x67)   # Using
+$TOOL_FALLBACK_DONE    = _s (0x55,0x73,0x65,0x64)         # Used
 # mcode node cli.js path fragment for cmdline match
 $CLI_FRAGMENT    = _s (0x40,0x6D,0x69,0x6E,0x69,0x6D,0x61,0x78,0x2D,0x61,0x69,0x2F,0x63,0x6F,0x64,0x65,0x2F,0x63,0x6C,0x69,0x2E,0x6A,0x73)  # @minimax-ai/code/cli.js
 # .mcode-active directory name
@@ -327,6 +366,49 @@ function Read-LastMessage($file) {
   }
 }
 
+# Normalize a tool name to the key shape used by $TOOL_ACTIONS
+# (mcode's own Wt(): trim, lowercase, '-' -> '_'). Untrusted agent-supplied
+# strings, so guard the length: a 4KB "tool name" must not become a map key.
+function Get-ToolKey($name) {
+  if (-not $name) { return '' }
+  $n = ([string]$name).Trim().ToLowerInvariant().Replace('-', '_')
+  if ($n.Length -gt 64) { $n = $n.Substring(0, 64) }
+  return $n
+}
+
+# Resolve the action verb for a tool in a given phase.
+#   phase: 'running' | 'done' | 'fail'
+# Returns '' for an unknown tool so callers can fall back to the raw name.
+function Get-ToolVerb($name, $phase) {
+  $key = Get-ToolKey $name
+  if (-not $key) { return '' }
+  $entry = $TOOL_ACTIONS[$key]
+  if (-not $entry) { return '' }
+  switch ($phase) {
+    'running' { return [string]$entry.running }
+    'done'    { return [string]$entry.done }
+    'fail'    { return [string]$entry.fail }
+  }
+  return ''
+}
+
+# Verb for an unknown tool: "Using <name>" / "Used <name>", so the pill
+# never falls back to a bare identifier with no signal about the phase.
+function Get-ToolVerbFallback($name, $phase) {
+  $key = Get-ToolKey $name
+  if (-not $key) { return '' }
+  if ($phase -eq 'running') { return "$TOOL_FALLBACK_RUNNING $key" }
+  return "$TOOL_FALLBACK_DONE $key"
+}
+
+function Get-ToolFamily($name) {
+  $key = Get-ToolKey $name
+  if (-not $key) { return $null }
+  $fam = $TOOL_FAMILIES[$key]
+  if ($fam) { return [string]$fam }
+  return $null
+}
+
 function Infer-State($msg) {
   if (-not $msg) { return $null }
   # ledger.jsonl 事件格式：{kind, phase, action, ...}
@@ -337,11 +419,23 @@ function Infer-State($msg) {
     $kind = [string]$msg.kind
     $phase = [string]$msg.phase
     if ($kind -eq $S_TOOLRESULT) {
-      if ($msg.isError -eq $true) { return @{ state=$S_ERROR; message="$($msg.toolName) $MSG_FAIL" } }
-      return @{ state=$S_DONE; message="$($msg.toolName) $MSG_OK" }
+      $tv = [string]$msg.toolName
+      if ($msg.isError -eq $true) {
+        $verb = Get-ToolVerb $tv 'fail'
+        if (-not $verb) { $verb = Get-ToolVerbFallback $tv 'fail' }
+        return @{ state=$S_ERROR; message=$verb; family=$null }
+      }
+      $verb = Get-ToolVerb $tv 'done'
+      if (-not $verb) { $verb = Get-ToolVerbFallback $tv 'done' }
+      return @{ state=$S_DONE; message=$verb; family=(Get-ToolFamily $tv) }
     }
     if ($kind -eq 'toolCall' -or $kind -eq $S_TOOLCALL) {
-      return @{ state=$S_WORKING; message="$($msg.toolName) : $($msg.action)" }
+      $tv = [string]$msg.toolName
+      $verb = Get-ToolVerb $tv 'running'
+      if (-not $verb) { $verb = Get-ToolVerbFallback $tv 'running' }
+      $detail = [string]$msg.action
+      if ($detail) { return @{ state=$S_WORKING; message="$verb $detail"; family=(Get-ToolFamily $tv) } }
+      return @{ state=$S_WORKING; message=$verb; family=(Get-ToolFamily $tv) }
     }
     if ($kind -eq $S_ASSISTANT -and $phase -eq $S_THINKING) {
       return @{ state=$S_THINKING; message='' }
@@ -370,13 +464,16 @@ function Infer-State($msg) {
 
     if ($hasTool) {
       $tool  = $hasTool.name
+      $verb  = Get-ToolVerb $tool 'running'
+      if (-not $verb) { $verb = Get-ToolVerbFallback $tool 'running' }
       $args  = $hasTool.arguments
       if ($args) {
         # ConvertTo-Json is a single .NET call; keep it (no pipeline leak).
         $argsJson = $args | ConvertTo-Json -Compress -Depth 2 -WarningAction SilentlyContinue
         if ($argsJson.Length -gt 60) { $argsJson = $argsJson.Substring(0, 57) + $DOTS }
-      } else { $argsJson = '' }
-      return @{ state=$S_WORKING; message="$tool : $argsJson" }
+        return @{ state=$S_WORKING; message="$verb $argsJson"; family=(Get-ToolFamily $tool) }
+      }
+      return @{ state=$S_WORKING; message=$verb; family=(Get-ToolFamily $tool) }
     }
     if ($hasThink -and -not $hasText) { return @{ state=$S_THINKING; message='' } }
     if ($hasText) { return @{ state=$S_IDLE; message=$MSG_AGENT_DONE } }
@@ -386,8 +483,14 @@ function Infer-State($msg) {
   if ($role -eq $S_TOOLRESULT) {
     $tool  = $m.toolName
     $isErr = $m.isError -eq $true
-    if ($isErr) { return @{ state=$S_ERROR; message="$tool $MSG_FAIL" } }
-    return @{ state=$S_DONE; message="$tool $MSG_OK" }
+    if ($isErr) {
+      $verb = Get-ToolVerb $tool 'fail'
+      if (-not $verb) { $verb = Get-ToolVerbFallback $tool 'fail' }
+      return @{ state=$S_ERROR; message=$verb; family=$null }
+    }
+    $verb = Get-ToolVerb $tool 'done'
+    if (-not $verb) { $verb = Get-ToolVerbFallback $tool 'done' }
+    return @{ state=$S_DONE; message=$verb; family=(Get-ToolFamily $tool) }
   }
 
   if ($role -eq $S_COMPACTION) { return @{ state=$S_IDLE; message=$MSG_COMPACT } }
@@ -395,18 +498,21 @@ function Infer-State($msg) {
   return $null
 }
 
-function Write-Status($state, $message) {
+function Write-Status($state, $message, $family) {
   $tmp = "$statusFile.tmp"
   # usage5h：0..100 表示"剩余"百分比（不是已用！）；null = 未知/未拉到
   # usage5hResetMs：距下次刷新的毫秒数；null = 未知
   # todoProgress：0..100 完成百分比（cancelled 不计）；null = 无 todo 列表
+  # family：工具家族（shell/read/write/search/task/web/plan）；null = 无状态色可用
   $usageField  = if ($null -ne $script:plan5hRemainingPct) { [int]$script:plan5hRemainingPct } else { $null }
   $resetField  = if ($null -ne $script:plan5hResetMs)     { [int]$script:plan5hResetMs }     else { $null }
   $todoPct     = if ($null -ne $script:plan5hTodoData)    { [int]$script:plan5hTodoData.percent } else { $null }
   $todoCnt     = if ($null -ne $script:plan5hTodoData)    { ("{0}/{1}" -f $script:plan5hTodoData.completed, $script:plan5hTodoData.total) } else { $null }
+  $famField    = if ($family) { [string]$family } else { $null }
   $payload = [PSCustomObject]@{
     state          = $state
     message        = $message
+    family         = $famField
     progress       = -1
     usage5h        = $usageField
     usage5hResetMs = $resetField
@@ -577,7 +683,7 @@ try {
       }
 
       if ($shouldWrite) {
-        Write-Status $inferred.state $inferred.message
+        Write-Status $inferred.state $inferred.message $inferred.family
         if ($script:lastDetectedState -ne $newState) {
           Log-Line "$newState :: $newMsg ($reason)"
           $script:lastDetectedState = $newState
@@ -596,7 +702,8 @@ try {
       $curForUsage = Read-StatusObj
       $sForU = if ($curForUsage) { [string]$curForUsage.state } else { $S_IDLE }
       $mForU = if ($curForUsage) { [string]$curForUsage.message } else { '' }
-      Write-Status $sForU $mForU
+      $fForU = if ($curForUsage -and $curForUsage.PSObject.Properties['family']) { $curForUsage.family } else { $null }
+      Write-Status $sForU $mForU $fForU
       Log-Line ("5h usage refreshed: remaining=" + $curPct + "% resetMs=" + $curMs)
     }
 
@@ -609,7 +716,8 @@ try {
       $curForTodo = Read-StatusObj
       $sForT = if ($curForTodo) { [string]$curForTodo.state } else { $S_IDLE }
       $mForT = if ($curForTodo) { [string]$curForTodo.message } else { '' }
-      Write-Status $sForT $mForT
+      $fForT = if ($curForTodo -and $curForTodo.PSObject.Properties['family']) { $curForTodo.family } else { $null }
+      Write-Status $sForT $mForT $fForT
       $script:plan5hLastWrittenTodoPct = $curTodoPct
       if ($null -ne $curTodoData) {
         Log-Line ("todo refreshed: " + $curTodoData.completed + "/" + $curTodoData.total + " = " + $curTodoPct + "%")
