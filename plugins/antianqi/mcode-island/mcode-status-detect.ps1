@@ -553,6 +553,19 @@ function Write-Status($state, $message, $family) {
   $todoPct     = if ($null -ne $script:plan5hTodoData)    { [int]$script:plan5hTodoData.percent } else { $null }
   $todoCnt     = if ($null -ne $script:plan5hTodoData)    { ("{0}/{1}" -f $script:plan5hTodoData.completed, $script:plan5hTodoData.total) } else { $null }
   $famField    = if ($family) { [string]$family } else { $null }
+  # step / total / detail 是 agent（hook）推的 sub-step 状态，不是 detector
+  # 推的。detector 每次刷 5h 用量或 todo 进度都会重写整个 payload，如果这里
+  # 不把现有值读回来合并，正常使用中的 sub-step 进度会被静默清零
+  # （round-19 review hetaoBackend #2）。读-改-写，不是覆盖。
+  $prev = Read-StatusObj
+  $stepField   = -1
+  $totalField  = -1
+  $detailField = ''
+  if ($prev) {
+    if ($prev.PSObject.Properties['step'])   { $stepField   = [int]$prev.step }
+    if ($prev.PSObject.Properties['total'])  { $totalField  = [int]$prev.total }
+    if ($prev.PSObject.Properties['detail'] -and $null -ne $prev.detail) { $detailField = [string]$prev.detail }
+  }
   $payload = [PSCustomObject]@{
     state          = $state
     message        = $message
@@ -562,6 +575,9 @@ function Write-Status($state, $message, $family) {
     usage5hResetMs = $resetField
     todoProgress   = $todoPct
     todosCount     = $todoCnt
+    step           = $stepField
+    total          = $totalField
+    detail         = $detailField
     ts             = (Get-Date).ToString($FMT_O)
     source         = $S_DETECTOR
   } | ConvertTo-Json -Compress
