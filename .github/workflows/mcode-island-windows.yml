@@ -443,12 +443,24 @@ jobs:
             if (Get-Command $c -ErrorAction SilentlyContinue) { $chosen = $c; break }
           }
           if ($chosen) {
-            Write-Host "PowerShell on PATH: $chosen ($((& $c -NoProfile -Command '$PSVersionTable.PSVersion.ToString()')))"
+            Write-Host "PowerShell on PATH: $chosen ($((& $chosen -NoProfile -Command '$PSVersionTable.PSVersion.ToString()')))"
           } else {
-            Write-Host "No PowerShell found on PATH; the suite will skip its behavioral checks and fail"
+            Write-Host "No PowerShell found on PATH; the suite will fail loudly rather than skip"
           }
 
-          node scripts/test-substep-progress.mjs
+          # Resolve the suite path against the repo root instead of relying on
+          # the working directory. GitHub Actions runs every `run:` block from
+          # $GITHUB_WORKSPACE, not from the plugin directory, so a bare
+          # `scripts/...` path resolves to the wrong place and node exits
+          # MODULE_NOT_FOUND. It passed locally only because the local shell
+          # happened to be sitting in the plugin directory.
+          $suite = 'plugins/antianqi/mcode-island/scripts/test-substep-progress.mjs'
+          if (-not (Test-Path $suite)) {
+            throw "$suite not found (cwd: $((Get-Location).Path))"
+          }
+          Write-Host "Suite: $((Resolve-Path $suite).Path)"
+
+          node $suite
           if ($LASTEXITCODE -ne 0) {
             throw "test-substep-progress.mjs failed with exit code $LASTEXITCODE"
           }
