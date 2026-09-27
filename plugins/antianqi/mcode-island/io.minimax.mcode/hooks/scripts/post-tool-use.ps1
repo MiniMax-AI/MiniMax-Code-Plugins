@@ -32,9 +32,18 @@ if ($summary -and $summary.StartsWith("$tool : ")) {
     $detail = $summary
 }
 
+# Build-DisplayMessage 只在 Step > 0 时才用 detail（Step<=0 直接返回
+# Message），所以只传 -Detail 的话 detail 永远不显示
+#（round-19 review hetaoBackend #4）。这里给一个确定的 Step/Total，
+# 渲染成 "step 1/1 · <detail>"。
+# PostToolUse 是单次工具结果，不参与多步序列，所以用 1/1 而不是
+# 猜一个更大的分母——猜错会让 pill 显示 "step 1/0"。
+$step  = 1
+$total = 1
+
 if ($isError) {
-    Push-Island -State error -Message "$tool failed" -Detail $detail
+    Push-Island -State error -Message "$tool failed" -Detail $detail -Step $step -Total $total
 } else {
-    Push-Island -State done -Message "$tool ok" -Detail $detail
+    Push-Island -State done -Message "$tool ok" -Detail $detail -Step $step -Total $total
 }
 exit 0
