@@ -67,6 +67,7 @@ $S_COMPACTION = _s (0x63,0x6F,0x6D,0x70,0x61,0x63,0x74,0x69,0x6F,0x6E,0x53,0x75,
 $S_IDLE     = _s (0x69,0x64,0x6C,0x65)
 $S_THINKING = _s (0x74,0x68,0x69,0x6E,0x6B,0x69,0x6E,0x67)
 $S_WORKING  = _s (0x77,0x6F,0x72,0x6B,0x69,0x6E,0x67)
+$S_WAITING  = _s (0x77,0x61,0x69,0x74,0x69,0x6E,0x67)
 $S_DONE     = _s (0x64,0x6F,0x6E,0x65)
 $S_ERROR    = _s (0x65,0x72,0x72,0x6F,0x72)
 # content type discriminators
@@ -125,7 +126,11 @@ $TOOL_FAMILIES = @{
   'read' = 'read'
   'edit' = 'write';  'write' = 'write'
   'grep' = 'search'; 'search' = 'search'; 'glob' = 'search'; 'list' = 'search'
-  'task' = 'task'; 'task_output' = 'task'; 'task_append' = 'task'; 'ask_user' = 'task'
+  'task' = 'task'; 'task_output' = 'task'; 'task_append' = 'task'
+  # ask_user is deliberately absent: it maps to the `waiting` state (see
+  # Infer-State), and a waiting pill should wear the state color, not a family
+  # tint. Giving it 'task' would paint the "come back, I'm blocked" signal in
+  # the same cyan as an in-flight delegation.
   'web_search' = 'web'; 'web_fetch' = 'web'
   'todowrite' = 'plan'
   'request_feature_enable' = 'plan'
@@ -409,6 +414,35 @@ function Get-ToolFamily($name) {
   return $null
 }
 
+# ask_user is the one tool whose "in flight" state means the agent is BLOCKED,
+# not busy. When the questionnaire pops, nothing progresses until the user
+# comes back and answers. Reporting it as `working` tells the user "leave it
+# alone, it's making progress", which is the opposite of the truth -- so it
+# maps to `waiting` (the same state the permission hook uses) with a question
+# count, because "Asking 2 questions" is exactly the "come back" signal.
+#
+# Returns $null for every other tool, so the caller can fall through to the
+# normal verb lookup.
+function Test-IsAskUser($name) {
+  return ((Get-ToolKey $name) -eq 'ask_user')
+}
+
+function Get-AskQuestionCount($toolArgs) {
+  # Parameter is deliberately NOT named $args: that is a PowerShell automatic
+  # variable, and shadowing it makes every read inside the function return the
+  # function's own argument list instead of the caller's value. It silently
+  # produced a count of 0 for every input, which degraded the message to a
+  # bare "Asking".
+  if (-not $toolArgs) { return 0 }
+  try {
+    $a = $toolArgs
+    if ($a -is [string]) { $a = $a | ConvertFrom-Json -ErrorAction Stop }
+    $qs = $a.PSObject.Properties['questions']
+    if (-not $qs -or $null -eq $qs.Value) { return 0 }
+    return @($qs.Value).Count
+  } catch { return 0 }
+}
+
 function Infer-State($msg) {
   if (-not $msg) { return $null }
   # ledger.jsonl 事件格式：{kind, phase, action, ...}
@@ -431,6 +465,11 @@ function Infer-State($msg) {
     }
     if ($kind -eq 'toolCall' -or $kind -eq $S_TOOLCALL) {
       $tv = [string]$msg.toolName
+      if (Test-IsAskUser $tv) {
+        $n = Get-AskQuestionCount $msg.arguments
+        if ($n -gt 0) { return @{ state=$S_WAITING; message="Asking $n question$(if ($n -gt 1) { 's' })"; family=$null } }
+        return @{ state=$S_WAITING; message='Asking'; family=$null }
+      }
       $verb = Get-ToolVerb $tv 'running'
       if (-not $verb) { $verb = Get-ToolVerbFallback $tv 'running' }
       $detail = [string]$msg.action
@@ -464,9 +503,14 @@ function Infer-State($msg) {
 
     if ($hasTool) {
       $tool  = $hasTool.name
+      $args  = $hasTool.arguments
+      if (Test-IsAskUser $tool) {
+        $n = Get-AskQuestionCount $args
+        if ($n -gt 0) { return @{ state=$S_WAITING; message="Asking $n question$(if ($n -gt 1) { 's' })"; family=$null } }
+        return @{ state=$S_WAITING; message='Asking'; family=$null }
+      }
       $verb  = Get-ToolVerb $tool 'running'
       if (-not $verb) { $verb = Get-ToolVerbFallback $tool 'running' }
-      $args  = $hasTool.arguments
       if ($args) {
         # ConvertTo-Json is a single .NET call; keep it (no pipeline leak).
         $argsJson = $args | ConvertTo-Json -Compress -Depth 2 -WarningAction SilentlyContinue
@@ -643,9 +687,12 @@ try {
     }
 
     # 3) 60s 无活动 → idle 兜底（每次循环都跑，不再被 mtime 缓存屏蔽）
+    #    `waiting` 豁免：ask_user 弹出来之后，agent 就是在等用户，全程不会有
+    #    新消息写入 session log。如果不豁免，60s 后它会被降级成"已静默 60s"
+    #    灰点——而"该回来了"这个信号恰好在用户离开最久的时候最需要保留。
     if ($inferred -and $latestFile) {
       $curState = [string]$inferred.state
-      $isSettled = ($curState -eq $S_IDLE) -or ($curState -eq $S_ERROR)
+      $isSettled = ($curState -eq $S_IDLE) -or ($curState -eq $S_ERROR) -or ($curState -eq $S_WAITING)
       if (-not $isSettled) {
         $age = ($now - [System.IO.File]::GetLastWriteTime($latestFile)).TotalSeconds
         if ($age -gt 60) {
@@ -663,7 +710,11 @@ try {
 
       $isOwn = ($curSource -eq $S_DETECTOR)
       $stateChanged = ($curState -ne $newState)
-      $isSettleNew  = ($newState -eq $S_IDLE) -or ($newState -eq $S_ERROR)
+      # waiting 加入 settle 集合：ask_user 触发时，pre-tool-use hook 会先推一条
+      # `working`，detector 随后才从 session log 推出 `waiting`。如果 waiting
+      # 不算 settle，detector 永远抢不回这条 status.json，pill 会一直卡在
+      # "执行中"——正好毁掉这个状态存在的意义。
+      $isSettleNew  = ($newState -eq $S_IDLE) -or ($newState -eq $S_ERROR) -or ($newState -eq $S_WAITING)
 
       $shouldWrite = $false
       $reason = ''

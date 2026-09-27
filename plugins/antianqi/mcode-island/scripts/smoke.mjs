@@ -567,6 +567,10 @@ const main = async () => {
                     task_output: 'task', ask_user: 'task',
                     web_search: 'web', web_fetch: 'web', todowrite: 'plan',
                 })) {
+                    // ask_user is intentionally excluded from this list. It was
+                    // mapped to the 'task' family in round-18 and is deliberately
+                    // unmapped in 5d2, where it reports `waiting` instead.
+                    if (key === 'ask_user') continue;
                     const re = new RegExp(`'${key}'\\s*=\\s*'${fam}'`);
                     if (re.test(famMatch[1])) {
                         out('PASS', `$TOOL_FAMILIES maps "${key}" -> "${fam}"`);
@@ -606,6 +610,72 @@ const main = async () => {
             out('PASS', 'mcode-status-detect.ps1: Write-Status emits the family field');
         } else {
             out('FAIL', 'mcode-status-detect.ps1: Write-Status does not emit `family` (widget tinting is dead code)');
+        }
+
+        // 5d2. Drift lock: ask_user must report `waiting`, not `working`.
+        //
+        // ask_user is the only tool whose "in flight" state means the agent is
+        // BLOCKED on the user rather than busy. Showing it as `working` tells
+        // the user "leave it alone, it is making progress", which is the
+        // opposite of the truth and defeats the entire point of the state.
+        // This matters most on `full access` setups, where the permission hook
+        // never fires and ask_user is the only thing that ever blocks.
+        for (const [label, re] of [
+            ['$S_WAITING is defined', /\$S_WAITING\s*=\s*_s\s*\(/],
+            ['Test-IsAskUser helper', /function Test-IsAskUser\s*\(/],
+            ['Get-AskQuestionCount helper', /function Get-AskQuestionCount\s*\(/],
+        ]) {
+            if (re.test(detect)) {
+                out('PASS', `mcode-status-detect.ps1: ${label} present`);
+            } else {
+                out('FAIL', `mcode-status-detect.ps1: ${label} missing (ask_user cannot report waiting)`);
+            }
+        }
+
+        // Both tool paths (ledger.jsonl and messages.jsonl) must route
+        // ask_user to waiting. A presence test is not enough here for the same
+        // reason as the verb locks above: there are two sites, and breaking one
+        // leaves the other matching.
+        const askSites = detect.match(/state=\$S_WAITING;\s*message="Asking \$n question/g) || [];
+        if (askSites.length >= 2) {
+            out('PASS', `mcode-status-detect.ps1: both ask_user tool paths report waiting (${askSites.length}/2 sites)`);
+        } else {
+            out('FAIL', `mcode-status-detect.ps1: only ${askSites.length}/2 ask_user paths report waiting; a path still treats a blocked agent as busy`);
+        }
+
+        // $args is a PowerShell automatic variable. Naming a function parameter
+        // $args shadows it, and every read inside the function returns the
+        // function's own argument list instead of the caller's value -- which
+        // here silently produced a question count of 0 for every input. Lock
+        // the parameter name so the regression cannot come back unnoticed.
+        if (/function Get-AskQuestionCount\(\$toolArgs\)/.test(detect)) {
+            out('PASS', 'mcode-status-detect.ps1: Get-AskQuestionCount avoids the $args automatic variable');
+        } else {
+            out('FAIL', 'mcode-status-detect.ps1: Get-AskQuestionCount takes $args, which shadows the PowerShell automatic variable and always yields a count of 0');
+        }
+
+        // waiting must be in BOTH settle sets. The 60s no-activity fallback
+        // would otherwise downgrade a pending questionnaire to "已静默 60s"
+        // exactly when the user has been away longest, and the takeover
+        // arbitration would let a hook-pushed `working` win forever.
+        for (const [label, re] of [
+            ['60s idle fallback exempts waiting', /\$isSettled\s*=.*-or\s*\(\$curState\s+-eq\s+\$S_WAITING\)/],
+            ['takeover arbitration treats waiting as settle', /\$isSettleNew\s*=.*-or\s*\(\$newState\s+-eq\s+\$S_WAITING\)/],
+        ]) {
+            if (re.test(detect)) {
+                out('PASS', `mcode-status-detect.ps1: ${label}`);
+            } else {
+                out('FAIL', `mcode-status-detect.ps1: ${label} (a pending ask_user would be downgraded or shadowed)`);
+            }
+        }
+
+        // ask_user must NOT carry a family tint: it wears the waiting state
+        // color, and painting it the task cyan would look like an in-flight
+        // delegation -- the confusion this change exists to remove.
+        if (!/'ask_user'\s*=\s*'task'/.test(detect)) {
+            out('PASS', 'mcode-status-detect.ps1: ask_user carries no family tint (waits in the state color)');
+        } else {
+            out('FAIL', "mcode-status-detect.ps1: ask_user is still mapped to the 'task' family, so a blocked agent wears the delegation color");
         }
     }
 
