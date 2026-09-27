@@ -695,10 +695,14 @@ function Toggle-CallerWindow {
         Dbg "TOGGLE: forced to work area ({0},{1}) {2}x{3}" -f $wa.Left, $wa.Top, $cx, $cy
       }
       # 3) 抢 z-order 到最前(SetWindowPos(HWND_TOP) 不需要 foreground 权限)
-      #    注意:cx=0/cy=0 + 缺 SWP_NOSIZE 会被 Windows 当成"resize 到 0x0",
-      #    触发 WT 的 min-size 兜底,变成 480x76 strip。必须加 SWP_NOSIZE。
+      #    SWP_NOSIZE：cx=0/cy=0 缺它会被 Windows 当成"resize 到 0x0"，
+      #    触发 WT 的 min-size 兜底，变成 480x76 strip。
+      #    SWP_NOMOVE：X=0/Y=0 缺它会把窗口真的挪到 (0,0)。单屏时无所谓，
+      #    但副屏（monitor 原点非 0）上会把还原后的窗口甩到主屏左上角。
+      #    同样不能加 SWP_NOZORDER——那个 flag 会让 hWndInsertAfter 被忽略，
+      #    HWND_TOP 就白传了，BringWindowToTop 之后仍可能被别的窗口盖住。
       [WinAPI]::AllowSetForegroundWindow([uint32]$r.Pid) | Out-Null
-      $nofollow = [WinAPI]::SWP_NOACTIVATE -bor [WinAPI]::SWP_NOZORDER -bor [WinAPI]::SWP_NOSIZE
+      $nofollow = [WinAPI]::SWP_NOACTIVATE -bor [WinAPI]::SWP_NOSIZE -bor [WinAPI]::SWP_NOMOVE
       [WinAPI]::SetWindowPos($r.Hwnd, [WinAPI]::HWND_TOP, 0, 0, 0, 0, $nofollow) | Out-Null
       [WinAPI]::BringWindowToTop($r.Hwnd) | Out-Null
       [WinAPI]::SetForegroundWindow($r.Hwnd) | Out-Null

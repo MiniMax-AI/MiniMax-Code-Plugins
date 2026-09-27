@@ -480,19 +480,61 @@ const main = async () => {
                 out('PASS', 'mcode-island.ps1: Toggle restore branch forces work-area size via MonitorFromWindow + SetWindowPos (fills 2560x1440 physical monitor, not just 1920x1080 logical)');
             }
 
-            // Round-17: the follow-up z-order SetWindowPos call (HWND_TOP
-            // to push WT forward without foreground permission) MUST carry
-            // SWP_NOSIZE. Without it, cx=0/cy=0 is interpreted as "resize
-            // to 0x0", triggering WT's min-size fallback to a 480x76 strip —
-            // exactly the regression the user saw. Verified empirically:
-            // a click via computer-use on the live widget left WT at 480x76
-            // despite the work-area SetWindowPos having run a few ms earlier.
+            // Round-17 + round-19: the follow-up z-order SetWindowPos call
+            // (HWND_TOP, to push WT forward without foreground permission)
+            // must carry both SWP_NOSIZE and SWP_NOMOVE, and must NOT carry
+            // SWP_NOZORDER.
+            //
+            //   SWP_NOSIZE  cx=0/cy=0 is otherwise "resize to 0x0", triggering
+            //               WT's min-size fallback to a 480x76 strip — the
+            //               exact regression the user saw in round-17.
+            //   SWP_NOMOVE  X=0/Y=0 is otherwise "move to (0,0)". Invisible on
+            //               a single primary monitor, but any secondary monitor
+            //               whose origin is not 0 gets the restored window
+            //               yanked to the primary's top-left corner
+            //               (round-19 review #3).
+            //   no SWP_NOZORDER  that flag makes Windows ignore
+            //               hWndInsertAfter entirely, so passing HWND_TOP
+            //               alongside it is self-defeating: the whole point of
+            //               this call is the z-order change.
+            //
+            // The round-17 version of this lock asserted the literal
+            // `SWP_NOZORDER -bor SWP_NOSIZE`, which is exactly the pair the
+            // review asked to change, so it had to be rewritten rather than
+            // updated. Match on the flag names, not their order.
             if (!/SWP_NOSIZE\s*=\s*0x0001/.test(widget)) {
                 out('FAIL', 'mcode-island.ps1: WinAPI class missing SWP_NOSIZE constant (0x0001).');
-            } else if (!/SWP_NOZORDER\s*-bor\s*\[WinAPI\]::SWP_NOSIZE/.test(toggleBody)) {
-                out('FAIL', 'mcode-island.ps1: Toggle z-order SetWindowPos(HWND_TOP) does not include SWP_NOSIZE. cx=0/cy=0 will resize WT to 0x0 and trigger its 480x76 min-size fallback.');
+            } else if (!/SWP_NOMOVE\s*=\s*0x0002/.test(widget)) {
+                out('FAIL', 'mcode-island.ps1: WinAPI class missing SWP_NOMOVE constant (0x0002).');
             } else {
-                out('PASS', 'mcode-island.ps1: Toggle z-order SetWindowPos carries SWP_NOSIZE (won\'t trigger WT min-size 480x76 fallback)');
+                // Pull the flags expression that feeds the HWND_TOP call. It
+                // is assigned just ABOVE the call, not inside it, so anchor on
+                // the assignment and look for the HWND_TOP call within the
+                // same statement rather than scanning forward from the call.
+                const flagsExpr = (toggleBody.match(/\$nofollow\s*=\s*([^\n\r]+)/) || [null, ''])[1];
+                const hasZorderCall = /SetWindowPos\([^)]*HWND_TOP/.test(toggleBody);
+
+                const problems = [];
+                if (!hasZorderCall) {
+                    problems.push('the HWND_TOP SetWindowPos call is gone, so the window is never pushed forward');
+                }
+                if (!/SWP_NOSIZE/.test(flagsExpr)) {
+                    problems.push('SWP_NOSIZE (cx=0/cy=0 would resize WT to 0x0 and trigger its 480x76 min-size fallback)');
+                }
+                if (!/SWP_NOMOVE/.test(flagsExpr)) {
+                    problems.push('SWP_NOMOVE (X=0/Y=0 would move the window to (0,0) on any monitor whose origin is not 0)');
+                }
+                if (/SWP_NOZORDER/.test(flagsExpr)) {
+                    problems.push('SWP_NOZORDER is present, which makes Windows ignore hWndInsertAfter and defeats the HWND_TOP z-order call');
+                }
+
+                if (problems.length > 0) {
+                    for (const p of problems) {
+                        out('FAIL', `mcode-island.ps1: Toggle z-order SetWindowPos(HWND_TOP) — ${p}`);
+                    }
+                } else {
+                    out('PASS', 'mcode-island.ps1: Toggle z-order SetWindowPos carries SWP_NOSIZE + SWP_NOMOVE and omits SWP_NOZORDER (size preserved, position preserved, z-order actually applied)');
+                }
             }
         }
     }
