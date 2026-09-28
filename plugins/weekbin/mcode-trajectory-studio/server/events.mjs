@@ -100,16 +100,34 @@ export function getEvents(store, {
     // point of the cap. Casting to BLOB makes SQLite report the stored byte length,
     // which for a blob is the record header rather than a scan, so this is also the
     // cheaper of the two forms.
+    // Two steps, because one is not.
+    //
+    // Selecting the page inline with the byte-cap expression made SQLite sort the
+    // candidate rows *including* `data_json` before the OFFSET applied: the sorter
+    // carried the whole payload column of the session to produce 200 records. On a
+    // 200k-row session that is the difference between a 16 ms first page and a 228 ms
+    // deep one, and the cost is paid by the offset, not by the rows returned.
+    //
+    // The inner query projects the key columns only and finds the page; the join then
+    // fetches those rows by primary key. The sort moves 4 narrow columns instead of the
+    // whole payload, and the byte test still runs in SQL on the 200 rows that were
+    // actually selected, so an oversized value is never materialised.
     rows = store.db.prepare(`
+      WITH page AS (
+        SELECT id, role, created_at_ms, turn_id, source
+        FROM local_runtime_message_rows
+        WHERE ${where.join(' AND ')}
+        ORDER BY id ASC
+        LIMIT ? OFFSET ?
+      )
       SELECT
-        id, role, created_at_ms, turn_id, source,
-        CASE WHEN length(CAST(data_json AS BLOB)) <= ? THEN data_json ELSE NULL END AS data_json,
-        length(CAST(data_json AS BLOB)) AS data_bytes
-      FROM local_runtime_message_rows
-      WHERE ${where.join(' AND ')}
-      ORDER BY id ASC
-      LIMIT ? OFFSET ?
-    `).all(cap, ...params, safeLimit, safeOffset);
+        page.id AS id, page.role AS role, page.created_at_ms AS created_at_ms,
+        page.turn_id AS turn_id, page.source AS source,
+        CASE WHEN length(CAST(rows.data_json AS BLOB)) <= ? THEN rows.data_json ELSE NULL END AS data_json,
+        length(CAST(rows.data_json AS BLOB)) AS data_bytes
+      FROM page JOIN local_runtime_message_rows AS rows ON rows.id = page.id
+      ORDER BY page.id ASC
+    `).all(...params, safeLimit, safeOffset, cap);
   } catch (error) {
     // The reason travels with the page. A caller that got `source: 'error'` with no
     // explanation had no way to tell a broken query from a session that genuinely has
