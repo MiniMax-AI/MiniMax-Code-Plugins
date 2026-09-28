@@ -208,7 +208,7 @@ turn_mu6wnx9w_ee64qg   2042       457       90
 同作者 `plugins/hetaoBackend/mcode-dynamic-workflows/`（v0.8.0）采用：
 
 - `mcp.json` → MCP **stdio** server（`dist/main.mjs --stdio`），供 agent 调用
-- `src/http.mjs` → 本地 `http.createServer`，服务 `web/index.html` + `app.js` + `style.css` + `/api/*`
+- `server/http.mjs` → 本地 `http.createServer`，服务 `web/index.html` + `web/js/*` + `style.css` + `/api/*`
 - 工具 `workflow_dashboard` 「返回可收藏的本机可视化面板地址，无需 token」
 - Skill 指导 agent 用宿主 `mcp_browser({action, input})` 打开该 URL
 - 安全：`check(req.headers.host===new URL(origin).host)`、Origin 校验、自定义头防 CSRF、严格 CSP、`nosniff`、`no-store`
@@ -321,7 +321,7 @@ plugins/weekbin/mcode-trajectory-studio/
 1. **顶部 Overview 时间条** — 按 `created_at_ms` 投影真实开始/耗时；助手条区分「思考段」与「输出段」（用 `thinking_duration_ms` vs `request_duration_ms - thinking_duration_ms` 近似 dsh 的 TTFT/解码双色）；悬停显示精确耗时
 2. **轮次记录表** — 按 `turn_id` 分组，标注轮次/步骤边界、请求编号、累计 token
 3. **检查器** — 点开一条：token 用量（input/output/cache/total）、`request_duration_ms`、`thinking_duration_ms`、工具入参、工具结果、状态
-4. **筛选** — 按 `source`（api/thread-goal/questionnaire/background-task/task）、按角色、按工具名、仅失败
+4. **筛选** — 按人类/注入来源、按工具、按失败，以及按轮次 ID 与正文文本
 5. **压缩区段** — `kind=compaction` 落独立 `Between turns` 段，显示 messages/tokens 前后
 6. **子代理视图** — 通过 `parent_session_id` / `background_tasks` 展示嵌套
 7. **搜索** — 走 FTS5
@@ -502,19 +502,19 @@ plugins/weekbin/mcode-trajectory-studio/
 ├── plugin.json                   便携 Agent Plugins 1.0 清单
 ├── mcp.json                      MCP stdio 声明
 ├── .claude-plugin/plugin.json    v0.4.0+ 清单（含 skills / mcpServers）
-├── skills/SKILL.md               顶层 Skill（0.4.0+）
+├── skills/mcode-trajectory-studio/SKILL.md   顶层 Skill（0.4.0+）
 ├── skills/mcode-trajectory-studio/SKILL.md   字节一致副本（0.3.x + 校验器）
 ├── server/
 │   ├── main.mjs    入口：stdio / --serve / --doctor
 │   ├── store.mjs   数据层：SQLite 只读 + messages.jsonl 兜底
-│   ├── mcp.mjs     MCP JSON-RPC + 6 个工具
+│   ├── mcp.mjs     MCP JSON-RPC + 7 个工具
 │   ├── http.mjs    本地面板 + /api/* + 安全栅栏
 │   └── redact.mjs  脱敏与长度封顶
 ├── web/
 │   ├── index.html
 │   ├── app.js      缩放/平移时间轴、轮次表、检查器、筛选
 │   └── style.css
-└── test/store.test.mjs           18 个测试
+└── test/store.test.mjs           40 个测试
 ```
 
 **零依赖**：仅用 Node 标准库（`node:sqlite` 要求 Node 22+，本机 24.19.0 验证通过），无构建步骤，无 `node_modules`。
@@ -524,9 +524,9 @@ plugins/weekbin/mcode-trajectory-studio/
 | 验证项 | 结果 |
 |---|---|
 | `npm run validate`（仓库校验器） | `OK plugin weekbin/mcode-trajectory-studio`，29 个插件全通过 |
-| `npm run check`（全仓库 363 测试） | **363 pass / 0 fail** |
-| 插件自带测试 `node --test` | **18 pass / 0 fail** |
-| MCP `initialize` / `tools/list` / 6 工具调用 | 全部返回有效结果，真实数据 |
+| `npm run check`（全仓库 559 测试） | **559 pass / 0 fail** |
+| 插件自带测试 `node --test` | **202 pass / 0 fail** |
+| MCP `initialize` / `tools/list` / 7 工具调用 | 全部返回有效结果，真实数据 |
 | `--doctor` 真实数据 | 500+ 会话可见，SQLite + FTS 均可用 |
 | HTTP 面板（Playwright 实开） | 渲染正常，无 console 错误 |
 | 安全栅栏 | 缺自定义头 → 403；伪造 `Host` → 403 |
@@ -561,8 +561,8 @@ plugins/weekbin/mcode-trajectory-studio/
 |---|---|
 | 侧边栏会话应按 workspace 分类并支持折叠 | 按 `workspaceDir` 分组，组头显示路径尾段与数量徽标，可折叠，折叠状态存 `localStorage`；另加「折叠切换」一键全折/全展 |
 | 时间轴应按 INPUT / MODEL / TOOL 三行叙事，而不是按轮次堆叠 | 重做为三条共享时间轴的通道：INPUT（用户消息）、MODEL（请求，内含思考/输出双色段）、TOOL（后台任务与子代理，另加由记录间隔推导的浅色等待段）。通道内重叠块贪心装箱为子行。缩放/平移/重置保留 |
-| 默认显示正文，溢出单行省略，点开侧边栏看详情 | `detailLevel` 默认改为 `full`；记录行 `white-space: nowrap` + `text-overflow: ellipsis`；空正文时依次回退到思考内容、工具名，不再显示「（无正文）」；点击行打开右侧检查器 |
-| 后台任务/子代理不能展开、看不出作用 | 改为可展开卡片：任务 ID、起止时刻、耗时、所属轮次、执行模式、子代理名、工具调用 ID、子会话 ID、完整命令、**输出日志尾部**（`~/.minimax/background-tasks/<id>/output.log`，最多 16 KiB），以及三个操作：查看输出 / 打开子会话轨迹 / 定位调用记录 |
+| 默认显示正文，溢出单行省略，点开侧边栏看详情 | `detailLevel` 默认为 `summary`（需要正文时显式请求 `full`）；记录行 `white-space: nowrap` + `text-overflow: ellipsis`；空正文时依次回退到思考内容、工具名，不再显示「（无正文）」；点击行打开右侧检查器 |
+| 后台任务/子代理不能展开、看不出作用 | 改为可展开卡片：任务 ID、起止时刻、耗时、所属轮次、执行模式、子代理名、工具调用 ID、子会话 ID、完整命令，以及打开子会话轨迹 / 定位调用记录。**面板不再渲染输出日志尾部**（该区域已移除）；`/api/task-output` 与 `trajectory_task_output` 仍提供尾部，输出路径与 id 形状由服务端重建，不接受存储的 URI |
 
 新增能力对应关系：
 

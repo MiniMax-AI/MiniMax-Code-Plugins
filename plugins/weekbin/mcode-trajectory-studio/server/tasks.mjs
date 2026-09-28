@@ -13,10 +13,10 @@ import { num } from './json.mjs';
 import { tableExists } from './sqlite.mjs';
 import { openContainedRead } from './fsutil.mjs';
 import { redactText } from './redact.mjs';
-import { LIMITS, clamp, backgroundTasksRoot } from './config.mjs';
+import { LIMITS, clamp, normalizeOffset, backgroundTasksRoot } from './config.mjs';
 
 /** Background tasks owned by a session, including sub-agent dispatches. */
-export function listBackgroundTasks(store, sessionId, { limit = LIMITS.tasks.default, kind } = {}) {
+export function listBackgroundTasks(store, sessionId, { limit = LIMITS.tasks.default, kind, offset = 0 } = {}) {
   if (!store.db || !tableExists(store.db, 'local_runtime_background_tasks')) return [];
   const expr = (jsonPath) => `json_extract(record_json, '${jsonPath}')`;
   const where = ['owner_session_id = ?'];
@@ -25,7 +25,7 @@ export function listBackgroundTasks(store, sessionId, { limit = LIMITS.tasks.def
     where.push('kind = ?');
     params.push(kind);
   }
-  params.push(clamp(limit, LIMITS.tasks));
+  params.push(clamp(limit, LIMITS.tasks), normalizeOffset(offset));
   let rows = [];
   try {
     rows = store.db.prepare(`
@@ -44,7 +44,7 @@ export function listBackgroundTasks(store, sessionId, { limit = LIMITS.tasks.def
       FROM local_runtime_background_tasks
       WHERE ${where.join(' AND ')}
       ORDER BY created_at_ms DESC
-      LIMIT ?
+      LIMIT ? OFFSET ?
     `).all(...params);
   } catch {
     return [];
@@ -79,13 +79,43 @@ export function listBackgroundTasks(store, sessionId, { limit = LIMITS.tasks.def
  * Index background tasks by the tool call that spawned them, so a tool call and
  * its measured duration live on one row instead of two separate views.
  */
-export function taskIndex(store, sessionId) {
-  const index = new Map();
-  for (const task of listBackgroundTasks(store, sessionId, { limit: LIMITS.tasks.max })) {
-    if (task.toolCallId) index.set(task.toolCallId, task);
-    else index.set(`__task__${task.taskId}`, task);
+/**
+ * How many tasks a session owns, for the same `kind` filter.
+ *
+ * Without this, a capped page cannot say what it left out. The task list used to take
+ * the newest N with no count and no cursor, so a session with 2,500 tasks answered
+ * 2,000, reported `truncated: false, omitted: 0`, and left the oldest 500 unreachable
+ * through every surface — a complete-looking answer about an incomplete list.
+ */
+export function countBackgroundTasks(store, sessionId, { kind } = {}) {
+  if (!store.db || !tableExists(store.db, 'local_runtime_background_tasks')) return 0;
+  const where = ['owner_session_id = ?'];
+  const params = [sessionId];
+  if (kind) {
+    where.push('kind = ?');
+    params.push(kind);
   }
-  return index;
+  try {
+    return num(store.db.prepare(
+      `SELECT COUNT(*) AS n FROM local_runtime_background_tasks WHERE ${where.join(' AND ')}`,
+    ).get(...params)?.n) ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function taskIndex(store, sessionId) {
+  // Cached for the same reason as the timeline: every page of every event read built
+  // this, and building it is a full scan of the task table.
+  const updatedAtMs = store.getSession(sessionId)?.updatedAtMs ?? 0;
+  return store.cached(store.tasksCache, `${sessionId}|${updatedAtMs}`, () => {
+    const index = new Map();
+    for (const task of listBackgroundTasks(store, sessionId, { limit: LIMITS.tasks.max })) {
+      if (task.toolCallId) index.set(task.toolCallId, task);
+      else index.set(`__task__${task.taskId}`, task);
+    }
+    return index;
+  });
 }
 
 /**

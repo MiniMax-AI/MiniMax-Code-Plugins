@@ -88,8 +88,9 @@ question and does not repeat another surface's answer:
   paged from the server (200 at a time) instead of fetching 1000 with full content up front, and
   the timeline reads a separate compact projection so the axis always covers the whole session.
 - **Inspector** is tabbed: 概要 (hierarchy, status, token usage, context split), 载荷 (tool arguments
-  or message body), 结果 (result text plus a **failure evidence** block), 计时 (recorded instant,
-  request/thinking/decode time, and whether the tool duration was measured or absent), and Schema.
+  or message body, with the result text and a **failure evidence** block alongside), and 计时 (recorded
+  instant, request/thinking/decode time, and whether the tool duration was measured or absent). There
+  is no Schema tab.
 - **Failure localisation** is first-class: the header carries a `⚠ N 处失败（定位）` jump, the stream
   marks each failure inline, and the result tab separates **hard** failures (Traceback, stderr,
   `is_error`) from **soft** ones (a non-zero exit code, which is often just `grep` finding nothing).

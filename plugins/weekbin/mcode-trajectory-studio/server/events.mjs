@@ -8,7 +8,7 @@
  */
 
 import { num, parseJson } from './json.mjs';
-import { LIMITS, clamp } from './config.mjs';
+import { EGRESS_STRING_LIMIT, LIMITS, clamp, normalizeOffset } from './config.mjs';
 import { taskIndex } from './tasks.mjs';
 
 /**
@@ -55,6 +55,8 @@ export function getEvents(store, {
   turnId,
   withTasks = true,
   maxJsonBytes = LIMITS.eventJsonBytes,
+  stringLimit = EGRESS_STRING_LIMIT,
+  pageBytes = LIMITS.eventPageBytes,
 } = {}) {
   if (!store.db) return { events: [], total: 0, nextOffset: null, offset: 0, source: 'unavailable' };
   const safeLimit = clamp(limit, LIMITS.events);
@@ -120,21 +122,44 @@ export function getEvents(store, {
 
   const taskByCall = withTasks ? taskIndex(store, sessionId) : new Map();
   let oversized = 0;
-  const events = rows.map((row, index) => {
+  let projectedBytes = 0;
+  let cutForBytes = 0;
+  // The per-row cap and the response budget bound two different things and neither
+  // bounds this. A page of 1,000 rows at the 8 MiB row ceiling is 8 GiB of `data_json`
+  // to answer at most 2 MiB: every one of those rows would be parsed into JavaScript
+  // and swept by the redaction regexes before the budget that trims the reply ever
+  // ran. Measured on twenty 1 MiB rows, 6.4 s of sweeping for a 0.38 MB answer.
+  //
+  // So the page stops projecting once it has read a bounded number of raw bytes. The
+  // rows are already in hand — the savings are the parse and the sweep, which is
+  // where the time goes — and the cursor stays honest, because `nextOffset` counts the
+  // rows that were actually delivered and the client simply asks again.
+  const events = [];
+  for (const [index, row] of rows.entries()) {
     const position = safeOffset + index;
+    const size = num(row.data_bytes) ?? 0;
+    if (projectedBytes + size > pageBytes && events.length > 0) { cutForBytes = index + 1; break; }
+    projectedBytes += size;
     if (row.data_json === null && num(row.data_bytes) !== null && row.data_bytes > cap) {
       oversized += 1;
-      const stub = projectEvent({ ...row, data_json: '{}' }, position, 'summary', taskByCall);
+      const stub = projectEvent({ ...row, data_json: '{}' }, position, 'summary', taskByCall, stringLimit);
       stub.oversized = true;
       stub.bytes = num(row.data_bytes);
-      return stub;
+      events.push(stub);
+      continue;
     }
-    return projectEvent(row, position, detailLevel, taskByCall);
-  });
+    events.push(projectEvent(row, position, detailLevel, taskByCall, stringLimit));
+  }
   if (oversized > 0) {
     store.warn(`events_oversized:${oversized} record(s) exceeded ${cap} bytes and were returned as metadata only`);
   }
-  const consumed = safeOffset + rows.length;
+  // The cursor counts the rows this reply actually carries, whether they were dropped
+  // by the byte budget or not: a cursor that skipped over them would lose records
+  // permanently, which is the one thing a paging cursor must never do.
+  const consumed = safeOffset + events.length;
+  if (cutForBytes > 0) {
+    store.warn(`events_page_bytes:${cutForBytes} row(s) past the ${pageBytes}-byte page budget; ask again with the cursor`);
+  }
   return {
     events,
     total,
@@ -142,11 +167,30 @@ export function getEvents(store, {
     // was actually read rather than what it asked for.
     offset: safeOffset,
     nextOffset: consumed < total ? consumed : null,
+    pageBytesTruncated: cutForBytes > 0,
     source: 'sqlite',
   };
 }
 
-function projectEvent(row, index, detailLevel, taskByCall = new Map()) {
+/**
+ * Clip a field to the egress string limit, before anything reads it in full.
+ *
+ * The redaction sweep is regex work over every character of every field, and it used
+ * to run on the *raw* field: a 1 MiB `msg_content` was walked in its entirety and
+ * then cut to 20 KB on the way out. Measured on a session of twenty 1 MiB records,
+ * that was 6.4 s of sweeping to answer 0.38 MB.
+ *
+ * Clipping here moves the cut in front of the sweep, so the sweep only ever sees what
+ * survives it. Clipping before redacting is safe rather than merely faster: a secret
+ * cut in half by the clip is either outside the kept prefix entirely, or present in
+ * it in a form the key/value rule still matches — the prefix of `api_key=sk-live…`
+ * is still `api_key=sk-live`.
+ */
+function clipText(value, limit) {
+  return typeof value === 'string' && value.length > limit ? value.slice(0, limit) : value;
+}
+
+function projectEvent(row, index, detailLevel, taskByCall = new Map(), stringLimit = EGRESS_STRING_LIMIT) {
   const data = parseJson(row.data_json) || {};
   const usage = data.usage && typeof data.usage === 'object' ? data.usage : null;
   const contextUsage = data.context_usage && typeof data.context_usage === 'object' ? data.context_usage : null;
@@ -214,17 +258,17 @@ function projectEvent(row, index, detailLevel, taskByCall = new Map()) {
           hasOutput: task?.hasOutput ?? false,
         };
         if (detailLevel === 'full') {
-          projected.args = call?.tool_call_args ?? null;
-          projected.result = call?.tool_call_result_data ?? null;
-          projected.description = task?.description ?? null;
+          projected.args = clipText(call?.tool_call_args ?? null, stringLimit);
+          projected.result = clipText(call?.tool_call_result_data ?? null, stringLimit);
+          projected.description = clipText(task?.description ?? null, stringLimit);
         }
         return projected;
       })
     : null;
 
   if (detailLevel === 'full') {
-    event.content = typeof data.msg_content === 'string' ? data.msg_content : null;
-    event.thinking = typeof data.thinking_content === 'string' ? data.thinking_content : null;
+    event.content = clipText(typeof data.msg_content === 'string' ? data.msg_content : null, stringLimit);
+    event.thinking = clipText(typeof data.thinking_content === 'string' ? data.thinking_content : null, stringLimit);
     if (data.metadata && typeof data.metadata === 'object') event.metadata = data.metadata;
   }
 
@@ -256,20 +300,6 @@ export function getTurnSummaries(store, sessionId) {
  */
 const DOC_SQL = `CASE WHEN json_valid(data_json) THEN data_json ELSE '{}' END`;
 
-/**
- * A record offset a caller can actually page with.
- *
- * The cursor this module hands out is `offset + delivered` or the store's own
- * `nextOffset`, and a client feeds that value straight back in. So the offset has to
- * be a non-negative integer before it reaches SQL, whatever the caller sent: `1.5`,
- * `"3"` and `"abc"` all reached `OFFSET ?` verbatim, where the two invalid forms raise
- * `datatype mismatch` and take the whole page down.
- */
-export function normalizeOffset(offset) {
-  const parsed = Number(offset);
-  if (!Number.isFinite(parsed)) return 0;
-  return Math.max(0, Math.trunc(parsed));
-}
 
 function computeTurnSummaries(store, sessionId) {
   try {
@@ -307,6 +337,15 @@ function computeTurnSummaries(store, sessionId) {
  */
 export function getTimeline(store, sessionId, { cap = LIMITS.timeline } = {}) {
   if (!store.db) return { points: [], total: 0, truncated: false };
+  // Cached against the session's `updated_at_ms`, like the statistics and turn folds
+  // beside it. The panel asks for the timeline on every overview, so an uncached fold
+  // was 7 `json_extract`s over the whole session per request (78 ms at 6,000 rows) —
+  // for a value that changes only when the session does.
+  const updatedAtMs = store.getSession(sessionId)?.updatedAtMs ?? 0;
+  return store.cached(store.timelineCache, `${sessionId}|${updatedAtMs}|${cap}`, () => computeTimeline(store, sessionId, cap));
+}
+
+function computeTimeline(store, sessionId, cap) {
   const expr = (jsonPath) => `json_extract(${DOC_SQL}, '${jsonPath}')`;
   try {
     const rows = store.db.prepare(`
@@ -339,7 +378,10 @@ export function getTimeline(store, sessionId, { cap = LIMITS.timeline } = {}) {
       durationMs: num(row.duration_ms),
       thinkingMs: num(row.thinking_ms),
     }));
-    if (truncated) store.warn(`timeline_truncated:${rows.length - cap} point(s) past the ${cap} cap`);
+    // The warning says the axis was cut without claiming to know by how much: the
+    // query read one row past the cap and stopped, so the number of records after it
+    // was never counted, and a warning that guessed would be a worse kind of wrong.
+    if (truncated) store.warn(`timeline_truncated:more than ${cap} points; the axis was cut at the cap`);
     return { points, total: points.length, truncated };
   } catch (error) {
     store.warn(`timeline_failed:${error.message}`);

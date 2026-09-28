@@ -89,6 +89,15 @@ export const LIMITS = Object.freeze({
    * dropped — the reader still needs to know it exists and how large it is.
    */
   eventJsonBytes: 8 * 1024 * 1024,
+  /**
+   * How much raw `data_json` one page may project into JavaScript.
+   *
+   * The per-row ceiling bounds one record; this bounds the page, so the work a request
+   * can cause is a function of this constant rather than of `limit` times the row
+   * ceiling — which is 8 GiB. Rows past it are left for the next page, and the cursor
+   * says so.
+   */
+  eventPageBytes: 8 * 1024 * 1024,
 });
 
 /** Per-session folded totals kept warm; browsing revisits sessions constantly. */
@@ -170,4 +179,25 @@ export function clamp(value, { min, max, default: fallback }) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(max, Math.max(min, Math.trunc(parsed)));
+}
+
+/**
+ * A record offset a caller can actually page with.
+ *
+ * `OFFSET ?` binds a literal, so anything that is not a non-negative integer reaches
+ * SQLite as-is and raises `datatype mismatch`: a fraction, a numeric string and a
+ * non-number all took the whole read down, and the empty page that followed was
+ * reported as a session that was "not in the projection".
+ *
+ * It lives here rather than in a query module because both the event read and the task
+ * read need it, and putting it in either would make the two import each other.
+ *
+ * The cursors these offsets feed are `offset + delivered` and the store's own
+ * `nextOffset`, and clients hand that value straight back in, so an offset that is not
+ * an integer is not only a failed read — it poisons the next one.
+ */
+export function normalizeOffset(offset) {
+  const parsed = Number(offset);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.trunc(parsed));
 }

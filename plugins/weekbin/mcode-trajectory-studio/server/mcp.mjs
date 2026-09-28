@@ -8,9 +8,9 @@
 import { createInterface } from 'node:readline';
 
 import { boundPayloadList, redactEvent, redactPayload, redactPath, redactText } from './redact.mjs';
-import { EGRESS_MAX_DEPTH, EGRESS_MAX_ENTRIES, EGRESS_STRING_LIMIT, EGRESS_TOTAL_BYTES_MCP } from './config.mjs';
+import { EGRESS_MAX_DEPTH, EGRESS_MAX_ENTRIES, EGRESS_STRING_LIMIT, EGRESS_TOTAL_BYTES_MCP, normalizeOffset } from './config.mjs';
 import { SESSION_KINDS } from './store.mjs';
-import { normalizeOffset } from './events.mjs';
+
 
 export const SERVER_NAME = 'mcode-trajectory-studio';
 export const SERVER_VERSION = '0.1.3';
@@ -127,6 +127,9 @@ export const TOOLS = [
     inputSchema: obj({
       sessionId: str('Exact session ID. Omit to use the most recently updated session.'),
       limit: int('Maximum tasks to return.', { minimum: 1, maximum: 2000, default: 200 }),
+      // The list is newest-first, so a capped page needs a cursor: without one the
+      // oldest tasks of a long session were unreachable and the reply did not say so.
+      offset: int('Zero-based task offset, for reaching older tasks.', { minimum: 0, default: 0 }),
       kind: str('Restrict to one task kind, for example "bash" or "subagent".'),
     }),
   },
@@ -165,10 +168,24 @@ export function createHandler({ store, studio, homeDir, redactRoots = [] }) {
   };
 }
 
+/**
+ * Which session a tool call is about.
+ *
+ * `undefined` — the argument omitted — means "the most recently updated session",
+ * which is what the tool description promises. An explicitly empty string is not the
+ * same thing: it is a value the caller supplied, it matches no session, and treating
+ * it as absent returned a *different* session's records under the name the caller
+ * asked about. A caller whose session id came from an unfilled variable got plausible
+ * data for someone else's session.
+ */
 async function resolveSessionId(store, sessionId) {
-  if (sessionId) return sessionId;
-  const [latest] = store.listSessions({ limit: 1 });
-  return latest?.sessionId ?? null;
+  if (sessionId === undefined || sessionId === null) {
+    const [latest] = store.listSessions({ limit: 1 });
+    return latest?.sessionId ?? null;
+  }
+  if (typeof sessionId === 'string' && sessionId.trim() === '') throw new Error('unknown_session_id');
+  if (typeof sessionId === 'string') return sessionId;
+  throw new Error('invalid_session_id');
 }
 
 async function callTool(ctx, name, args = {}) {
@@ -301,22 +318,33 @@ async function callTool(ctx, name, args = {}) {
     case 'trajectory_tasks': {
       const sessionId = await resolveSessionId(store, args.sessionId);
       if (!sessionId) throw new Error('no_sessions_available');
-      const tasks = store.listBackgroundTasks(sessionId, { limit: args.limit ?? 200, kind: args.kind });
+      const total = store.countBackgroundTasks(sessionId, { kind: args.kind });
+      const at = normalizeOffset(args.offset ?? 0);
+      const tasks = store.listBackgroundTasks(sessionId, {
+        limit: args.limit ?? 200, kind: args.kind, offset: at,
+      });
       // The same total-frame budget the event list gets. `limit` alone was the only
       // bound here, and `limit: 2000` of full tasks is roughly a 32 MB frame — the
       // event list was protected from exactly this and the task list was not.
       //
-      // The aggregate fields below describe the records in *this* reply, which is
-      // what `omitted`/`truncated` are for: a caller that needs the session's whole
-      // task set lowers `limit` or asks again.
+      // `total` and `nextOffset` are what make a short page honest. The list is
+      // newest-first, so a capped page used to answer `truncated: false, omitted: 0`
+      // while the session's oldest tasks were unreachable through every surface: a
+      // 2,500-task session returned its newest 2,000 and described the result as
+      // complete. The aggregate fields describe the records in this reply, which is
+      // what `omitted` says.
       const bounded = boundPayloadList(tasks, { maxBytes: EGRESS_TOTAL_BYTES_MCP });
       const delivered = bounded.items;
+      const covered = at + tasks.length;
       return {
         sessionId,
         returned: delivered.length,
         totalMs: delivered.reduce((sum, task) => sum + (task.durationMs ?? 0), 0),
         failed: delivered.filter((task) => task.status === 'failed').length,
         subagents: delivered.filter((task) => task.kind === 'subagent').length,
+        total,
+        offset: at,
+        nextOffset: covered < total ? covered : null,
         truncated: bounded.truncated,
         omitted: bounded.omitted,
         tasks: delivered,

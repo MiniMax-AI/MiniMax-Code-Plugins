@@ -62,6 +62,13 @@ export class Store {
     // browsing — then costs nothing, and the first visit is the only one that scans.
     this.statsCache = new Map();
     this.turnsCache = new Map();
+    // The timeline and the task index are per-session folds of data that only changes
+    // when the session does, and both were recomputed on every single request: the
+    // timeline is 7 `json_extract`s over up to 6,000 rows (78 ms measured), and the
+    // task index is a full scan of the task table with no index on `owner_session_id`
+    // (12.7 ms at 5k tasks), paid on every page of every event read.
+    this.timelineCache = new Map();
+    this.tasksCache = new Map();
   }
 
   /**
@@ -99,8 +106,10 @@ export class Store {
     for (const key of [...this.statsCache.keys()]) {
       if (key.startsWith(`${sessionId}|`)) this.statsCache.delete(key);
     }
-    for (const key of [...this.turnsCache.keys()]) {
-      if (key.startsWith(`${sessionId}|`)) this.turnsCache.delete(key);
+    for (const map of [this.turnsCache, this.timelineCache, this.tasksCache]) {
+      for (const key of [...map.keys()]) {
+        if (key.startsWith(`${sessionId}|`)) map.delete(key);
+      }
     }
   }
 
@@ -137,6 +146,7 @@ export class Store {
   /* --------------------------------------------------------------- tasks -- */
 
   listBackgroundTasks(sessionId, options) { return tasks.listBackgroundTasks(this, sessionId, options); }
+  countBackgroundTasks(sessionId, options) { return tasks.countBackgroundTasks(this, sessionId, options); }
 
   readTaskOutput(taskId, options) { return tasks.readTaskOutput(this, taskId, options); }
 

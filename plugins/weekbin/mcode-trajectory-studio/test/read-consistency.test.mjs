@@ -111,7 +111,14 @@ test('a JSON document that is not an object is not an unreadable row', async (t)
   const stats = store.getStats('sess-c');
   assert.equal(stats.events, 4);
   assert.equal(stats.unreadableRows, 0);
-  assert.deepEqual(store.warnings, []);
+  // Scoped to the warning this is about: a store opened on a runtime without FTS5
+  // legitimately carries an `fts5_unavailable` warning, and asserting the list was
+  // empty would make this fail on the Node floor for an unrelated reason.
+  assert.deepEqual(
+    store.warnings.filter((entry) => entry.startsWith('rows_unreadable:')),
+    [],
+    'ordinary content must not be reported as unreadable rows',
+  );
 });
 
 /* ---------------------------------------------------- the artifact is reachable -- */
@@ -246,4 +253,70 @@ test('an artifact with CRLF endings is read whole', async (t) => {
   const { store } = await seed(t, [], { artifact: `${record(0)}\r\n${record(1)}\r\n` });
   const page = await store.readJsonlEvents({ sessionId: 'sess-artifact', limit: 10 });
   assert.equal(page.events.length, 2);
+});
+
+/* ------------------------------------------------- work is bounded by bytes -- */
+
+test('a page stops reading raw bytes rather than multiplying by limit', async (t) => {
+  // `limit` bounds records and the response budget bounds the reply, and neither
+  // bounds the work between them: a page of rows at the 8 MiB row ceiling is GiB of
+  // `data_json` parsed into JavaScript and swept by the redaction regexes before the
+  // budget that trims the reply ever runs. Measured on twenty 1 MiB records, 6.4 s of
+  // sweeping for a 0.38 MB answer.
+  const MB = 1024 * 1024;
+  const { store } = await seed(t, []);
+  const db = new DatabaseSync(path.join(store.dataDir, 'v2', 'sqlite', 'runtime-state.sqlite'));
+  const insert = db.prepare(
+    `INSERT INTO local_runtime_message_rows (session_id, msg_id, role, turn_id, created_at_ms, data_json, source)
+     VALUES ('sess-c', ?, 'assistant', 't1', ?, ?, 'api')`,
+  );
+  const body = 'z'.repeat(MB);
+  db.exec('BEGIN');
+  for (let i = 0; i < 20; i += 1) {
+    insert.run(`m${i}`, NOW - i, JSON.stringify({ msg_id: `m${i}`, role: 'assistant', source: 'api', msg_type: 2, turn_id: 't1', msg_content: body }));
+  }
+  db.exec('COMMIT');
+  db.close();
+
+  const page = store.getEvents({ sessionId: 'sess-c', limit: 20, detailLevel: 'full', pageBytes: 4 * MB });
+  assert.equal(page.total, 20, 'the whole session still reports its size');
+  assert.ok(page.events.length < 20, `every row was projected: ${page.events.length}`);
+  assert.equal(page.pageBytesTruncated, true, 'and the page says it stopped early');
+  assert.equal(page.nextOffset, page.events.length, 'the cursor resumes where the reply stopped');
+  assert.ok(store.warnings.some((entry) => entry.startsWith('events_page_bytes:')));
+});
+
+test('the cursor from a byte-cut page still reaches every record', async (t) => {
+  const { store } = await seed(t, Array.from({ length: 30 }, (_, i) => ({
+    ...good(i),
+    data: { ...good(i).data, msg_content: 'y'.repeat(4000) },
+  })));
+  const seen = [];
+  let offset = 0;
+  for (let page = 0; page < 20; page += 1) {
+    const reply = store.getEvents({ sessionId: 'sess-c', offset, limit: 30, detailLevel: 'full', pageBytes: 16_000 });
+    for (const event of reply.events) seen.push(event.index);
+    if (reply.nextOffset === null) break;
+    assert.ok(reply.nextOffset > offset, `the cursor stalled at ${offset}`);
+    offset = reply.nextOffset;
+  }
+  assert.deepEqual(seen, Array.from({ length: 30 }, (_, i) => i), 'a byte-cut page lost records');
+});
+
+test('a field is clipped before the sweep reads it, not after', async (t) => {
+  // Clipping after redaction is what cost 6.4 s: the sweep walked the whole 1 MiB and
+  // the reply kept 20 KB. The reply must still be correct — a credential inside the
+  // kept prefix is still redacted — but the discarded tail is never swept.
+  const canary = 'ghp_zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz';
+  const { store } = await seed(t, [{
+    ...good(0),
+    data: {
+      ...good(0).data,
+      msg_content: `${'padding '.repeat(4000)} api_key=${canary}`,
+    },
+  }]);
+  const page = store.getEvents({ sessionId: 'sess-c', limit: 1, detailLevel: 'full', stringLimit: 4000 });
+  const { redactEvent } = await import('../server/redact.mjs');
+  const swept = redactEvent(page.events[0], { maxLength: 20000, homeDir: FIXTURE_HOME, roots: [store.dataDir] });
+  assert.equal(swept.content.includes(canary), false, 'the credential survived the clip+sweep order');
 });
