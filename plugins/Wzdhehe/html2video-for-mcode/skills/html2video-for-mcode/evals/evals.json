@@ -33,7 +33,7 @@
       "id": 4,
       "name": "asr-mismatch",
       "prompt": "ASR 校验发现第 5 张转写里 '92%' 听成了 '九二', 数字对不上, 怎么处理?",
-      "expected_output": "text(字幕)保持 '92%' 不动, 给该句加 say:'…百分之九十二…'(显示/发音分离: 发音形态只进 say, 不上屏)→ 只重做该段 TTS → 重跑 plan-timings → 删 build/frames/05 与 out/slide-05.mp4 → 该张重 capture + build-video, 不整片重做。若确认是同音字级微小差异可接受, 数字/产品名不一致必须返工。",
+      "expected_output": "text(字幕)保持 '92%' 不动, 给该句加 say 换一个更清晰的读法(如 say:'…增长九成二…' —— 显示/发音分离: 发音形态只进 say, 不上屏; 换词要真的改变发音, 念作'百分之九十二'的同义改写解决不了听错)→ 只重做该段 TTS → 重跑 plan-timings → 删 build/frames/05 与 out/slide-05.mp4 → 该张重 capture + build-video, 不整片重做。若确认是同音字级微小差异可接受, 数字/产品名不一致必须返工。",
       "files": []
     },
     {

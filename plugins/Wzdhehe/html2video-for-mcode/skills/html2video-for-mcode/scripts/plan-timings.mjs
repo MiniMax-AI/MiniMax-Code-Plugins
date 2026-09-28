@@ -13,12 +13,13 @@ import { positionalDir, probeDuration, requireTool, safeId, safeOut, safeRel, su
 // tools.subLineCap, 字幕胶囊几何的唯一来源也在 tools.SUB_GEOMETRY); pace 区间用于语速异常预警。
 // yearGate = 年份逐位读的闸门只对中/粤语面开(第 24 轮: 用 emPer===1 充当语族判别是排版
 // 属性代理语义, 未来 emPer:1 的语种会误触); 未知语种 fallback 不开闸。
+const ZH_BASE = { unit: '字', pacing: 4.8, paceMin: 3, paceMax: 6.5, emPer: 1, word: null, yearGate: true };
 const LANG_CFG = {
-  zh: { unit: '字', pacing: 4.8, paceMin: 3, paceMax: 6.5, emPer: 1, word: null, yearGate: true },
-  yue: { unit: '字', pacing: 4.8, paceMin: 3, paceMax: 6.5, emPer: 1, word: null, yearGate: true },
-  en: { unit: '字符', pacing: 14, paceMin: 9, paceMax: 18, emPer: 0.44, word: 'words' },
+  zh: ZH_BASE,
+  yue: ZH_BASE,
+  en: { unit: '字符', pacing: 14, paceMin: 9, paceMax: 18, emPer: 0.44, word: 'words', yearGate: false },
 };
-const langCfg = code => LANG_CFG[code] ?? { unit: '字符', pacing: 14, paceMin: 8, paceMax: 20, emPer: 0.44, word: null };
+const langCfg = code => LANG_CFG[code] ?? { unit: '字符', pacing: 14, paceMin: 8, paceMax: 20, emPer: 0.44, word: null, yearGate: false };
 
 const argv = process.argv.slice(2);
 const dir = positionalDir(argv);
@@ -58,7 +59,7 @@ for (const s of script.slides) {
 
   // 时间权重按**发音形态**(say ?? text)算 —— 音频念的是 say(第 24 轮: "82.3%"显示 5 字、
   // 发音"百分之八十二点三"8 字, 按显示形态分摊会把长 say 句的开口系统性估早, 字幕窗与
-  // ASR 切分跟着偏)。字幕行宽(:93)仍按显示形态 text —— 胶囊几何是屏幕上的事。
+  // ASR 切分跟着偏)。字幕行宽(下方 wrap 检查)仍按显示形态 text —— 胶囊几何是屏幕上的事。
   const spokenLen = c => charCount(c.say ?? c.text);
   const total = s.clauses.reduce((n, c) => n + spokenLen(c), 0);
   if (total === 0) warns.push(`${s.id}: clauses 为空, 将整张静止`);
@@ -106,7 +107,7 @@ for (const s of script.slides) {
     // 整读/逐位读是意图问题, 2026点 就该整读 —— 其余数字写法走文档纪律)。
     if (CFG.yearGate) {
       const spoken = c.say ?? c.text;
-      const ym = /\d{4}\s*年/.exec(spoken);
+      const ym = /(?<!\d)\d{4}\s*年(?!\d)/.exec(spoken);   // 数字边界: 12026年 这类长串截出的"2026年"不是年份
       if (ym) {
         const digitsRead = ym[0].replace(/\D/g, '').split('').map(d => '零一二三四五六七八九'[+d]).join('');
         warns.push(`${s.id} 第 ${clauses.indexOf(c) + 1} 句 "${ym[0]}" 会被 TTS 按整数读(2026年→"两千零二十六年") — 年份按播报惯例逐位读: text 原样上字幕, 加 say:"${digitsRead}年…"`);

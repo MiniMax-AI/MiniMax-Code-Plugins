@@ -16,11 +16,26 @@ import { pathToFileURL } from 'node:url';
 import { findTool, loadPackage } from '../scripts/tools.mjs';
 
 const FFMPEG = findTool('ffmpeg');
-const { positionals, readTransition, positionalDir, VALUE_FLAGS } = await import(
+const { positionals, readTransition, positionalDir, VALUE_FLAGS, matchBoundaries } = await import(
   pathToFileURL(path.join(SCRIPTS, 'tools.mjs')).href);
 
 const SLIDE = `<!doctype html><html data-theme="a"><head><meta charset="utf-8"><link rel="stylesheet" href="tokens.css"></head>
 <body><div class="stage"><h1 class="fx-rise" data-stage="1">标题</h1></div></body></html>`;
+
+describe('第 25 轮 · matchBoundaries 对齐用发音形态(say ?? text)', () => {
+  test('say/text 标点不一致时精确模式按 say 对齐; 按 text 会降级成 nearest(判据可区分)', () => {
+    const gaps = [1.0, 2.0, 3.0, 4.0].map(end => ({ end }));
+    const clauses = [
+      { start: 0, text: '开场白,要点。', say: '开场白,要点,补充。' },   // 标点: text 2 / say 3
+      { start: 4, text: '结尾。', say: '结尾,致谢。' },                 // 标点: text 1 / say 2
+    ];
+    const r = matchBoundaries(gaps, clauses);
+    // say 总标点 5, gaps=4 = 5-1 → 精确模式成立; 第 0 边界 = gaps[say 标点累积(3)-1] = gaps[2] = 3.0
+    // 按 text(总 3)则精确模式不成立 → nearest, meas[0]=4.0 —— 两个结果形状不同, 断言可区分
+    assert.equal(r.method, 'exact', '应按 say 的标点进精确模式');
+    assert.equal(r.meas[0], 3.0, '边界应对齐 say 标点累积对应的静音段');
+  });
+});
 
 describe('D1 · check-timing --calibrate 不写回半份实测', () => {
   // 造一段"两句话 + 句间静音"的音频: 0–1.0s 噪声(第 1 句) → 1.0–1.6s 静音 → 1.6–2.6s 噪声(第 2 句)

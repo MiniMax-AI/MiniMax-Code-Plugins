@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { matchBoundaries } from './tools.mjs';
 import { positionalDir, requireTool, safeId, safeOut, safeRel, validateScriptPaths, validateTimingsIds } from './tools.mjs';
 
 const argv = process.argv.slice(2);
@@ -38,40 +39,8 @@ function detectGaps(file, tts) {
 }
 
 // 句间边界匹配: 静音段里混着句内逗号停顿, 不能假设段数=句数-1。
-// 精确模式: 句读标点总数-1 == 静音段数 → 按标点累积下标对齐(最可信)。
-// 最近邻模式: 否则在估算时刻 ±1s 窗内取最近的静音段末端, 时序单调; 找不到就报未测(宁缺勿错)。
-const PAUSE_PUNCT = /[，,、;；:：。！？!?…]/g;
-function matchBoundaries(gaps, clauses) {
-  const nBound = clauses.length - 1;
-  if (nBound <= 0) return { method: 'none', meas: [] };
-  const marks = clauses.map(c => (c.text.match(PAUSE_PUNCT) || []).length);
-  const totalMarks = marks.reduce((a, b) => a + b, 0);
-  const meas = new Array(nBound).fill(null);   // 精确模式自己一份
-  if (gaps.length === totalMarks - 1 || gaps.length === totalMarks) {
-    let cum = 0, gi = 0;
-    for (let k = 0; k < nBound; k++) {
-      cum += marks[k]; // 第 k 边界 = 前 k 句累积标点数对应的那个停顿
-      const idx = Math.min(cum - 1, gaps.length - 1);
-      if (idx >= gi) { meas[k] = gaps[idx].end; gi = idx + 1; }
-    }
-    if (meas.every(v => v != null)) return { method: 'exact', meas };
-  }
-  // 最近邻: **重新分配**, 绝不从上面那份里继承已填值 —— 继承的话写回的就是"精确 + 最近邻"的
-  // 混合值, 而 method 只报 nearest, 属于谎报方法(2026-09-18 复查 D1: 精确模式失败即走到此处)。
-  const near = new Array(nBound).fill(null);
-  const est = clauses.slice(1).map(c => c.start);
-  let lastUsed = -1;
-  for (let k = 0; k < nBound; k++) {
-    let best = -1, bestD = Infinity;
-    for (let g = lastUsed + 1; g < gaps.length; g++) {
-      const d = Math.abs(gaps[g].end - est[k]);
-      if (d < bestD && d <= 1.0) { bestD = d; best = g; }
-    }
-    if (best > -1) { near[k] = gaps[best].end; lastUsed = best; }
-  }
-  // 只有**每条边界都有实测**才叫 nearest(可写回); 有缺口的报 sparse, 只展示不写回
-  return { method: near.every(v => v != null) ? 'nearest' : 'sparse', meas: near };
-}
+// 实现已挪 tools.matchBoundaries(单一来源, 发音形态口径 say ?? text —— 第 25 轮: 按 text
+// 对齐时 say/text 标点不一致会精确模式错位, --calibrate 写回错的 start)。
 
 const report = [];
 let calibratable = 0;
