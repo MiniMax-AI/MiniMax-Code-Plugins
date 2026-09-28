@@ -69,14 +69,33 @@ const state = {
   lastTurn: undefined,
   loadingMore: false,
   // Records are paged from the server: nextOffset is null once the session is fully
-  // loaded, and eventsTotal is the server's count for the whole session.
+  // loaded, and eventsTotal is the server's count for the whole session — null when
+  // the server sent no count, which is a different thing from a count of zero and
+  // must not be rendered as one.
   nextOffset: 0,
-  eventsTotal: 0,
+  eventsTotal: null,
   loadingEvents: false,
   eventsSource: 'sqlite',
   // Artifact lines past the server's per-line cap are dropped at the source; the
   // count comes back with the page so the reader is told the file is short.
   eventsDroppedOversized: 0,
+  // What the pages that have been read did *not* deliver. The server reports all
+  // three on every page and a panel that drops them reports a session it never
+  // finished reading as if it were whole. Accumulated across pages for the same
+  // reason `eventsDroppedOversized` is: a later clean page must not erase an earlier
+  // cut.
+  eventsOmitted: 0,
+  eventsTruncated: false,
+  eventsPageBytesTruncated: false,
+  eventsFailed: null,
+  // The axis is capped for drawability, and the request can fail outright. Neither is
+  // the same thing as a session with no activity, and neither may be drawn as one.
+  timelineTruncated: false,
+  timelineFailed: null,
+  // Rows the statistics fold could not parse. They are excluded from every total the
+  // stats bar shows, so the bar has to say so rather than describe a shorter
+  // session as a complete one.
+  unreadableRows: 0,
   turnOrder: [],
   theme: 'dark',
 };

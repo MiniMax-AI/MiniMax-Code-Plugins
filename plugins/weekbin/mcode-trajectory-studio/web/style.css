@@ -315,6 +315,31 @@ summary { cursor: pointer; }
 
 /* ------------------------------------------------------------------ panel */
 
+/* What this view did not read.
+ *
+ * The banner is transient on purpose, which is right for an action that failed and
+ * wrong for a fact about the data: a page cut to the byte budget, an axis cut at the
+ * point cap, rows dropped at the source and a fold that could not read a row do not
+ * stop being true after six seconds. They stay in the document instead.
+ */
+.notices {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 12px 0 0;
+}
+.notices[hidden] { display: none; }
+.notice-line {
+  margin: 0;
+  padding: 8px 11px;
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--tool);
+  border-radius: var(--radius);
+  font-size: 14px;
+  color: var(--fg-dim);
+}
+
 .panel {
   background: var(--bg-2);
   border: 1px solid var(--line);

@@ -366,20 +366,18 @@ exit 1 — so a green run means something.
 
 | Verified with | Result |
 |---|---|
-| `compat-matrix` on Node `24.19.0` (latest run) | 188 tests, 188 pass, 0 fail, 0 skipped (FTS5 present, SQLite 3.53.3) |
+| `compat-matrix` on Node `24.19.0` (latest run) | 236 tests, 236 pass, 0 fail, 0 skipped (FTS5 present, SQLite 3.53.3) |
 | `compat-matrix` on Node `22.13.0` (previous revision) | 115 tests, 114 pass, 0 fail, 1 skipped (FTS5 absent, SQLite 3.47.2) |
 | `compat-matrix` on Node `22.19.0`, `22.23.2`, `24.0.0`, `24.20.0` (previous revision) | 115 tests, 115 pass, 0 fail, 0 skipped |
 | `node --test` on `windows-latest` and `macos-latest` (previous revision) | 115 tests, 0 fail on both |
 | `node server/main.mjs --doctor` on Node `22.12.0` | refuses to start, naming the floor and `node:sqlite` |
 
 Rows marked "previous revision" are the numbers actually measured then and are left as they were. The
-suite has grown from 115 in those rows to 188 as the fixes' canaries and the egress-contract and
+suite has grown from 115 in those rows to 236 as the fixes' canaries and the egress-contract and
 release-gate suites were added; the latest pass contributed 28 cases — escaped-form redaction and idempotence, the MCP error branch and its own sweep,
 the per-row and warning bounds, the git child environment, root parsing, the panel's privacy default,
 and the JSONL drop-count case. Re-measured green on Node `24.19.0`. The other Node releases and the
 Windows/macOS runners have not been re-run since, so the next CI run covers them.
-| `node server/main.mjs --doctor` on Node `22.12.0` | refuses to start, naming the floor and `node:sqlite` |
-
 The last three rows were run on Windows and macOS for the first time during this review round, and
 that run is the reason the suite still changes: it found three platform assumptions **in the tests**
 (a temporary path compared before canonicalization — `/var` on macOS, a short `RUNNER~1` path on
@@ -387,10 +385,13 @@ Windows — a POSIX-only assertion about a resolved data directory, and a tempor
 while SQLite still held the file open, which is `EBUSY` on Windows and harmless on POSIX). All three
 are fixed here.
 
-This Plugin deliberately adds no workflow to this repository: how the project spends its CI minutes
-and what runs on its runners is the maintainers' call, not a contributor's. The job definitions we
-used — a Node matrix, a `windows-latest`/`macos-latest` pair, and the floor guard — are written out
-in the pull request so they can be adopted, adapted, or ignored.
+This Plugin ships its own CI in `.github/workflows/mcode-trajectory-studio.yml`, scoped by `paths:` to
+this Plugin so it cannot spend the repository's minutes on anyone else's change. It runs the release
+gates, the suite on a Node matrix across `ubuntu-latest`, `macos-latest` and `windows-latest`, and a
+separate `engines` job that pins the declared Node floor. A workflow file introduced by a pull request
+is not executed *for* that pull request, so on this PR these jobs only gate once the file lands on
+`main`; the runs quoted below are dispatched from the fork, the route `tool-map-windows.yml` already
+documents.
 
 The Plugin's own tests cover the SQLite reads, the JSONL fallback, the git grouping (including a
 real worktree merge), input provenance, the tool-call/task join, the agent definition lookup,
@@ -509,10 +510,16 @@ so that no file has to hold more than one concern:
   `inspector` (surfaces), and `flow` · `controller` · `wire` (orchestration). Surfaces
   announce an intent on the bus rather than importing the action, so the client graph
   is acyclic too — a property a test enforces. The panel is served as ES modules.
-- `test/` — `store.test.mjs` (the data layer and the MCP surface),
-  `modules.test.mjs` (the import graph is acyclic and every import resolves), and
-  `format.test.mjs` (client formatting edge cases). The package audit lives in the
-  repository at `tests/plugins/mcode-trajectory-studio/smoke.test.mjs`.
+- `test/` — the suite is grouped by what it defends, and `release-gates` checks that
+  the counts and claims in these documents still match the code: `store` (the data
+  layer), `protocol` and `egress-contract` (the MCP surface, the latter with no
+  stubs), `http` and `panel-security` (the panel's routes and its rendering), `panel-flow`
+  (the client's race guards, run against a hand-written DOM), `redact` (credentials and
+  length bounds), `read-consistency` (one session compared against itself across every
+  surface), `containment` and `portable-paths` (the data directory boundary),
+  `modules` (the import graph is acyclic and every import resolves), `format` (client
+  formatting edge cases), `node-version` and `release-gates`. The package audit lives in
+  the repository at `tests/plugins/mcode-trajectory-studio/smoke.test.mjs`.
 
 ## License
 

@@ -284,9 +284,8 @@ plugins/weekbin/mcode-trajectory-studio/
 ├── .claude-plugin/
 │   └── plugin.json               # v0.4.0+ 首选清单（含 skills / mcpServers）
 ├── skills/
-│   ├── SKILL.md                  # 顶层（0.4.0+）
 │   └── mcode-trajectory-studio/
-│       └── SKILL.md              # 字节一致副本（0.3.x & 校验器）
+│       └── SKILL.md              # 唯一的 Skill 声明
 ├── server/
 │   ├── main.mjs                  # 入口：--stdio（默认） / --serve / --doctor
 │   ├── mcp.mjs                   # MCP JSON-RPC（stdio）
@@ -306,13 +305,17 @@ plugins/weekbin/mcode-trajectory-studio/
 
 | 工具 | 作用 | 入参要点 |
 |---|---|---|
-| `trajectory_list` | 列出最近会话（元数据，无正文） | `limit`、`agent`、`since` |
+| `trajectory_list` | 列出最近会话（元数据，无正文） | `limit`、`agent`、`kind`、`sinceMs`、`includeArchived` |
 | `trajectory_summary` | 单会话统计：turns / steps / llmMs / toolMs / decodeMs / tokens / 压缩数 / 工具调用数 | `sessionId` |
-| `trajectory_get` | 分页读取事件记录（轮次分组） | `sessionId`、`offset`、`limit`、`detailLevel` |
+| `trajectory_get` | 分页读取事件记录（轮次分组） | `sessionId`、`offset`、`limit`、`turnId`、`detailLevel` |
 | `trajectory_search` | FTS5 全文检索 | `query`、`limit` |
-| `trajectory_studio` | 启动/复用本地 HTTP 面板，返回 URL | `sessionId?`、`port?` |
+| `trajectory_tasks` | 列出该会话的后台任务与子 Agent 派发 | `sessionId`、`limit`、`offset`、`kind` |
+| `trajectory_task_output` | 读取后台任务捕获输出的尾部 | `taskId`、`maxBytes` |
+| `trajectory_studio` | 启动/复用本地 HTTP 面板，返回 URL | `sessionId?`、`port?`、`stop?` |
 
 隐私默认：`detailLevel=summary` 不带正文；`full` 需显式请求，且结果经脱敏 + 长度封顶。
+
+`turnId` 有三态，区别不可省略：不传表示不过滤；传 `null` 或 `''` 表示"该会话中不带轮次标识的记录"（轮次折叠会把这个分组报成 `turnId: null`，调用方把它传回来是合理请求）；传字符串表示精确匹配该轮次。把它与"不传"混为一谈，会让一个收窄的查询返回整个会话。
 
 ### 6.4 HTTP 面板（Studio）
 
@@ -502,8 +505,7 @@ plugins/weekbin/mcode-trajectory-studio/
 ├── plugin.json                   便携 Agent Plugins 1.0 清单
 ├── mcp.json                      MCP stdio 声明
 ├── .claude-plugin/plugin.json    v0.4.0+ 清单（含 skills / mcpServers）
-├── skills/mcode-trajectory-studio/SKILL.md   顶层 Skill（0.4.0+）
-├── skills/mcode-trajectory-studio/SKILL.md   字节一致副本（0.3.x + 校验器）
+├── skills/mcode-trajectory-studio/SKILL.md   唯一的 Skill 声明
 ├── server/
 │   ├── main.mjs    入口：stdio / --serve / --doctor
 │   ├── store.mjs   数据层：SQLite 只读 + messages.jsonl 兜底
@@ -524,8 +526,8 @@ plugins/weekbin/mcode-trajectory-studio/
 | 验证项 | 结果 |
 |---|---|
 | `npm run validate`（仓库校验器） | `OK plugin weekbin/mcode-trajectory-studio`，29 个插件全通过 |
-| `npm run check`（全仓库 559 测试） | **559 pass / 0 fail** |
-| 插件自带测试 `node --test` | **202 pass / 0 fail** |
+| `npm run check`（全仓库 594 测试） | **594 pass / 0 fail** |
+| 插件自带测试 `node --test` | **236 pass / 0 fail** |
 | MCP `initialize` / `tools/list` / 7 工具调用 | 全部返回有效结果，真实数据 |
 | `--doctor` 真实数据 | 500+ 会话可见，SQLite + FTS 均可用 |
 | HTTP 面板（Playwright 实开） | 渲染正常，无 console 错误 |

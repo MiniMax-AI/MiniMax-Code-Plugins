@@ -123,11 +123,36 @@ export function renderStream() {
   updateStreamCount();
 }
 
+/**
+ * The record count, and how much of the session it covers.
+ *
+ * `streamRows` holds one row per message *and* per tool call, so it is not a record
+ * count at all — and it holds only the pages that have been loaded. The server's
+ * count for the whole session is `eventsTotal`. A session of 20 records with 7 of
+ * them loaded used to read "7 行", which is a partial page presented as the whole
+ * session; when the two differ the label has to carry both.
+ */
 export function updateStreamCount() {
-  const all = state.streamRows?.length ?? 0;
-  const shown = state.filteredRows?.length ?? 0;
   const label = el('record-count');
-  if (label) label.textContent = shown === all ? `${all} 行` : `${shown} / ${all} 行`;
+  if (!label) return;
+  const loaded = state.events?.length ?? 0;
+  const rows = state.streamRows?.length ?? 0;
+  const shown = state.filteredRows?.length ?? 0;
+  const total = state.eventsTotal;
+  let scope;
+  if (typeof total === 'number' && total > loaded) {
+    scope = `已加载 ${loaded} / ${total} 行`;
+  } else if (typeof total !== 'number' && loaded > 0 && state.nextOffset !== null) {
+    // No count arrived with the page — the JSONL fallback sends none — so the honest
+    // claim is "this much, so far", not a number that looks like a session size.
+    scope = `已加载 ${loaded} 行（总数未知）`;
+  } else {
+    scope = `${loaded} 行`;
+  }
+  label.textContent = shown === rows ? scope : `${scope}（筛选后 ${shown} 行）`;
+  label.title = typeof total === 'number'
+    ? `服务端统计该会话共 ${total} 条记录`
+    : '服务端未给出该会话的记录总数';
 }
 
 function markSelected(node, isTool, position) {

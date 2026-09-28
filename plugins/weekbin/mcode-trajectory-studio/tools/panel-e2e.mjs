@@ -110,66 +110,85 @@ async function seed(dataDir) {
  * panel boots and binds, the document is served under the hardening headers, the
  * capability is required and sufficient, and a payload that would execute if the
  * client built markup from a string reaches the wire as data.
+ *
+ * The number of checks is counted as they run rather than written down after them.
+ * A hardcoded "8 checks passed" is a claim about the harness rather than about the
+ * run: deleting a check left the line saying 8 while the harness did seven, and the
+ * suite stayed green. The count below is the count of checks that actually ran, and
+ * the same tally decides the exit code, so the line and the verdict cannot disagree.
+ *
+ * `MINIMUM_CHECKS` is the harness's own claim about itself — the number of property
+ * checks below, plus this guard — and it is what makes a *deleted* check fail rather
+ * than quietly renumber. Adding a check needs no edit here; removing one does.
  */
+const MINIMUM_CHECKS = 13;
+
 async function smoke(context, started) {
   const problems = [];
+  let ran = 0;
+  /** Record one check, and remember what it was about when it fails. */
+  const check = (ok, problem) => {
+    ran += 1;
+    if (!ok) problems.push(problem);
+  };
   const base = `http://127.0.0.1:${started.port}`;
   const capability = new URL(started.url).hash.replace(/^#t=/, '');
 
   const document = await fetch(`${base}/`, { headers: { host: `127.0.0.1:${started.port}` } });
   const html = await document.text();
-  if (document.status !== 200) problems.push(`GET / answered ${document.status}`);
-  if (!/default-src 'none'/.test(String(document.headers.get('content-security-policy')))) {
-    problems.push('GET / served without the deny-by-default CSP');
-  }
-  if (document.headers.get('referrer-policy') !== 'no-referrer') {
-    problems.push('GET / served without no-referrer');
-  }
+  check(document.status === 200, `GET / answered ${document.status}`);
+  check(/default-src 'none'/.test(String(document.headers.get('content-security-policy'))),
+    'GET / served without the deny-by-default CSP');
+  check(document.headers.get('referrer-policy') === 'no-referrer',
+    'GET / served without no-referrer');
 
   // The capability: absent, and wrong, must both be refused.
   const noToken = await fetch(`${base}/api/sessions`, { headers: { host: `127.0.0.1:${started.port}` } });
-  if (noToken.status !== 403) problems.push(`an API call without the capability answered ${noToken.status}, not 403`);
+  check(noToken.status === 403, `an API call without the capability answered ${noToken.status}, not 403`);
   const wrongToken = await fetch(`${base}/api/sessions`, {
     headers: { host: `127.0.0.1:${started.port}`, 'x-trajectory-token': 'wrong-capability' },
   });
-  if (wrongToken.status !== 403) problems.push(`a wrong capability answered ${wrongToken.status}, not 403`);
+  check(wrongToken.status === 403, `a wrong capability answered ${wrongToken.status}, not 403`);
 
   const authed = await fetch(`${base}/api/sessions`, {
     headers: { host: `127.0.0.1:${started.port}`, 'x-trajectory-token': capability },
   });
   const body = await authed.text();
-  if (authed.status !== 200) problems.push(`an authorised API call answered ${authed.status}: ${body}`);
+  check(authed.status === 200, `an authorised API call answered ${authed.status}: ${body}`);
 
   // The credential planted in the session title must not reach the wire.
-  if (body.includes(SECRET)) problems.push('the planted credential reached the panel response');
+  check(!body.includes(SECRET), 'the planted credential reached the panel response');
 
   // The markup payloads are stored as message text and task commands; they may
   // appear in a JSON body as strings, but they must never be served as part of the
   // document, where the parser would act on them.
-  if (html.includes(IMG_PAYLOAD) || html.includes(SCRIPT_PAYLOAD) || html.includes(SVG_PAYLOAD)) {
-    problems.push('a stored payload was interpolated into the served document');
-  }
+  check(!(html.includes(IMG_PAYLOAD) || html.includes(SCRIPT_PAYLOAD) || html.includes(SVG_PAYLOAD)),
+    'a stored payload was interpolated into the served document');
 
   const full = await fetch(`${base}/api/events?id=sess-render-e2e&detailLevel=full`, {
     headers: { host: `127.0.0.1:${started.port}`, 'x-trajectory-token': capability },
   });
   const fullBody = await full.text();
-  if (full.status !== 200) problems.push(`GET /api/events answered ${full.status}: ${fullBody}`);
-  if (fullBody.includes(SECRET)) problems.push('the planted credential survived into full-detail events');
+  check(full.status === 200, `GET /api/events answered ${full.status}: ${fullBody}`);
+  check(!fullBody.includes(SECRET), 'the planted credential survived into full-detail events');
   // It is not redaction's job to remove markup from message text — it is the client's,
   // and the client builds nodes rather than parsing a string. What is checked here is
   // that the payload is *delivered as data*, which is what makes that safe. The
   // attribute value is matched rather than the whole payload because a JSON body
   // escapes the quotes inside it, and matching the raw payload would pass by accident
   // or fail for a reason that has nothing to do with the harness.
-  if (!fullBody.includes('window.__XSS=1')) {
-    problems.push('the harness fixture no longer carries its payload into full detail; this check is stale');
-  }
-  if (fullBody.includes('\\"onerror\\"')) {
-    problems.push('a payload reached the client as markup rather than as a string');
-  }
+  check(fullBody.includes('window.__XSS=1'),
+    'the harness fixture no longer carries its payload into full detail; this check is stale');
+  check(!fullBody.includes('\\"onerror\\"'),
+    'a payload reached the client as markup rather than as a string');
 
-  return problems;
+  // A harness that ran nothing has verified nothing, and "0 checks passed" is not a
+  // pass. This check is itself one of the checks it counts, which is why the
+  // comparison is against `ran + 1`.
+  check(ran + 1 >= MINIMUM_CHECKS,
+    `only ${ran} property checks ran; this harness is expected to run at least ${MINIMUM_CHECKS - 1}`);
+
+  return { problems, ran };
 }
 
 async function main() {
@@ -190,8 +209,9 @@ async function main() {
 
   if (args.smoke) {
     let problems = [];
+    let ran = 0;
     try {
-      problems = await smoke(context, started);
+      ({ problems, ran } = await smoke(context, started));
     } finally {
       await shutdown();
     }
@@ -201,7 +221,9 @@ async function main() {
       process.exitCode = 1;
       return;
     }
-    process.stdout.write('panel smoke: 8 checks passed over a real loopback socket\n');
+    // `ran` is the tally the same block used to decide the exit code above, so the
+    // line cannot claim more checks than the run performed.
+    process.stdout.write(`panel smoke: ${ran} checks passed over a real loopback socket\n`);
     return;
   }
 

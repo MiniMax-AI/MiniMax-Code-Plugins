@@ -269,7 +269,7 @@ node tools/panel-e2e.mjs                         # 种一个恶意会话并启�
 
 | 验证方式 | 结果 |
 |---|---|
-| Node `24.19.0` 上跑 `compat-matrix`（最新一次） | 166 个测试：166 通过 / 0 失败 / 0 跳过（FTS5 存在，SQLite 3.53.3） |
+| Node `24.19.0` 上跑 `compat-matrix`（最新一次） | 236 个测试：236 通过 / 0 失败 / 0 跳过（FTS5 存在，SQLite 3.53.3） |
 | Node `22.13.0` 上跑 `compat-matrix`（上一修订） | 115 个测试：114 通过 / 0 失败 / 1 跳过（FTS5 缺失，SQLite 3.47.2） |
 | Node `22.19.0` / `22.23.2` / `24.0.0` / `24.20.0` 上跑 `compat-matrix`（上一修订） | 115 个测试：115 通过 / 0 失败 / 0 跳过 |
 | `windows-latest` 与 `macos-latest` 上跑 `node --test`（上一修订） | 两个平台均 115 个测试 / 0 失败 |
@@ -285,9 +285,12 @@ Node 版本与 Windows / macOS 尚未在此之后复测，下一次 CI 运行会
 `RUNNER~1`；一处只在 POSIX 成立的「已解析数据目录」断言；以及在 SQLite 仍持有文件句柄时删除临时
 目录，Windows 上是 `EBUSY` 而在 POSIX 上无影响）。三者均已修复。
 
-本插件**刻意不向本仓库添加任何 workflow**：项目如何支配 CI 时间、在它的 runner 上跑什么，是维护方的
-决定，不是贡献者的。我们所用的 job 定义（Node 矩阵、`windows-latest`/`macos-latest` 一对、以及下限
-守卫）写在 PR 描述里，供维护方采用、改写或忽略。
+本插件自带 CI：`.github/workflows/mcode-trajectory-studio.yml`，以 `paths:` 窄过滤到本插件，
+不会替别人的改动花掉仓库的 CI 时间。它跑发布门禁、在 `ubuntu-latest`/`macos-latest`/
+`windows-latest` 上以 Node 矩阵跑测试套件，并用独立的 `engines` job 钉住声明的 Node 下限。
+PR 新增的 workflow 文件不会**为该 PR** 执行，因此在本 PR 上这些 job 要等文件落到 `main`
+之后才会真正把关；下文引用的运行结果是从 fork 派发的，路线与 `tool-map-windows.yml` 已有的
+做法一致。
 
 插件自身的测试覆盖 SQLite 读取、JSONL 兜底、git 分组（含真实 worktree 合并）、输入来源、
 工具调用/任务 join、agent 定义查找、脱敏、MCP 协议面、模块图（无环、界面层不 import
@@ -381,8 +384,12 @@ node server/main.mjs --serve    # 在 127.0.0.1 上独立运行 Studio 面板
   （界面层），以及 `flow` · `controller` · `wire`（编排层）。界面层通过总线**广播意图**，
   而不是 import 动作本身，因此前端依赖图同样**无环**——这一点由测试强制执行。面板以
   ES 模块方式提供服务。
-- `test/` —— `store.test.mjs`（数据层与 MCP 协议面）、`modules.test.mjs`（import 图
-  无环、且每个相对导入都能解析到真实文件），以及 `format.test.mjs`（客户端格式化边界）。
+- `test/` —— 套件按「各自守住什么」分组，`release-gates` 另外检查本文档里的计数与断言是否
+  仍与代码一致：`store`（数据层）、`protocol` 与 `egress-contract`（MCP 协议面，后者不含任何
+  stub）、`http` 与 `panel-security`（面板路由与其渲染）、`panel-flow`（客户端竞态守卫，跑在
+  手写 DOM 上）、`redact`（凭据与长度封顶）、`read-consistency`（同一会话在各表面对照）、
+  `containment` 与 `portable-paths`（数据目录边界）、`modules`（import 图无环、且每个相对导入
+  都能解析到真实文件）、`format`（客户端格式化边界）、`node-version` 与 `release-gates`。
   上架包审计位于仓库的 `tests/plugins/mcode-trajectory-studio/smoke.test.mjs`。
 
 ## 许可证
