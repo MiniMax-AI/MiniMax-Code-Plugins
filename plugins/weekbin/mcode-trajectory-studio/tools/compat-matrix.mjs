@@ -47,6 +47,20 @@ function runSuite() {
   const skipped = [...output.matchAll(/^ok \d+ - (.+?)(?: # SKIP ?(.*))?$/gmu)]
     .filter((match) => match[2] !== undefined)
     .map((match) => ({ name: match[1].trim(), reason: (match[2] ?? '').trim() }));
+  // Every `not ok` line, with whatever the runner printed under it as the reason.
+  // Collected here so a failure names itself: the 40-line tail that used to be the
+  // only evidence cut the failing test off on a suite this size.
+  const failed = [];
+  const lines = output.split('\n');
+  lines.forEach((line, index) => {
+    const match = /^not ok \d+ - (.+)$/u.exec(line);
+    if (!match) return;
+    const name = match[1].trim();
+    const detail = lines.slice(index + 1, index + 12)
+      .map((entry) => entry.trim())
+      .find((entry) => entry && entry !== '...' && !/^---$/u.test(entry) && !/^\{/u.test(entry));
+    failed.push(detail ? `${name} — ${detail}` : name);
+  });
   return {
     status: result.status,
     tests: count('tests'),
@@ -54,6 +68,7 @@ function runSuite() {
     fail: count('fail'),
     skippedCount: count('skipped'),
     skipped,
+    failed,
     output,
   };
 }
@@ -118,6 +133,14 @@ function main() {
 
   if (problems.length) {
     process.stderr.write(`\ncompatibility assertion failed on Node ${node}:\n${problems.map((p) => `  - ${p}`).join('\n')}\n`);
+    // Name the failures. A 40-line tail of TAP is how a floor-release failure on a
+    // 188-test suite arrived with the failing test cut off, so the only visible
+    // evidence was "1 test(s) failed" and no way to act on it. The `not ok` lines are
+    // the answer; everything after them is context.
+    if (suite.failed.length > 0) {
+      process.stderr.write(`\n--- failing tests (${suite.failed.length}) ---\n`);
+      for (const failure of suite.failed) process.stderr.write(`  - ${failure}\n`);
+    }
     process.stderr.write(`\n--- suite output (tail) ---\n${suite.output.split('\n').slice(-40).join('\n')}\n`);
     process.exitCode = 1;
   }

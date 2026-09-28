@@ -821,7 +821,6 @@ test('a row past the per-record byte cap is reported, not parsed whole', async (
   // exercised at 512 bytes here rather than 8 MiB, because the property under test
   // is the accounting, not the constant.
   const dataDir = await makeDataDir();
-  t.after(() => rm(dataDir, { recursive: true, force: true }));
   const huge = JSON.stringify({
     msg_id: 'm-huge', role: 'assistant', source: 'api', msg_type: 2,
     turn_id: 'turn-1', msg_content: 'y'.repeat(4096),
@@ -834,7 +833,13 @@ test('a row past the per-record byte cap is reported, not parsed whole', async (
   writable.close();
 
   const store = openStore({ dataDir });
-  t.after(() => store.close());
+  // Close, then remove, in one hook. Windows refuses to unlink a file that is still
+  // open, and `after` hooks run in registration order — a removal registered ahead
+  // of the close takes the projection while SQLite still holds it.
+  t.after(async () => {
+    store.close();
+    await rm(dataDir, { recursive: true, force: true });
+  });
   const page = store.getEvents({ sessionId: 'sess-a', limit: 500, maxJsonBytes: 2048 });
   const oversized = page.events.find((event) => event.oversized === true);
   assert.ok(oversized, `no record was reported as oversized: ${JSON.stringify(page.events.map((e) => e.rowId))}`);
@@ -864,7 +869,6 @@ test('a row past the per-record byte cap is reported, not parsed whole', async (
  */
 test('the per-record cap counts UTF-8 bytes, not characters', async (t) => {
   const dataDir = await makeDataDir();
-  t.after(() => rm(dataDir, { recursive: true, force: true }));
   const payload = JSON.stringify({
     msg_id: 'm-multibyte', role: 'assistant', source: 'api', msg_type: 2,
     turn_id: 'turn-1', msg_content: '😀'.repeat(1000),
@@ -887,7 +891,13 @@ test('the per-record cap counts UTF-8 bytes, not characters', async (t) => {
   writable.close();
 
   const store = openStore({ dataDir });
-  t.after(() => store.close());
+  // Close, then remove, in one hook. Windows refuses to unlink a file that is still
+  // open, and `after` hooks run in registration order — a removal registered ahead
+  // of the close takes the projection while SQLite still holds it.
+  t.after(async () => {
+    store.close();
+    await rm(dataDir, { recursive: true, force: true });
+  });
   const page = store.getEvents({ sessionId: 'sess-a', limit: 500, maxJsonBytes: cap });
   const oversized = page.events.find((event) => event.msgId === null || event.oversized === true);
   assert.ok(oversized?.oversized === true, 'a multibyte row past the byte cap was returned whole');
@@ -920,7 +930,13 @@ test('the jsonl fallback pages to the end of the artifact', async (t) => {
   await writeFile(path.join(dir, 'messages.jsonl'), `${lines.join('\n')}\n`, 'utf8');
 
   const store = openStore({ dataDir });
-  t.after(() => store.close());
+  // Close, then remove, in one hook. Windows refuses to unlink a file that is still
+  // open, and `after` hooks run in registration order — a removal registered ahead
+  // of the close takes the projection while SQLite still holds it.
+  t.after(async () => {
+    store.close();
+    await rm(dataDir, { recursive: true, force: true });
+  });
 
   const seen = [];
   let offset = 0;
@@ -952,7 +968,6 @@ test('the jsonl fallback pages to the end of the artifact', async (t) => {
 
 test('the jsonl fallback reports lines dropped at the per-line cap', async (t) => {
   const dataDir = await makeDataDir({ withSqlite: true, withJsonl: false });
-  t.after(() => rm(dataDir, { recursive: true, force: true }));
   const dir = path.join(dataDir, 'v2', 'sessions', '2026', '09', '18', '10-00-00-000-sess-drop');
   await mkdir(dir, { recursive: true });
   const line = (i) => JSON.stringify({ message_id: `j${i}`, message: { role: 'user', content: [{ type: 'text', text: `r${i}` }] } });
@@ -968,7 +983,13 @@ test('the jsonl fallback reports lines dropped at the per-line cap', async (t) =
   );
 
   const store = openStore({ dataDir });
-  t.after(() => store.close());
+  // Close, then remove, in one hook. Windows refuses to unlink a file that is still
+  // open, and `after` hooks run in registration order — a removal registered ahead
+  // of the close takes the projection while SQLite still holds it.
+  t.after(async () => {
+    store.close();
+    await rm(dataDir, { recursive: true, force: true });
+  });
   const result = await store.readJsonlEvents({ sessionId: 'sess-drop', limit: 10 });
   assert.equal(result.droppedOversized, 1, 'the dropped line was not reported');
   assert.equal(result.events.length, 2, 'a dropped line must not take the next one with it');
@@ -977,9 +998,15 @@ test('the jsonl fallback reports lines dropped at the per-line cap', async (t) =
 
 test('the warning list is bounded and reports what it dropped', async (t) => {
   const dataDir = await makeDataDir();
-  t.after(() => rm(dataDir, { recursive: true, force: true }));
   const store = openStore({ dataDir });
-  t.after(() => store.close());
+  // One hook, closing before removing. Windows refuses to unlink a file that is still
+  // open, and `after` hooks run in registration order, so a removal registered ahead
+  // of the close takes the projection while SQLite still holds it — EBUSY, reported
+  // as a hook failure on a test that never failed on Linux.
+  t.after(async () => {
+    store.close();
+    await rm(dataDir, { recursive: true, force: true });
+  });
   const before = store.warnings.length;
   const total = WARNINGS_MAX * 3;
   for (let index = 0; index < total; index += 1) store.warn(`synthetic_${index}`);
@@ -1084,7 +1111,6 @@ test('full detail over MCP is redacted', async (t) => {
  */
 test('trajectory_tasks is bounded by the frame budget, not only by limit', async (t) => {
   const dataDir = await makeDataDir();
-  t.after(() => rm(dataDir, { recursive: true, force: true }));
   const writable = new DatabaseSync(path.join(dataDir, 'v2', 'sqlite', 'runtime-state.sqlite'));
   const insert = writable.prepare(`
     INSERT INTO local_runtime_background_tasks (task_id, owner_session_id, kind, status, created_at_ms, updated_at_ms, ended_at_ms, record_json)
@@ -1102,7 +1128,13 @@ test('trajectory_tasks is bounded by the frame budget, not only by limit', async
   writable.close();
 
   const store = openStore({ dataDir });
-  t.after(() => store.close());
+  // Close, then remove, in one hook. Windows refuses to unlink a file that is still
+  // open, and `after` hooks run in registration order — a removal registered ahead
+  // of the close takes the projection while SQLite still holds it.
+  t.after(async () => {
+    store.close();
+    await rm(dataDir, { recursive: true, force: true });
+  });
   const studio = { start: async () => ({ url: 'http://127.0.0.1:1/', port: 1, reused: false }), stop: async () => true };
 
   const response = await handleRpcMessage(
@@ -1127,9 +1159,15 @@ test('trajectory_tasks is bounded by the frame budget, not only by limit', async
 
 test('a small task list is returned whole, with no false truncation', async (t) => {
   const dataDir = await makeDataDir();
-  t.after(() => rm(dataDir, { recursive: true, force: true }));
   const store = openStore({ dataDir });
-  t.after(() => store.close());
+  // Closing before removing, in one hook: `after` hooks run in registration order,
+  // so a removal registered ahead of the close unlinks the projection while SQLite
+  // still holds it. Windows answers EBUSY; Linux does not, which is how this passed
+  // for as long as it did.
+  t.after(async () => {
+    store.close();
+    await rm(dataDir, { recursive: true, force: true });
+  });
   const studio = { start: async () => ({ url: 'http://127.0.0.1:1/', port: 1, reused: false }), stop: async () => true };
 
   const response = await handleRpcMessage(

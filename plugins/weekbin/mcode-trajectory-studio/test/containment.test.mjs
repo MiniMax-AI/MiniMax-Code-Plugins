@@ -297,16 +297,23 @@ test('a real file with a huge no-newline record is read through the capped path'
  * `/proc` is absent that race is the documented, accepted limit rather than an
  * unstated one, and the gate says so explicitly.
  */
+// Built with `path.resolve` / `path.join` rather than written as POSIX literals.
+// `isWithin` compares a prefix plus `path.sep`, which is `\\` on Windows, so a
+// hard-coded `/base/data/ok.log` can never start with `/base/data\\` there: both
+// assertions failed on windows-latest while testing the separator rather than the
+// containment rule. The rule is platform-independent; the fixture has to be too.
+const ROOT = path.resolve('base/data');
+
 test('a descriptor that resolves outside the root is refused', () => {
-  assert.equal(openedPathAllowed('/base/data', '/base/outside/output.log'), false);
-  assert.equal(openedPathAllowed('/base/data', '/base/data/ok.log'), true);
-  assert.equal(openedPathAllowed('/base/data', '/base/data'), true);
+  assert.equal(openedPathAllowed(ROOT, path.resolve('base/outside/output.log')), false);
+  assert.equal(openedPathAllowed(ROOT, path.join(ROOT, 'ok.log')), true);
+  assert.equal(openedPathAllowed(ROOT, ROOT), true);
 });
 
 test('the containment test is not fooled by a sibling sharing a name prefix', () => {
-  assert.equal(isWithin('/base/data', '/base/data-evil/x'), false);
-  assert.equal(isWithin('/base/data', '/base/data/x'), true);
-  assert.equal(isWithin('/base/data', '/base/dat'), false);
+  assert.equal(isWithin(ROOT, path.resolve('base/data-evil/x')), false);
+  assert.equal(isWithin(ROOT, path.join(ROOT, 'x')), true);
+  assert.equal(isWithin(ROOT, path.resolve('base/dat')), false);
 });
 
 test('an unavailable /proc path falls back to the documented boundary', () => {
