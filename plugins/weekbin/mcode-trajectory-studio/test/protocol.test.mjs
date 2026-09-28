@@ -22,7 +22,13 @@ import { createFixtureProjection } from '../tools/fixture.mjs';
  */
 
 const SERVER = path.join(import.meta.dirname, '..', 'server', 'main.mjs');
-const CALL_TIMEOUT_MS = 10_000;
+// 30s rather than 10s. This client talks to a spawned process over a pipe, and the
+// heaviest call in the suite — a full-detail page trimmed to the frame budget — takes
+// ~10.8 s on a two-CPU GitHub runner. At a flat 10 s budget that call reported
+// `did not answer within 10000ms`: a machine-speed fact presented as a protocol
+// failure, with the property it was written to verify left unchecked. The budget is
+// for a server that has stopped answering, not for one that is working slowly.
+const CALL_TIMEOUT_MS = 30_000;
 
 /** A credential planted in the fixture; it must never appear in a response. */
 const SECRET = 'ghp_qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq';
@@ -312,7 +318,13 @@ test('the reply is bounded by total bytes, not only per string', async (t) => {
   const now = 1_700_000_000_000;
   projection.session({ id: 'sess-big', title: 'Big fixture', updatedAtMs: now });
   const filler = 'y'.repeat(20000);
-  for (let i = 0; i < 400; i += 1) {
+  // 150 records, not 400. The frame budget is 2 MB and each record is ~20 KB, so
+  // this is already ~1.5x the budget — the property under test is that a page is
+  // trimmed and the drop is reported, and that needs to exceed the budget, not to
+  // exceed it four times over. At 400 records this call took 10.8 s on a two-CPU
+  // runner and blew a flat timeout, which reported a timeout rather than the
+  // property being unverified.
+  for (let i = 0; i < 150; i += 1) {
     projection.row({
       sessionId: 'sess-big', msgId: `m${i}`, role: 'assistant', turnId: 'turn-1', createdAtMs: now - i,
       data: {

@@ -916,9 +916,6 @@ test('the per-record cap counts UTF-8 bytes, not characters', async (t) => {
  */
 test('the jsonl fallback pages to the end of the artifact', async (t) => {
   const dataDir = await makeDataDir({ withSqlite: true, withJsonl: false });
-  t.after(async () => {
-    await rm(dataDir, { recursive: true, force: true });
-  });
   const dir = path.join(dataDir, 'v2', 'sessions', '2026', '09', '18', '10-00-00-000-sess-page');
   await mkdir(dir, { recursive: true });
   const RECORDS = 25;
