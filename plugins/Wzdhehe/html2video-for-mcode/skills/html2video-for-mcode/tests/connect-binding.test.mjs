@@ -6,7 +6,9 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import http from 'node:http';
-import { runSkill, tmpdir } from './helpers.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { runSkill, tmpdir, SCRIPTS } from './helpers.mjs';
 import { assertResolvedHost, checkedLookup, policyGet, startVetoProxy, PolicyError } from '../scripts/url-policy.mjs';
 
 const PUB = [{ address: '93.184.216.34', family: 4 }];   // example.com 的公网地址, 只当"公网样子"用
@@ -104,7 +106,7 @@ describe('startVetoProxy: 浏览器全部出网的否决隧道', () => {
   // 注入的 connect 必须保留第二参 connectListener —— 生产路径 net.connect(options, cb) 靠它回调
   const connectTo = port => (opts, cb) => net.connect({ host: '127.0.0.1', port }, cb);
 
-  function connectHandshake(port, requestLine) {
+  function connectHandshake(port) {
     // 模拟浏览器侧: 裸 socket 发 CONNECT / 绝对形式请求由各用例自己拼
     return net.connect({ host: '127.0.0.1', port });
   }
@@ -179,9 +181,11 @@ describe('startVetoProxy: 浏览器全部出网的否决隧道', () => {
     const proxy = await startVetoProxy({ lookup: lookupByName({ 'rebind.example.test': LOOPBACK }) });
     try {
       const res = await new Promise((resolve, reject) => {
-        http.get({ host: '127.0.0.1', port: proxy.port, path: `http://rebind.example.test:${srv.address().port}/page` }, r => {
-          const chunks = []; r.on('data', c => chunks.push(c)); r.on('end', () => resolve({ status: r.statusCode, body: Buffer.concat(chunks).toString() }));
-        }).on('error', reject);
+        const timer = setTimeout(() => { req.destroy(); reject(new Error('代理绝对形式请求超时')); }, 5000);
+        const req = http.get({ host: '127.0.0.1', port: proxy.port, path: `http://rebind.example.test:${srv.address().port}/page` }, r => {
+          const chunks = []; r.on('data', c => chunks.push(c)); r.on('end', () => { clearTimeout(timer); resolve({ status: r.statusCode, body: Buffer.concat(chunks).toString() }); });
+        });
+        req.on('error', e => { clearTimeout(timer); reject(e); });
       });
       assert.equal(res.status, 502, '回源被否决应回 502');
       assert.equal(hits, 0, '源站一个请求都不能收到');
@@ -195,9 +199,11 @@ describe('startVetoProxy: 浏览器全部出网的否决隧道', () => {
     const proxy = await startVetoProxy({ lookup: lookupByName({}), connect: connectTo(srv.address().port) });
     try {
       const res = await new Promise((resolve, reject) => {
-        http.get({ host: '127.0.0.1', port: proxy.port, path: `http://ok.example.test:${srv.address().port}/page` }, r => {
-          const chunks = []; r.on('data', c => chunks.push(c)); r.on('end', () => resolve({ status: r.statusCode, type: r.headers['content-type'], body: Buffer.concat(chunks).toString() }));
-        }).on('error', reject);
+        const timer = setTimeout(() => { req.destroy(); reject(new Error('代理绝对形式请求超时')); }, 5000);
+        const req = http.get({ host: '127.0.0.1', port: proxy.port, path: `http://ok.example.test:${srv.address().port}/page` }, r => {
+          const chunks = []; r.on('data', c => chunks.push(c)); r.on('end', () => { clearTimeout(timer); resolve({ status: r.statusCode, type: r.headers['content-type'], body: Buffer.concat(chunks).toString() }); });
+        });
+        req.on('error', e => { clearTimeout(timer); reject(e); });
       });
       assert.equal(res.status, 200);
       assert.equal(res.type, 'text/html');
@@ -211,10 +217,16 @@ describe('startVetoProxy: 浏览器全部出网的否决隧道', () => {
 // 覆盖 —— 它们走的就是换装后的 openUrl→policyGet 路径; 本文件不重复造环境依赖的判据
 // (.invalid 之类"必然解析失败"的域名在不同 DNS 环境行为不一, 不作测试依据)。
 
+describe('渲染 Chromium 也必须进否决隧道(第 23 轮收口, 结构钉)', () => {
+  test('capture.mjs 的浏览器启动带 proxy(去隧道 = slide 子资源可直连私网, 第 23 轮半做项)', () => {
+    const src = fs.readFileSync(path.join(SCRIPTS, 'capture.mjs'), 'utf8');
+    assert.match(src, /startVetoProxy/, 'capture 必须启动否决代理');
+    assert.match(src, /proxy:\s*\{\s*server:\s*`http:\/\/127\.0\.0\.1:\$\{veto\.port\}`/, 'launch 必须把浏览器流量收进隧道');
+  });
+});
+
 describe('浏览器模式接线(带否决代理启动; 需 playwright/chromium, 缺则按能力 skip)', () => {
   test('file:// 页面 --allow-file --list --json 正常列出候选(代理在链上不碍事)', async t => {
-    const fs = await import('node:fs');
-    const path = await import('node:path');
     const d = tmpdir();
     // 1×1 PNG: naturalWidth=1, 过滤器(默认 --min 0)必放行
     fs.writeFileSync(path.join(d, 'shot.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'));

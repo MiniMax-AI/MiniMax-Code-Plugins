@@ -35,8 +35,8 @@ function candidatePaths(name, projectDir) {
     }
     return out;
   };
-  const anchors = [process.env.KIT_PROJECT_DIR, projectDir, process.cwd(), ...upDirs(SELF_DIR)]
-    .filter(Boolean);
+  const anchors = [...new Set([process.env.KIT_PROJECT_DIR, projectDir, process.cwd(), ...upDirs(SELF_DIR)]
+    .filter(Boolean))];
   for (const base of anchors) {
     dirs.push(path.join(base, 'node_modules', 'ffmpeg-static'));
     dirs.push(path.join(base, 'node_modules', 'ffprobe-static', 'bin', process.platform, process.arch));

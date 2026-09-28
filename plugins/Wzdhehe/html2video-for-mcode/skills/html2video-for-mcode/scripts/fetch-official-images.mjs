@@ -156,23 +156,23 @@ if (!playwright) { console.error('✗ 未找到 playwright(已按 项目目录 /
 const veto = await startVetoProxy({ maxBytes: MAX_BYTES });
 let browser, context;
 try {
-browser = await playwright.chromium.launch({ headless: true, proxy: { server: `http://127.0.0.1:${veto.port}` } });
-context = await browser.newContext({ viewport: { width: 1600, height: 1200 } });
-const page = await context.newPage();
-// 逐请求拦截(二审 P1: 策略必须落在**真实请求边界**上): 字符串策略 + **无缓存**的逐请求
-// 解析预查 —— 这里只做早拦与可命名告警; 权威检查点在否决代理的建连期(预查结果不作准,
-// 按 host 缓存只会把 rebinding 的时间窗越放越大)。
-await context.route('**/*', async route => {
-  const u = route.request().url();
-  try {
-    assertFetchableUrl(u, { allowFile: ALLOW_FILE, where: '页面请求' });
-    await assertResolvedHost(u, { where: '页面请求' });
-    await route.continue();
-  } catch (e) {
-    if (e instanceof PolicyError) { console.warn(`  ⚠ 已拦截请求: ${String(u).slice(0, 90)} — ${e.message}`); await route.abort(); }
-    else await route.continue();
-  }
-});
+  browser = await playwright.chromium.launch({ headless: true, proxy: { server: `http://127.0.0.1:${veto.port}` } });
+  context = await browser.newContext({ viewport: { width: 1600, height: 1200 } });
+  const page = await context.newPage();
+  // 逐请求拦截(二审 P1: 策略必须落在**真实请求边界**上): 字符串策略 + **无缓存**的逐请求
+  // 解析预查 —— 这里只做早拦与可命名告警; 权威检查点在否决代理的建连期(预查结果不作准,
+  // 按 host 缓存只会把 rebinding 的时间窗越放越大)。
+  await context.route('**/*', async route => {
+    const u = route.request().url();
+    try {
+      assertFetchableUrl(u, { allowFile: ALLOW_FILE, where: '页面请求' });
+      await assertResolvedHost(u, { where: '页面请求' });
+      await route.continue();
+    } catch (e) {
+      if (e instanceof PolicyError) { console.warn(`  ⚠ 已拦截请求: ${String(u).slice(0, 90)} — ${e.message}`); await route.abort(); }
+      else await route.continue();
+    }
+  });
 
   await assertResolvedHost(url, { where: '页面 URL' });
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
@@ -231,11 +231,11 @@ await context.route('**/*', async route => {
     candidates.push({ ...it, host, ext: ext || '(无扩展名)', offsite });
   }
 
-  if (!candidates.length) { console.log('没找到符合条件的图片(试试去掉 --min, 或换页面 / 产品页 / 新闻页)'); await context.close(); await browser.close(); process.exit(0); }
+  if (!candidates.length) { console.log('没找到符合条件的图片(试试去掉 --min, 或换页面 / 产品页 / 新闻页)'); await context.close(); await browser.close(); await veto.close(); process.exit(0); }
 
   // --json 是布尔 flag: 必须用 includes 判存在。flagValue 取的是"下一个参数",
   // --json 在末尾(文档写的用法)时取到 undefined → 静默退化成人类可读列表(终轮复查抓到)。
-  if (argv.includes('--json')) { console.log(JSON.stringify(candidates, null, 2)); await context.close(); await browser.close(); process.exit(0); }
+  if (argv.includes('--json')) { console.log(JSON.stringify(candidates, null, 2)); await context.close(); await browser.close(); await veto.close(); process.exit(0); }
 
   console.log(`候选图 ${candidates.length} 张(页面 ${pageHost || url}):\n`);
   candidates.forEach((c, i) => {

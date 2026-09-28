@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { flagValue, loadPackage, positionalDir, requireFreshCss, safeId, safeOut, safeRel, SUB_GEOMETRY, subScale, subtitleKeyframes, subtitleWindows, validateScriptPaths, validateTimingsIds } from './tools.mjs';
+import { startVetoProxy } from './url-policy.mjs';
 
 const argv = process.argv.slice(2);
 const dir = positionalDir(argv);
@@ -88,7 +89,11 @@ async function waitAssets(page) {
   }));
 }
 
-const browser = await playwright.chromium.launch({ headless: true });
+// 渲染 Chromium 也进否决隧道(2026-09-28 第 23 轮收口): slide HTML 理论上本地生成、外链由
+// check-slides 的 error 闸门拦 —— 但闸门不是连接期; 万一被绕过, 私网/元数据地址在这里被
+// 建连期否决(公共外网照常可达, file:// 页不经代理)。
+const veto = await startVetoProxy();
+const browser = await playwright.chromium.launch({ headless: true, proxy: { server: `http://127.0.0.1:${veto.port}` } });
 const context = await browser.newContext({
   viewport: { width: script.width ?? 1920, height: script.height ?? 1080 },
   deviceScaleFactor: dsf,
@@ -355,4 +360,5 @@ for (const s of slides) {
 
 await context.close();
 await browser.close();
+await veto.close();   // 先关浏览器再关代理(关代理会掐掉仍在途的隧道)
 console.log(`完成: ${done}/${slides.length} 张 (mode=${mode})`);
