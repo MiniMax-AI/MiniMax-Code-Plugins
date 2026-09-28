@@ -330,8 +330,10 @@ html, body { width: var(--stage-w, 1920px); height: var(--stage-h, 1080px); over
 }
 
 /* ── 免责声明 / 出处标注行(受监管题材: 财经/医疗/法律/政策, 见 references/compliance.md)
-   小字不抢视觉; 出现在 closing 张并停留 ≥3s; 口播不念、不进字幕; 加了它也不替代核实 */
-.disclaimer { font-size: var(--fs-tiny); line-height: 1.6; color: var(--fg-3); max-width: 1240px; }
+   小字不抢视觉; 出现在 closing 张并停留 ≥3s; 口播不念、不进字幕; 加了它也不替代核实。
+   2026-09-28 去掉内置 max-width:1240px —— 那是给单行出处标注设计的, 会把多行整宽
+   免责块卡死在 1240px 居中(项目里显式 width:100% 也压不过它); 需要收窄的项目自己覆写 */
+.disclaimer { font-size: var(--fs-tiny); line-height: 1.6; color: var(--fg-3); }
 .disclaimer-box { border-left: 2px solid var(--line-strong); padding-left: var(--sp-3); }
 
 /* ── 分步入场系统 ──────────────────────────────────────────────

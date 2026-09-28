@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { flagValue, loadPackage, positionalDir, requireFreshCss, safeId, safeOut, safeRel, SUB_GEOMETRY, subScale, subtitleKeyframes, subtitleWindows, validateScriptPaths, validateTimingsIds } from './tools.mjs';
+import { flagValue, loadPackage, positionalDir, requireFreshCss, safeId, safeOut, safeRel, subPillCss, subScale, subtitleKeyframes, subtitleWindows, validateScriptPaths, validateTimingsIds } from './tools.mjs';
 import { startVetoProxy } from './url-policy.mjs';
 
 const argv = process.argv.slice(2);
@@ -50,6 +50,14 @@ if (!Number.isInteger(cvW) || cvW < 16 || cvW > 16384 || !Number.isInteger(cvH) 
 const slides = script.slides.filter(s => !idsFilter || idsFilter.includes(s.id));
 const firstId = script.slides[0]?.id;   // 封面图取自成片第 1 段(与 --ids 无关)
 if (!slides.length) { console.error('✗ 没有匹配的 slide'); process.exit(1); }
+// 部分匹配不再静默少做(2026-09-28 Mavis 交接): --ids 里没命中的 id 点名告警 + 打印本次实际
+// 生效列表。顺带覆盖 PowerShell 裸逗号列表吃前导零的形态(03,05 → 3,5 匹配不上零填充 id)。
+if (idsFilter) {
+  const hitIds = new Set(slides.map(s => s.id));
+  const miss = idsFilter.filter(id => !hitIds.has(id));
+  if (miss.length) console.warn(`⚠ --ids 里没有对应 slide 的 id, 已忽略: ${miss.join(', ')}(注意 PowerShell 裸写 03,05 会被当数字数组吃掉前导零 —— 加引号 --ids "03,05" 或逐个传)`);
+  console.log(`本次处理: ${[...hitIds].join(', ')}`);
+}
 
 const playwright = await loadPackage('playwright', { projectDir: dir });
 if (!playwright) {
@@ -199,18 +207,12 @@ for (const s of slides) {
   // 显示窗 = 该句开口 → 下句开口。做成百分比关键帧动画: 逐帧 seek 天然工作, still 模式 finish() 后自动隐藏。
   // 必须在 goto 之前 addInitScript 才会生效。
   if (SUBS && Array.isArray(t.clauses) && t.clauses.length) {
-    await page.addInitScript(({ clauses, durMs, css, geom }) => {
+    // 胶囊样式整体来自 tools.subPillCss(单一来源): 含 width:max-content —— 没有它,
+    // left:50% 的可用宽度只有画布一半, max-width 永远够不到, 字幕提前一半折行(Mavis A/B 实测)
+    await page.addInitScript(({ clauses, durMs, css }) => {
       const mount = () => {
         const st = document.createElement('style');
-        st.textContent = '.kit-sub{position:absolute;left:50%;bottom:calc(var(--stage-h, 1080px) * 0.077778);transform:translateX(-50%);'
-          + 'max-width:calc(var(--stage-w, 1920px) * ' + geom.boxW + ');'
-          + 'background:var(--sub-bg, rgba(12,12,16,.62));color:var(--sub-fg, #fff);'
-          + 'border:var(--sub-ring, 0 solid transparent);'
-          + 'font-size:calc(' + geom.fontPx + 'px * var(--sub-scale, 1));line-height:1.5;'
-          + 'padding:calc(12px * var(--sub-scale, 1)) calc(' + geom.padPx + 'px * var(--sub-scale, 1));'
-          + 'border-radius:calc(14px * var(--sub-scale, 1));text-align:center;opacity:0;z-index:9;pointer-events:none;'
-          + 'box-shadow:0 2px 12px rgba(0,0,0,.18)}'
-          + '.kit-sub-2{font-size:.74em;opacity:.88;margin-top:6px;letter-spacing:.01em}' + css;
+        st.textContent = css;
         (document.head || document.documentElement).appendChild(st);
         const host = document.querySelector('.stage') || document.body;
         // 幂等: 若 mount 因任何原因被触发多次, 先清掉上一次的挂载, 避免字幕元素累积
@@ -233,7 +235,7 @@ for (const s of slides) {
       };
       if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount, { once: true });
       else mount();
-    }, { clauses: t.clauses, durMs: t.duration * 1000, css: subtitleKeyframes(t.clauses, t.duration), geom: SUB_GEOMETRY });
+    }, { clauses: t.clauses, durMs: t.duration * 1000, css: subPillCss() + subtitleKeyframes(t.clauses, t.duration) });
 
     // 字幕窗口自检(与页面关键帧同一来源 tools.subtitleWindows): 任意时刻最多一条字幕可见。
     // 淡入/淡出都收在各自窗口内 —— 真正的重叠只有一种: 上一句窗口过短被 a+0.5 顶出(prevB > a)。

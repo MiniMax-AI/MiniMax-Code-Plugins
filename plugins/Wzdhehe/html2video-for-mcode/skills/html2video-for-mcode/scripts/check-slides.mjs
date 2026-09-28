@@ -27,7 +27,7 @@
 //      提醒确认领域与免责口径(见 references/compliance.md); 用户明确不要免责时可忽略
 import fs from 'node:fs';
 import path from 'node:path';
-import { expectedTokens, flagValue, inside, positionalDir, readTransition, safeId, safeRel } from './tools.mjs';
+import { expectedTokens, flagValue, inside, positionalDir, readTransition, safeId, safeRel, subBandTop } from './tools.mjs';
 import { kitStatuses } from './css-kit.mjs';
 import { MAX_SCAN_BYTES } from './limits.mjs';   // 对 tokens.css 与 HTML 都生效, 单一来源(见 limits.mjs)
 
@@ -198,12 +198,16 @@ for (const s of slides) {
     warns++;
   }
 
-  // 5e. 绝对定位元素落在字幕带(2026-09-18 实测踩坑, 最贵的一类): 成片字幕占底部 84–168px(@1080,
-  //     按画布高缩放), 图注/落款写 bottom:96px 会被字幕压住 —— still 预览看不出(终态不一定显示
-  //     字幕), 只有抽成片帧才见。**提示级**(字幕之外的合法贴底元素可忽略; 与 SKILL.md 的措辞一致)。
+  // 5e. 绝对定位元素落在字幕带(2026-09-18 实测踩坑, 最贵的一类): 成片字幕占底部一条带, 图注/
+  //     落款写 bottom:96px 会被字幕压住 —— still 预览看不出(终态不一定显示字幕), 只有抽成片帧才见。
+  //     **提示级**(字幕之外的合法贴底元素可忽略; 与 SKILL.md 的措辞一致)。
   //     2026-09-18 复查 D5 收紧两处误报: ① 前加边界, 别把 padding-bottom / margin-bottom 当 bottom;
   //     ② 要求同一条规则里有 position: absolute|fixed —— 流内元素写 bottom 不产生位移, 报了是噪音。
-  const bandTop = Math.round(168 * (Number(script.height ?? 1080) / 1080));
+  //     2026-09-28 Mavis 交接: 常量 168 按单行几何写死 —— 单行实测 170px, 折行后 230px(62px 碰撞区
+  //     永远不报, 08/11 实际压住内容而闸门全绿)。现按 tools.subBandTop 实算: 有 text2 的张用双行档;
+  //     .kit-sub 修 width:max-content 后恒单行, 但闸门按最坏形状算(长句极端时仍可能折行)。
+  const bandTop = subBandTop(Number(script.height ?? 1080), Number(script.width ?? 1920),
+    { bilingual: (s.clauses ?? []).some(c => c.text2) });
   const cssRules = [
     ...[...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)]
       .flatMap(m2 => [...m2[1].matchAll(/\{([^{}]*)\}/g)].map(m3 => m3[1])),   // style 块: 按规则体切(含 @media 内层)
@@ -219,6 +223,15 @@ for (const s of slides) {
   }
   if (inBand.length) {
     report.push({ id: s.id, level: 'warn', msg: `绝对定位元素的 bottom:${inBand[0]}px 等 ${inBand.length} 处落在字幕带(底部 0–${bandTop}px @${script.height ?? 1080}) — 成片字幕会压住它, still 预览看不出; 图注/落款挪到 bottom ≥ ${bandTop}px 或放回流内(padding-bottom 会兜住), 验收用 grab-frames.mjs 抽成片实帧` });
+    warns++;
+  }
+
+  // 5e-bis. 流内贴底启发式(2026-09-28 Mavis 交接: 5e 只扫绝对定位, 流内贴底完全不在射程 ——
+  //     margin-top:auto / 前置 flex:1 空占位把内容顶到底部, 字幕带检查看不见, 静帧也看不见,
+  //     只有 grab-frames 抽成片帧才见)。启发式只提示"去复核", 不定罪(合法贴底元素存在)。
+  const flowBottom = /margin-top\s*:\s*auto/.test(html) || /flex\s*:\s*1[^;}]*;\s*\/\*?\s*占位/.test(html);
+  if (flowBottom) {
+    report.push({ id: s.id, level: 'warn', msg: `本张有流内贴底写法(margin-top:auto / flex:1 占位) — 字幕带闸门只扫绝对定位, 流内贴底是否被成片字幕压住, 用 grab-frames.mjs 抽成片实帧复核(still 预览看不出)` });
     warns++;
   }
 

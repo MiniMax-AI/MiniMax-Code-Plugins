@@ -272,6 +272,11 @@ describe('D4 · --mode / --dsf / --at 的非法值必须在入口被拒', () => 
     const none = runSkill('grab-frames.mjs', [p, '--ids', '99']);
     assert.equal(none.status, 1, '零帧必须退出 1: ' + none.stdout);
     assert.ok(none.stderr.includes('一帧都没抽到'), none.stderr);
+    // 部分匹配不再静默少做: 没命中的 id 点名告警(2026-09-28 Mavis 交接 §4)
+    const mixed = runSkill('grab-frames.mjs', [p, '--ids', '01,99']);
+    assert.equal(mixed.status, 0, mixed.stdout + mixed.stderr);
+    assert.ok((mixed.stdout + mixed.stderr).includes('已忽略: 99'), '没命中的 id 必须点名: ' + (mixed.stdout + mixed.stderr).slice(-300));
+    assert.ok(fs.existsSync(path.join(p, 'build', 'introspect', 'frame-01-end.png')), '命中的 01 照常抽帧');
   });
 });
 
@@ -302,6 +307,31 @@ describe('D5 · 字幕带闸门只对"绝对定位的 bottom"报警', () => {
     const inline = runSkill('check-slides.mjs', [mk(`<!doctype html><html data-theme="a"><head><meta charset="utf-8"></head>
 <body><div class="stage"><p class="fx-fade" data-stage="1">x</p><div class="cap" style="position:absolute;bottom:80px">图:来源</div></div></body></html>`)]);
     assert.match(inline.stdout, /字幕带/, '行内 style 的 absolute+bottom 同样要报');
+  });
+  test('2026-09-28 Mavis 交接 · 字幕带按 SUB_GEOMETRY 实算(单行 170 / 双语双行档)', () => {
+    // 旧常量 168: bottom:169 漏报(实测单行 170); 且折行后 230px —— 62px 碰撞区永远不报
+    const edge = runSkill('check-slides.mjs', [mk(`<!doctype html><html data-theme="a"><head><meta charset="utf-8">
+<style>.cap { position: absolute; bottom: 169px; }</style></head>
+<body><div class="stage"><p class="fx-fade" data-stage="1">x</p><div class="cap">图:来源</div></div></body></html>`)]);
+    assert.match(edge.stdout, /字幕带/, 'bottom:169 落在实测单行带 170 内, 必须报(旧常量 168 会漏)');
+    const safe = runSkill('check-slides.mjs', [mk(`<!doctype html><html data-theme="a"><head><meta charset="utf-8">
+<style>.cap { position: absolute; bottom: 185px; }</style></head>
+<body><div class="stage"><p class="fx-fade" data-stage="1">x</p><div class="cap">图:来源</div></div></body></html>`)]);
+    assert.ok(!/字幕带/.test(safe.stdout), 'bottom:185 在单行带之外, 不该报: ' + safe.stdout.slice(-300));
+    // 双语(text2): 第二行 .kit-sub-2 叠高, 带更厚 —— bottom:185 此时也要报
+    const p2 = mkproj(tmpdir(), { slides: [{ id: '01', html: '01.html', audio: '01.mp3', clauses: [{ stage: 1, text: '一', text2: 'one' }] }] });
+    fs.writeFileSync(path.join(p2, 'slides', '01.html'), `<!doctype html><html data-theme="a"><head><meta charset="utf-8">
+<style>.cap { position: absolute; bottom: 185px; }</style></head>
+<body><div class="stage"><p class="fx-fade" data-stage="1">x</p><div class="cap">图:来源</div></div></body></html>`);
+    const bi = runSkill('check-slides.mjs', [p2]);
+    assert.match(bi.stdout, /字幕带/, '双语张的带按双行档算, bottom:185 仍落在带内');
+  });
+  test('2026-09-28 Mavis 交接 · 流内贴底(margin-top:auto)给复核提示(闸门只扫绝对定位)', () => {
+    const flow = runSkill('check-slides.mjs', [mk(`<!doctype html><html data-theme="a"><head><meta charset="utf-8">
+<style>.stage { display: flex; flex-direction: column; } .cap { margin-top: auto; }</style></head>
+<body><div class="stage"><p class="fx-fade" data-stage="1">x</p><div class="cap">底部免责</div></div></body></html>`)]);
+    assert.match(flow.stdout, /流内贴底/, '流内贴底写法要给 grab-frames 复核提示(08/11 压住内容而闸门全绿的形状)');
+    assert.equal(flow.status, 0, '提示级, 不阻塞');
   });
 });
 

@@ -41,6 +41,12 @@ fs.mkdirSync(outDir, { recursive: true });
 
 let start = 0;
 const shots = [];
+// --ids 未命中的 id 点名告警(与 capture 同款: 部分匹配不再静默少做, 2026-09-28 Mavis 交接)
+if (onlyIds) {
+  const have = new Set(timings.slides.map(s => safeId(s.id)));
+  const miss = [...onlyIds].filter(id => !have.has(id));
+  if (miss.length) console.warn(`⚠ --ids 里没有对应 slide 的 id, 已忽略: ${miss.join(', ')}(PowerShell 裸写 03,05 会吃掉前导零 —— 加引号 --ids "03,05" 或逐个传)`);
+}
 for (const s of timings.slides) {
   const sid = safeId(s.id);
   const dur = Number(s.duration);

@@ -6,7 +6,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { runSkill, tmpdir } from './helpers.mjs';
+import { runSkill, tmpdir, SCRIPTS } from './helpers.mjs';
 
 function parseFx(css) {
   const classes = new Map(); // .fx-name → { anim, infinite }
@@ -110,5 +110,14 @@ describe('init-project --upgrade-css: 老项目补 no-fx 规则', () => {
   test('没有 tokens.css → 退出 1', () => {
     const r = runSkill('init-project.mjs', [tmpdir(), '--upgrade-css']);
     assert.equal(r.status, 1);
+  });
+});
+
+describe('2026-09-28 Mavis 交接 · .disclaimer 不再内置 max-width:1240px', () => {
+  test('生成物里 .disclaimer 无 1240 上限(那会卡死多行整宽免责块, 项目覆写 width:100% 也压不过)', async () => {
+    const { generateTokensCss } = await import('file://' + path.join(SCRIPTS, 'tokens-template.mjs').split(path.sep).join('/'));
+    const css = generateTokensCss();
+    assert.ok(css.includes('.disclaimer'), '原语要在');
+    assert.ok(!css.includes('max-width: 1240px'), '不得再内置 1240px 上限 —— 需要收窄的项目自己覆写');
   });
 });

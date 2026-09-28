@@ -337,12 +337,46 @@ export function canonicalPath(p) {
 // padding 再乘 --sub-scale = clamp(W/1920, 0.75, 1.25)。行宽(全宽字) = (0.729167·W − 2·34·s)/(40·s·emPer):
 // 中文 1080≈24 字、1920≈33 字、2560≈35 字 —— 2026-09-23 复核: 缩放带钳位, 按宽度线性外推是错的
 // (1.9.9 的 18×W/1080 在 1080 过报 27%、2560 漏报真折行)。emPer = 单字宽按 em 折算(中文全宽 1, 拉丁 ≈0.44)。
-export const SUB_GEOMETRY = { boxW: 0.729167, padPx: 34, fontPx: 40, baseW: 1920 };
+// 2026-09-28 实测勘误(Mavis A/B): 这些行宽值是 width:max-content 生效后的**设计值** —— 旧实现
+// left:50% 的绝对定位可用宽度只有画布一半(1920→960px), max-width 永远够不到, 实际 22 字就折行;
+// 修复后设计值与实测一致(见 subPillCss 的 width:max-content)。
+export const SUB_GEOMETRY = { boxW: 0.729167, padPx: 34, padYPx: 12, fontPx: 40, radiusPx: 14, bottomFrac: 0.077778, sub2Em: 0.74, baseW: 1920 };
 export const subScale = width => Math.min(1.25, Math.max(0.75, (width ?? SUB_GEOMETRY.baseW) / SUB_GEOMETRY.baseW));
 export function subLineCap(width, emPer = 1) {
   const w = width ?? SUB_GEOMETRY.baseW;
   const s = subScale(w);
   return Math.max(8, Math.floor((SUB_GEOMETRY.boxW * w - 2 * SUB_GEOMETRY.padPx * s) / (SUB_GEOMETRY.fontPx * s * emPer)));
+}
+
+// .kit-sub 胶囊样式(单一来源: capture 的页面注入与几何测试共用; 常量全部来自 SUB_GEOMETRY)。
+// width:max-content 是硬约束, 不是优化: left:50% 的绝对定位元素 shrink-to-fit 的可用宽度
+// = 包含块宽 − left 偏移 = 画布的一半(1920→960px), transform 只位移不改布局宽度 ——
+// 于是 max-width: 1400px 永远够不到, 字幕提前一半折行、双行胶囊侵占到距底 230px 压住
+// 图注/免责(2026-09-28 A/B 实测: 22 句 8 句折错; 加 width:max-content 后 0 折行, 恒单行 170px)。
+// 通用教训: left:50%+translateX(-50%) 居中与 max-width 互斥; 要"居中+能撑满"必须显式
+// width:max-content, 或改用 left:0;right:0;margin-inline:auto;max-width:<设计值>。
+export function subPillCss(geom = SUB_GEOMETRY) {
+  return '.kit-sub{position:absolute;left:50%;bottom:calc(var(--stage-h, 1080px) * ' + geom.bottomFrac + ');transform:translateX(-50%);width:max-content;'
+    + 'max-width:calc(var(--stage-w, 1920px) * ' + geom.boxW + ');'
+    + 'background:var(--sub-bg, rgba(12,12,16,.62));color:var(--sub-fg, #fff);'
+    + 'border:var(--sub-ring, 0 solid transparent);'
+    + 'font-size:calc(' + geom.fontPx + 'px * var(--sub-scale, 1));line-height:1.5;'
+    + 'padding:calc(' + geom.padYPx + 'px * var(--sub-scale, 1)) calc(' + geom.padPx + 'px * var(--sub-scale, 1));'
+    + 'border-radius:calc(' + geom.radiusPx + 'px * var(--sub-scale, 1));text-align:center;opacity:0;z-index:9;pointer-events:none;'
+    + 'box-shadow:0 2px 12px rgba(0,0,0,.18)}'
+    + '.kit-sub-2{font-size:' + geom.sub2Em + 'em;opacity:.88;margin-top:6px;letter-spacing:.01em}';
+}
+
+// 字幕带顶部(距画布底的距离): check-slides 的闸门与 authoring 的安全区共用同一公式。
+// 单行 = bottom 偏移(不随 --sub-scale 缩放, CSS 里就是这么写的) + 胶囊高(字号×1.5 行高
+// + 上下 padding, 随缩放) + 2px 渲染余量(实测单行 86px vs 公式 84px)。
+// 双语(text2)再叠一行 .kit-sub-2(0.74em + 6px margin)。
+export function subBandTop(height, width, { bilingual = false } = {}) {
+  const s = subScale(width);
+  const g = SUB_GEOMETRY;
+  const pill = (g.padYPx * 2 + g.fontPx * 1.5) * s + 2;
+  const pill2 = pill + (g.fontPx * g.sub2Em * 1.5 + 6) * s + 2;
+  return Math.round(g.bottomFrac * (height ?? 1080) + (bilingual ? pill2 : pill));
 }
 
 // ── CLI 入口守卫(单一来源) ───────────────────────────────────────────

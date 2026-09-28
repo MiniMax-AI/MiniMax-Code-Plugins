@@ -56,9 +56,10 @@ test('冒烟: 全链路出片', async t => {
   // 6. check-slides(静态闸门, 必须全绿)
   r = runSkill('check-slides.mjs', [proj]);
   assert.equal(r.status, 0, r.stdout + r.stderr);
-  // 7. capture still
-  r = runSkill('capture.mjs', [proj, '--mode', 'still']);
+  // 7. capture still(--ids 带一个不存在的 id: 部分匹配必须点名告警, 不静默少做 —— Mavis 交接 §4)
+  r = runSkill('capture.mjs', [proj, '--mode', 'still', '--ids', '01,99']);
   assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.ok((r.stdout + r.stderr).includes('已忽略: 99'), '没命中的 id 必须点名: ' + (r.stdout + r.stderr).slice(-300));
   assert.ok(fs.existsSync(path.join(proj, 'preview', '01.png')), '应产出 preview/01.png');
   // 8. build-video(不带 --asr, 不碰网络)
   r = runSkill('build-video.mjs', [proj]);
@@ -455,6 +456,34 @@ test('plan-timings 年份读法闸门: 无 say 必须点名(给逐位写法), �
   assert.ok(!/逐位读/.test(r2.stdout + r2.stderr), '英语面不得误报年份闸门: ' + (r2.stdout + r2.stderr).slice(-300));
 });
 
+// 2026-09-28 Mavis 交接 P0: left:50% 的绝对定位可用宽度只有画布一半, max-width(设计 1400)永远
+// 够不到 —— 字幕提前一半折行(22 句实测 8 句折错), 双行侵占到距底 230px 压住图注/免责。
+// 修法 = width:max-content(subPillCss 单一来源)。判据: 30 字句必须单行且宽 >1000px。
+test('字幕胶囊: width:max-content 生效 — 30 字句单行且宽 >1000px(旧实现封顶 960 折两行)', async t => {
+  playwright = playwright || await loadPackage('playwright');
+  if (!playwright) return t.skip('无 playwright');
+  let browser;
+  try { browser = await playwright.chromium.launch({ headless: true }); } catch { return t.skip('chromium 未安装(npx playwright install chromium)'); }
+  try {
+    const { subPillCss } = await import('file://' + path.join(SCRIPTS, 'tools.mjs').split(path.sep).join('/'));
+    const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+    await page.setContent('<div class="stage" style="position:relative;width:1920px;height:1080px"></div>');
+    await page.evaluate(() => {
+      const el = document.documentElement;
+      el.style.setProperty('--stage-w', '1920px'); el.style.setProperty('--stage-h', '1080px'); el.style.setProperty('--sub-scale', '1');
+    });
+    await page.addStyleTag({ content: subPillCss() });
+    const g = await page.evaluate(() => {
+      const d = document.createElement('div'); d.className = 'kit-sub'; d.style.opacity = '1'; d.textContent = '一'.repeat(30);
+      document.querySelector('.stage').appendChild(d);
+      const r = d.getBoundingClientRect();
+      return { w: Math.round(r.width), h: Math.round(r.height) };
+    });
+    assert.ok(g.w > 1000, `30 字句应撑到 >1000px(设计上限 1400): 实测 ${g.w}px —— 封顶 960 说明 max-width 仍够不到`);
+    assert.ok(g.h < 100, `必须单行(高≈86px): 实测 ${g.h}px —— 146px = 折成了两行`);
+  } finally { await browser.close(); }
+});
+
 // 2026-09-23 复核钉死: 胶囊几何唯一来源 tools.subLineCap —— 缩放带钳位, 按宽度线性外推是错的
 // (1.9.9 的 18×W/1080 在 1080 过报 27%、2560 漏报真折行)。数字来自 .kit-sub 的 CSS 常量。
 test('subLineCap: 字幕胶囊行宽几何(钳位后非线性, 数字钉死)', async () => {
@@ -476,8 +505,6 @@ test('胶囊几何单源: 除 tools.mjs 外无字面量, capture 必须消费 SU
     assert.ok(!/0\.729167/.test(src), `${f} 不得硬编码胶囊宽度(唯一来源 tools.SUB_GEOMETRY)`);
   }
   const cap = fs.readFileSync(path.join(SCRIPTS, 'capture.mjs'), 'utf8');
-  assert.match(cap, /SUB_GEOMETRY/, 'capture 必须导入 SUB_GEOMETRY');
-  for (const k of ['geom.boxW', 'geom.fontPx', 'geom.padPx']) {
-    assert.ok(cap.includes(k), `capture 的 .kit-sub CSS 必须用 ${k} 注入(硬编码即两份几何)`);
-  }
+  assert.match(cap, /subPillCss/, 'capture 的字幕胶囊样式必须来自 tools.subPillCss(硬编码即两份几何)');
+  assert.match(cap, /css: subPillCss\(\) \+ subtitleKeyframes/, '注入样式 = 胶囊样式 + 关键帧, 同一来源拼接');
 });
