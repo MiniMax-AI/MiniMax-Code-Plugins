@@ -399,7 +399,7 @@ plugins/weekbin/mcode-trajectory-studio/
 - SQLite 侧与 JSONL 侧都有**单行上限**：JSONL 2 MiB（缓冲区随分块即时封顶），SQLite `data_json`
   8 MiB。超限行以 `oversized` + 字节数上报——既不是整行读进内存，也不是静默丢弃；写 SQL 时用
   `CASE WHEN length(CAST(data_json AS BLOB)) <= ?` 让判定在 SQL 内侧完成，超限值根本不进
-  JS 字符串。**这里必须按字节而不是字符计**：`length()` 作用在 TEXT 列上返回的是字符数，
+  JS 字符串。**这里必须按字节而不是字符计**：`length()` 作用在 TEXT 列上返回的是**字符数**而非 UTF-8 字节数，
   于是一条 4 字节码点的行会以四分之一的体量通过字节上限，然后被完整解析并返回——上限恰好
   放过了它要拦的那种行。CAST 成 BLOB 后 SQLite 直接读记录头里的字节长度，比逐字符扫描更便宜
 - **分页游标按“已投递记录数”推导**，不是按“已读取记录数”。聚合字节预算会把一页裁短（1000 条

@@ -112,7 +112,7 @@ export const TOOLS = [
     name: 'trajectory_search',
     annotations: READ_ONLY,
     description:
-      'Full-text search across local session titles, agent names, statuses and workspace paths using the runtime FTS5 index.',
+      'Full-text search across local session titles, agent names, statuses and workspace paths using the runtime FTS5 index. truncated/omitted report matches the response budget could not carry.',
     inputSchema: obj({
       query: str('Search text. Multi-character queries are matched as a phrase.', { minLength: 1, maxLength: 200 }),
       limit: int('Maximum sessions to return.', { minimum: 1, maximum: 200, default: 20 }),

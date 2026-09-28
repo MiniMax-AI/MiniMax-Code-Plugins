@@ -1,0 +1,131 @@
+name: mcode-trajectory-studio
+
+# This Plugin carries three review rounds of confidentiality, containment and
+# bounding fixes, and each round ended with the same finding from the reviewer:
+# "current tests do not cover the reproduced cases". The three fixtures that should
+# have caught them existed and were green.
+#
+# So this workflow does not re-run the repository's own `npm run check`, which
+# already covers `scripts/validate.mjs` and the whole test tree on ubuntu. It adds
+# the evidence that has been *claimed* rather than checked for this Plugin:
+#
+#   contract   The plugin-scoped gates: the release gates, then the egress contract
+#              suite that drives every tool and every route against the real
+#              projection instead of a stub store. The `/api/overview` 500 survived
+#              two rounds precisely because only stub stores exercised that path, so
+#              the stub-free suite is run as its own named step rather than folded
+#              into a count.
+#   suite      The full Plugin suite on ubuntu, macos and windows. Cross-platform
+#              evidence was previously a hand-run claim; the previous hand-run had
+#              not covered three platform assumptions in the tests themselves.
+#   engines    `tools/compat-matrix.mjs` under the documented Node floor, the lowest
+#              verified release and the current line, so the manifest's floor and
+#              verified range are asserted rather than described. On a release
+#              outside the verified range the only permitted skip is the FTS5 search
+#              test, and the tool fails if anything else is skipped.
+#
+# Scope is deliberately narrow: `paths:` filters this workflow to the Plugin plus
+# this file, so it can never block an unrelated PR. See the note in ci.yml about
+# why an unscoped "validate everything" job was removed there.
+
+on:
+  pull_request:
+    paths:
+      - 'plugins/weekbin/mcode-trajectory-studio/**'
+      - '.github/workflows/mcode-trajectory-studio.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/weekbin/mcode-trajectory-studio/**'
+      - '.github/workflows/mcode-trajectory-studio.yml'
+  # Lets a maintainer, or this Plugin's author, run the same jobs outside a PR —
+  # which is how a github-hosted green check is captured on a fork whose
+  # fork-to-upstream PR cannot start Actions without maintainer approval.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: contract gates (ubuntu-latest, node 22)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: plugins/weekbin/mcode-trajectory-studio
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b18 # v7.0.1
+        persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      # No `npm ci`: the Plugin ships zero dependencies and no build step, which is
+      # itself part of what the release gates check.
+      - name: release gates (version, engine claims, byte units, doc anchors, egress bounds)
+        run: node tools/release-gates.mjs
+      - name: every tool and route, driven against the real projection
+        run: node --test test/egress-contract.test.mjs
+      # The browser half of this harness is manual by nature and stays out of CI.
+      # `--smoke` is the part a machine can judge, over a real loopback socket: the
+      # panel binds, the document is served hardened, the capability is required and
+      # sufficient, and the planted credential does not reach the wire. Removing the
+      # capability check makes this step fail, which is how it was verified.
+      - name: panel smoke over a real socket
+        run: node tools/panel-e2e.mjs --smoke
+
+  suite:
+    name: suite (${{ matrix.os }}, node 22)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: plugins/weekbin/mcode-trajectory-studio
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b18 # v7.0.1
+        persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      # The Plugin suite creates and removes real temporary directories and opens
+      # real SQLite projections, so it is serialised: the Windows jobs fail with
+      # EBUSY when a fixture is unlinked while SQLite still holds the file.
+      - name: plugin suite
+        shell: bash
+        run: node --test --test-concurrency=1 'test/*.test.mjs' 2>&1 | tee trajectory-suite.tap
+      - name: preserve suite output, including failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trajectory-suite-${{ matrix.os }}
+          path: plugins/weekbin/mcode-trajectory-studio/trajectory-suite.tap
+          if-no-files-found: warn
+          retention-days: 7
+
+  engines:
+    name: engines (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22.13.0 is the floor: node:sqlite exists, FTS5 does not. The tool requires
+        # that the FTS5 search test is the *only* skip there.
+        # 22.19.0 is the lowest release in the verified range, where FTS5 is present.
+        # 24.x is the line mcode's own engines allow today.
+        node: ['22.13.0', '22.19.0', '24']
+    defaults:
+      run:
+        working-directory: plugins/weekbin/mcode-trajectory-studio
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b18 # v7.0.1
+        persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+      - name: assert the suite behaves as the manifest claims for this release
+        run: node tools/compat-matrix.mjs

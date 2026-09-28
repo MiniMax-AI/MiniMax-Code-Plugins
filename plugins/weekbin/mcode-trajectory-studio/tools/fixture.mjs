@@ -126,6 +126,34 @@ export async function createFixtureProjection(dataDir) {
     `).run(taskId, sessionId, kind, status, createdAtMs, endedAtMs, endedAtMs, JSON.stringify(record));
   };
 
+  /**
+   * An agent definition for a session.
+   *
+   * This helper exists because its absence cost two review rounds. The table has been
+   * in this fixture's schema since it was written, but nothing ever put a row in it,
+   * so every consumer — the domain tests, the protocol test that spawns the real MCP
+   * server, and the panel harness — ran with `getAgentDefinition() === null`. The
+   * `/api/overview` defect that a populated definition triggers was unreachable from
+   * all three, and a stub store is the only thing that can express that shape at all.
+   *
+   * `systemPrompt` defaults to a non-empty string, because an empty one takes the
+   * same branch-skipping path as a null definition: a fixture that cannot reach the
+   * code it exists to cover is not a fixture.
+   */
+  const agent = ({ sessionId, ownerName = 'mavis', systemPrompt = 'You are a fixture agent.', tools = ['read', 'bash'] } = {}) => {
+    db.prepare(`
+      INSERT INTO local_runtime_session_agent_definitions (session_id, definition_json)
+      VALUES (?, ?)
+    `).run(sessionId, JSON.stringify({
+      definitionVersion: 2,
+      exactOwnerName: ownerName,
+      model: { providerId: 'minimax', modelId: 'MiniMax-M3', variant: 'thinking', contextWindow: 512000, maxOutputTokens: 128000 },
+      project: { workspaceDir: FIXTURE_WORKSPACE },
+      systemPrompt,
+      capabilities: { tools, disallowedTools: [], mcpServers: [], skills: [], extensionSkills: [] },
+    }));
+  };
+
   return {
     file,
     db,
@@ -133,6 +161,7 @@ export async function createFixtureProjection(dataDir) {
     session,
     row,
     task,
+    agent,
     close: () => db.close(),
   };
 }

@@ -321,9 +321,40 @@ npm run validate                                 # the repository validator
 cd plugins/weekbin/mcode-trajectory-studio
 node --test                                      # the Plugin suite
 node tools/compat-matrix.mjs                     # assert this Node behaves as claimed
+node tools/release-gates.mjs                     # assert the invariants no behavioural test can see
 node server/main.mjs --doctor                    # data-source diagnostics against this machine
+node tools/panel-e2e.mjs --smoke                 # panel over a real loopback socket, self-checking
 node tools/panel-e2e.mjs                         # seed a hostile session and serve the panel
 ```
+
+### Release gates
+
+Three review rounds ended with the same sentence from the reviewer: *current tests do not cover
+the reproduced cases*, while three green fixtures existed. The gap was structural — a stub store
+can express `getAgentDefinition: () => null`, and a null definition skips the branch that reads
+the overview's redaction context, so the `/api/overview` defect was unreachable from every fixture
+in the repository. Two things close that class of gap, and both run in CI
+(`.github/workflows/mcode-trajectory-studio.yml`):
+
+- **`test/egress-contract.test.mjs` has no stubs.** It seeds the real projection, opens the `Store`
+  the way `main.mjs` does, and drives all seven tools and every API route. Its assertions are
+  structural — no route 500s on a populated session, every record-list tool reports
+  `truncated`/`omitted`, the cursor names the first undelivered record — because value-level
+  assertions pass happily when a field silently disappears.
+- **`tools/release-gates.mjs` checks what no behavioural test can see**, because the property is the
+  *relationship* between code, docs and shipped surface:
+
+  | Gate | Prevents |
+  |---|---|
+  | `version-coherence` | a release advertising one version in `plugin.json` and serving another over the wire — the version lives in four places |
+  | `engine-claims` | a Node floor or verified range in the manifests that `server/node-version.mjs` no longer enforces |
+  | `byte-not-char-sql` | a byte ceiling written as SQLite `length()` on a TEXT column, which counts characters — invisible to an ASCII-only fixture |
+  | `doc-anchors` | documentation quoting an implementation the code no longer has (`DESIGN.md` described the character-count SQL as a byte bound for two rounds) |
+  | `record-list-egress` | a record-list tool with no frame budget: every tool is *declared* a list or a single object, so adding one forces the decision that `trajectory_tasks` never got |
+
+Each gate names the defect it prevents, and each was verified by breaking its invariant and
+confirming the gate fails — including `trajectory_search` losing its bound, which the gate caught
+in this tree during development, along with a version-skew and a stale-doc anchor.
 
 Three claims in the manifest would otherwise only be prose, so they ship with a script instead
 of a promise. `tools/compat-matrix.mjs` runs the suite under whatever Node executes it and fails
@@ -334,15 +365,15 @@ exit 1 — so a green run means something.
 
 | Verified with | Result |
 |---|---|
-| `compat-matrix` on Node `24.19.0` (latest run) | 166 tests, 166 pass, 0 fail, 0 skipped (FTS5 present, SQLite 3.53.3) |
+| `compat-matrix` on Node `24.19.0` (latest run) | 188 tests, 188 pass, 0 fail, 0 skipped (FTS5 present, SQLite 3.53.3) |
 | `compat-matrix` on Node `22.13.0` (previous revision) | 115 tests, 114 pass, 0 fail, 1 skipped (FTS5 absent, SQLite 3.47.2) |
 | `compat-matrix` on Node `22.19.0`, `22.23.2`, `24.0.0`, `24.20.0` (previous revision) | 115 tests, 115 pass, 0 fail, 0 skipped |
 | `node --test` on `windows-latest` and `macos-latest` (previous revision) | 115 tests, 0 fail on both |
 | `node server/main.mjs --doctor` on Node `22.12.0` | refuses to start, naming the floor and `node:sqlite` |
 
 Rows marked "previous revision" are the numbers actually measured then and are left as they were. The
-suite has grown from 115 in those rows to 166 as the fixes' canaries were added; the latest pass
-contributed 28 cases — escaped-form redaction and idempotence, the MCP error branch and its own sweep,
+suite has grown from 115 in those rows to 188 as the fixes' canaries and the egress-contract and
+release-gate suites were added; the latest pass contributed 28 cases — escaped-form redaction and idempotence, the MCP error branch and its own sweep,
 the per-row and warning bounds, the git child environment, root parsing, the panel's privacy default,
 and the JSONL drop-count case. Re-measured green on Node `24.19.0`. The other Node releases and the
 Windows/macOS runners have not been re-run since, so the next CI run covers them.
