@@ -12,7 +12,7 @@ import { EGRESS_MAX_DEPTH, EGRESS_MAX_ENTRIES, EGRESS_STRING_LIMIT, EGRESS_TOTAL
 import { SESSION_KINDS } from './store.mjs';
 
 export const SERVER_NAME = 'mcode-trajectory-studio';
-export const SERVER_VERSION = '0.1.2';
+export const SERVER_VERSION = '0.1.3';
 
 /**
  * Protocol versions this server implements, newest first.
@@ -77,7 +77,7 @@ export const TOOLS = [
     name: 'trajectory_list',
     annotations: READ_ONLY,
     description:
-      'List recent local MiniMax Code sessions from the runtime SQLite projection, with non-content metadata only (no message text). Use this first to find a session ID, then call trajectory_summary or trajectory_get.',
+      'List recent local MiniMax Code sessions from the runtime SQLite projection, with non-content metadata only (no message text). Use this first to find a session ID, then call trajectory_summary or trajectory_get. truncated/omitted report sessions the response budget could not carry.',
     inputSchema: obj({
       limit: int('Maximum sessions to return.', { minimum: 1, maximum: 200, default: 20 }),
       agent: str('Filter by agent name, for example "mavis", "explore", "worker", "verifier".'),
@@ -99,7 +99,7 @@ export const TOOLS = [
     name: 'trajectory_get',
     annotations: READ_ONLY,
     description:
-      'Return a page of trajectory records for one session, in insert order. Summary mode returns timing, token usage, roles, turn IDs and tool-call names only. Full mode additionally returns message text, thinking, tool arguments and tool results, redacted and length-bounded; request it only after explicit user consent.',
+      'Return a page of trajectory records for one session, in insert order. Summary mode returns timing, token usage, roles, turn IDs and tool-call names only. Full mode additionally returns message text, thinking, tool arguments and tool results, redacted and length-bounded; request it only after explicit user consent. Reply with the same offset to continue: nextOffset is the index of the first record you did NOT receive and is null at the end, and truncated/omitted report records the response budget could not carry.',
     inputSchema: obj({
       sessionId: str('Exact session ID. Omit to use the most recently updated session.'),
       offset: int('Zero-based record offset.', { minimum: 0, default: 0 }),
@@ -122,7 +122,7 @@ export const TOOLS = [
     name: 'trajectory_tasks',
     annotations: READ_ONLY,
     description:
-      'List the background tasks and sub-agent dispatches owned by one session, with status, wall-clock duration, the command or objective, the sub-agent name, and the child session ID when a sub-agent ran. This is the nested-tool view for a trajectory.',
+      'List the background tasks and sub-agent dispatches owned by one session, with status, wall-clock duration, the command or objective, the sub-agent name, and the child session ID when a sub-agent ran. This is the nested-tool view for a trajectory. truncated/omitted report tasks the response budget could not carry, so the totals describe the records in this reply rather than the whole session.',
     inputSchema: obj({
       sessionId: str('Exact session ID. Omit to use the most recently updated session.'),
       limit: int('Maximum tasks to return.', { minimum: 1, maximum: 2000, default: 200 }),
@@ -198,11 +198,17 @@ async function callTool(ctx, name, args = {}) {
         ...session,
         workspaceDir: redactPath(session.workspaceDir, { homeDir, roots: redactRoots }),
       }));
+      // Every tool that returns a record list goes through the frame budget, not only
+      // the one that was found to need it: the budget is what makes "how much can
+      // come back" a property of the surface rather than of one tool's `limit`.
+      const bounded = boundPayloadList(sessions, { maxBytes: EGRESS_TOTAL_BYTES_MCP });
       return {
         dataDir: store.dataDir,
         sqlite: Boolean(store.db),
-        returned: sessions.length,
-        sessions,
+        returned: bounded.items.length,
+        truncated: bounded.truncated,
+        omitted: bounded.omitted,
+        sessions: bounded.items,
         warnings: store.warnings,
         // The list is bounded, so say when entries were dropped rather than letting
         // a truncated list read as a complete one.
@@ -221,16 +227,16 @@ async function callTool(ctx, name, args = {}) {
     case 'trajectory_get': {
       const sessionId = await resolveSessionId(store, args.sessionId);
       if (!sessionId) throw new Error('no_sessions_available');
+      const offset = args.offset ?? 0;
       let page = store.getEvents({
         sessionId,
-        offset: args.offset ?? 0,
+        offset,
         limit: args.limit ?? 200,
         turnId: args.turnId,
         detailLevel,
       });
       if (page.events.length === 0 && page.source !== 'sqlite') {
-        page = await store.readJsonlEvents({ sessionId, detailLevel });
-        page = { ...page, total: page.events.length, nextOffset: null };
+        page = await store.readJsonlEvents({ sessionId, offset, limit: args.limit ?? 200, detailLevel });
       }
       const events = detailLevel === 'full'
         ? page.events.map((event) => redactEvent(event, options))
@@ -240,16 +246,21 @@ async function callTool(ctx, name, args = {}) {
       // The budget is the frame budget halved, because the result carries the payload
       // twice (text and structuredContent).
       const bounded = boundPayloadList(events, { maxBytes: EGRESS_TOTAL_BYTES_MCP });
+      // The cursor names the first record the caller did not receive, not the first
+      // one the store read: a page trimmed from 1000 records to 209 must answer 209,
+      // or records 209-999 are skipped by every caller that pages on this value.
+      const delivered = bounded.items.length;
       return {
         sessionId,
         detailLevel,
         source: page.source,
-        offset: args.offset ?? 0,
-        returned: bounded.items.length,
-        total: page.total,
-        nextOffset: page.nextOffset,
+        offset,
+        returned: delivered,
+        total: page.total ?? null,
+        nextOffset: delivered === 0 ? null : (bounded.truncated ? offset + delivered : page.nextOffset),
         truncated: bounded.truncated,
         omitted: bounded.omitted,
+        ...(page.droppedOversized > 0 ? { droppedOversized: page.droppedOversized } : {}),
         events: bounded.items,
       };
     }
@@ -257,14 +268,17 @@ async function callTool(ctx, name, args = {}) {
     case 'trajectory_search': {
       const sessions = store.searchSessions({ query: args.query, limit: args.limit ?? 20 })
         .map((session) => ({ ...session, workspaceDir: redactPath(session.workspaceDir, { homeDir, roots: redactRoots }) }));
+      const bounded = boundPayloadList(sessions, { maxBytes: EGRESS_TOTAL_BYTES_MCP });
       // An empty result on a runtime whose SQLite lacks FTS5 looks identical to a
       // query that matched nothing, so say which one it is.
       return {
         query: args.query,
-        returned: sessions.length,
+        returned: bounded.items.length,
+        truncated: bounded.truncated,
+        omitted: bounded.omitted,
         ftsAvailable: store.hasFts,
         ...(store.hasFts ? {} : { note: 'full-text search is unavailable on this Node runtime (bundled SQLite without FTS5)' }),
-        sessions,
+        sessions: bounded.items,
       };
     }
 
@@ -272,13 +286,24 @@ async function callTool(ctx, name, args = {}) {
       const sessionId = await resolveSessionId(store, args.sessionId);
       if (!sessionId) throw new Error('no_sessions_available');
       const tasks = store.listBackgroundTasks(sessionId, { limit: args.limit ?? 200, kind: args.kind });
+      // The same total-frame budget the event list gets. `limit` alone was the only
+      // bound here, and `limit: 2000` of full tasks is roughly a 32 MB frame — the
+      // event list was protected from exactly this and the task list was not.
+      //
+      // The aggregate fields below describe the records in *this* reply, which is
+      // what `omitted`/`truncated` are for: a caller that needs the session's whole
+      // task set lowers `limit` or asks again.
+      const bounded = boundPayloadList(tasks, { maxBytes: EGRESS_TOTAL_BYTES_MCP });
+      const delivered = bounded.items;
       return {
         sessionId,
-        returned: tasks.length,
-        totalMs: tasks.reduce((sum, task) => sum + (task.durationMs ?? 0), 0),
-        failed: tasks.filter((task) => task.status === 'failed').length,
-        subagents: tasks.filter((task) => task.kind === 'subagent').length,
-        tasks,
+        returned: delivered.length,
+        totalMs: delivered.reduce((sum, task) => sum + (task.durationMs ?? 0), 0),
+        failed: delivered.filter((task) => task.status === 'failed').length,
+        subagents: delivered.filter((task) => task.kind === 'subagent').length,
+        truncated: bounded.truncated,
+        omitted: bounded.omitted,
+        tasks: delivered,
       };
     }
 

@@ -81,13 +81,17 @@ export function getEvents(store, {
   let rows = [];
   try {
     // The size test runs in SQL so an oversized value is never materialised as a
-    // JavaScript string; `length()` on TEXT counts characters, which is close
-    // enough for a bound whose job is to refuse the extreme case.
+    // JavaScript string. It measures *bytes*: `length(x)` on a TEXT column counts
+    // characters, so a row of 4-byte code points passes a byte budget at a quarter
+    // of its real size and is then parsed and returned whole — which is the whole
+    // point of the cap. Casting to BLOB makes SQLite report the stored byte length,
+    // which for a blob is the record header rather than a scan, so this is also the
+    // cheaper of the two forms.
     rows = store.db.prepare(`
       SELECT
         id, role, created_at_ms, turn_id, source,
-        CASE WHEN length(data_json) <= ? THEN data_json ELSE NULL END AS data_json,
-        length(data_json) AS data_bytes
+        CASE WHEN length(CAST(data_json AS BLOB)) <= ? THEN data_json ELSE NULL END AS data_json,
+        length(CAST(data_json AS BLOB)) AS data_bytes
       FROM local_runtime_message_rows
       WHERE ${where.join(' AND ')}
       ORDER BY id ASC

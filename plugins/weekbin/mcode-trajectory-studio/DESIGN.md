@@ -398,7 +398,23 @@ plugins/weekbin/mcode-trajectory-studio/
 
 - SQLite 侧与 JSONL 侧都有**单行上限**：JSONL 2 MiB（缓冲区随分块即时封顶），SQLite `data_json`
   8 MiB。超限行以 `oversized` + 字节数上报——既不是整行读进内存，也不是静默丢弃；写 SQL 时用
-  `CASE WHEN length(data_json) <= ?` 让判定在 SQL 内侧完成，超限值根本不进 JS 字符串
+  `CASE WHEN length(CAST(data_json AS BLOB)) <= ?` 让判定在 SQL 内侧完成，超限值根本不进
+  JS 字符串。**这里必须按字节而不是字符计**：`length()` 作用在 TEXT 列上返回的是字符数，
+  于是一条 4 字节码点的行会以四分之一的体量通过字节上限，然后被完整解析并返回——上限恰好
+  放过了它要拦的那种行。CAST 成 BLOB 后 SQLite 直接读记录头里的字节长度，比逐字符扫描更便宜
+- **分页游标按“已投递记录数”推导**，不是按“已读取记录数”。聚合字节预算会把一页裁短（1000 条
+  裁到 209 条），此时若回传读取层的 `nextOffset`（1000），客户端会永久跳过 209-999 这些
+  记录——预算生效了，会话却是不完整的。裁剪发生时游标取 `offset + 已投递条数`
+- **预算对一条记录是软的**：游标由已投递条数推出，一页若一条都放不下就会回传同一个
+  `nextOffset`，客户端会无限重取同一条。因此至少投递一条（该条已过单字段上限，超出量有界），
+  并且这种情况也要把 `truncated` 置真——否则一次超预算数倍的回复会自称完整
+- **JSONL 回退同样分页**。它此前每次从文件头重读且游标被丢弃，于是 5000 条的会话只返回
+  前 1000 条并报告“已到末尾”。现在按 `offset` 续读，并用一条前瞻记录区分“文件到此为止”和
+  “还有下一页”；`total` 回 `null` 而不是编一个数——折到页满就停，从不统计整份文件。
+  超行上限被丢弃的行数经 `droppedOversized` 上报（此前在 store 里算出来却在路由里丢掉）
+- 记录列表类工具（`trajectory_get` / `trajectory_tasks` / `trajectory_list` /
+  `trajectory_search`）与面板的 overview 任务列表**共用同一条总帧预算**。只给事件列表设预算时，
+  `limit: 2000` 的任务列表（description 即命令行）可以一次返回约 32 MB，且 MCP 帧里再翻一倍
 - 诊断列表有上限（`WARNINGS_MAX = 64`），并回传 `warningsDropped`；长驻 MCP server 每次读失败都会
   追加一条，无上限即慢泄漏，而这份列表每次 `trajectory_list` 都会整体回传
 - 唯一执行外部命令的地方是 `git rev-parse`：传**白名单环境变量**而不是整个 `process.env`

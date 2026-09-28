@@ -359,10 +359,10 @@ async function api(store, homeDir, redactRoots, url, { getFocus, setFocus }) {
     if (!sessionId) {
       const [latest] = store.listSessions({ limit: 1 });
       if (!latest) return { session: null, stats: null, events: [], tasks: [] };
-      return overview(store, fold, latest.sessionId);
+      return overview(store, fold, latest.sessionId, { homeDir, redactRoots });
     }
     setFocus?.(sessionId);
-    return overview(store, fold, sessionId);
+    return overview(store, fold, sessionId, { homeDir, redactRoots });
   }
 
   if (route === '/api/timeline') {
@@ -399,8 +399,9 @@ async function api(store, homeDir, redactRoots, url, { getFocus, setFocus }) {
     const turnId = url.searchParams.get('turnId') || undefined;
     let page = store.getEvents({ sessionId, offset, limit, detailLevel, turnId });
     if (page.events.length === 0 && page.source !== 'sqlite') {
-      page = await store.readJsonlEvents({ sessionId, limit, detailLevel });
-      page = { ...page, total: page.events.length, nextOffset: null };
+      // The fallback pages on the same `offset` the SQLite read does, so a session
+      // the projection has not indexed can still be walked to its end.
+      page = await store.readJsonlEvents({ sessionId, offset, limit, detailLevel });
     }
     const events = detailLevel === 'full'
       ? page.events.map((event) => redactEvent(event, { maxLength: 20000, homeDir, roots: redactRoots }))
@@ -408,14 +409,27 @@ async function api(store, homeDir, redactRoots, url, { getFocus, setFocus }) {
     // Per-string limits do not bound the response: trim the record list to a byte
     // budget and report it, so a 1000-record full page cannot return tens of MB.
     const bounded = boundPayloadList(events, { maxBytes: EGRESS_TOTAL_BYTES });
+    // The cursor has to name the first record the client did *not* get.
+    //
+    // It used to echo the store's own `nextOffset`, which counts what was *read* —
+    // so a 1000-record page cut to 209 records answered `nextOffset: 1000` and
+    // records 209-999 were skipped by every client, permanently. The cursor is now
+    // derived from delivered records whenever the list was trimmed, and the client
+    // uses it directly (`web/js/flow.js`), so this is the difference between a
+    // complete session and a silently shortened one.
+    const delivered = bounded.items.length;
+    const nextOffset = bounded.truncated ? offset + delivered : page.nextOffset;
     return {
       detailLevel,
       source: page.source,
       offset,
-      total: page.total,
-      nextOffset: page.nextOffset,
+      total: page.total ?? null,
+      nextOffset: delivered === 0 ? null : nextOffset,
       truncated: bounded.truncated,
       omitted: bounded.omitted,
+      // A line past the JSONL line cap is dropped at the source; say so rather than
+      // let a short file read as a faithful one.
+      ...(page.droppedOversized > 0 ? { droppedOversized: page.droppedOversized } : {}),
       events: bounded.items,
     };
   }
@@ -424,12 +438,29 @@ async function api(store, homeDir, redactRoots, url, { getFocus, setFocus }) {
   throw new ApiError(404, 'unknown_route');
 }
 
-function overview(store, fold, sessionId) {
+/**
+ * The overview payload.
+ *
+ * `homeDir` and `redactRoots` are arguments rather than closed-over names. This is a
+ * module-level function, so the agent branch's `redactText(…, { homeDir, roots })`
+ * was reading two identifiers that do not exist in its scope — a ReferenceError, not
+ * a null, and therefore a `500 internal_error` for exactly one class of session: the
+ * ones with an agent definition whose `systemPrompt` is non-empty. The fixtures all
+ * stubbed `getAgentDefinition: () => null`, so the branch never ran. The context it
+ * needs is in the argument list now, and the regression test drives a populated one.
+ */
+function overview(store, fold, sessionId, { homeDir, redactRoots } = {}) {
   const session = store.getSession(sessionId);
   if (!session) throw new ApiError(404, 'session_not_found');
   const stats = store.getStats(sessionId);
-  const tasks = store.listBackgroundTasks(sessionId, { limit: 500 });
   const agent = store.getAgentDefinition(sessionId);
+  // 500 tasks is 500 records in one reply, and a task's `description` is a command
+  // line — a credential surface whose per-string bound is not an aggregate bound.
+  // The same budget the event page uses, and the same `truncated`/`omitted` report,
+  // so a trimmed task list cannot read as a complete one.
+  const boundedTasks = boundPayloadList(store.listBackgroundTasks(sessionId, { limit: 500 }), {
+    maxBytes: EGRESS_TOTAL_BYTES,
+  });
   // No events here on purpose: the client asks /api/events for the page it will
   // actually render. Fetching them here only to discard them was the single
   // largest waste in a session switch.
@@ -443,7 +474,9 @@ function overview(store, fold, sessionId) {
     agent: agent
       ? { ...agent, systemPrompt: agent.systemPrompt ? redactText(agent.systemPrompt, { maxLength: 20000, homeDir, roots: redactRoots }) : null }
       : null,
-    tasks,
+    tasks: boundedTasks.items,
+    tasksTruncated: boundedTasks.truncated,
+    tasksOmitted: boundedTasks.omitted,
   };
 }
 

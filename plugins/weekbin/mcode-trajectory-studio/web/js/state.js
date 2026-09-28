@@ -70,6 +70,9 @@ const state = {
   eventsTotal: 0,
   loadingEvents: false,
   eventsSource: 'sqlite',
+  // Artifact lines past the server's per-line cap are dropped at the source; the
+  // count comes back with the page so the reader is told the file is short.
+  eventsDroppedOversized: 0,
   turnOrder: [],
   theme: 'dark',
 };

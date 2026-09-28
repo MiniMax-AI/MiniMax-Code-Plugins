@@ -495,9 +495,18 @@ export function redactPath(value, { homeDir, roots } = {}) {
  * the next record would cross `maxBytes` — reporting how many were dropped so the
  * client can page on `nextOffset` instead of assuming it saw everything.
  *
- * The bound is deliberately hard: an item that alone exceeds the budget is not
- * returned at all, because "one oversized record" is exactly the case a byte budget
- * exists to refuse. Per-record string limits keep a real record far below the budget.
+ * The budget is soft for exactly one record. Callers derive their next cursor from
+ * the number of records delivered, so a page that fits *nothing* would answer
+ * `nextOffset: <the same offset>` and every client would re-request it forever.
+ * One record over budget beats a stream that cannot advance, and every record has
+ * already passed the per-string bounds, so the overshoot is bounded by those.
+ *
+ * `truncated` is true when records were dropped *or* when that one record had to go
+ * over. Reporting only the omission would let a reply that exceeded its budget —
+ * possibly by an order of magnitude — describe itself as whole.
+ *
+ * A value JSON cannot serialise is dropped rather than returned — it would break
+ * the reply it was put in — and it is counted in `omitted` like any other loss.
  */
 export function boundPayloadList(items, { maxBytes } = {}) {
   if (!Array.isArray(items)) return { items: [], truncated: false, omitted: 0 };
@@ -506,20 +515,21 @@ export function boundPayloadList(items, { maxBytes } = {}) {
   }
   const kept = [];
   let used = 0;
+  let overBudget = false;
   for (const item of items) {
     let size = 0;
     try {
       size = Buffer.byteLength(JSON.stringify(item) ?? '', 'utf8');
     } catch {
-      // A value JSON cannot serialise cannot be shown; treat it as a dropped record
-      // rather than aborting the whole page.
-      size = Number.MAX_SAFE_INTEGER;
+      continue;
     }
     if (used + size > maxBytes) {
-      return { items: kept, truncated: true, omitted: items.length - kept.length };
+      if (kept.length > 0) break;
+      overBudget = true;
     }
     kept.push(item);
     used += size;
   }
-  return { items: kept, truncated: false, omitted: 0 };
+  const omitted = items.length - kept.length;
+  return { items: kept, truncated: omitted > 0 || overBudget, omitted };
 }

@@ -4,7 +4,7 @@ description: Inspect and visualize MiniMax Code session trajectories from the lo
 license: Apache-2.0
 metadata:
   author: weekbin
-  version: 0.1.2
+  version: 0.1.3
 ---
 
 # MiniMax Code Trajectory Studio

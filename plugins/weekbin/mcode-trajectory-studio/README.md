@@ -202,10 +202,20 @@ silently, and `--doctor` prints the path that was actually opened on this machin
   more, never less, so it is not a configuration surface that can weaken anything.
 - Responses are **bounded by total size, not only per string**: an event page is trimmed to a byte
   budget and reports `truncated`/`omitted` so the client pages on `nextOffset` instead of assuming it
-  received everything. The SQLite read also has a **per-row ceiling** (8 MiB): a row past it is
-  reported as `oversized` with its byte count rather than parsed into the process or silently dropped.
+  received everything. That budget applies to **every record-list tool** — `trajectory_tasks` with
+  `limit: 2000` was the one that could still return tens of megabytes — and to the panel's task list.
+  The cursor is the first record the caller did **not** get, not the first one the server read, so a
+  trimmed page resumes where it actually stopped instead of skipping the records in between.
+- The SQLite read also has a **per-row ceiling** (8 MiB), measured in **UTF-8 bytes**: a row past it
+  is reported as `oversized` with its byte count rather than parsed into the process or silently
+  dropped. (`length()` on a TEXT column counts characters, so the test is cast to BLOB — otherwise a
+  row of 4-byte code points passes the cap at a quarter of its real size.)
   A JSONL record with no newline can never grow the read buffer past the 2 MiB line cap — the buffer is
-  capped as chunks arrive, not after the fact.
+  capped as chunks arrive, not after the fact — and lines dropped by that cap are reported in
+  `droppedOversized`.
+- The **JSONL fallback pages like SQLite does**, rather than re-reading the artifact from the top and
+  reporting the first page as the whole file. Its `total` is `null`: the fold stops one record past a
+  full page, so it never counts the file it deliberately did not read.
 - Diagnostics are bounded too: `warnings` keeps the most recent 64 entries and reports how many were
   dropped in `warningsDropped`.
 - Filesystem containment canonicalizes every traversed component, refuses a symlinked final

@@ -106,6 +106,7 @@ export async function loadEvents({ reset = false } = {}) {
     state.lastTurn = undefined;
     state.nextOffset = 0;
     state.eventsTotal = 0;
+    state.eventsDroppedOversized = 0;
   }
   if (state.loadingEvents || state.nextOffset === null) return false;
   state.loadingEvents = true;
@@ -121,9 +122,15 @@ export async function loadEvents({ reset = false } = {}) {
         state.streamRows.push({ kind: 'tool', event, call, position });
       }
     }
-    state.nextOffset = payload.nextOffset ?? null;
+    // The cursor is only meaningful when the page carried records. A page that
+    // delivered none has nothing more to give, so stop here rather than leaving a
+    // cursor that would re-request the same offset.
+    state.nextOffset = incoming.length > 0 ? (payload.nextOffset ?? null) : null;
     state.eventsTotal = payload.total ?? state.events.length;
     state.eventsSource = payload.source ?? 'sqlite';
+    // Accumulated, not assigned: the count arrives only on the pages that dropped a
+    // line, and a later clean page must not erase what an earlier one reported.
+    state.eventsDroppedOversized += payload.droppedOversized ?? 0;
     state.filteredRows = null;
     return incoming.length > 0;
   } finally {
@@ -137,6 +144,9 @@ export async function refreshEvents() {
   if (state.selected) renderInspector();
   if (state.eventsSource === 'jsonl') {
     banner('该会话未进入 SQLite 投影，已回退到 messages.jsonl。计时与任务关联可能缺失。');
+  }
+  if (state.eventsDroppedOversized > 0) {
+    banner(`messages.jsonl 中有 ${state.eventsDroppedOversized} 行超过单行上限，已丢弃。`);
   }
 }
 

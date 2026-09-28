@@ -838,7 +838,9 @@ test('a row past the per-record byte cap is reported, not parsed whole', async (
   const page = store.getEvents({ sessionId: 'sess-a', limit: 500, maxJsonBytes: 2048 });
   const oversized = page.events.find((event) => event.oversized === true);
   assert.ok(oversized, `no record was reported as oversized: ${JSON.stringify(page.events.map((e) => e.rowId))}`);
-  assert.equal(oversized.bytes, huge.length);
+  // Bytes, not characters — `huge` is ASCII so the two agree here, and the test
+  // below is the one that separates them.
+  assert.equal(oversized.bytes, Buffer.byteLength(huge, 'utf8'));
   assert.equal(oversized.msgId, null, 'an oversized row must not pretend to have content');
   // The row still occupies its slot, so indices and `total` keep lining up.
   assert.equal(page.events.length, page.total);
@@ -846,6 +848,131 @@ test('a row past the per-record byte cap is reported, not parsed whole', async (
   // The ordinary rows are untouched by the presence of one oversized sibling.
   assert.ok(page.events.some((event) => event.contentLength > 0), 'the other records lost their summary');
   assert.ok(store.warnings.some((entry) => entry.startsWith('events_oversized:')), 'no warning was recorded');
+});
+
+/**
+ * The cap is in bytes; `length()` on a TEXT column counts characters.
+ *
+ * So the size test was satisfied by a row four times larger than its budget, which
+ * was then materialised as a JavaScript string and parsed in full — the cap refusing
+ * the 8 MiB ASCII case while waving through the 2 MiB emoji case. The row below is
+ * 1000 characters, 4000 bytes, against a 2048-byte cap: under the old rule it
+ * passed and came back whole, under the byte rule it is an oversized record.
+ *
+ * `bytes` is asserted in bytes for the same reason — the reported count is what a
+ * reader compares against the limit.
+ */
+test('the per-record cap counts UTF-8 bytes, not characters', async (t) => {
+  const dataDir = await makeDataDir();
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  const payload = JSON.stringify({
+    msg_id: 'm-multibyte', role: 'assistant', source: 'api', msg_type: 2,
+    turn_id: 'turn-1', msg_content: '😀'.repeat(1000),
+  });
+  // Counted in code points, because that is what SQLite's `length()` on a TEXT
+  // column counts — a JS `.length` counts UTF-16 units and would overstate this row
+  // by one unit per astral character, which is exactly the confusion the fix is about.
+  const chars = [...payload].length;
+  const bytes = Buffer.byteLength(payload, 'utf8');
+  assert.ok(bytes > chars * 2, `the fixture is not multibyte: ${chars} chars / ${bytes} bytes`);
+  const cap = 2048;
+  assert.ok(chars <= cap, `the row must pass a character count, or this proves nothing: ${chars}`);
+  assert.ok(bytes > cap, 'the row must fail a byte count');
+
+  const writable = new DatabaseSync(path.join(dataDir, 'v2', 'sqlite', 'runtime-state.sqlite'));
+  writable.prepare(
+    `INSERT INTO local_runtime_message_rows (session_id, msg_id, role, turn_id, created_at_ms, data_json, source)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run('sess-a', 'm-multibyte', 'assistant', 'turn-1', 5100, payload, 'api');
+  writable.close();
+
+  const store = openStore({ dataDir });
+  t.after(() => store.close());
+  const page = store.getEvents({ sessionId: 'sess-a', limit: 500, maxJsonBytes: cap });
+  const oversized = page.events.find((event) => event.msgId === null || event.oversized === true);
+  assert.ok(oversized?.oversized === true, 'a multibyte row past the byte cap was returned whole');
+  assert.equal(oversized.bytes, bytes, 'the reported size is not the byte size');
+  assert.equal(oversized.contentLength, 0, 'an oversized row must not report parsed content');
+});
+
+/**
+ * A file with more records than one page holds must not report itself complete.
+ *
+ * The fallback read from the top of the artifact on every call and the caller
+ * discarded the cursor, so a 5,000-record session answered one 1,000-record page and
+ * `nextOffset: null` — the last 4,000 records were unreachable through HTTP and MCP
+ * alike. The cursor now pages the artifact, and one record of look-ahead is what
+ * distinguishes "the file ends here" from "there is more".
+ */
+test('the jsonl fallback pages to the end of the artifact', async (t) => {
+  const dataDir = await makeDataDir({ withSqlite: true, withJsonl: false });
+  t.after(async () => {
+    await rm(dataDir, { recursive: true, force: true });
+  });
+  const dir = path.join(dataDir, 'v2', 'sessions', '2026', '09', '18', '10-00-00-000-sess-page');
+  await mkdir(dir, { recursive: true });
+  const RECORDS = 25;
+  const lines = Array.from({ length: RECORDS }, (_, i) => JSON.stringify({
+    message_id: `j${i}`,
+    turn_id: `turn-${Math.floor(i / 5)}`,
+    message: { role: i % 2 ? 'assistant' : 'user', content: [{ type: 'text', text: `record ${i}` }], timestamp: i },
+  }));
+  await writeFile(path.join(dir, 'messages.jsonl'), `${lines.join('\n')}\n`, 'utf8');
+
+  const store = openStore({ dataDir });
+  t.after(() => store.close());
+
+  const seen = [];
+  let offset = 0;
+  let lastPage = 0;
+  for (let page = 0; page < 10; page += 1) {
+    const result = await store.readJsonlEvents({ sessionId: 'sess-page', offset, limit: 10 });
+    assert.equal(result.source, 'jsonl');
+    assert.equal(result.events.length, Math.min(10, RECORDS - offset), 'the page is not full');
+    lastPage = result.events.length;
+    for (const event of result.events) seen.push(event.index);
+    if (result.nextOffset === null) break;
+    assert.ok(result.nextOffset > offset, `the cursor did not advance: ${offset} -> ${result.nextOffset}`);
+    offset = result.nextOffset;
+  }
+  assert.deepEqual(seen, Array.from({ length: RECORDS }, (_, i) => i), 'paging skipped or repeated records');
+  assert.equal(offset + lastPage, RECORDS, 'the last page did not end exactly at the end of the file');
+
+  // A page past the end is empty and terminates, rather than restarting the file.
+  const past = await store.readJsonlEvents({ sessionId: 'sess-page', offset: RECORDS, limit: 10 });
+  assert.equal(past.events.length, 0);
+  assert.equal(past.nextOffset, null);
+  assert.equal(past.total, null, 'the fold stops early, so it does not claim a total it never counted');
+
+  // A session the projection has not indexed still pages through the HTTP route.
+  const last = await store.readJsonlEvents({ sessionId: 'sess-page', offset: RECORDS - 3, limit: 10 });
+  assert.equal(last.events.length, 3);
+  assert.equal(last.nextOffset, null, 'the final page must terminate');
+});
+
+test('the jsonl fallback reports lines dropped at the per-line cap', async (t) => {
+  const dataDir = await makeDataDir({ withSqlite: true, withJsonl: false });
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  const dir = path.join(dataDir, 'v2', 'sessions', '2026', '09', '18', '10-00-00-000-sess-drop');
+  await mkdir(dir, { recursive: true });
+  const line = (i) => JSON.stringify({ message_id: `j${i}`, message: { role: 'user', content: [{ type: 'text', text: `r${i}` }] } });
+  // A real line past the 2 MiB cap, so the production path is exercised rather than
+  // a knob only the test knows about. It is unparseable JSON too, which is what a
+  // truncated write looks like — and the point is that the drop is *reported*
+  // instead of the file quietly reading one record shorter than it is.
+  const oversized = 'z'.repeat(2 * 1024 * 1024 + 64);
+  await writeFile(
+    path.join(dir, 'messages.jsonl'),
+    `${line(0)}\n${oversized}\n${line(1)}\n`,
+    'utf8',
+  );
+
+  const store = openStore({ dataDir });
+  t.after(() => store.close());
+  const result = await store.readJsonlEvents({ sessionId: 'sess-drop', limit: 10 });
+  assert.equal(result.droppedOversized, 1, 'the dropped line was not reported');
+  assert.equal(result.events.length, 2, 'a dropped line must not take the next one with it');
+  assert.equal(JSON.stringify(result).includes(oversized.slice(0, 64)), false, 'the oversized line leaked');
 });
 
 test('the warning list is bounded and reports what it dropped', async (t) => {
@@ -944,6 +1071,75 @@ test('full detail over MCP is redacted', async (t) => {
   const events = response.result.structuredContent.events;
   assert.ok(events.every((event) => typeof event.content !== 'string' || !/api[_-]?key\s*[:=]/i.test(event.content)));
   assert.equal(response.result.structuredContent.detailLevel, 'full');
+});
+
+/**
+ * The event list had a frame budget and the task list did not.
+ *
+ * `trajectory_tasks` accepts `limit: 2000` and every task carries a `description`
+ * that is, for a `bash` task, its full command line — so the "bounded" tool could
+ * answer roughly 32 MB in one result, doubled again by `structuredContent`. The
+ * aggregate bound now applies to every record-list tool, and the loss is reported
+ * rather than passing as a complete list.
+ */
+test('trajectory_tasks is bounded by the frame budget, not only by limit', async (t) => {
+  const dataDir = await makeDataDir();
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  const writable = new DatabaseSync(path.join(dataDir, 'v2', 'sqlite', 'runtime-state.sqlite'));
+  const insert = writable.prepare(`
+    INSERT INTO local_runtime_background_tasks (task_id, owner_session_id, kind, status, created_at_ms, updated_at_ms, ended_at_ms, record_json)
+    VALUES (?, 'sess-a', 'bash', 'completed', ?, ?, ?, ?)
+  `);
+  // Each description is swept at the source and truncated to the per-string bound, so
+  // a task costs ~4 KB in the reply whatever it was stored with. 800 of them is well
+  // past the 2 MB record budget — which is the point: `limit` is not what bounds this.
+  const COUNT = 800;
+  writable.exec('BEGIN');
+  for (let i = 0; i < COUNT; i += 1) {
+    insert.run(`bulk-${i}`, 1000 + i, 1100 + i, 1100 + i, JSON.stringify({ description: 'x'.repeat(8 * 1024) }));
+  }
+  writable.exec('COMMIT');
+  writable.close();
+
+  const store = openStore({ dataDir });
+  t.after(() => store.close());
+  const studio = { start: async () => ({ url: 'http://127.0.0.1:1/', port: 1, reused: false }), stop: async () => true };
+
+  const response = await handleRpcMessage(
+    { call: (name, args) => callHandlerForTest({ store, studio }, name, args) },
+    {
+      jsonrpc: '2.0', id: 6, method: 'tools/call',
+      params: { name: 'trajectory_tasks', arguments: { sessionId: 'sess-a', limit: 2000 } },
+    },
+  );
+  const body = response.result.structuredContent;
+  assert.equal(body.truncated, true, 'a trimmed task list must report itself as truncated');
+  assert.ok(body.omitted > 0, 'nothing was reported as omitted');
+  assert.equal(body.returned, body.tasks.length, 'the count and the list disagree');
+  // Plus the two tasks the base fixture already owns.
+  assert.equal(body.returned + body.omitted, COUNT + 2, 'the accounting does not add up');
+  assert.ok(body.tasks.length < COUNT, `the list was not trimmed: ${body.tasks.length}`);
+  // The whole reply carries the payload twice, so the frame is bounded at twice the
+  // record budget rather than twice the event page's.
+  const frame = JSON.stringify(response.result);
+  assert.ok(frame.length <= 8 * 1024 * 1024, `the frame exceeded its budget: ${frame.length}`);
+});
+
+test('a small task list is returned whole, with no false truncation', async (t) => {
+  const dataDir = await makeDataDir();
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  const store = openStore({ dataDir });
+  t.after(() => store.close());
+  const studio = { start: async () => ({ url: 'http://127.0.0.1:1/', port: 1, reused: false }), stop: async () => true };
+
+  const response = await handleRpcMessage(
+    { call: (name, args) => callHandlerForTest({ store, studio }, name, args) },
+    { jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'trajectory_tasks', arguments: { sessionId: 'sess-a' } } },
+  );
+  const body = response.result.structuredContent;
+  assert.equal(body.truncated, false, 'two tasks must not be reported as a trimmed list');
+  assert.equal(body.omitted, 0);
+  assert.equal(body.returned, 2);
 });
 
 /* The MCP module owns tool dispatch; import it through the public handler factory. */

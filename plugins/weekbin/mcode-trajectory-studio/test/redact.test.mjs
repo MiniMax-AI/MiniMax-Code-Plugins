@@ -267,6 +267,48 @@ test('a payload list under budget is returned whole, with no false truncation', 
   assert.deepEqual(bounded, { items, truncated: false, omitted: 0 });
 });
 
+/**
+ * The byte budget must not be able to produce a page that cannot advance.
+ *
+ * Callers derive `nextOffset` from the number of records delivered, so a page that
+ * fits *nothing* answers with the offset it was given, and every client re-requests
+ * it forever. The budget is therefore soft for one record — and that record has
+ * already passed the per-string bounds, so the overshoot is bounded by them.
+ */
+test('a payload list always delivers at least one record, so the cursor can move', () => {
+  const items = [
+    { index: 0, content: 'x'.repeat(8192) },
+    { index: 1, content: 'small' },
+  ];
+  const bounded = boundPayloadList(items, { maxBytes: 16 });
+  assert.equal(bounded.items.length, 1, 'a page that fits nothing delivered nothing');
+  assert.equal(bounded.items[0].index, 0);
+  assert.equal(bounded.truncated, true);
+  assert.equal(bounded.omitted, 1, 'the record that did not fit was not accounted for');
+});
+
+test('a list delivered over budget says so even when nothing was omitted', () => {
+  // One record that cannot fit, and nothing else in the list: `omitted` is 0, so a
+  // `truncated` flag derived only from omissions would describe a reply that broke
+  // its budget as whole. The reader has to be able to tell.
+  const bounded = boundPayloadList([{ content: 'x'.repeat(1024) }], { maxBytes: 16 });
+  assert.equal(bounded.items.length, 1);
+  assert.equal(bounded.omitted, 0);
+  assert.equal(bounded.truncated, true, 'an over-budget reply reported itself as whole');
+});
+
+test('a value JSON cannot serialise is dropped and counted, never returned', () => {
+  // Returning it would break the very reply it was put in — the failure mode this
+  // function exists to prevent — so it is lost like any other omitted record.
+  const circular = { index: 0 };
+  circular.self = circular;
+  const bounded = boundPayloadList([circular, { index: 1 }], { maxBytes: 1024 });
+  assert.deepEqual(bounded.items, [{ index: 1 }]);
+  assert.equal(bounded.truncated, true);
+  assert.equal(bounded.omitted, 1);
+  assert.doesNotThrow(() => JSON.stringify(bounded.items), 'the bounded list cannot be serialised');
+});
+
 /* ------------------------------------------------- JSON inside a JSON string -- */
 
 /**

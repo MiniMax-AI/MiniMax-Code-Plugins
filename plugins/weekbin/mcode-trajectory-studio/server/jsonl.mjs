@@ -57,20 +57,39 @@ export async function findSessionDir(store, sessionId) {
   return null;
 }
 
-/** Fold a `messages.jsonl` artifact into the same event shape as SQLite. */
-export async function readJsonlEvents(store, { sessionId, limit = 1000, detailLevel = 'summary' } = {}) {
+/**
+ * Fold a `messages.jsonl` artifact into the same event shape as SQLite.
+ *
+ * The result carries the same page contract as the SQLite read: `nextOffset` is the
+ * cursor for the next page, and it is non-null exactly when more records exist. The
+ * artifact used to be read from the top every time with the cursor discarded, so a
+ * file of 5,000 records answered one 1,000-record page and then reported itself
+ * complete — the last 4,000 were unreachable through every surface.
+ *
+ * `total` is null rather than a number: the fold stops as soon as the page is full
+ * plus one look-ahead record, so the record count of the whole file is deliberately
+ * not paid for on every request.
+ */
+export async function readJsonlEvents(store, { sessionId, offset = 0, limit = 1000, detailLevel = 'summary' } = {}) {
   const dir = await findSessionDir(store, sessionId);
-  if (!dir) return { events: [], source: 'unavailable' };
+  if (!dir) return { events: [], source: 'unavailable', total: 0, nextOffset: null, droppedOversized: 0 };
   // The descriptor that containment approved is the one the stream reads, so the
   // path cannot be re-pointed at another inode between the check and the read.
   const opened = await openContainedRead(store.dataDir, path.join(dir, 'messages.jsonl'));
-  if (!opened) return { events: [], source: 'unavailable' };
-  // `autoClose` hands the descriptor to the stream, so destroying it — on success
-  // and on a mid-stream error alike — is what releases the handle.
+  if (!opened) return { events: [], source: 'unavailable', total: 0, nextOffset: null, droppedOversized: 0 };
+  // `autoClose` hands the descriptor to the stream, so destroying it — on success,
+  // on a mid-stream error, and on the early stop below alike — is what releases
+  // the handle.
   const stream = opened.handle.createReadStream({ encoding: 'utf8' });
   try {
-    const folded = await foldJsonl(stream, { limit, detailLevel });
-    return { events: folded.events, source: 'jsonl', droppedOversized: folded.droppedOversized };
+    const folded = await foldJsonl(stream, { offset, limit, detailLevel });
+    return {
+      events: folded.events,
+      source: 'jsonl',
+      total: null,
+      nextOffset: folded.hasMore ? offset + folded.events.length : null,
+      droppedOversized: folded.droppedOversized,
+    };
   } finally {
     stream.destroy();
   }
@@ -78,6 +97,13 @@ export async function readJsonlEvents(store, { sessionId, limit = 1000, detailLe
 
 /**
  * Project one artifact stream into the SQLite-shaped event list.
+ *
+ * `offset` and `limit` mean what they mean for the SQLite read: skip `offset`
+ * records, then fold up to `limit` of them. Reading stops one record past the page
+ * — that look-ahead is what distinguishes "this file ends here" from "there is more",
+ * which is the difference between an honest cursor and a truncated list presented as
+ * a whole one. Record indices keep counting from `offset`, so a paged artifact and a
+ * paged projection produce the same indices for the same records.
  *
  * The buffer is capped *incrementally*. The earlier revision appended a chunk and
  * only then tested the line size, so a single line with no newline — a truncated
@@ -90,10 +116,13 @@ export async function readJsonlEvents(store, { sessionId, limit = 1000, detailLe
  *
  * Exported so the buffer accounting can be tested against a synthetic stream.
  */
-export async function foldJsonl(stream, { limit, detailLevel, maxLineBytes = LIMITS.jsonlLineBytes }) {
+export async function foldJsonl(stream, {
+  offset = 0, limit, detailLevel, maxLineBytes = LIMITS.jsonlLineBytes,
+}) {
+  const startAt = Math.max(0, Math.trunc(offset) || 0);
   const events = [];
   let turnCursor = null;
-  let index = 0;
+  let skipped = 0;
   let buffer = '';
   let bytes = 0;
   let discarding = false;
@@ -115,18 +144,23 @@ export async function foldJsonl(stream, { limit, detailLevel, maxLineBytes = LIM
       // one line — the discarding branch consumes the overflowing line's newline and
       // returns before this test.
       if (Buffer.byteLength(line) > maxLineBytes) { droppedOversized += 1; continue; }
-      if (events.length >= limit) continue;
       const record = parseJson(line);
       if (!record) continue;
+      // A skipped record still advances the turn cursor, or the first record of a
+      // later page would inherit the wrong turn.
+      if (record.turn_id) turnCursor = record.turn_id;
+      if (skipped < startAt) { skipped += 1; continue; }
+      // One record past the page is the look-ahead: it proves there is a next page,
+      // and it costs one parse rather than a second pass over the whole file.
+      if (events.length >= limit) return { events, droppedOversized, hasMore: true };
       const message = record.message && typeof record.message === 'object' ? record.message : {};
       const parts = Array.isArray(message.content) ? message.content : [];
       const text = parts.filter((part) => part?.type === 'text').map((part) => part.text).join('');
       const thinking = parts.filter((part) => part?.type === 'thinking').map((part) => part.thinking).join('');
       const toolUses = parts.filter((part) => part?.type === 'toolCall');
       const usage = message.usage && typeof message.usage === 'object' ? message.usage : null;
-      if (record.turn_id) turnCursor = record.turn_id;
       const event = {
-        index: index++,
+        index: startAt + events.length,
         source: 'jsonl',
         msgId: record.message_id ?? null,
         turnId: record.turn_id ?? turnCursor,
@@ -195,5 +229,6 @@ export async function foldJsonl(stream, { limit, detailLevel, maxLineBytes = LIM
       discarding = true;
     }
   }
-  return { events, droppedOversized };
+  // The stream ended inside the page: this artifact has nothing after it.
+  return { events, droppedOversized, hasMore: false };
 }
