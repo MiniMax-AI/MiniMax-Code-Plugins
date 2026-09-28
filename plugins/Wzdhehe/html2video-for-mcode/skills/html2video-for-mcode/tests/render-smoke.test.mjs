@@ -421,7 +421,8 @@ test('plan-timings 年份读法闸门: 无 say 必须点名(给逐位写法), �
   const s = JSON.parse(fs.readFileSync(sp, 'utf8'));
   s.slides = [{ id: '01', html: '01-title.html', audio: '01.mp3', clauses: [
     { stage: 1, text: '回顾2026年,七条要闻速览。' },                                   // 无 say → 必须点名
-    { stage: 2, text: '展望2027年,继续同行。', say: '展望二零二七年,继续同行。' },      // 有 say → 静默
+    { stage: 2, text: '展望2027年,增长82.3%。', say: '展望二零二七年,增长百分之八十二点三。' },  // 有 say → 静默; 且 say(19) 比 text(16) 长 → 时间权重的判别样本
+    { stage: 3, text: '远溯1897年,一切开始。' },                                       // 19xx/20xx 之外的四位年份同样要报
   ] }];
   fs.writeFileSync(sp, JSON.stringify(s, null, 2));
   fs.writeFileSync(path.join(proj, 'slides', '01-title.html'),
@@ -429,12 +430,20 @@ test('plan-timings 年份读法闸门: 无 say 必须点名(给逐位写法), �
   const r = runSkill('plan-timings.mjs', [proj]);
   assert.equal(r.status, 0, r.stdout + r.stderr);
   const out = r.stdout + r.stderr;
-  assert.match(out, /第 1 句.*2026年.*逐位读.*say:"二零二六年/, '无 say 的年份必须点名并给出逐位写法: ' + out.slice(-400));
-  assert.ok(!/第 2 句.*(整读|逐位)/.test(out), '有 say 的年份不得再报: ' + out.slice(-400));
+  assert.match(out, /第 1 句.*2026年.*逐位读.*say:"二零二六年/, '无 say 的年份必须点名并给出逐位写法: ' + out.slice(-500));
+  assert.ok(!/第 2 句.*(整读|逐位)/.test(out), '有 say 的年份不得再报: ' + out.slice(-500));
+  assert.match(out, /第 3 句.*1897年.*say:"一八九七年/, '闸门不得只认 19xx/20xx —— 任意四位年份都逐位读(第 24 轮): ' + out.slice(-500));
   // say 原样传递(build-video 的 ASR 清单要消费它, 丢了清单就回退显示形态)
   const timings = JSON.parse(fs.readFileSync(path.join(proj, 'build', 'timings.json'), 'utf8'));
-  assert.equal(timings.slides[0].clauses[1].say, '展望二零二七年,继续同行。');
+  assert.equal(timings.slides[0].clauses[1].say, '展望二零二七年,增长百分之八十二点三。');
   assert.ok(!('say' in timings.slides[0].clauses[0]), '无 say 的句子不得凭空造出 say');
+  // 时间权重按**发音形态**分摊(第 24 轮): 用实测 tts 反推两个候选 —— 语音字数 15/19/13 vs 显示 15/16/13,
+  // 第 2 句开口只有按 say 加权才对得上; 按显示形态分摊会系统性估早(字幕窗/ASR 切分跟着偏)。
+  const tts0 = timings.slides[0].tts;
+  const expSpoken = (tts0 * 15) / (15 + 19 + 13), expText = (tts0 * 15) / (15 + 16 + 13);
+  const start2 = timings.slides[0].clauses[1].start;
+  assert.ok(Math.abs(start2 - expSpoken) < 0.02, `开口应按 say 加权≈${expSpoken.toFixed(3)}(实测 ${start2})`);
+  assert.ok(Math.abs(start2 - expText) > 0.04, `与显示形态加权(${expText.toFixed(3)})必须可区分, 否则判据失效`);
   // 英语面不误报(英语 TTS 自己读 twenty twenty-six, 且正则本身要求"年"字)
   s.lang = 'en';
   s.slides[0].clauses = [{ stage: 1, text: 'Looking back at 2026, seven stories.' }];

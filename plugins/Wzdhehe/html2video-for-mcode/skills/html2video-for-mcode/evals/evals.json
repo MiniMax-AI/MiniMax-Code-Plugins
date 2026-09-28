@@ -33,7 +33,7 @@
       "id": 4,
       "name": "asr-mismatch",
       "prompt": "ASR 校验发现第 5 张转写里 '92%' 听成了 '九二', 数字对不上, 怎么处理?",
-      "expected_output": "改口播写法(如 '九成二')→ 只重做该段 TTS → 重跑 plan-timings → 删 build/frames/05 与 out/slide-05.mp4 → 该张重 capture + build-video, 不整片重做。若确认是同音字级微小差异可接受, 数字/产品名不一致必须返工。",
+      "expected_output": "text(字幕)保持 '92%' 不动, 给该句加 say:'…百分之九十二…'(显示/发音分离: 发音形态只进 say, 不上屏)→ 只重做该段 TTS → 重跑 plan-timings → 删 build/frames/05 与 out/slide-05.mp4 → 该张重 capture + build-video, 不整片重做。若确认是同音字级微小差异可接受, 数字/产品名不一致必须返工。",
       "files": []
     },
     {
@@ -110,7 +110,7 @@
       "id": 15,
       "name": "english-narration",
       "prompt": "这条视频要发给海外同事, 口播改成英语。要改哪些地方?",
-      "expected_output": "开工对齐时就该问清语言(铁律 4 的语言行: 中文/英语/粤语/其他)。改动四处: ① script.json 设 lang:'en'; ② 口播稿改写英语并按英文基准控量 —— plan-timings 自动切换(约 14 字符/秒、常见 9–18; 字幕单句建议 ≤42 字符(可读性惯例), 胶囊实际行宽 ≈55 字符@1080 / ≈75@1920, 折 3 行起才警告; 每张约 14–26 词); ③ 音色换成 English_* 前缀(Chinese (Mandarin)_* 配英文会出怪腔调), 做完用 asr.mjs --language en 验语种; ④ 若开双语, 主行=英语口播、text2 放中文。排版、脚本、渲染流程都不用动; 数字写法反过来(口播 nine hundred million, 画面 900M)。",
+      "expected_output": "开工对齐时就该问清语言(铁律 4 的语言行: 中文/英语/粤语/其他)。改动四处: ① script.json 设 lang:'en'; ② 口播稿改写英语并按英文基准控量 —— plan-timings 自动切换(约 14 字符/秒、常见 9–18; 字幕单句建议 ≤42 字符(可读性惯例), 胶囊实际行宽 ≈55 字符@1080 / ≈75@1920, 折 3 行起才警告; 每张约 14–26 词); ③ 音色换成 English_* 前缀(Chinese (Mandarin)_* 配英文会出怪腔调), 做完用 asr.mjs --language en 验语种; ④ 若开双语, 主行=英语口播、text2 放中文。排版、脚本、渲染流程都不用动; 数字写法分离(text 写 900M 上字幕, 加 say:'nine hundred million' 控制发音 —— TTS/ASR 吃 say ?? text, 字幕恒显示形态)。",
       "files": []
     },
     {

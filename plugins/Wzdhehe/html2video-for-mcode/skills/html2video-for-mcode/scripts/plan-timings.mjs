@@ -11,9 +11,11 @@ import { positionalDir, probeDuration, requireTool, safeId, safeOut, safeRel, su
 // 语种相关的计量基准。中文按"字", 英文按"字符"(含词间节奏, 与音节时长大致成正比)。
 // pacing = 每单位每秒的常见语速; emPer = 单字宽按 em 折算(行宽估算用 —— 行宽公式在
 // tools.subLineCap, 字幕胶囊几何的唯一来源也在 tools.SUB_GEOMETRY); pace 区间用于语速异常预警。
+// yearGate = 年份逐位读的闸门只对中/粤语面开(第 24 轮: 用 emPer===1 充当语族判别是排版
+// 属性代理语义, 未来 emPer:1 的语种会误触); 未知语种 fallback 不开闸。
 const LANG_CFG = {
-  zh: { unit: '字', pacing: 4.8, paceMin: 3, paceMax: 6.5, emPer: 1, word: null },
-  yue: { unit: '字', pacing: 4.8, paceMin: 3, paceMax: 6.5, emPer: 1, word: null },
+  zh: { unit: '字', pacing: 4.8, paceMin: 3, paceMax: 6.5, emPer: 1, word: null, yearGate: true },
+  yue: { unit: '字', pacing: 4.8, paceMin: 3, paceMax: 6.5, emPer: 1, word: null, yearGate: true },
   en: { unit: '字符', pacing: 14, paceMin: 9, paceMax: 18, emPer: 0.44, word: 'words' },
 };
 const langCfg = code => LANG_CFG[code] ?? { unit: '字符', pacing: 14, paceMin: 8, paceMax: 20, emPer: 0.44, word: null };
@@ -54,7 +56,11 @@ for (const s of script.slides) {
   const tts = probeDur(audioPath);
   if (tts == null) { console.error(`✗ ffprobe 读不出时长: ${audioPath}`); process.exit(1); }
 
-  const total = s.clauses.reduce((n, c) => n + charCount(c.text), 0);
+  // 时间权重按**发音形态**(say ?? text)算 —— 音频念的是 say(第 24 轮: "82.3%"显示 5 字、
+  // 发音"百分之八十二点三"8 字, 按显示形态分摊会把长 say 句的开口系统性估早, 字幕窗与
+  // ASR 切分跟着偏)。字幕行宽(:93)仍按显示形态 text —— 胶囊几何是屏幕上的事。
+  const spokenLen = c => charCount(c.say ?? c.text);
+  const total = s.clauses.reduce((n, c) => n + spokenLen(c), 0);
   if (total === 0) warns.push(`${s.id}: clauses 为空, 将整张静止`);
 
   // 第 k 句开口时刻 ≈ 实测时长 × (前 k-1 句字数占比); stage 取该层最早一句, 再提前 LEAD
@@ -63,11 +69,11 @@ for (const s of script.slides) {
   let cum = 0;
   for (const c of s.clauses) {
     const start = total > 0 ? (tts * cum) / total : 0;
-    // say = 发音形态(只喂 TTS/ASR), text = 显示形态(字幕/画面) —— 原样传递给下游
-    clauses.push({ stage: c.stage ?? null, start: r3(start), chars: charCount(c.text), text: c.text, ...(c.text2 ? { text2: c.text2 } : {}), ...(c.say ? { say: c.say } : {}) });
+    // say = 发音形态(只喂 TTS/ASR), text = 显示形态(字幕/画面) —— 原样传递给下游; chars = 发音字数(计时簿记)
+    clauses.push({ stage: c.stage ?? null, start: r3(start), chars: spokenLen(c), text: c.text, ...(c.text2 ? { text2: c.text2 } : {}), ...(c.say ? { say: c.say } : {}) });
     const t = Math.max(0, start - LEAD);
     if (c.stage != null) stageTime[c.stage] = c.stage in stageTime ? Math.min(stageTime[c.stage], t) : t;
-    cum += charCount(c.text);
+    cum += spokenLen(c);
   }
   clauses.forEach((c, i) => { c.dur = r3((clauses[i + 1]?.start ?? tts) - c.start); });
   Object.assign(stageTime, s.stageTimes ?? {}); // 显式 stageTimes 覆盖优先
@@ -96,10 +102,11 @@ for (const s of script.slides) {
     if (c.text2 && c.text2.length > 60) warns.push(`${s.id} 第 ${clauses.indexOf(c) + 1} 句双语第二行 ${c.text2.length} 字符 > 60 — 建议精简译文`);
     // 年份读法闸门(2026-09-28 用户实测: TTS 把 2026年 念成"两千零二十六年"): 显示与发音
     // 分离 —— text 保持 2026年 上字幕, 加 say:'二零二六年' 控制发音。判别只钉无歧义的
-    // "四位数字+年"(整读/逐位读是意图问题, 2026点 就该整读 —— 其余数字写法走文档纪律)。
-    if (CFG.emPer === 1) {   // 中文/粤语面; 英语 TTS 自己会读 twenty twenty-six
+    // "四位数字+年"(任意年份都逐位读, 不止 19xx/20xx —— 第 24 轮: 旧正则漏 1897年 这类;
+    // 整读/逐位读是意图问题, 2026点 就该整读 —— 其余数字写法走文档纪律)。
+    if (CFG.yearGate) {
       const spoken = c.say ?? c.text;
-      const ym = /(?:19|20)\d{2}\s*年/.exec(spoken);
+      const ym = /\d{4}\s*年/.exec(spoken);
       if (ym) {
         const digitsRead = ym[0].replace(/\D/g, '').split('').map(d => '零一二三四五六七八九'[+d]).join('');
         warns.push(`${s.id} 第 ${clauses.indexOf(c) + 1} 句 "${ym[0]}" 会被 TTS 按整数读(2026年→"两千零二十六年") — 年份按播报惯例逐位读: text 原样上字幕, 加 say:"${digitsRead}年…"`);
