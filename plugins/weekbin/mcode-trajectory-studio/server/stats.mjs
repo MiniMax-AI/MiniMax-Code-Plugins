@@ -19,7 +19,11 @@ import { TURN_KEY_SQL } from './events.mjs';
 export function getStats(store, sessionId) {
   const session = store.getSession(sessionId);
   if (!store.db || !session) return null;
-  return store.cached(store.statsCache, `${sessionId}|${session.updatedAtMs}`, () => computeStats(store, sessionId, session));
+  // Keyed on the message rows themselves, not on the session's own updated_at_ms:
+  // the runtime writes those rows while indexing and does not touch the session
+  // row, so a session-scoped key kept serving the totals from before the write.
+  return store.cached(store.statsCache, `${sessionId}|${store.messageSignature(sessionId)}`,
+    () => computeStats(store, sessionId, session));
 }
 
 function computeStats(store, sessionId, session) {
@@ -112,7 +116,16 @@ function rowAggregate(store, sessionId) {
       -- turn_id column contributed to the turn summaries and to a turnId-filtered
       -- event read but not to this: one session reporting 0 turns beside a timeline
       -- with turns in it.
-      COUNT(DISTINCT NULLIF(${TURN_KEY_SQL}, '')) AS turns,
+      --
+      -- TURN_KEY_SQL now folds an empty turn id into NULL, so the NULLIF this used to
+      -- carry is redundant — and redundant in a way that hid a disagreement. It
+      -- dropped the unturn-keyed group on this side while the turn fold's GROUP BY
+      -- kept it, so a session of two rows in one turn, one with no turn id and one
+      -- with an empty one reported turns: 1 beside three turn cards. The group is
+      -- real — getTurnSummaries returns it and the panel draws it — so it is counted
+      -- here too, and the two surfaces now answer with the same number.
+      COUNT(DISTINCT ${TURN_KEY_SQL})
+        + MAX(CASE WHEN ${TURN_KEY_SQL} IS NULL THEN 1 ELSE 0 END) AS turns,
       SUM(readable) AS readable,
       -- The rows that contributed nothing above: json_valid is 1 or 0 per row, so the
       -- unreadable count is the total less the readable ones.

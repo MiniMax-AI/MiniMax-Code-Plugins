@@ -252,16 +252,27 @@ async function callTool(ctx, name, args = {}) {
         turnId: args.turnId,
         detailLevel,
       });
-      // The artifact is consulted whenever the projection yielded nothing, not only
-      // when there is no database at all.
+      // The artifact is consulted whenever the *session* has no projection at all,
+      // not whenever this particular page came back empty.
       //
       // The guard used to be `source !== 'sqlite'`, and a live projection answers
       // `sqlite` for zero rows — so the fallback never ran for the case it exists
       // for: a session whose records have not been indexed yet but whose
       // `messages.jsonl` is on disk. That session reported "no records" while the
-      // artifact held them. The artifact is only adopted when it actually has some,
-      // so a projection that truly holds none still answers "no records".
-      if (page.events.length === 0) {
+      // artifact held them.
+      //
+      // Keying it on the page was wrong in a way this one is not. "This page is empty"
+      // is not a statement about the session: a turn filter that matched nothing says
+      // it too, and the caller was then answered from a second source, with that
+      // source's `total`, for the same session. It also let the source change between
+      // two pages of one cursor when the indexer landed in between.
+      //
+      // What this does *not* claim: no record was being lost. The projection is built
+      // from the artifact, so offset n names the same record in either, and a session
+      // that is still being indexed reports the projection's count — a snapshot of what
+      // has landed — either way. What is fixed is that one cursor walk now stays in one
+      // source and answers every page of it the same way.
+      if (page.sessionRows === 0) {
         const artifact = await store.readJsonlEvents({
           sessionId, offset: page.offset ?? 0, limit: args.limit ?? 200, detailLevel, turnId: args.turnId,
         });
@@ -289,11 +300,24 @@ async function callTool(ctx, name, args = {}) {
         offset: readAt,
         returned: delivered,
         total: page.total ?? null,
+        // Present only when a turn filter is in play, so `total` (what matched) and
+        // `sessionTotal` (what the session holds) are never confused for one another.
+        ...(page.sessionRows !== undefined && page.sessionRows !== page.total
+          ? { sessionTotal: page.sessionRows } : {}),
         nextOffset: delivered === 0 ? null : (bounded.truncated ? readAt + delivered : page.nextOffset),
         truncated: bounded.truncated,
         omitted: bounded.omitted,
+        // The page byte budget is a *different* cut from the frame budget above: the
+        // frame budget trims a list this reply already read, while this one stopped
+        // the read itself, so `returned` is below `limit` with nothing omitted from
+        // what was read. Reporting it as `truncated: false, omitted: 0` described a
+        // short page as a whole one. It is its own field rather than folded into
+        // `truncated` because `omitted: 0, truncated: true` reads as a contradiction.
+        ...(page.pageBytesTruncated ? { pageBytesTruncated: true } : {}),
         ...(page.source === 'error' ? { error: page.error ?? 'event_read_failed' } : {}),
         ...(page.droppedOversized > 0 ? { droppedOversized: page.droppedOversized } : {}),
+        ...(page.malformedLines > 0 ? { malformedLines: page.malformedLines } : {}),
+        ...(page.taskIndexTruncated ? { taskIndexTruncated: true } : {}),
         events: bounded.items,
       };
     }

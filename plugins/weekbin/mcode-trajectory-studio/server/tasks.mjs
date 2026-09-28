@@ -107,14 +107,27 @@ export function countBackgroundTasks(store, sessionId, { kind } = {}) {
 export function taskIndex(store, sessionId) {
   // Cached for the same reason as the timeline: every page of every event read built
   // this, and building it is a full scan of the task table.
-  const updatedAtMs = store.getSession(sessionId)?.updatedAtMs ?? 0;
-  return store.cached(store.tasksCache, `${sessionId}|${updatedAtMs}`, () => {
+  // The task signature, not the session's: a task moving from running to completed
+  // updates its own row and leaves the session row alone, so a session-scoped key
+  // kept reporting the tool call as ok with the duration it had while running.
+  return store.cached(store.tasksCache, `${sessionId}|${store.taskSignature(sessionId)}`, () => {
     const index = new Map();
-    for (const task of listBackgroundTasks(store, sessionId, { limit: LIMITS.tasks.max })) {
+    // One past the cap, so "this session owns more tasks than the index holds" is
+    // known without a second query. Beyond it a tool call resolves to no task at all,
+    // which the projection renders as `taskId: null, durationMs: null, hasOutput:
+    // false` — indistinguishable from a call that was never a background task. The
+    // count of what the session really owns travels with the index for that reason.
+    const tasks = listBackgroundTasks(store, sessionId, { limit: LIMITS.tasks.max + 1 });
+    const capped = tasks.length > LIMITS.tasks.max;
+    if (capped) {
+      store.warn(`task_index_capped:more than ${LIMITS.tasks.max} tasks owned by ${sessionId}; `
+        + 'tool calls outside the newest slice carry no task timing');
+    }
+    for (const task of (capped ? tasks.slice(0, LIMITS.tasks.max) : tasks)) {
       if (task.toolCallId) index.set(task.toolCallId, task);
       else index.set(`__task__${task.taskId}`, task);
     }
-    return index;
+    return { byCall: index, capped, total: countBackgroundTasks(store, sessionId) };
   });
 }
 

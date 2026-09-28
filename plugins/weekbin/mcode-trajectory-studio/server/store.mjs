@@ -19,6 +19,7 @@
  * indexed: <dataDir>/v2/sessions/YYYY/MM/DD/<stamp>-<sessionId>/messages.jsonl
  */
 
+import { num } from './json.mjs';
 import { tableColumns, tableExists, ftsModuleAvailable, openReadOnlyProjection, resolveSqliteFile } from './sqlite.mjs';
 import { resolveDataDir, CACHE_ENTRIES, WARNINGS_MAX } from './config.mjs';
 import { resolveSessionsRoot } from './fsutil.mjs';
@@ -88,6 +89,55 @@ export class Store {
     }
   }
 
+  /**
+   * A cheap signature of the rows a per-session fold reads.
+   *
+   * The four per-session folds — statistics, turn summaries, timeline, task index —
+   * are cached, and they were all keyed on the session row's `updated_at_ms`. That
+   * column does not move when a *message* row is inserted or a *task* row changes
+   * state, which is every write the runtime actually makes while a session is live:
+   * the rows being indexed are exactly the rows the folds read, and they are written
+   * by a different process. So a session that gained a record kept serving the
+   * statistics, the turn summaries, the timeline and the task index it had before —
+   * `invalidateSession` existed to break exactly that and was never called from
+   * anywhere, which is the kind of thing that reads as protection and is not.
+   *
+   * The signature is derived from the folded tables instead. It is a count and a
+   * high-water mark, which is one cheap aggregate: an insert moves the count, a
+   * delete moves the count, and a background task moving from running to completed
+   * moves `updated_at_ms`. None of them needs the payload parsed, which is the part
+   * the fold spends its time on.
+   *
+   * The one write this cannot see is an in-place update of an existing message row at
+   * an unchanged id. The projection is append-only — a message row is written once,
+   * when the runtime emits the message — and that assumption is now written down here
+   * instead of being an unstated hope behind a cache.
+   */
+  messageSignature(sessionId) {
+    if (!this.db) return 'none';
+    try {
+      const row = this.db.prepare(
+        'SELECT COUNT(*) AS n, COALESCE(MAX(id), 0) AS top FROM local_runtime_message_rows WHERE session_id = ?',
+      ).get(sessionId);
+      return `${num(row?.n) ?? 0}:${num(row?.top) ?? 0}`;
+    } catch {
+      return 'error';
+    }
+  }
+
+  /** As `messageSignature`, over the task table the task index folds. */
+  taskSignature(sessionId) {
+    if (!this.db) return 'none';
+    try {
+      const row = this.db.prepare(
+        'SELECT COUNT(*) AS n, COALESCE(MAX(updated_at_ms), 0) AS top FROM local_runtime_background_tasks WHERE owner_session_id = ?',
+      ).get(sessionId);
+      return `${num(row?.n) ?? 0}:${num(row?.top) ?? 0}`;
+    } catch {
+      return 'error';
+    }
+  }
+
   /** LRU: refresh recency on a hit, evict the oldest entry on an insert. */
   cached(map, key, compute) {
     if (map.has(key)) {
@@ -102,16 +152,6 @@ export class Store {
     return value;
   }
 
-  invalidateSession(sessionId) {
-    for (const key of [...this.statsCache.keys()]) {
-      if (key.startsWith(`${sessionId}|`)) this.statsCache.delete(key);
-    }
-    for (const map of [this.turnsCache, this.timelineCache, this.tasksCache]) {
-      for (const key of [...map.keys()]) {
-        if (key.startsWith(`${sessionId}|`)) map.delete(key);
-      }
-    }
-  }
 
   close() {
     try {

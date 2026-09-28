@@ -90,17 +90,23 @@ export function getSession(store, sessionId) {
   if (!row) return null;
   const summary = sessionSummary(row);
   let children = [];
+  let childrenCapped = false;
   if (store.has('sessions', 'parent_session_id')) {
     try {
-      children = store.db
-        .prepare('SELECT * FROM local_runtime_sessions WHERE parent_session_id = ? ORDER BY created_at_ms ASC LIMIT 200')
-        .all(sessionId)
-        .map(sessionSummary);
+      // One row past the cap, so "there are more children" is known without a second
+      // query. LIMIT 200 with no count meant a parent with 210 children reported 200
+      // of them and said nothing, which is the same shape as a session that really
+      // has 200.
+      const childRows = store.db
+        .prepare('SELECT * FROM local_runtime_sessions WHERE parent_session_id = ? ORDER BY created_at_ms ASC LIMIT 201')
+        .all(sessionId);
+      childrenCapped = childRows.length > 200;
+      children = childRows.slice(0, 200).map(sessionSummary);
     } catch {
       children = [];
     }
   }
-  return { ...summary, children };
+  return { ...summary, children, ...(childrenCapped ? { childrenCapped: true } : {}) };
 }
 
 /**

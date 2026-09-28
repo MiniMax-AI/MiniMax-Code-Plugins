@@ -74,11 +74,11 @@ export async function readJsonlEvents(store, {
   sessionId, offset = 0, limit = 1000, detailLevel = 'summary', turnId,
 } = {}) {
   const dir = await findSessionDir(store, sessionId);
-  if (!dir) return { events: [], source: 'unavailable', total: 0, nextOffset: null, droppedOversized: 0 };
+  if (!dir) return { events: [], source: 'unavailable', total: 0, nextOffset: null, droppedOversized: 0, malformedLines: 0 };
   // The descriptor that containment approved is the one the stream reads, so the
   // path cannot be re-pointed at another inode between the check and the read.
   const opened = await openContainedRead(store.dataDir, path.join(dir, 'messages.jsonl'));
-  if (!opened) return { events: [], source: 'unavailable', total: 0, nextOffset: null, droppedOversized: 0 };
+  if (!opened) return { events: [], source: 'unavailable', total: 0, nextOffset: null, droppedOversized: 0, malformedLines: 0 };
   // `autoClose` hands the descriptor to the stream, so destroying it — on success,
   // on a mid-stream error, and on the early stop below alike — is what releases
   // the handle.
@@ -94,6 +94,7 @@ export async function readJsonlEvents(store, {
       total: null,
       nextOffset: folded.hasMore ? readAt + folded.events.length : null,
       droppedOversized: folded.droppedOversized,
+      malformedLines: folded.malformed,
     };
   } finally {
     stream.destroy();
@@ -126,7 +127,7 @@ export async function foldJsonl(stream, {
 }) {
   const startAt = Math.max(0, Math.trunc(offset) || 0);
   const events = [];
-  const state = { turnCursor: null, skipped: 0, hasMore: false };
+  const state = { skipped: 0, hasMore: false, malformed: 0 };
 
   /**
    * Fold one complete line, if it is a record this page wants.
@@ -148,16 +149,39 @@ export async function foldJsonl(stream, {
     if (!line.trim()) return false;
     if (Buffer.byteLength(line) > maxLineBytes) return false;
     const record = parseJson(line);
-    if (!record) return false;
-    // A skipped record still advances the turn cursor, or the first record of a later
-    // page would inherit the wrong turn.
-    if (record.turn_id) state.turnCursor = record.turn_id;
-    // The turn filter applies before the offset, which is what makes the two paths
+    if (!record) {
+      // A line that does not parse is the shape an interrupted write leaves behind,
+      // which is the case this reader exists for. It is correctly not presented as a
+      // record, but the oversized path counts its drops and this one did not, so a
+      // file whose last record is corrupt was indistinguishable from a file that
+      // simply ended.
+      state.malformed += 1;
+      return false;
+    }
+    // The turn this record names, normalised the way the projection normalises it:
+    // no turn id, or an empty one, is the same "no turn" group. Nothing is inherited
+    // from the previous record.
+    //
+    // The cursor used to be, and it was used twice. As a *label* it was a reasonable
+    // reading of a session file that omits `turn_id` on continuation lines. As a
+    // *filter* it was not: `TURN_KEY_SQL` has no such cursor, so asking a session for
+    // one turn returned, from the artifact, records that carry no turn id at all —
+    // which the same query on the same session excluded from the projection. The
+    // module's stated invariant is that a caller cannot tell the two paths apart from
+    // the record alone, and a filter that selects a different set breaks it outright,
+    // so the label follows the record too.
+    const recordTurn = record.turn_id ? record.turn_id : null;
+    // The filter applies before the offset, which is what makes the two paths
     // agree: SQLite offsets into the filtered set too. The parameter used to be absent
     // from this signature entirely, so a caller that asked for one turn got every
     // turn — from a filtered SQLite read and an unfiltered artifact read, for the same
     // session.
-    if (turnId && (record.turn_id ?? state.turnCursor) !== turnId) return false;
+    //
+    // `undefined` means no filter; `null` means the records that name no turn, which is
+    // a group the turn fold reports and a caller holding that id back is asking about.
+    // `undefined` and `null` must not collapse, or that second question answers with
+    // every record in the file.
+    if (turnId !== undefined && recordTurn !== turnId) return false;
     if (state.skipped < startAt) { state.skipped += 1; return false; }
     // One record past the page is the look-ahead: it proves there is a next page, and
     // it costs one parse rather than a second pass over the whole file.
@@ -177,7 +201,7 @@ export async function foldJsonl(stream, {
       index: startAt + events.length,
       source: 'jsonl',
       msgId: record.message_id ?? null,
-      turnId: record.turn_id ?? state.turnCursor,
+      turnId: recordTurn,
       role: message.role ?? null,
       sourceKind: null,
       kind: null,
@@ -276,5 +300,5 @@ export async function foldJsonl(stream, {
   // newline still has a last record, and it is the one the reader is most likely to
   // have opened the session for.
   if (!discarding && buffer) take(buffer);
-  return { events, droppedOversized, hasMore: state.hasMore };
+  return { events, droppedOversized, malformed: state.malformed, hasMore: state.hasMore };
 }

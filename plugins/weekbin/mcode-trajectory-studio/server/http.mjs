@@ -370,7 +370,9 @@ async function api(store, homeDir, redactRoots, url, { getFocus, setFocus }) {
     if (!sessionId) throw new ApiError(400, 'session_required');
     // The timeline is capped for drawability, so the reply says whether it was cut:
     // a panel that drew 6,000 points for a 7,000-record session otherwise presents
-    // the cap as the session.
+    // the cap as the session. There is no `total` and there should not be one — the
+    // store never counted past the cap, so it could only have reported the delivered
+    // count under a name that reads as the session's size.
     const { points, truncated } = store.getTimeline(sessionId);
     return { points, truncated };
   }
@@ -400,15 +402,16 @@ async function api(store, homeDir, redactRoots, url, { getFocus, setFocus }) {
     const detailLevel = url.searchParams.get('detailLevel') === 'full' ? 'full' : 'summary';
     const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
     const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get('limit')) || 200));
-    const turnId = url.searchParams.get('turnId') || undefined;
+    // `?turnId=` and no `turnId` at all are different questions: one asks for the rows
+    // that carry no turn identity, the other asks for no filter. Collapsing them with
+    // `|| undefined` made the first return the whole session.
+    const rawTurn = url.searchParams.get('turnId');
+    const turnId = url.searchParams.has('turnId') ? rawTurn : undefined;
     let page = store.getEvents({ sessionId, offset, limit, detailLevel, turnId });
-    // The artifact is consulted whenever the projection yielded nothing, not only
-    // when there is no database at all. The guard used to be `source !== 'sqlite'`,
-    // and a live projection answers `sqlite` for zero rows — so a session whose
-    // records are not indexed yet but whose artifact is on disk reported "no
-    // records" while the artifact held them. It is adopted only when it has some, so
-    // a projection that truly holds none still answers "no records".
-    if (page.events.length === 0) {
+    // Keyed on the session's row count, not on this page. `page.events.length === 0`
+    // is also what a turn filter matching nothing looks like, and it let the source
+    // change between two pages of one cursor. See the longer note in `mcp.mjs`.
+    if (page.sessionRows === 0) {
       const artifact = await store.readJsonlEvents({
         sessionId, offset: page.offset ?? offset, limit, detailLevel, turnId,
       });
@@ -439,12 +442,22 @@ async function api(store, homeDir, redactRoots, url, { getFocus, setFocus }) {
       source: page.source,
       offset: readAt,
       total: page.total ?? null,
+      ...(page.sessionRows !== undefined && page.sessionRows !== page.total
+        ? { sessionTotal: page.sessionRows } : {}),
       nextOffset: delivered === 0 ? null : (bounded.truncated ? readAt + delivered : page.nextOffset),
       truncated: bounded.truncated,
       omitted: bounded.omitted,
+      // The page byte budget stopped the read, which is a different cut from the frame
+      // budget above: `returned` is below `limit` with nothing omitted from what was
+      // read, so without this the panel saw a short page described as a whole one.
+      // Separate from `truncated` because `omitted: 0, truncated: true` reads as a
+      // contradiction, and separate because the reason a page is short matters.
+      ...(page.pageBytesTruncated ? { pageBytesTruncated: true } : {}),
       // A line past the JSONL line cap is dropped at the source; say so rather than
       // let a short file read as a faithful one.
       ...(page.droppedOversized > 0 ? { droppedOversized: page.droppedOversized } : {}),
+      ...(page.malformedLines > 0 ? { malformedLines: page.malformedLines } : {}),
+      ...(page.taskIndexTruncated ? { taskIndexTruncated: true } : {}),
       ...(page.source === 'error' ? { error: page.error ?? 'event_read_failed' } : {}),
       events: bounded.items,
     };
@@ -474,9 +487,21 @@ function overview(store, fold, sessionId, { homeDir, redactRoots } = {}) {
   // line — a credential surface whose per-string bound is not an aggregate bound.
   // The same budget the event page uses, and the same `truncated`/`omitted` report,
   // so a trimmed task list cannot read as a complete one.
-  const boundedTasks = boundPayloadList(store.listBackgroundTasks(sessionId, { limit: 500 }), {
-    maxBytes: EGRESS_TOTAL_BYTES,
-  });
+  //
+  // One row past the cap, because the 500 was a limit with no count behind it: a
+  // session owning 900 tasks answered `tasksTruncated: false, tasksOmitted: 0` with
+  // 400 of them absent, since the byte budget never tripped. The byte budget trims a
+  // list this reply read; the cap stops the read. Both now say so, and `tasksTotal`
+  // is the session's real count — which is also what `stats.backgroundTasks` beside
+  // it already reported, so the two used to contradict each other on the same
+  // session.
+  const OVERVIEW_TASKS = 500;
+  const taskRows = store.listBackgroundTasks(sessionId, { limit: OVERVIEW_TASKS + 1 });
+  const tasksCapped = taskRows.length > OVERVIEW_TASKS;
+  const boundedTasks = boundPayloadList(
+    tasksCapped ? taskRows.slice(0, OVERVIEW_TASKS) : taskRows,
+    { maxBytes: EGRESS_TOTAL_BYTES },
+  );
   // No events here on purpose: the client asks /api/events for the page it will
   // actually render. Fetching them here only to discard them was the single
   // largest waste in a session switch.
@@ -491,8 +516,9 @@ function overview(store, fold, sessionId, { homeDir, redactRoots } = {}) {
       ? { ...agent, systemPrompt: agent.systemPrompt ? redactText(agent.systemPrompt, { maxLength: 20000, homeDir, roots: redactRoots }) : null }
       : null,
     tasks: boundedTasks.items,
-    tasksTruncated: boundedTasks.truncated,
-    tasksOmitted: boundedTasks.omitted,
+    tasksTotal: store.countBackgroundTasks(sessionId),
+    tasksTruncated: boundedTasks.truncated || tasksCapped,
+    tasksOmitted: boundedTasks.omitted + (tasksCapped ? taskRows.length - OVERVIEW_TASKS : 0),
   };
 }
 

@@ -55,10 +55,11 @@ function makeStore(overrides = {}) {
     listAgents: () => [],
     annotateWorkspaces: (sessions) => sessions,
     searchSessions: () => [],
-    getTimeline: () => ({ points: [], total: 0, truncated: false }),
-    getEvents: () => ({ events: [], total: 0, nextOffset: null, source: 'sqlite' }),
+    getTimeline: () => ({ points: [], truncated: false }),
+    getEvents: () => ({ events: [], total: 0, sessionRows: 0, nextOffset: null, source: 'sqlite' }),
     getTurnSummaries: () => [],
     listBackgroundTasks: () => [],
+    countBackgroundTasks: () => 0,
     getStats: () => null,
     getAgentDefinition: () => null,
     readTaskOutput: async () => ({ taskId: 'x', available: false, bytes: 0, truncated: false, text: '' }),
@@ -320,7 +321,7 @@ test('a full-detail event page is bounded by total bytes, not only per string', 
   const store = makeStore({
     getEvents: () => ({
       events: Array.from({ length: 1000 }, (_, i) => ({ index: i, content: 'x'.repeat(20000) })),
-      total: 1000, nextOffset: null, source: 'sqlite',
+      total: 1000, sessionRows: 1000, nextOffset: null, source: 'sqlite',
     }),
   });
   const { res } = await request(store, makeReq({ url: '/api/events?id=s1&detailLevel=full&limit=1000' }));
@@ -435,7 +436,7 @@ test('an event page too large for the budget still delivers one record and advan
  */
 test('lines dropped from the jsonl artifact are reported to the client', async () => {
   const store = makeStore({
-    getEvents: () => ({ events: [], total: 0, nextOffset: null, source: 'unavailable' }),
+    getEvents: () => ({ events: [], total: 0, sessionRows: 0, nextOffset: null, source: 'unavailable' }),
     readJsonlEvents: async () => ({
       events: [{ index: 0 }],
       source: 'jsonl',

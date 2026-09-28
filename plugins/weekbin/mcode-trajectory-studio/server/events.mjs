@@ -8,19 +8,36 @@
  */
 
 import { num, parseJson } from './json.mjs';
-import { EGRESS_STRING_LIMIT, LIMITS, clamp, normalizeOffset } from './config.mjs';
+import { LIMITS, clamp, normalizeOffset } from './config.mjs';
 import { taskIndex } from './tasks.mjs';
 
 /**
  * A record's turn identity, from whichever place the runtime recorded it. Used for
  * both the per-turn fold and the event projection so the two always agree.
  *
+ * Two things are settled here rather than at each call site.
+ *
+ * The `json_valid` guards: `json_extract` raises "malformed JSON" on a row whose
+ * `data_json` is not a JSON document, and that error aborts the whole statement, not
+ * the row. The turn-filtered read built this predicate against the raw table, so one
+ * truncated write made the *whole session* unreadable by turn — the same
+ * "empty trajectory beside a full event list" shape the `DOC_SQL` normalisation was
+ * added for, reached through a different door. `CASE` short-circuits, so the guard
+ * costs nothing on a readable row.
+ *
+ * The `NULLIF(…, '')`: a row the runtime left with an empty turn id has no turn
+ * identity, and treating that as a second distinct "no turn" group made the turn fold
+ * report one more turn than the summary counted, for the same rows.
+ *
  * The result alias must differ from every real column name: `local_runtime_message_rows`
  * has its own `turn_id`, and aliasing the JSON expression to the same name makes
  * the driver return the column instead — silently yielding null turn ids.
  */
-export const TURN_KEY_SQL =
-  "COALESCE(json_extract(data_json, '$.turn_id'), json_extract(data_json, '$.turnId'), turn_id)";
+export const TURN_KEY_SQL = `NULLIF(COALESCE(
+  CASE WHEN json_valid(data_json) THEN json_extract(data_json, '$.turn_id') END,
+  CASE WHEN json_valid(data_json) THEN json_extract(data_json, '$.turnId') END,
+  turn_id
+), '')`;
 
 /**
  * Which doorway did this record enter the session through?
@@ -55,10 +72,9 @@ export function getEvents(store, {
   turnId,
   withTasks = true,
   maxJsonBytes = LIMITS.eventJsonBytes,
-  stringLimit = EGRESS_STRING_LIMIT,
   pageBytes = LIMITS.eventPageBytes,
 } = {}) {
-  if (!store.db) return { events: [], total: 0, nextOffset: null, offset: 0, source: 'unavailable' };
+  if (!store.db) return { events: [], total: 0, sessionRows: 0, nextOffset: null, offset: 0, source: 'unavailable' };
   const safeLimit = clamp(limit, LIMITS.events);
   // The offset is normalised here, once, and echoed back to the caller.
   //
@@ -76,9 +92,20 @@ export function getEvents(store, {
 
   const where = ['session_id = ?'];
   const params = [sessionId];
-  if (turnId) {
-    where.push(`${TURN_KEY_SQL} = ?`);
-    params.push(turnId);
+  // Three states, because a filter that matches nothing and no filter at all are
+  // different questions. `undefined` means the caller did not ask. `null` or `''`
+  // means the caller asked for the rows that carry *no* turn identity — a real group
+  // the turn fold reports as `turnId: null`, and the one a caller holding that id from
+  // `getTurnSummaries` is most likely to pass back. Both used to fall through the
+  // `if (turnId)` test, so asking for the unturn-keyed group returned the entire
+  // session instead. `= NULL` matches nothing at all, hence `IS NULL`.
+  if (turnId !== undefined) {
+    if (turnId === null || turnId === '') {
+      where.push(`${TURN_KEY_SQL} IS NULL`);
+    } else {
+      where.push(`${TURN_KEY_SQL} = ?`);
+      params.push(turnId);
+    }
   }
 
   let total = 0;
@@ -89,6 +116,22 @@ export function getEvents(store, {
     total = num(row?.n) ?? 0;
   } catch {
     total = 0;
+  }
+  // How many rows the session has, before any turn filter — which is not the same
+  // question, and the artifact fallback needs this one. `total` answers "how many match
+  // what you asked for", so a turn filter that matched nothing made it zero, and a
+  // caller asking a narrowed question was answered from a second source. The count is
+  // taken only when the filtered one is zero, so an ordinary read pays nothing for it.
+  let sessionRows = total;
+  if (total === 0) {
+    try {
+      const row = store.db.prepare(
+        'SELECT COUNT(*) AS n FROM local_runtime_message_rows WHERE session_id = ?',
+      ).get(sessionId);
+      sessionRows = num(row?.n) ?? 0;
+    } catch {
+      sessionRows = 0;
+    }
   }
 
   let rows = [];
@@ -134,11 +177,16 @@ export function getEvents(store, {
     // no records, and the panel answered "not in the SQLite projection" for both.
     store.warn(`event_read_failed:${error.message}`);
     return {
-      events: [], total: 0, nextOffset: null, offset: safeOffset, source: 'error', error: error.message,
+      events: [], total: 0, sessionRows: 0, nextOffset: null, offset: safeOffset, source: 'error', error: error.message,
     };
   }
 
-  const taskByCall = withTasks ? taskIndex(store, sessionId) : new Map();
+  // The index reports its own cap, and the cap travels with the page: a tool call
+  // outside the indexed slice carries no task timing, and a caller reading
+  // `durationMs: null` has no way to tell that from a call that was never a
+  // background task.
+  const tasks = withTasks ? taskIndex(store, sessionId) : { byCall: new Map(), capped: false, total: 0 };
+  const taskByCall = tasks.byCall;
   let oversized = 0;
   let projectedBytes = 0;
   let cutForBytes = 0;
@@ -160,13 +208,13 @@ export function getEvents(store, {
     projectedBytes += size;
     if (row.data_json === null && num(row.data_bytes) !== null && row.data_bytes > cap) {
       oversized += 1;
-      const stub = projectEvent({ ...row, data_json: '{}' }, position, 'summary', taskByCall, stringLimit);
+      const stub = projectEvent({ ...row, data_json: '{}' }, position, 'summary', taskByCall);
       stub.oversized = true;
       stub.bytes = num(row.data_bytes);
       events.push(stub);
       continue;
     }
-    events.push(projectEvent(row, position, detailLevel, taskByCall, stringLimit));
+    events.push(projectEvent(row, position, detailLevel, taskByCall));
   }
   if (oversized > 0) {
     store.warn(`events_oversized:${oversized} record(s) exceeded ${cap} bytes and were returned as metadata only`);
@@ -181,34 +229,40 @@ export function getEvents(store, {
   return {
     events,
     total,
+    // Unfiltered, so the caller can tell an empty session from an empty answer.
+    sessionRows,
     // The offset this page was read at, after normalisation, so a caller can tell what
     // was actually read rather than what it asked for.
     offset: safeOffset,
     nextOffset: consumed < total ? consumed : null,
     pageBytesTruncated: cutForBytes > 0,
+    ...(tasks.capped ? { taskIndexTruncated: true, taskIndexTotal: tasks.total } : {}),
     source: 'sqlite',
   };
 }
 
 /**
- * Clip a field to the egress string limit, before anything reads it in full.
+ * There is deliberately no projection-time string clip.
  *
- * The redaction sweep is regex work over every character of every field, and it used
- * to run on the *raw* field: a 1 MiB `msg_content` was walked in its entirety and
- * then cut to 20 KB on the way out. Measured on a session of twenty 1 MiB records,
- * that was 6.4 s of sweeping to answer 0.38 MB.
+ * One was added here to bound the redaction sweep, and it had to be removed: a clip
+ * landing inside a quoted value deletes that value's closing delimiter, and every
+ * redaction layer fails open at once. `redactJsonText` cannot `JSON.parse` the
+ * unterminated document, the escaped-document rule needs its closing delimiter, and
+ * the key/value rule's unquoted branch excludes `"` — so a `read` or `bash` result
+ * over 256 KiB carrying `api_key` inside a JSON object was delivered unredacted,
+ * through the one surface whose output reaches a model.
  *
- * Clipping here moves the cut in front of the sweep, so the sweep only ever sees what
- * survives it. Clipping before redacting is safe rather than merely faster: a secret
- * cut in half by the clip is either outside the kept prefix entirely, or present in
- * it in a form the key/value rule still matches — the prefix of `api_key=sk-live…`
- * is still `api_key=sk-live`.
+ * The work is bounded instead by `eventJsonBytes` per row and `eventPageBytes` per
+ * page, both of which already report themselves: a row past the per-row ceiling is
+ * returned as an `oversized` stub carrying its byte count, and a page past the
+ * per-page budget is left for the next page with an honest cursor. Measured on the
+ * shape that motivated the clip — twenty 1 MiB records — removing it moves the sweep
+ * from 350 ms to 1.1 s, and on the common shape (2000 records of ~4 KB) it moves
+ * nothing at all: 816 ms against 811 ms, because those fields never reached the
+ * 256 KiB clip in the first place.
  */
-function clipText(value, limit) {
-  return typeof value === 'string' && value.length > limit ? value.slice(0, limit) : value;
-}
 
-function projectEvent(row, index, detailLevel, taskByCall = new Map(), stringLimit = EGRESS_STRING_LIMIT) {
+function projectEvent(row, index, detailLevel, taskByCall = new Map()) {
   const data = parseJson(row.data_json) || {};
   const usage = data.usage && typeof data.usage === 'object' ? data.usage : null;
   const contextUsage = data.context_usage && typeof data.context_usage === 'object' ? data.context_usage : null;
@@ -276,17 +330,17 @@ function projectEvent(row, index, detailLevel, taskByCall = new Map(), stringLim
           hasOutput: task?.hasOutput ?? false,
         };
         if (detailLevel === 'full') {
-          projected.args = clipText(call?.tool_call_args ?? null, stringLimit);
-          projected.result = clipText(call?.tool_call_result_data ?? null, stringLimit);
-          projected.description = clipText(task?.description ?? null, stringLimit);
+          projected.args = call?.tool_call_args ?? null;
+          projected.result = call?.tool_call_result_data ?? null;
+          projected.description = task?.description ?? null;
         }
         return projected;
       })
     : null;
 
   if (detailLevel === 'full') {
-    event.content = clipText(typeof data.msg_content === 'string' ? data.msg_content : null, stringLimit);
-    event.thinking = clipText(typeof data.thinking_content === 'string' ? data.thinking_content : null, stringLimit);
+    event.content = typeof data.msg_content === 'string' ? data.msg_content : null;
+    event.thinking = typeof data.thinking_content === 'string' ? data.thinking_content : null;
     if (data.metadata && typeof data.metadata === 'object') event.metadata = data.metadata;
   }
 
@@ -302,8 +356,7 @@ function projectEvent(row, index, detailLevel, taskByCall = new Map(), stringLim
  */
 export function getTurnSummaries(store, sessionId) {
   if (!store.db) return [];
-  const updatedAtMs = store.getSession(sessionId)?.updatedAtMs ?? 0;
-  return store.cached(store.turnsCache, `${sessionId}|${updatedAtMs}`,
+  return store.cached(store.turnsCache, `${sessionId}|${store.messageSignature(sessionId)}`,
     () => computeTurnSummaries(store, sessionId));
 }
 
@@ -354,13 +407,14 @@ function computeTurnSummaries(store, sessionId) {
  * pages, instead of forcing one large request to serve both.
  */
 export function getTimeline(store, sessionId, { cap = LIMITS.timeline } = {}) {
-  if (!store.db) return { points: [], total: 0, truncated: false };
-  // Cached against the session's `updated_at_ms`, like the statistics and turn folds
+  if (!store.db) return { points: [], truncated: false };
+  // Cached against the message rows it folds, like the statistics and turn folds
   // beside it. The panel asks for the timeline on every overview, so an uncached fold
-  // was 7 `json_extract`s over the whole session per request (78 ms at 6,000 rows) —
-  // for a value that changes only when the session does.
-  const updatedAtMs = store.getSession(sessionId)?.updatedAtMs ?? 0;
-  return store.cached(store.timelineCache, `${sessionId}|${updatedAtMs}|${cap}`, () => computeTimeline(store, sessionId, cap));
+  // was 7 json_extracts over the whole session per request (78 ms at 6,000 rows).
+  // It used to be keyed on the session's own updated_at_ms, which the runtime does not
+  // touch while it indexes — so a session that grew kept drawing the old axis.
+  return store.cached(store.timelineCache, `${sessionId}|${store.messageSignature(sessionId)}|${cap}`,
+    () => computeTimeline(store, sessionId, cap));
 }
 
 function computeTimeline(store, sessionId, cap) {
@@ -396,13 +450,16 @@ function computeTimeline(store, sessionId, cap) {
       durationMs: num(row.duration_ms),
       thinkingMs: num(row.thinking_ms),
     }));
-    // The warning says the axis was cut without claiming to know by how much: the
-    // query read one row past the cap and stopped, so the number of records after it
-    // was never counted, and a warning that guessed would be a worse kind of wrong.
+    // No `total` here, deliberately. The query read one row past the cap and stopped,
+    // so the number of records after it was never counted; a field named `total`
+    // holding the delivered count is read as the session's size, which is the exact
+    // misreading this Plugin exists to prevent. `points.length` is what arrived and
+    // `truncated` says whether the session has more. A caller needing the true count
+    // asks `getStats`, which counts properly.
     if (truncated) store.warn(`timeline_truncated:more than ${cap} points; the axis was cut at the cap`);
-    return { points, total: points.length, truncated };
+    return { points, truncated };
   } catch (error) {
     store.warn(`timeline_failed:${error.message}`);
-    return { points: [], total: 0, truncated: false };
+    return { points: [], truncated: false };
   }
 }
