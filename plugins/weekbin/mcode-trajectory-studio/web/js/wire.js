@@ -86,6 +86,11 @@ export function wire() {
         appendStreamRows();
       }
       updateStreamCount();
+    } catch (error) {
+      // A page that fails mid-scroll is a dead end the reader has to be told about:
+      // left uncaught it is an unhandled rejection, and the stream just stops
+      // growing with no explanation.
+      banner(`加载更多记录失败：${error.message}`);
     } finally {
       state.loadingMore = false;
     }

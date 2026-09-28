@@ -56,9 +56,20 @@ export function getEvents(store, {
   withTasks = true,
   maxJsonBytes = LIMITS.eventJsonBytes,
 } = {}) {
-  if (!store.db) return { events: [], total: 0, nextOffset: null, source: 'unavailable' };
+  if (!store.db) return { events: [], total: 0, nextOffset: null, offset: 0, source: 'unavailable' };
   const safeLimit = clamp(limit, LIMITS.events);
-  const safeOffset = Math.max(0, offset);
+  // The offset is normalised here, once, and echoed back to the caller.
+  //
+  // `limit` already went through `clamp`, but `offset` did not, and `OFFSET ?` binds
+  // a literal: a fractional, negative, string or non-numeric offset raised
+  // `datatype mismatch` inside SQLite, the read failed, and the page came back
+  // `source: 'error'` with no records — which the egress then reported as a session
+  // that was "not in the projection". A caller whose offset happened to be a float
+  // got an empty trajectory that looked like an empty session.
+  //
+  // Normalising at the boundary means the reply echoes the offset that was actually
+  // read, and the cursor a trimmed page returns is always feedable back in.
+  const safeOffset = normalizeOffset(offset);
   const cap = Number.isFinite(maxJsonBytes) && maxJsonBytes > 0 ? maxJsonBytes : LIMITS.eventJsonBytes;
 
   const where = ['session_id = ?'];
@@ -98,8 +109,13 @@ export function getEvents(store, {
       LIMIT ? OFFSET ?
     `).all(cap, ...params, safeLimit, safeOffset);
   } catch (error) {
+    // The reason travels with the page. A caller that got `source: 'error'` with no
+    // explanation had no way to tell a broken query from a session that genuinely has
+    // no records, and the panel answered "not in the SQLite projection" for both.
     store.warn(`event_read_failed:${error.message}`);
-    return { events: [], total: 0, nextOffset: null, source: 'error' };
+    return {
+      events: [], total: 0, nextOffset: null, offset: safeOffset, source: 'error', error: error.message,
+    };
   }
 
   const taskByCall = withTasks ? taskIndex(store, sessionId) : new Map();
@@ -122,6 +138,9 @@ export function getEvents(store, {
   return {
     events,
     total,
+    // The offset this page was read at, after normalisation, so a caller can tell what
+    // was actually read rather than what it asked for.
+    offset: safeOffset,
     nextOffset: consumed < total ? consumed : null,
     source: 'sqlite',
   };
@@ -226,6 +245,32 @@ export function getTurnSummaries(store, sessionId) {
     () => computeTurnSummaries(store, sessionId));
 }
 
+/**
+ * The document to extract from, per row.
+ *
+ * `json_extract` raises "malformed JSON" on a row whose `data_json` is not a JSON
+ * document, and that error aborts the whole statement — not the row. Substituting
+ * `{}` makes an unreadable row contribute nothing while every other row is still
+ * counted, so one truncated write cannot report a session as having no turns or no
+ * timeline while `getEvents` goes on listing its records.
+ */
+const DOC_SQL = `CASE WHEN json_valid(data_json) THEN data_json ELSE '{}' END`;
+
+/**
+ * A record offset a caller can actually page with.
+ *
+ * The cursor this module hands out is `offset + delivered` or the store's own
+ * `nextOffset`, and a client feeds that value straight back in. So the offset has to
+ * be a non-negative integer before it reaches SQL, whatever the caller sent: `1.5`,
+ * `"3"` and `"abc"` all reached `OFFSET ?` verbatim, where the two invalid forms raise
+ * `datatype mismatch` and take the whole page down.
+ */
+export function normalizeOffset(offset) {
+  const parsed = Number(offset);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.trunc(parsed));
+}
+
 function computeTurnSummaries(store, sessionId) {
   try {
     return store.db.prepare(`
@@ -235,8 +280,10 @@ function computeTurnSummaries(store, sessionId) {
         SUM(COALESCE(json_extract(data_json, '$.usage.request_duration_ms'), 0)) AS llm_ms,
         SUM(COALESCE(json_extract(data_json, '$.usage.output_tokens'), 0)) AS output_tokens,
         MIN(created_at_ms) AS first_ms
-      FROM local_runtime_message_rows
-      WHERE session_id = ?
+      FROM (
+        SELECT created_at_ms, turn_id, ${DOC_SQL} AS data_json
+        FROM local_runtime_message_rows WHERE session_id = ?
+      )
       GROUP BY turn_key
       ORDER BY first_ms ASC
     `).all(sessionId).map((row) => ({
@@ -259,8 +306,8 @@ function computeTurnSummaries(store, sessionId) {
  * pages, instead of forcing one large request to serve both.
  */
 export function getTimeline(store, sessionId, { cap = LIMITS.timeline } = {}) {
-  if (!store.db) return [];
-  const expr = (jsonPath) => `json_extract(data_json, '${jsonPath}')`;
+  if (!store.db) return { points: [], total: 0, truncated: false };
+  const expr = (jsonPath) => `json_extract(${DOC_SQL}, '${jsonPath}')`;
   try {
     const rows = store.db.prepare(`
       SELECT
@@ -276,8 +323,12 @@ export function getTimeline(store, sessionId, { cap = LIMITS.timeline } = {}) {
       WHERE session_id = ?
       ORDER BY id ASC
       LIMIT ?
-    `).all(sessionId, cap);
-    return rows.map((row) => ({
+    `).all(sessionId, cap + 1);
+    // One row past the cap, so "there is more" is known without a second count —
+    // and a session with 7,000 records reports 6,000 points and says so, instead of
+    // presenting the cap as the whole session.
+    const truncated = rows.length > cap;
+    const points = rows.slice(0, cap).map((row) => ({
       rowId: row.row_id,
       at: num(row.at_ms),
       role: row.role_json ?? null,
@@ -288,8 +339,10 @@ export function getTimeline(store, sessionId, { cap = LIMITS.timeline } = {}) {
       durationMs: num(row.duration_ms),
       thinkingMs: num(row.thinking_ms),
     }));
+    if (truncated) store.warn(`timeline_truncated:${rows.length - cap} point(s) past the ${cap} cap`);
+    return { points, total: points.length, truncated };
   } catch (error) {
     store.warn(`timeline_failed:${error.message}`);
-    return [];
+    return { points: [], total: 0, truncated: false };
   }
 }

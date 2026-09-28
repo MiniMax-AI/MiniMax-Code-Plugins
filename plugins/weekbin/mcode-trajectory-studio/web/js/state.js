@@ -36,6 +36,10 @@ const state = {
   sessions: [],
   sessionId: null,
   events: [],
+  // Identity of every record already held in `events`, so an overlapping page cannot
+  // render the same record twice. Keyed on the server's row id, falling back to the
+  // record's own index; a reset clears it together with the records it describes.
+  eventKeys: new Set(),
   turns: new Map(),
   tasks: [],
   agent: null,

@@ -368,7 +368,11 @@ async function api(store, homeDir, redactRoots, url, { getFocus, setFocus }) {
   if (route === '/api/timeline') {
     const sessionId = url.searchParams.get('id') || getFocus();
     if (!sessionId) throw new ApiError(400, 'session_required');
-    return { points: store.getTimeline(sessionId) };
+    // The timeline is capped for drawability, so the reply says whether it was cut:
+    // a panel that drew 6,000 points for a 7,000-record session otherwise presents
+    // the cap as the session.
+    const { points, truncated } = store.getTimeline(sessionId);
+    return { points, truncated };
   }
 
   if (route === '/api/task-output') {
@@ -398,10 +402,17 @@ async function api(store, homeDir, redactRoots, url, { getFocus, setFocus }) {
     const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get('limit')) || 200));
     const turnId = url.searchParams.get('turnId') || undefined;
     let page = store.getEvents({ sessionId, offset, limit, detailLevel, turnId });
-    if (page.events.length === 0 && page.source !== 'sqlite') {
-      // The fallback pages on the same `offset` the SQLite read does, so a session
-      // the projection has not indexed can still be walked to its end.
-      page = await store.readJsonlEvents({ sessionId, offset, limit, detailLevel });
+    // The artifact is consulted whenever the projection yielded nothing, not only
+    // when there is no database at all. The guard used to be `source !== 'sqlite'`,
+    // and a live projection answers `sqlite` for zero rows — so a session whose
+    // records are not indexed yet but whose artifact is on disk reported "no
+    // records" while the artifact held them. It is adopted only when it has some, so
+    // a projection that truly holds none still answers "no records".
+    if (page.events.length === 0) {
+      const artifact = await store.readJsonlEvents({
+        sessionId, offset: page.offset ?? offset, limit, detailLevel, turnId,
+      });
+      if (artifact.events.length > 0) page = { ...page, ...artifact };
     }
     const events = detailLevel === 'full'
       ? page.events.map((event) => redactEvent(event, { maxLength: 20000, homeDir, roots: redactRoots }))
@@ -417,19 +428,24 @@ async function api(store, homeDir, redactRoots, url, { getFocus, setFocus }) {
     // derived from delivered records whenever the list was trimmed, and the client
     // uses it directly (`web/js/flow.js`), so this is the difference between a
     // complete session and a silently shortened one.
+    //
+    // `readAt` is the offset the read actually used, after normalisation: a float or a
+    // non-numeric offset used to raise `datatype mismatch` inside SQLite and the page
+    // came back empty, which the panel then reported as "not in the projection".
+    const readAt = page.offset ?? offset;
     const delivered = bounded.items.length;
-    const nextOffset = bounded.truncated ? offset + delivered : page.nextOffset;
     return {
       detailLevel,
       source: page.source,
-      offset,
+      offset: readAt,
       total: page.total ?? null,
-      nextOffset: delivered === 0 ? null : nextOffset,
+      nextOffset: delivered === 0 ? null : (bounded.truncated ? readAt + delivered : page.nextOffset),
       truncated: bounded.truncated,
       omitted: bounded.omitted,
       // A line past the JSONL line cap is dropped at the source; say so rather than
       // let a short file read as a faithful one.
       ...(page.droppedOversized > 0 ? { droppedOversized: page.droppedOversized } : {}),
+      ...(page.source === 'error' ? { error: page.error ?? 'event_read_failed' } : {}),
       events: bounded.items,
     };
   }

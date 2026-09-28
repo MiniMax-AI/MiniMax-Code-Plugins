@@ -16,11 +16,19 @@ export class UnauthorizedPanelError extends Error {
   }
 }
 
-export async function api(pathname) {
+/**
+ * `signal` is optional so a caller can abandon a request it no longer wants — a
+ * page of records for a session the reader has since left. Nothing here treats an
+ * abort as a failure; whether a cancelled request counts as an error is the
+ * caller's decision, because only the caller knows whether the view it fetched for
+ * is still on screen.
+ */
+export async function api(pathname, { signal } = {}) {
   const token = panelToken();
   const response = await fetch(pathname, {
     headers: token ? { 'x-trajectory-token': token } : {},
     cache: 'no-store',
+    signal,
   });
   const payload = await response.json().catch(() => ({}));
   if (response.status === 403 && payload.error === 'forbidden_token') throw new UnauthorizedPanelError();

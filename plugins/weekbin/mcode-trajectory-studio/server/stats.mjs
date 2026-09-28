@@ -61,6 +61,9 @@ function computeStats(store, sessionId, session) {
     toolCalls: agg.toolCalls,
     toolFailures: agg.toolFailures,
     events: agg.events,
+    // Rows whose `data_json` is not a JSON document, excluded from every total above.
+    // Non-zero means those totals describe fewer records than `getEvents` lists.
+    unreadableRows: agg.unreadable,
     thinkingEvents: agg.thinkingEvents,
     subagentTasks: toolTasks.subagentCount,
     backgroundTasks: toolTasks.taskCount,
@@ -74,11 +77,36 @@ function computeStats(store, sessionId, session) {
 }
 
 function rowAggregate(store, sessionId) {
-  const expr = (jsonPath) => `json_extract(data_json, '${jsonPath}')`;
+  // Every row is normalised to a parseable document before anything is extracted
+  // from it.
+  //
+  // `json_extract` raises "malformed JSON" on a row whose `data_json` is not a JSON
+  // document, and that error aborts the WHOLE statement — not the row. One row, so
+  // one truncated write (which is what an interrupted runtime write leaves behind)
+  // took the session's turns, events, token totals and tool-call count to zero while
+  // `getEvents` still listed every record. The reader was told the session was empty
+  // and shown it full of records at the same time.
+  //
+  // Substituting `{}` for an unparseable row makes the row contribute nothing, which
+  // is the honest answer for a record whose contents cannot be read, and leaves every
+  // other row counted. `json_valid` is also what lets `unreadable` report how many rows
+  // were skipped, so the gap is stated rather than hidden behind a plausible total.
+  const expr = (jsonPath) => `json_extract(doc, '${jsonPath}')`;
   const sql = `
+    WITH rows AS (
+      SELECT
+        CASE WHEN json_valid(data_json) THEN data_json ELSE '{}' END AS doc,
+        json_valid(data_json) AS readable
+      FROM local_runtime_message_rows
+      WHERE session_id = ?
+    )
     SELECT
       COUNT(*) AS events,
       COUNT(DISTINCT NULLIF(${expr('$.turn_id')}, '')) AS turns,
+      SUM(readable) AS readable,
+      -- The rows that contributed nothing above: json_valid is 1 or 0 per row, so the
+      -- unreadable count is the total less the readable ones.
+      COUNT(*) - SUM(readable) AS unreadable,
       SUM(CASE WHEN ${expr('$.usage.request_duration_ms')} IS NOT NULL THEN 1 ELSE 0 END) AS steps,
       SUM(COALESCE(${expr('$.usage.request_duration_ms')}, 0)) AS request_ms,
       SUM(COALESCE(${expr('$.thinking_duration_ms')}, 0)) AS thinking_ms,
@@ -90,8 +118,7 @@ function rowAggregate(store, sessionId) {
       MAX(${expr('$.usage.context_window')}) AS context_window,
       SUM(CASE WHEN ${expr('$.kind')} = 'compaction' THEN 1 ELSE 0 END) AS compactions,
       SUM(CASE WHEN ${expr('$.kind')} = 'compaction_failed' THEN 1 ELSE 0 END) AS compaction_failures
-    FROM local_runtime_message_rows
-    WHERE session_id = ?
+    FROM rows
   `;
   let base;
   try {
@@ -104,6 +131,10 @@ function rowAggregate(store, sessionId) {
   // Expanding tool_calls with json_each in a join is one pass. The previous
   // correlated subquery re-parsed every row's JSON separately and dominated the
   // whole statistics call on large sessions.
+  //
+  // `json_each` raises on an unparseable `data_json` exactly as `json_extract` does,
+  // so the same substitution applies: an unreadable row expands to zero tool calls
+  // instead of taking the whole tool-call count with it.
   let toolCalls = 0;
   let toolFailures = 0;
   try {
@@ -111,7 +142,9 @@ function rowAggregate(store, sessionId) {
       SELECT
         COUNT(*) AS calls,
         SUM(CASE WHEN COALESCE(json_extract(tc.value, '$.tool_call_status'), 2) <> 2 THEN 1 ELSE 0 END) AS failures
-      FROM local_runtime_message_rows AS r, json_each(r.data_json, '$.tool_calls') AS tc
+      FROM local_runtime_message_rows AS r, json_each(
+        CASE WHEN json_valid(r.data_json) THEN r.data_json ELSE '{}' END, '$.tool_calls'
+      ) AS tc
       WHERE r.session_id = ?
     `).get(sessionId) || {};
     toolCalls = num(row.calls) ?? 0;
@@ -123,18 +156,29 @@ function rowAggregate(store, sessionId) {
   let sources = [];
   try {
     sources = store.db.prepare(`
-      SELECT ${expr('$.source')} AS source, COUNT(*) AS count
-      FROM local_runtime_message_rows
-      WHERE session_id = ? AND ${expr('$.source')} IS NOT NULL
+      SELECT json_extract(doc, '$.source') AS source, COUNT(*) AS count
+      FROM (
+        SELECT CASE WHEN json_valid(data_json) THEN data_json ELSE '{}' END AS doc
+        FROM local_runtime_message_rows WHERE session_id = ?
+      )
+      WHERE json_extract(doc, '$.source') IS NOT NULL
       GROUP BY source ORDER BY count DESC
     `).all(sessionId).map((row) => ({ source: row.source, count: row.count }));
   } catch {
     sources = [];
   }
 
+  const unreadable = (num(base.unreadable) ?? 0);
+  if (unreadable > 0) {
+    // Reported rather than absorbed: a session whose totals silently omit N records
+    // is a different answer from one that has none to omit.
+    store.warn(`rows_unreadable:${unreadable} record(s) were not valid JSON and are excluded from these totals`);
+  }
+
   return {
     events: num(base.events) ?? 0,
     turns: num(base.turns) ?? 0,
+    unreadable,
     steps: num(base.steps) ?? 0,
     requestMs: num(base.request_ms),
     thinkingMs: base.thinking_events ? num(base.thinking_ms) : null,

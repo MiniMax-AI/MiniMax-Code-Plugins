@@ -743,8 +743,9 @@ test('timeline points keep their json role and source, not the shadowed columns'
     await rm(dataDir, { recursive: true, force: true });
   });
 
-  const points = store.getTimeline('sess-a');
+  const { points, truncated } = store.getTimeline('sess-a');
   assert.equal(points.length, 6);
+  assert.equal(truncated, false, 'a six-record session is nowhere near the cap');
   assert.equal(points[0].role, 'user');
   assert.equal(points[0].source, 'api');
   assert.equal(points[1].role, 'assistant');

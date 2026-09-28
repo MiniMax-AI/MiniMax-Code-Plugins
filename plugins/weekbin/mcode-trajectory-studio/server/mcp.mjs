@@ -10,6 +10,7 @@ import { createInterface } from 'node:readline';
 import { boundPayloadList, redactEvent, redactPayload, redactPath, redactText } from './redact.mjs';
 import { EGRESS_MAX_DEPTH, EGRESS_MAX_ENTRIES, EGRESS_STRING_LIMIT, EGRESS_TOTAL_BYTES_MCP } from './config.mjs';
 import { SESSION_KINDS } from './store.mjs';
+import { normalizeOffset } from './events.mjs';
 
 export const SERVER_NAME = 'mcode-trajectory-studio';
 export const SERVER_VERSION = '0.1.3';
@@ -227,16 +228,27 @@ async function callTool(ctx, name, args = {}) {
     case 'trajectory_get': {
       const sessionId = await resolveSessionId(store, args.sessionId);
       if (!sessionId) throw new Error('no_sessions_available');
-      const offset = args.offset ?? 0;
       let page = store.getEvents({
         sessionId,
-        offset,
+        offset: args.offset ?? 0,
         limit: args.limit ?? 200,
         turnId: args.turnId,
         detailLevel,
       });
-      if (page.events.length === 0 && page.source !== 'sqlite') {
-        page = await store.readJsonlEvents({ sessionId, offset, limit: args.limit ?? 200, detailLevel });
+      // The artifact is consulted whenever the projection yielded nothing, not only
+      // when there is no database at all.
+      //
+      // The guard used to be `source !== 'sqlite'`, and a live projection answers
+      // `sqlite` for zero rows — so the fallback never ran for the case it exists
+      // for: a session whose records have not been indexed yet but whose
+      // `messages.jsonl` is on disk. That session reported "no records" while the
+      // artifact held them. The artifact is only adopted when it actually has some,
+      // so a projection that truly holds none still answers "no records".
+      if (page.events.length === 0) {
+        const artifact = await store.readJsonlEvents({
+          sessionId, offset: page.offset ?? 0, limit: args.limit ?? 200, detailLevel, turnId: args.turnId,
+        });
+        if (artifact.events.length > 0) page = { ...page, ...artifact };
       }
       const events = detailLevel === 'full'
         ? page.events.map((event) => redactEvent(event, options))
@@ -249,17 +261,21 @@ async function callTool(ctx, name, args = {}) {
       // The cursor names the first record the caller did not receive, not the first
       // one the store read: a page trimmed from 1000 records to 209 must answer 209,
       // or records 209-999 are skipped by every caller that pages on this value.
+      // Built from the offset that was actually read, so the value it hands back is
+      // always feedable in again.
+      const readAt = page.offset ?? normalizeOffset(args.offset ?? 0);
       const delivered = bounded.items.length;
       return {
         sessionId,
         detailLevel,
         source: page.source,
-        offset,
+        offset: readAt,
         returned: delivered,
         total: page.total ?? null,
-        nextOffset: delivered === 0 ? null : (bounded.truncated ? offset + delivered : page.nextOffset),
+        nextOffset: delivered === 0 ? null : (bounded.truncated ? readAt + delivered : page.nextOffset),
         truncated: bounded.truncated,
         omitted: bounded.omitted,
+        ...(page.source === 'error' ? { error: page.error ?? 'event_read_failed' } : {}),
         ...(page.droppedOversized > 0 ? { droppedOversized: page.droppedOversized } : {}),
         events: bounded.items,
       };
