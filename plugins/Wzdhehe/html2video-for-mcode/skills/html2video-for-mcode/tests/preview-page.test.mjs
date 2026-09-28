@@ -325,7 +325,7 @@ describe('预览放映页 · 逐级步进(动效开)+ 无重播(2026-09-18 实�
     assert.match(en, /id="narrbtn"[^>]*>Narration on</, '口播开关英文');
     assert.ok(en.includes('Narration for this slide'), '口播面板标题英文');
     assert.ok(en.includes('>Overview<'), '总览按钮英文');
-    assert.ok(en.includes('No thumbnail (preview/'), '缩略图缺失占位英文');
+    assert.ok(en.includes('No thumbnail (run capture first — preview/'), '缩略图缺失占位英文');
     assert.ok(en.includes('reveal level / slide'), '键盘提示英文(断言可见文本; 代码注释里的中文不算)');
     assert.ok(!en.includes('>动效开<') && !en.includes('>口播开<'), '按钮不得残留中文');
     assert.ok(!en.includes('本张口播文案') && !en.includes('快照生成于') && !en.includes('无缩略图'), '面板/页脚/占位不得残留中文');
@@ -407,4 +407,66 @@ test('isMainModule: 入口判定稳健(符号链接/同名兜底/被 import 不�
   const link = path.join(dir, 'link.mjs');
   try { fs.symlinkSync(real, link, 'file'); } catch { return t.skip('当前环境建不了文件符号链接(Windows 需开发者模式)'); }
   assert.equal(isMainModule(meta, link), true, '经符号链接调用必须为真(realpath 两侧) — 修复前恒假');
+});
+
+describe('外部报告(放映页六条) · P1a/P1b/P2/P3 修复', () => {
+  const page = buildPlayPage({ topic: 'T', slides: [{ id: '01', name: 'a.html', copy: 'a.html', copyNofx: 'a.nofx.html', clauses: [{ stage: 1, text: '甲' }], steps: [1] }] });
+
+  test('P1a 总览缩略图: 相对路径指向 play/thumbs/, 不再指到父目录', () => {
+    assert.ok(page.includes("img.src = 'thumbs/' + s.id + '.png'"), '总览缩略图必须用随页携带的 thumbs/ 相对路径');
+    assert.ok(!page.includes("'../' + s.id"), '不得再写死 ../ 指到父目录 preview/(只拷 play/ 就全挂)');
+  });
+
+  test('P1b 编程接口: window.playPage 暴露 state/go/next/prev/setFx/setNarr/setTrans/overview', () => {
+    assert.ok(page.includes('window.playPage = {'), '必须暴露 window.playPage(状态全是闭包变量, 外部自动化只能模拟键盘抠 innerText)');
+    for (const k of ['get state()', 'go: go', 'next: next', 'prev: prev', 'setFx:', 'setNarr:', 'setTrans:', 'overview:']) {
+      assert.ok(page.includes(k), `playPage 缺 ${k}`);
+    }
+  });
+
+  test('P2a 键位提示: footer 列全 Space/PgDn/PgUp/Home/End/Esc(键盘实际都支持)', () => {
+    assert.ok(page.includes('hintKeys') && page.includes('hintEsc'), '文案键要进页面');
+    const zh = buildPlayPage({ topic: 'T', lang: 'zh', slides: [{ id: '01', name: 'a.html', copy: 'a.html', copyNofx: 'a.nofx.html' }] });
+    assert.ok(zh.includes('空格/PgDn 前进'), '中文键位提示');
+    assert.ok(zh.includes('Home/End 首末张'), '中文键位提示(首末张)');
+    const en = buildPlayPage({ topic: 'T', lang: 'en', slides: [{ id: '01', name: 'a.html', copy: 'a.html', copyNofx: 'a.nofx.html' }] });
+    assert.ok(en.includes('Home / End first / last'), '英文键位提示');
+  });
+
+  test('P2b 边界反馈: 首/末 no-op 弹 toast, 不是毫无反应', () => {
+    assert.ok(page.includes('id="edge"'), '要有 toast 元素');
+    assert.ok(/next\(\)\{\s*if \(i >= S\.length - 1[^}]*\{ edge\(T\.edgeLast\); return; \}/.test(page), 'next 到末张必须 edge 反馈');
+    assert.ok(/prev\(\)\{\s*if \(i <= 0[^}]*\{ edge\(T\.edgeFirst\); return; \}/.test(page), 'prev 到首张必须 edge 反馈');
+  });
+
+  test('P3a xfade 状态泄漏: 换帧入口归一后备帧隐藏态', () => {
+    // 400ms 延迟撤场被 gen 作废时旧帧带 .show 留存, 两个 iframe 同 opacity:1 —— 外部脚本按
+    // offsetParent 判当前帧必错(报告人实踩)。入口一行归一即封死所有泄漏路径。
+    assert.ok(/function show\(src\)\{[\s\S]{0,400}back\.classList\.remove\('show'\)/.test(page), 'show() 入口必须先把后备帧归一到隐藏态');
+  });
+
+  test('P1a(CLI): preview/*.png 拷进 play/thumbs/, 没跑 capture 时如实计数告警', () => {
+    const proj = tmpdir();
+    const build2 = proj; // 复用上面的 build 夹具太重, 这里最小化: script + slides + (可选)preview png
+    fs.mkdirSync(path.join(build2, 'slides'), { recursive: true });
+    fs.writeFileSync(path.join(build2, 'script.json'), JSON.stringify({
+      topic: 'T', lang: 'zh', speed: 1.1,
+      slides: [{ id: '01', layout: 'title', html: '01.html', audio: '01.mp3', title: 'A', clauses: [{ stage: 1, text: '甲。' }] },
+               { id: '02', layout: 'title', html: '02.html', audio: '02.mp3', title: 'B', clauses: [{ stage: 1, text: '乙。' }] }],
+    }));
+    fs.writeFileSync(path.join(build2, 'slides', '01.html'), SLIDE.replace(/01-title/g, '01'));
+    fs.writeFileSync(path.join(build2, 'slides', '02.html'), SLIDE.replace(/01-title/g, '02'));
+    fs.mkdirSync(path.join(build2, 'preview'), { recursive: true });
+    fs.writeFileSync(path.join(build2, 'preview', '01.png'), 'PNG');   // 只有 01 跑过 capture
+    const r = runSkill('preview-page.mjs', [proj]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(fs.existsSync(path.join(proj, 'preview', 'play', 'thumbs', '01.png')), '存在的缩略图必须拷进 play/thumbs/');
+    assert.ok(!fs.existsSync(path.join(proj, 'preview', 'play', 'thumbs', '02.png')), '没跑 capture 的不得凭空造图');
+    assert.match(r.stdout + r.stderr, /1\/2 张/, '终端必须如实计数(其余没跑 capture)');
+    // 陈旧缩略图清理: 重新生成后老 thumbs 目录里不该留已删张次的死图
+    fs.writeFileSync(path.join(proj, 'preview', 'play', 'thumbs', '99.png'), 'STALE');
+    const r2 = runSkill('preview-page.mjs', [proj]);
+    assert.equal(r2.status, 0, r2.stderr);
+    assert.ok(!fs.existsSync(path.join(proj, 'preview', 'play', 'thumbs', '99.png')), '重建 thumbs/ 时陈旧死图必须清掉');
+  });
 });

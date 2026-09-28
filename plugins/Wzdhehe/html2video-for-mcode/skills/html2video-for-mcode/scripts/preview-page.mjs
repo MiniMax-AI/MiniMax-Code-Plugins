@@ -118,13 +118,15 @@ export function injectStyle(html, css, note = '本项目 tokens.css 缺这段规
 // ?s=k 表示已揭示到第 k 个用到的 stage: 第 k 级带 &anim=1 时当场入场, 更早的级直接终态
 // (-60s 延迟 = 动画早已完成), 更晚的级保持隐藏(+60s 延迟 = 还在等, 等用户按"下一步")。
 // 父页只换 iframe src(与快照同一套机制), 不做任何跨文档访问 —— file:// 下 iframe 是独立源。
-export function addStepScript(html, stages = []) {
-  if (!stages.length) return html;
+export function addStepScript(html, stageIds = []) {
+  // 形参叫 stageIds: 传进来的是 stagesFromHtml(html) 的 **stage 编号数组**;
+  // 同文件 main() 里另有局部量 stages = timings 的 {1:0.3} 字典 —— 同名不同义, 维护时极易改错(第 25+ 轮外部报告 P3)
+  if (!stageIds.length) return html;
   const script = `<script>
 /* 放映页逐级步进(动效开): 在动画启动前按 ?s=k 重设各级入场延迟 */
 (function(){try{
   var q=new URLSearchParams(location.search);var k=parseInt(q.get('s')||'0',10);
-  if(!k)return;var anim=q.get('anim')==='1';var used=${JSON.stringify(stages)};
+  if(!k)return;var anim=q.get('anim')==='1';var used=${JSON.stringify(stageIds)};
   used.forEach(function(n,idx){var pos=idx+1,v;
     if(pos<k)v='-60000ms';else if(pos===k)v=anim?'0ms':'-60000ms';else v='60000ms';
     document.documentElement.style.setProperty('--t'+n,v);});
@@ -152,9 +154,11 @@ export function buildPlayPage({
     prevTitle: 'Previous level / slide', nextTitle: 'Next level / slide',
     hintStep: 'reveal level / slide', hintFx: 'motion on / off', hintNarr: 'narration on / off',
     hintOv: 'overview', hintFs: 'fullscreen', level: 'step',
+    hintKeys: 'Space / PgDn next · PgUp prev · Home / End first / last', hintEsc: 'close overview',
+    edgeFirst: 'Already the first slide', edgeLast: 'Already the last slide',
     cut: 'Cut', xfade: 'Dissolve', transTitle: 'Slide transition: cut / dissolve (compare, then set script.json transition)', hintTrans: 'slide transition',
     gen: 'Snapshots generated', genNote: 'same source as the final video (no audio, no subtitles)',
-    noThumbA: 'No thumbnail (preview/', ovH: 'Overview · click any slide to jump (thumbnails from preview/*.png)',
+    noThumbA: 'No thumbnail (run capture first — preview/', ovH: 'Overview · click any slide to jump (thumbnails bundled in play/thumbs/)',
   } : {
     title: '放映页', fxOn: '动效开', fxOff: '动效关', narrOn: '口播开', narrOff: '口播关',
     overview: '总览', panelH: '本张口播文案', untimed: '(未对时)',
@@ -162,9 +166,11 @@ export function buildPlayPage({
     prevTitle: '上一级 / 上一张', nextTitle: '下一级 / 下一张',
     hintStep: '逐级入场 / 翻页', hintFx: '动效开 / 动效关', hintNarr: '口播开 / 口播关',
     hintOv: '总览', hintFs: '全屏', level: '级',
+    hintKeys: '空格/PgDn 前进 · PgUp 后退 · Home/End 首末张', hintEsc: '关总览',
+    edgeFirst: '已是第一张', edgeLast: '已是最后一张',
     cut: '硬切', xfade: '溶解', transTitle: '切页方式:硬切 / 溶解(现场对比后写进 script.json 的 transition)', hintTrans: '切页方式',
     gen: '快照生成于', genNote: '画面与成片同源(无声、无字幕)',
-    noThumbA: '无缩略图(preview/', ovH: '总览 · 点任意一张跳转(缩略图来自 preview/*.png)',
+    noThumbA: '无缩略图(没跑 capture, 缺 preview/', ovH: '总览 · 点任意一张跳转(缩略图已随 play/thumbs/ 携带)',
   };
   const model = slides.map(s => ({
     id: s.id, name: s.name, title: s.title ?? '',
@@ -226,6 +232,9 @@ export function buildPlayPage({
     border-top:1px solid var(--c-line);color:var(--c-dim);font-size:12px}
   footer kbd{background:#1d2130;border:1px solid var(--c-line);border-radius:4px;padding:1px 5px;color:var(--c-fg);font-family:inherit}
   footer .gen{margin-left:auto;opacity:.8}
+  footer .kbd-hints .more{opacity:.72}
+  #edge{position:fixed;left:50%;bottom:76px;transform:translateX(-50%) translateY(6px);background:rgba(12,12,16,.8);color:#fff;padding:8px 16px;border-radius:10px;font-size:15px;opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;z-index:60}
+  #edge.show{opacity:1;transform:translateX(-50%) translateY(0)}
   .kbd-hints{display:flex;flex-wrap:wrap;gap:6px 16px}   /* 不用内联样式: 否则窄屏媒体查询盖不住它 */
   #touchbar{display:flex;gap:6px;flex-wrap:wrap}
   #touchbar button{flex:1 1 auto;min-width:0;font:inherit;font-size:12px;color:var(--c-fg);background:#1a1d26;
@@ -292,6 +301,7 @@ export function buildPlayPage({
     <span><kbd>O</kbd> ${T.hintOv}</span>
     <span><kbd>F</kbd> ${T.hintFs}</span>
     <span><kbd>T</kbd> ${T.hintTrans}</span>
+    <span class="more">${T.hintKeys} · <kbd>Esc</kbd> ${T.hintEsc}</span>
   </span>
   <span id="touchbar">
     <button type="button" data-act="prev" title="${T.prevTitle}">‹</button>
@@ -304,9 +314,10 @@ export function buildPlayPage({
   <span class="gen">${T.gen} ${esc(generatedAt)} · ${T.genNote}</span>
 </footer>
 <div id="overlay"><h2>${T.ovH}</h2><div id="grid"></div></div>
+<div id="edge"></div>
 <script>
 var S = ${json};
-var T = ${JSON.stringify({ fxOn: T.fxOn, fxOff: T.fxOff, narrOn: T.narrOn, narrOff: T.narrOff, level: T.level, noThumbA: T.noThumbA, cut: T.cut, xfade: T.xfade })};
+var T = ${JSON.stringify({ fxOn: T.fxOn, fxOff: T.fxOff, narrOn: T.narrOn, narrOff: T.narrOff, level: T.level, noThumbA: T.noThumbA, cut: T.cut, xfade: T.xfade, hintKeys: T.hintKeys, hintEsc: T.hintEsc, edgeFirst: T.edgeFirst, edgeLast: T.edgeLast })};
 var i = 0, nofx = false, step = 1, animNext = true, trans = 'cut';   // trans: 'cut' 硬切(默认) / 'xfade' 溶解 —— 现场对比用
 // step = 动效开时已揭示到第几个 stage; animNext = 揭示该级时是否当场播入场动画
 
@@ -318,6 +329,10 @@ function cur(){ return S[i]; }
 var FR = [el('frame'), el('frameB')], front = 0, gen = 0;
 function show(src){
   gen++; var g = gen, back = FR[1 - front], prev = FR[front];
+  // 入口归一: 后备帧必须从隐藏态出发。xfade 的 400ms 延迟撤场被 gen 守卫作废时,
+  // 旧帧会带着 .show 留到下次换帧 —— 两个 iframe 同 opacity:1, 视觉上被盖住无感,
+  // 但外部脚本按 offsetParent/可见性判"当前帧"必然判错(第 25+ 轮外部报告 P3 实踩)
+  back.classList.remove('show');
   var raf = window.requestAnimationFrame || function(f){ setTimeout(f, 16); };
   back.addEventListener('load', function onl(){
     back.removeEventListener('load', onl);
@@ -384,14 +399,21 @@ function render(){
 
 // 动效开: →/← 先逐级揭示(下一级当场入场、上一级直接终态), 到头/回头才翻页;动效关: 直接翻页。
 // 片尾(末张末级)再按 → / 片头(首张第 1 级)再按 ← 都是 no-op —— 旧实现会把末张重置回第 1 级重播、首张跳到末级终态
+// no-op 也要有反馈(toast): 不然用户分不清"到头了"还是"坏了"(外部报告 P2 实测按了 80 次)
+var edgeTimer = 0;
+function edge(msg){
+  var t = el('edge'); if (!t) return;
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(edgeTimer); edgeTimer = setTimeout(function(){ t.classList.remove('show'); }, 1200);
+}
 function next(){
-  if (i >= S.length - 1 && (!multi() || step >= cur().steps.length)) return;
+  if (i >= S.length - 1 && (!multi() || step >= cur().steps.length)) { edge(T.edgeLast); return; }
   if (multi() && step < cur().steps.length) { step++; animNext = true; }
   else { i = Math.min(S.length - 1, i + 1); enterSlide(true); }
   render();
 }
 function prev(){
-  if (i <= 0 && (!multi() || step <= 1)) return;
+  if (i <= 0 && (!multi() || step <= 1)) { edge(T.edgeFirst); return; }
   if (multi() && step > 1) { step--; animNext = false; }
   else { i = Math.max(0, i - 1); enterSlide(false); }
   render();
@@ -416,7 +438,7 @@ function buildGrid(){
   S.forEach(function(s, n){
     var f = document.createElement('figure');
     var img = document.createElement('img');
-    img.src = '../' + s.id + '.png';
+    img.src = 'thumbs/' + s.id + '.png';   // 随 play/thumbs/ 携带(生成时拷入): 只拷 play/ 给别人不再全挂
     img.alt = s.id;
     img.onerror = function(){ var p = document.createElement('div'); p.className = 'ph'; p.textContent = T.noThumbA + s.id + '.png)'; img.replaceWith(p); };
     f.appendChild(img);
@@ -441,6 +463,21 @@ var ACT = {
 Array.prototype.forEach.call(document.querySelectorAll('#touchbar button'), function(b){
   b.onclick = function(){ (ACT[b.getAttribute('data-act')] || function(){})(); };
 });
+
+// 编程接口(外部报告 P1: 页面状态全是闭包变量, 自动化只能模拟键盘再拿 innerText 正则抠
+// "级 1/2"、猜哪个 iframe 带 .show —— 实测必错)。外部脚本请用 window.playPage, 不再抠 DOM。
+window.playPage = {
+  get state(){ return {
+    index: i, total: S.length, step: step, steps: (cur().steps || []).length,
+    fx: !nofx, narr: !(el('panel') && document.body.classList.contains('narr-off')),
+    trans: trans, overview: el('overlay').classList.contains('show'),
+  }; },
+  go: go, next: next, prev: prev,
+  setFx: function(b){ nofx = !b; render(); },
+  setNarr: function(b){ if (!el('panel')) return; document.body.classList.toggle('narr-off', !b); paintToggles(); setTimeout(layout, 30); },
+  setTrans: function(s){ trans = s === 'xfade' ? 'xfade' : 'cut'; render(); },
+  overview: function(b){ if (b) ACT.overview(); else el('overlay').classList.remove('show'); },
+};
 
 // 触屏: 左右滑 = 逐级入场/翻页(与按钮、键盘同一套 next/prev;画面本身是纯 CSS, 盖一层透明接收层)
 (function(){
@@ -591,6 +628,18 @@ function main() {
   const now = new Date();
   if (!rows.length) { console.error('✗ 一张可放映的 slide 都没有(检查 script.json 的 html 字段与 slides/ 目录)'); process.exit(1); }
 
+  // 总览缩略图随 play/thumbs/ 携带(外部报告 P1: 总览曾写死 '../'+id+'.png' 指到父目录的
+  // preview/, 只拷 play/ 或只发 index.html 就全挂)。preview/*.png 是 capture 的产物 —— 缺的
+  // 用占位并如实计数, 没跑过 capture 的项目不再静默全占位。先清空重建, 删掉的旧张不留死图。
+  const thumbsDir = safeOut(dir, 'preview', 'play', 'thumbs');
+  fs.rmSync(thumbsDir, { recursive: true, force: true });
+  fs.mkdirSync(thumbsDir, { recursive: true });
+  let thumbN = 0;
+  for (const r of rows) {
+    const srcPng = path.join(dir, 'preview', `${r.id}.png`);
+    if (fs.existsSync(srcPng)) { fs.copyFileSync(srcPng, safeOut(dir, 'preview', 'play', 'thumbs', `${r.id}.png`)); thumbN++; }
+  }
+
   // 口播 UI 三种状态: 有文案+有对时 → 标注正常;有文案没对时 → 标注"未对时";没文案或 --no-script → 不出
   const anyClauses = rows.some(r => r.clauses.length > 0);
   const narration = anyClauses && !NO_SCRIPT;
@@ -616,11 +665,13 @@ function main() {
   console.log(`✓ 放映页 → ${path.relative(process.cwd(), path.join(outDir, 'index.html'))}`);
   console.log(`  快照 ${rows.length} 张 ×2(动效/关动效) → ${path.relative(process.cwd(), outDir)}/${rows[0]?.name ?? '<id>.html'}`);
   console.log(`  口播 UI: ${modes}`);
+  if (thumbN === rows.length) console.log(`  总览缩略图: ${thumbN}/${rows.length} 张已随 play/thumbs/ 携带`);
+  else console.warn(`⚠ 总览缩略图: 仅 ${thumbN}/${rows.length} 张(其余没跑 capture, 缺 preview/<id>.png —— 总览用占位; 跑 capture 后重新 preview-page 会补齐)`);
   if (!hasTimings) console.warn('⚠ 缺 build/timings.json: 副本按等间隔预览入场顺序, 不是成片时序 —— 先跑 plan-timings.mjs');
   else if (fallbackUsed) console.warn('⚠ 部分张在 timings.json 里没有 stage 数据: 那几张按等间隔预览');
   else console.log(`  已注入实测 stage 延迟: ${rows.map(r => `${r.id}(${r.lastStage != null ? '末层 ' + r.lastStage.toFixed(1) + 's' : '无 stage'})`).join(' ')}`);
   if (kitIssues.length) console.warn(`⚠ slides/tokens.css 落后于技能当前版(缺: ${kitIssues.map(k => k.label).join(' · ')}) —— 副本已兜底注入;想让成片与项目文件也用上, 跑 node scripts/init-project.mjs <项目目录> --upgrade-css`);
-  console.log(`  操作: ← → 逐级入场/翻页(动效开)或翻页(动效关) · X 动效开/关${narration ? ' · P 口播开/关' : ''} · O 总览 · F 全屏;触屏左右滑同 ← →`);
+  console.log(`  操作: ← → 逐级入场/翻页(动效开)或翻页(动效关) · Space/PgDn 前进 · PgUp 后退 · Home/End 首末张${narration ? ' · P 口播开/关' : ''} · X 动效开/关 · T 切页方式 · O 总览(Esc 关) · F 全屏;触屏左右滑同 ← →;外部自动化用 window.playPage(state/go/next/prev/setFx/setNarr/setTrans/overview)`);
 
   if (OPEN) {
     const target = path.join(outDir, 'index.html');
