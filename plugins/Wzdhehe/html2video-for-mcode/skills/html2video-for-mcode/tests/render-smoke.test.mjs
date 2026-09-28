@@ -408,3 +408,19 @@ test('subLineCap: 字幕胶囊行宽几何(钳位后非线性, 数字钉死)', a
   assert.equal(subLineCap(2560), 35);          // 缩放钳到 1.25 ≈ 35.6 —— 线性外推会给 42(错)
   assert.equal(subLineCap(1080, 0.44), 55);    // 拉丁 ≈0.44em/字符
 });
+
+// 2026-09-28 第 22 轮 review 判断项收口: 上面只钉了 tools 侧数字, 若 capture 侧改回硬编码
+// (两份几何曾经漂移过、正是 1.9.10 单源化的起因), 257 例照样全绿 —— 把"消费方必须吃 SUB_GEOMETRY"
+// 钉成结构断言: 除 tools.mjs 外任何脚本不得再出现胶囊宽度字面量, capture 必须以 geom.* 注入。
+test('胶囊几何单源: 除 tools.mjs 外无字面量, capture 必须消费 SUB_GEOMETRY', () => {
+  for (const f of fs.readdirSync(SCRIPTS)) {
+    if (!f.endsWith('.mjs') || f === 'tools.mjs') continue;
+    const src = fs.readFileSync(path.join(SCRIPTS, f), 'utf8');
+    assert.ok(!/0\.729167/.test(src), `${f} 不得硬编码胶囊宽度(唯一来源 tools.SUB_GEOMETRY)`);
+  }
+  const cap = fs.readFileSync(path.join(SCRIPTS, 'capture.mjs'), 'utf8');
+  assert.match(cap, /SUB_GEOMETRY/, 'capture 必须导入 SUB_GEOMETRY');
+  for (const k of ['geom.boxW', 'geom.fontPx', 'geom.padPx']) {
+    assert.ok(cap.includes(k), `capture 的 .kit-sub CSS 必须用 ${k} 注入(硬编码即两份几何)`);
+  }
+});

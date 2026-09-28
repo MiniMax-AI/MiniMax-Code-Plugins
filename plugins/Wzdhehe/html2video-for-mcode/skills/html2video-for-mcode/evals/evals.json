@@ -110,7 +110,7 @@
       "id": 15,
       "name": "english-narration",
       "prompt": "这条视频要发给海外同事, 口播改成英语。要改哪些地方?",
-      "expected_output": "开工对齐时就该问清语言(铁律 4 的语言行: 中文/英语/粤语/其他)。改动四处: ① script.json 设 lang:'en'; ② 口播稿改写英语并按英文基准控量 —— plan-timings 自动切换(约 14 字符/秒、常见 9–18、字幕单行 42 字符, 每张约 14–26 词); ③ 音色换成 English_* 前缀(Chinese (Mandarin)_* 配英文会出怪腔调), 做完用 asr.mjs --language en 验语种; ④ 若开双语, 主行=英语口播、text2 放中文。排版、脚本、渲染流程都不用动; 数字写法反过来(口播 nine hundred million, 画面 900M)。",
+      "expected_output": "开工对齐时就该问清语言(铁律 4 的语言行: 中文/英语/粤语/其他)。改动四处: ① script.json 设 lang:'en'; ② 口播稿改写英语并按英文基准控量 —— plan-timings 自动切换(约 14 字符/秒、常见 9–18; 字幕单句建议 ≤42 字符(可读性惯例), 胶囊实际行宽 ≈55 字符@1080 / ≈75@1920, 折 3 行起才警告; 每张约 14–26 词); ③ 音色换成 English_* 前缀(Chinese (Mandarin)_* 配英文会出怪腔调), 做完用 asr.mjs --language en 验语种; ④ 若开双语, 主行=英语口播、text2 放中文。排版、脚本、渲染流程都不用动; 数字写法反过来(口播 nine hundred million, 画面 900M)。",
       "files": []
     },
     {

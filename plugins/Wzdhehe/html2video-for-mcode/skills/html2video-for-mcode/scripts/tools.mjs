@@ -19,10 +19,23 @@ const SELF_DIR = path.dirname(fileURLToPath(import.meta.url)); // Node 20.11 以
 
 function candidatePaths(name, projectDir) {
   const dirs = [];
-  // 调用方项目目录(若给了)、当前工作目录、技能自身位置的两个上层(仓库根/项目根都可能装了 node_modules)
+  // 调用方项目目录(若给了)、当前工作目录、技能自身位置的**全部祖先**(与 Node import 的模块
+  // 解析同型)。只看固定两级时, 技能被深嵌在 monorepo(plugins/<owner>/<name>/skills/<name>/scripts,
+  // 6 层)会漏掉"仓库根明明装了 ffmpeg-static"的布局 —— 测试进程从仓库根找得到, spawn 出去的
+  // asr.mjs(cwd=临时项目)却找不到, 同一套测试两种结果(发布树实测踩到, 2026-09-28)。
   // cwd 必须查(二审 P2): README 明说支持把 ffmpeg-static 装在**视频项目**里, 而 prep-image / asr
   // 是从项目目录被调用的 —— 不查 cwd 就会"项目里明明装了却报找不到"
-  const anchors = [process.env.KIT_PROJECT_DIR, projectDir, process.cwd(), SELF_DIR, path.resolve(SELF_DIR, '..'), path.resolve(SELF_DIR, '../..')]
+  const upDirs = start => {
+    const out = []; let d = path.resolve(start);
+    for (let i = 0; i < 12; i++) {
+      out.push(d);
+      const parent = path.dirname(d);
+      if (parent === d) break;
+      d = parent;
+    }
+    return out;
+  };
+  const anchors = [process.env.KIT_PROJECT_DIR, projectDir, process.cwd(), ...upDirs(SELF_DIR)]
     .filter(Boolean);
   for (const base of anchors) {
     dirs.push(path.join(base, 'node_modules', 'ffmpeg-static'));

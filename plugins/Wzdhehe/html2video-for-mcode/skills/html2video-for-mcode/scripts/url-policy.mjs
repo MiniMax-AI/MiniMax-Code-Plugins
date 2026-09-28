@@ -5,10 +5,13 @@
 //   2. 抓图目标校验 —— fetch-official-images.mjs 的页面 URL、每个候选图 src、每一跳
 //      重定向都过同一套 host 策略: 拦 loopback / 链路本地(含云元数据)/私网 / 无点主机名,
 //      只允许 http(s), file:// 需显式 --allow-file, 禁 userinfo。
-// 全部为纯函数, 不做 IO; 抛 PolicyError(带 reason code)由调用方决定退出码与文案。
-// 例外: assertResolvedHost 会做 DNS 查询(那是它的职责 —— 见下), 其余仍为纯函数。
+// host 判定是纯函数; DNS 相关(assertResolvedHost/checkedLookup/policyGet/startVetoProxy)
+// 做 IO —— 那是它们的职责。抛 PolicyError(带 reason code)由调用方决定退出码与文案。
 
 import dns from 'node:dns';
+import http from 'node:http';
+import https from 'node:https';
+import net from 'node:net';
 
 export const OFFICIAL_ASR_BASES = ['https://api.minimaxi.com', 'https://api.minimax.io'];
 
@@ -144,15 +147,150 @@ export const MAX_REDIRECTS = 5;
 // 解析后再验一层(2026-09-18 二审 P1): 字符串层拦得住字面 IP, 拦不住"公网域名解析回内网"
 // (DNS rebinding / 内网域名)。**每个真实请求**都要过这里 —— 页面导航、它的重定向、浏览器子资源、
 // 逐跳下载 —— 否则策略只覆盖了"最初输入的那个 URL"。lookup 可注入(测试用假解析器, 无需真 DNS)。
+// 2026-09-25 六审 blocker 1: 解析失败/空答案不再放行 —— 旧实现 catch 后 return 等于
+// "解析不了就放行"(fail open), 钉死的语义应该是 fail closed。
 export async function assertResolvedHost(urlStr, { lookup, where = 'url' } = {}) {
   let h;
   try { h = new URL(urlStr).hostname; } catch { return; }
   if (!h || !h.includes('.')) return;              // 裸主机名/非法 URL 已被字符串层拦掉
   const doLookup = lookup || (async name => dns.promises.lookup(name, { all: true }));
   let addr;
-  try { addr = await doLookup(h); } catch { return; }   // 解析不了就交给连接自己报错
-  const bad = (addr || []).find(a => { try { return isBlockedHost(a.address); } catch { return false; } });
+  try {
+    addr = await doLookup(h);
+  } catch (e) {
+    throw new PolicyError('dns-error', `${where}: ${h} 解析失败(${e?.message ?? e}) — fail closed, 拒绝继续`);
+  }
+  const list = (Array.isArray(addr) ? addr : [addr]).filter(a => a && typeof a.address === 'string');
+  if (!list.length) throw new PolicyError('dns-error', `${where}: ${h} 解析结果为空 — fail closed`);
+  const bad = list.find(a => isBlockedHost(a.address));
   if (bad) throw new PolicyError('dns-rebinding', `${where}: ${h} 解析到被拦地址 ${bad.address}(DNS rebinding 或内网域名? 换官方 CDN 直链)`);
+}
+
+// ── 连接期绑定(2026-09-25 六审 blocker 1) ─────────────────────────
+// 预查(assertResolvedHost)与真正建连之间隔着一次**独立解析** —— 攻击面就是这道缝:
+// 预查时公网、建连时私网(DNS rebinding), 或两台解析器答案不一致。唯一权威的检查点是
+// socket 建连用的那次 lookup。本节三个件:
+//   checkedLookup   把否决权挂到 http(s)/net 的 lookup 选项上(Node lookup 兼容签名)
+//   policyGet       配套出网 GET(不跟重定向, 由调用方逐跳复核), 建连带否决
+//   startVetoProxy  浏览器(Chromium 自己解析, 注入不了 lookup)的全部出网收进本地隧道,
+//                   上游建连仍走同一否决
+
+// Node lookup 签名 (hostname, options, callback) 的策略包装: 解析失败按失败处理(建连即败,
+// fail closed); 结果里**任何一个**地址被拦就整体拒绝 —— Happy-Eyeballs 会在地址列表里挑,
+// "部分放行"等于没拦。resolve 可注入(与 assertResolvedHost 的 lookup 同一形态, 测试免真 DNS)。
+export function checkedLookup(resolve) {
+  const doResolve = resolve || ((name, opts) => dns.promises.lookup(name, { family: opts?.family ?? 0, hints: opts?.hints, all: true }));
+  return (hostname, options, callback) => {
+    doResolve(hostname, options).then(raw => {
+      const all = (Array.isArray(raw) ? raw : [raw]).filter(a => a && typeof a.address === 'string');
+      const fam = options?.family;
+      const pool = (fam === 4 || fam === 6) ? all.filter(a => a.family === fam) : all;
+      if (!pool.length) return callback(new Error(`dns: ${hostname} 无可用解析结果${fam ? `(family ${fam})` : ''}`));
+      const bad = pool.find(a => isBlockedHost(a.address));
+      if (bad) return callback(new PolicyError('dns-rebinding', `建连: ${hostname} 解析到被拦地址 ${bad.address}(连接期否决)`));
+      // 只行使否决权, 不改变解析语义: 原样回传让 net 自己挑地址
+      if (options?.all) return callback(null, pool);
+      callback(null, pool[0].address, pool[0].family);
+    }, callback);
+  };
+}
+
+// 出网 GET, 建连那次解析经 checkedLookup 否决。不跟重定向 —— 重定向由调用方逐跳复核
+// (fetch-official-images 的 followRedirects), 每一跳的建连都被单独否决。
+// 返回与 followRedirects 的 get 契约一致的归一化结果。maxBytes 在**流式读取时**掐断,
+// 不信用 content-length(恶意服务器会谎报)。createConnection 仅测试注入假上游用。
+export function policyGet(rawUrl, { headers = {}, timeoutMs = 30000, maxBytes = Infinity, lookup, createConnection } = {}) {
+  return new Promise((resolve, reject) => {
+    let u;
+    try { u = new URL(rawUrl); } catch { return reject(new PolicyError('bad-url', String(rawUrl))); }
+    const mod = u.protocol === 'https:' ? https : u.protocol === 'http:' ? http : null;
+    if (!mod) return reject(new PolicyError('bad-scheme', String(u.protocol)));
+    const req = mod.request(u, {
+      headers,
+      lookup: checkedLookup(lookup),
+      ...(createConnection ? { createConnection } : { agent: false }),   // agent:false = 不留池化连接(工具进程要能自然退出)
+    }, res => {
+      const chunks = []; let total = 0;
+      res.on('data', c => {
+        total += c.length;
+        if (total > maxBytes) { res.destroy(new Error(`响应超限: 已收 ${(total / 1048576).toFixed(0)}MB 超过上限(读取中途掐断, 不信用 content-length)`)); return; }
+        chunks.push(c);
+      });
+      res.on('end', () => resolve({
+        status: res.statusCode,
+        location: res.headers.location,
+        headers: { ...res.headers },
+        header: n => res.headers[String(n).toLowerCase()] || '',
+        arrayBuffer: async () => Buffer.concat(chunks),
+      }));
+      res.on('error', reject);
+    });
+    req.setTimeout(timeoutMs, () => req.destroy(new Error(`请求超时(${timeoutMs}ms): ${u.host}`)));
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+// 本地否决代理: Chromium 的页面导航/子资源自己解析 DNS, 没有 lookup 钩子可注入 ——
+// 把它的全部出网收进这条隧道才能把策略绑到"实际建连的那次解析"上:
+//   CONNECT(https) → 上游建连带 checkedLookup, 建连前还做一次字符串层+解析预否决(可命名告警)
+//   绝对形式 http  → 经 policyGet 出网(连接期否决), 原样回贴
+// 只监听 127.0.0.1(它本身就是策略咽喉, 不是出网目标)。connect 可注入(测试假上游)。
+const HOP_BY_HOP = ['connection', 'keep-alive', 'proxy-connection', 'te', 'trailer', 'transfer-encoding', 'upgrade'];
+export async function startVetoProxy({ lookup, connect = net.connect, maxBytes = 30 * 1024 * 1024 } = {}) {
+  const sockets = new Set();
+  const track = s => { sockets.add(s); s.on('close', () => sockets.delete(s)); return s; };
+  const server = http.createServer((req, res) => {
+    if (!req.url || !/^https?:\/\//i.test(req.url)) { res.writeHead(400); return res.end('veto-proxy: 只收绝对形式 URL'); }
+    const fwd = {};
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (k === 'host' || HOP_BY_HOP.includes(k)) continue;   // Host 由目标 URL 决定, 逐跳头不转发
+      fwd[k] = v;
+    }
+    policyGet(req.url, { headers: fwd, lookup, createConnection: connect, maxBytes, timeoutMs: 45000 })
+      .then(async r => {
+        const out = { ...r.headers };
+        delete out['transfer-encoding']; delete out['connection'];   // 已整包缓冲, 传输头自算
+        res.writeHead(r.status, out);
+        res.end(await r.arrayBuffer());
+      })
+      .catch(e => {
+        try { res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' }); res.end(`veto-proxy: ${e.message}`); }
+        catch { /* 客户端已断 */ }
+      });
+  });
+  server.on('connect', (req, clientSocket, head) => {
+    const fail = () => clientSocket.destroy();
+    const m = /^(\[[^\]]+\]|[^:]+):(\d+)$/.exec(req.url || '');
+    if (!m) return fail();
+    const host = m[1], port = parseInt(m[2], 10);
+    const bare = host.replace(/^\[|\]$/g, '');
+    const literal = /^[\d.]+$/.test(bare) || (bare.includes(':') && /^[0-9a-f:]+$/i.test(bare));
+    (async () => {
+      if (isBlockedHost(bare)) throw new PolicyError('blocked-host', `代理 CONNECT: ${bare}`);
+      // 名字(非字面 IP)先做一次可命名的预否决; 权威检查点仍是下面建连里的 checkedLookup
+      if (!literal && (bare.includes('.') || bare.includes(':'))) {
+        await assertResolvedHost(`https://${bare}/`, { lookup, where: '代理 CONNECT' });
+      }
+      const up = track(connect({ host, port, lookup: checkedLookup(lookup), noDelay: true }, () => {
+        track(clientSocket);
+        clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+        if (head && head.length) up.write(head);
+        up.pipe(clientSocket);
+        clientSocket.pipe(up);
+      }));
+      up.on('error', fail);
+      clientSocket.on('error', () => up.destroy());
+      up.on('close', () => clientSocket.destroy());
+      clientSocket.on('close', () => up.destroy());
+    })().catch(() => fail());
+  });
+  server.on('connection', track);
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  return {
+    port: server.address().port,
+    close: async () => { for (const s of sockets) s.destroy(); await new Promise(r => server.close(r)); },
+  };
 }
 
 // ── 落盘文件名(抓图下载) ─────────────────────────────────────────

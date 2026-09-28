@@ -17,15 +17,18 @@
 // 纪律(与 image-sources.md 一致): 只取官方域名的资源; 列出的每一项都要人眼过一遍
 // (主体是否居中/有无水印/比例是否合适), 选中的落盘 assets/ 并登记 MANIFEST.md。
 //
-// 网络安全(全部在打开浏览器之前校验, 负向路径无需 playwright):
+// 网络安全(字符串策略在打开浏览器之前校验, 负向路径无需 playwright):
 //   - 只允许 http(s) 公网页面; file:// 本地页需显式 --allow-file(离线场景)
 //   - 拦内网/本地/元数据地址(loopback、169.254.x、私网段、无点主机名等, 见 url-policy.mjs)
-//   - 下载逐跳过同一策略(maxRedirects=0 手动跟, ≤5 跳), 响应有大小上限(默认 30MB)
+//   - 下载逐跳过同一策略(maxRedirects=0 手动跟, ≤5 跳), 响应有大小上限(默认 30MB, 读取中途掐断)
+//   - **连接期绑定**(2026-09-25 六审 blocker 1): 预查≠建连 —— DNS rebinding 的缝在"预查时
+//     公网、建连时私网"。所有出网走 policyGet(建连那次 lookup 被否决); 浏览器(Chromium 自己
+//     解析, 注入不了 lookup)的全部流量收进本地否决代理 startVetoProxy, 上游建连走同一否决
 //   - 落盘必须在工作目录内(--out-dir 越界需 --force), 不覆盖已存在文件(需 --force)
 import fs from 'node:fs';
 import { assertContained, canonicalPath as canonical, flagValue, loadPackage, inside, positionals } from './tools.mjs';
 import path from 'node:path';
-import { assertFetchableUrl, assertRedirectTarget, assertResolvedHost, sanitizeFilename, imageNameFromUrl, MAX_REDIRECTS, PolicyError } from './url-policy.mjs';
+import { assertFetchableUrl, assertRedirectTarget, assertResolvedHost, policyGet, startVetoProxy, sanitizeFilename, imageNameFromUrl, MAX_REDIRECTS, PolicyError } from './url-policy.mjs';
 
 const argv = process.argv.slice(2);
 // 位置参数与取值型 flag 的清单统一在 tools.mjs: --json 曾在这里被当作取值型, 于是
@@ -104,11 +107,13 @@ async function followRedirects(src, get, { where = '下载' } = {}) {
 }
 
 async function openUrl(src) {
-  const res = await followRedirects(src, async u => {
-    const r = await fetch(u, { redirect: 'manual', headers: { 'user-agent': 'html2video-for-mcode/image-fetch' } });
-    if (r.status === 0) throw new Error(`重定向响应读不出状态(跨域重定向常见): ${u}\n     改用图片最终地址(内置浏览器里右键复制图片地址)再试`);
-    return { status: r.status, location: r.headers.get('location'), header: n => r.headers.get(n) || '', arrayBuffer: () => r.arrayBuffer() };
-  }, { where: '下载' });
+  // 出网走 policyGet: 建连那次 DNS 解析被 checkedLookup 否决(连接期绑定, 不再是"预查后
+  // 任由 fetch 自己再解析一遍" —— 那道缝就是 DNS rebinding 的攻击面)
+  const res = await followRedirects(src, u => policyGet(u, {
+    headers: { 'user-agent': 'html2video-for-mcode/image-fetch' },
+    timeoutMs: 30000,
+    maxBytes: MAX_BYTES,
+  }), { where: '下载' });
   const type = String(res.header('content-type') || '').split(';')[0].trim();
   if (!/^image\//.test(type) && !/octet-stream/.test(type)) console.warn(`  ⚠ content-type 不是图片(${type || '未知类型'})—— 人眼确认一下再登记`);
   return { res, type };
@@ -145,30 +150,30 @@ if (URLS.length) {
 const playwright = await loadPackage('playwright', { projectDir: process.cwd() });
 if (!playwright) { console.error('✗ 未找到 playwright(已按 项目目录 / 调用目录 / npm 全局 逐个找过)。先执行: npm i playwright && npx playwright install chromium'); process.exit(1); }
 
-const browser = await playwright.chromium.launch({ headless: true });
-const context = await browser.newContext({ viewport: { width: 1600, height: 1200 } });
+// 浏览器全部出网收进本地否决代理(2026-09-25 六审 blocker 1): Chromium 自己解析 DNS,
+// 注入不了 lookup —— 只有把页面导航/Chromium 跟随的重定向/全部子资源收进隧道, 上游建连
+// 的那次解析才能过 checkedLookup(file:// 本地页不经过代理, 也无需)。
+const veto = await startVetoProxy({ maxBytes: MAX_BYTES });
+let browser, context;
+try {
+browser = await playwright.chromium.launch({ headless: true, proxy: { server: `http://127.0.0.1:${veto.port}` } });
+context = await browser.newContext({ viewport: { width: 1600, height: 1200 } });
 const page = await context.newPage();
-// 逐请求拦截(二审 P1: 策略必须落在**真实请求边界**上): 页面导航、Chromium 自己跟随的 30x
-// 重定向、以及页面的每一个子资源请求, 都要先过字符串策略, 再做 DNS 解析复核 —— 只查"最初输入的
-// URL"等于没覆盖真正的连接点。带缓存避免同一域名反复解析。
-const dnsCache = new Map();
+// 逐请求拦截(二审 P1: 策略必须落在**真实请求边界**上): 字符串策略 + **无缓存**的逐请求
+// 解析预查 —— 这里只做早拦与可命名告警; 权威检查点在否决代理的建连期(预查结果不作准,
+// 按 host 缓存只会把 rebinding 的时间窗越放越大)。
 await context.route('**/*', async route => {
   const u = route.request().url();
   try {
     assertFetchableUrl(u, { allowFile: ALLOW_FILE, where: '页面请求' });
-    const host = (() => { try { return new URL(u).hostname; } catch { return ''; } })();
-    if (host && host.includes('.')) {
-      if (!dnsCache.has(host)) dnsCache.set(host, assertResolvedHost(u, { where: '页面请求' }).then(() => null, e => e));
-      const err = await dnsCache.get(host);
-      if (err) throw err;
-    }
+    await assertResolvedHost(u, { where: '页面请求' });
     await route.continue();
   } catch (e) {
     if (e instanceof PolicyError) { console.warn(`  ⚠ 已拦截请求: ${String(u).slice(0, 90)} — ${e.message}`); await route.abort(); }
     else await route.continue();
   }
 });
-try {
+
   await assertResolvedHost(url, { where: '页面 URL' });
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
   await page.waitForTimeout(2500); // 让懒加载图片冒出来
@@ -254,11 +259,10 @@ try {
         if (c.src.startsWith('file:')) {
           fs.copyFileSync(new URL(c.src), out); // 本地页面(file://, 需 --allow-file)直拷
         } else {
-          // 与 --url 直下共用同一套逐跳策略 + 环守卫 + 0 字节守卫(followRedirects 单一实现)
-          const res = await followRedirects(c.src, async u => {
-            const r = await context.request.get(u, { timeout: 30000, maxRedirects: 0 });
-            return { status: r.status(), location: r.headers()['location'], header: n => r.headers()[n] || '', arrayBuffer: () => r.body() };
-          }, { where: '下载' });
+          // 与 --url 直下共用同一套逐跳策略 + 环守卫 + 0 字节守卫(followRedirects 单一实现);
+          // 出网同样走 policyGet(连接期否决) —— context.request 走 Playwright 自己的网络栈,
+          // 解析不受我们控制, 六审 blocker 1 之后不再用它出网
+          const res = await followRedirects(c.src, u => policyGet(u, { timeoutMs: 30000, maxBytes: MAX_BYTES }), { where: '下载' });
           const body = Buffer.from(await res.arrayBuffer());
           if (!body.length) throw new Error('响应为空(0 字节)—— 多半是 404 错误页或防盗链, 别写空文件');
           if (body.length > MAX_BYTES) { throw new Error(`响应 ${(body.length / 1048576).toFixed(0)}MB 超过上限 ${Math.round(MAX_BYTES / 1048576)}MB(--max-mb 可调)`); }
@@ -281,6 +285,7 @@ try {
   console.error(`✗ 取图失败: ${e.message}\n  → 检查网址是否可达; 若站点需要交互(登录/滚动加载), 用内置浏览器手动取。`);
   process.exitCode = 1;
 } finally {
-  await context.close();
-  await browser.close();
+  await context?.close();
+  await browser?.close();
+  await veto.close();   // 先关浏览器再关代理: 关代理会掐掉仍在途的隧道连接
 }

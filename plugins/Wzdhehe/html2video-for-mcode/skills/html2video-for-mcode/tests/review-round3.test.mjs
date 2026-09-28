@@ -183,7 +183,8 @@ describe('D3 · fetch-official-images 的参数与退出码', () => {
     assert.match(src, /async function followRedirects\(/, '共享核心必须存在');
     assert.match(src, /seen\.has\(next\)/, '环守卫(ping-pong)必须在共享核心里');
     assert.match(src, /await followRedirects\(c\.src/, '--get(浏览器)路径必须走共享核心');
-    assert.match(src, /await followRedirects\(src, async u => \{/, '--url 直下路径必须走共享核心');
+    assert.match(src, /await followRedirects\(src, u => policyGet\(/, '--url 直下路径必须走共享核心(1.9.11 起出网走 policyGet, 建连期否决)');
+    assert.equal((src.match(/policyGet\(u, \{/g) || []).length, 2, '--url 与 --get 两条下载路径的出网都必须走 policyGet(连接期绑定, 不许退回 fetch/context.request)');
     assert.equal((src.match(/响应为空\(0 字节\)/g) || []).length, 2, '--url 与 --get 两条下载路径必须各有一条 0 字节守卫(此前 --get 路径缺这条)');
   });
 });

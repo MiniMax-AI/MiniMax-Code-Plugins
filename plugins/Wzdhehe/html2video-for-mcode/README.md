@@ -231,12 +231,12 @@ node --test "plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/te
 node --test "tests/*.test.mjs"
 ```
 
-257 tests in fourteen files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
+272 tests in fifteen files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
 escapes including a **dangling** link that must be caught rather than skipped), `no-clobber` (refusing to overwrite), `endpoint-allowlist` (key never leaves the official
 hosts — plus a local server that proves the gate sits before the request, and provider selection:
 `mmx speech transcribe` default vs `--provider api` fallback, with an mmx-shim integration pair
 asserting the exact argv mapping and tmpdir staging/cleanup), `fetch-policy` (SSRF,
-`file://`, redirect and filename rules), `preview-page` (snapshot timing injection, `base` ordering,
+`file://`, redirect and filename rules), `connect-binding` (DNS fails closed, and the SSRF veto rides the connection's own lookup — egress via `policyGet`, browser traffic through a loopback veto proxy; the rebinding cases assert the target receives **zero requests**), `preview-page` (snapshot timing injection, `base` ordering,
 self-containment, containment refusals, the no-timer rule), `tokens-fx` (every entrance animation in
 the generated `tokens.css` must declare `opacity`, `no-fx` must reset it, `--upgrade-css` is
 idempotent) and `fetch-policy`/`no-clobber` (the `--url` download route obeys the same SSRF,
