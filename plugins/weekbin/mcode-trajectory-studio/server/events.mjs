@@ -19,7 +19,7 @@ import { taskIndex } from './tasks.mjs';
  * has its own `turn_id`, and aliasing the JSON expression to the same name makes
  * the driver return the column instead — silently yielding null turn ids.
  */
-const TURN_KEY_SQL =
+export const TURN_KEY_SQL =
   "COALESCE(json_extract(data_json, '$.turn_id'), json_extract(data_json, '$.turnId'), turn_id)";
 
 /**

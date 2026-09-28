@@ -13,6 +13,7 @@
 
 import { num } from './json.mjs';
 import { tableExists } from './sqlite.mjs';
+import { TURN_KEY_SQL } from './events.mjs';
 
 /** Folded totals for one session, or null when the session is unknown. */
 export function getStats(store, sessionId) {
@@ -91,18 +92,27 @@ function rowAggregate(store, sessionId) {
   // is the honest answer for a record whose contents cannot be read, and leaves every
   // other row counted. `json_valid` is also what lets `unreadable` report how many rows
   // were skipped, so the gap is stated rather than hidden behind a plausible total.
-  const expr = (jsonPath) => `json_extract(doc, '${jsonPath}')`;
+  const expr = (jsonPath) => `json_extract(data_json, '${jsonPath}')`;
   const sql = `
     WITH rows AS (
       SELECT
-        CASE WHEN json_valid(data_json) THEN data_json ELSE '{}' END AS doc,
+        -- Aliased back to data_json, because the turn-key expression reads that name
+        -- and the column name is what keeps this fold and the event projection reading
+        -- the same document.
+        CASE WHEN json_valid(data_json) THEN data_json ELSE '{}' END AS data_json,
+        turn_id,
         json_valid(data_json) AS readable
       FROM local_runtime_message_rows
       WHERE session_id = ?
     )
     SELECT
       COUNT(*) AS events,
-      COUNT(DISTINCT NULLIF(${expr('$.turn_id')}, '')) AS turns,
+      -- The same expression the event projection and the turn fold use. This counted
+      -- turns straight out of the JSON, so a row whose turn id lives only in the
+      -- turn_id column contributed to the turn summaries and to a turnId-filtered
+      -- event read but not to this: one session reporting 0 turns beside a timeline
+      -- with turns in it.
+      COUNT(DISTINCT NULLIF(${TURN_KEY_SQL}, '')) AS turns,
       SUM(readable) AS readable,
       -- The rows that contributed nothing above: json_valid is 1 or 0 per row, so the
       -- unreadable count is the total less the readable ones.

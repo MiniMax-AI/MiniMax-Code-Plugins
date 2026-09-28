@@ -320,3 +320,30 @@ test('a field is clipped before the sweep reads it, not after', async (t) => {
   const swept = redactEvent(page.events[0], { maxLength: 20000, homeDir: FIXTURE_HOME, roots: [store.dataDir] });
   assert.equal(swept.content.includes(canary), false, 'the credential survived the clip+sweep order');
 });
+
+test('a turn id in the column counts the same everywhere it is asked about', async (t) => {
+  // Three surfaces decided "which turn is this row" three ways. The statistics counted
+  // turns straight out of the document, so a row whose turn id the runtime wrote only
+  // to the `turn_id` column contributed to the turn fold and to a turnId-filtered read
+  // but not to the summary — one session reporting 0 turns beside a timeline with
+  // turns in it.
+  const { store } = await seed(t, []);
+  const db = new DatabaseSync(path.join(store.dataDir, 'v2', 'sqlite', 'runtime-state.sqlite'));
+  const insert = db.prepare(
+    `INSERT INTO local_runtime_message_rows (session_id, msg_id, role, turn_id, created_at_ms, data_json, source)
+     VALUES ('sess-c', ?, 'assistant', 'column-turn', ?, ?, 'api')`,
+  );
+  db.exec('BEGIN');
+  for (let i = 0; i < 5; i += 1) {
+    insert.run(`m${i}`, NOW - i, JSON.stringify({ msg_id: `m${i}`, role: 'assistant', source: 'api', msg_type: 2, msg_content: `row ${i}` }));
+  }
+  db.exec('COMMIT');
+  db.close();
+
+  const stats = store.getStats('sess-c');
+  const summaries = store.getTurnSummaries('sess-c');
+  const filtered = store.getEvents({ sessionId: 'sess-c', turnId: 'column-turn', limit: 10 });
+  assert.equal(stats.turns, 1, 'the summary disagrees with the turn fold about how many turns exist');
+  assert.equal(summaries.length, 1);
+  assert.equal(filtered.events.length, 5, 'the same filter finds the records the fold counted');
+});
