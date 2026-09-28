@@ -1,0 +1,35 @@
+{
+  "name": "mcode-trajectory-studio",
+  "version": "0.1.3",
+  "description": "只读查看本机 MiniMax Code 会话轨迹：轮次、步骤、LLM 与工具的墙钟耗时、token 用量、工具入参与结果、上下文拆分、压缩与子代理任务，并附带一个本地交互式面板。数据取自本地运行时自身的 SQLite 投影；插件不写入任何文件、不联网、不收集遥测。面板仅监听 127.0.0.1，每个 API 路由都要求一份随进程新生成的访问凭据。需要 Node.js 22.13.0+（内置 node:sqlite 的下限），已验证范围与 mcode engines 一致：>=22.19 <23 或 >=24 <27；全文检索另需内置 SQLite 带 FTS5，22.13.0-22.18.x 与 23.x 缺失时搜索降级并告警。 / Read-only inspection of local MiniMax Code session trajectories: turns, steps, LLM and tool wall-clock time, token usage, tool arguments/results, context breakdown, compactions, sub-agent tasks, plus a local panel. Data comes from the local runtime SQLite projection; the Plugin writes no files, no network, no telemetry. The panel listens on 127.0.0.1 only and requires a per-process capability token on every API route. Requires Node.js 22.13.0+ (the built-in node:sqlite floor); the verified range matches mcode engines: >=22.19 <23 or >=24 <27. Full-text search also needs FTS5 in that bundled SQLite; absent in 22.13.0-22.18.x and 23.x, where search degrades with a warning.",
+  "author": {
+    "name": "weekbin",
+    "url": "https://github.com/weekbin"
+  },
+  "homepage": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins/tree/main/plugins/weekbin/mcode-trajectory-studio",
+  "repository": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins.git",
+  "license": "Apache-2.0",
+  "keywords": [
+    "minimax-code",
+    "mcode",
+    "trajectory",
+    "session",
+    "telemetry",
+    "sqlite",
+    "mcp",
+    "visualization"
+  ],
+  "skills": [
+    "./skills/mcode-trajectory-studio/SKILL.md"
+  ],
+  "mcpServers": {
+    "mcode-trajectory-studio": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "./server/main.mjs"
+      ],
+      "cwd": "${PLUGIN_ROOT}"
+    }
+  }
+}

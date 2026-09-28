@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCode Trajectory Studio</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d1014'/%3E%3Crect x='5' y='9' width='14' height='3' rx='1.5' fill='%23b98cff'/%3E%3Crect x='5' y='14.5' width='22' height='3' rx='1.5' fill='%2343c59e'/%3E%3Crect x='5' y='20' width='9' height='3' rx='1.5' fill='%23ffb454'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body data-state="loading">
+
+<aside id="sidebar">
+  <header class="side-head">
+    <h1>Trajectory<span>Studio</span></h1>
+    <p id="source-line" class="muted">连接中…</p>
+  </header>
+  <div class="side-search">
+    <input id="search" type="search" placeholder="搜索标题 / 仓库 / 路径…" autocomplete="off" spellcheck="false">
+  </div>
+  <div class="side-filters">
+    <label class="agent-filter">
+      <span class="agent-filter-label">Agent</span>
+      <select id="agent-select" aria-label="按 Agent 筛选会话">
+        <option value="">全部</option>
+      </select>
+    </label>
+    <button class="chip ghost-chip" id="collapse-all" title="全部折叠 / 展开">折叠切换</button>
+  </div>
+  <div id="session-groups" class="session-groups"></div>
+</aside>
+
+<main id="main">
+  <header id="topbar">
+    <div class="topbar-title">
+      <h2 id="session-title">选择会话</h2>
+      <p id="session-meta" class="muted"></p>
+    </div>
+    <div class="topbar-controls">
+      <button id="failure-jump" class="btn danger" hidden></button>
+      <label class="toggle" title="开启后才加载正文与入参；默认只显示角色、耗时与工具名">
+        <input type="checkbox" id="full-detail">
+        <span>显示正文</span>
+      </label>
+      <button id="theme-toggle" class="btn icon-btn" title="切换浅色 / 深色主题" aria-label="切换主题">☾</button>
+      <button id="reload" class="btn">刷新</button>
+    </div>
+  </header>
+
+  <div id="data-notices" class="notices" hidden></div>
+
+  <details id="capability" class="panel capability">
+    <summary class="panel-head">
+      <span class="summary-caret" aria-hidden="true"></span>
+      <h3>Agent 与能力</h3>
+      <span id="cap-summary" class="muted small"></span>
+    </summary>
+    <div id="cap-body" class="cap-body"></div>
+  </details>
+
+  <section id="stats" class="stats"></section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h3>时间轴</h3>
+      <span class="muted small">仅用于定位与缩放，正文见下方轨迹流</span>
+    </div>
+    <div id="overview" class="overview"></div>
+    <p id="overview-hint" class="muted small overview-hint"></p>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h3>轨迹流</h3>
+      <div class="stream-tools">
+        <span id="record-count" class="muted small"></span>
+        <button class="chip is-on" data-filter="all">全部</button>
+        <button class="chip" data-filter="human">人类输入</button>
+        <button class="chip" data-filter="injected">注入上下文</button>
+        <button class="chip" data-filter="tools">工具调用</button>
+        <button class="chip" data-filter="failed">仅失败</button>
+      </div>
+    </div>
+    <div class="filters">
+      <input id="turn-jump" class="turn-jump" type="search" placeholder="按 turn ID 过滤" autocomplete="off" spellcheck="false">
+      <input id="text-filter" class="turn-jump" type="search" placeholder="按文本过滤（正文 / 工具名 / 入参 / 结果）" autocomplete="off" spellcheck="false">
+    </div>
+    <div id="stream" class="stream"></div>
+  </section>
+</main>
+
+<aside id="inspector" data-open="false">
+  <header class="ins-head">
+    <div class="ins-title-wrap">
+      <h3 id="ins-title">检查器</h3>
+      <p id="ins-sub" class="muted small"></p>
+    </div>
+    <button id="ins-close" class="btn ghost" aria-label="关闭">×</button>
+  </header>
+  <nav id="ins-tabs" class="ins-tabs" role="tablist">
+    <button class="ins-tab is-on" data-tab="summary" role="tab">概要</button>
+    <button class="ins-tab" data-tab="payload" role="tab">载荷 / 结果</button>
+    <button class="ins-tab" data-tab="timing" role="tab">计时</button>
+  </nav>
+  <div id="ins-body" class="ins-body"></div>
+</aside>
+
+<div id="banner" class="banner" hidden></div>
+
+<script src="/app.js" type="module"></script>
+</body>
+</html>
