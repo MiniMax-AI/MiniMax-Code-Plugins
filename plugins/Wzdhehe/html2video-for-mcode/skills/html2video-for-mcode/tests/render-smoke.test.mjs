@@ -38,7 +38,8 @@ test('冒烟: 全链路出片', async t => {
   const scriptPath = path.join(proj, 'script.json');
   const script = JSON.parse(fs.readFileSync(scriptPath, 'utf8'));
   script.slides = script.slides.filter(s => s.id === '01');
-  script.slides[0].clauses = [{ stage: 1, text: '冒烟测试。' }, { stage: 2, text: '第二句展开。' }];
+  // 第 2 句带 say(发音分离): 显示形态 82.3% 上字幕, TTS/ASR 吃 百分之八十二点三
+  script.slides[0].clauses = [{ stage: 1, text: '冒烟测试。' }, { stage: 2, text: '第二句展开,营收增长82.3%。', say: '第二句展开,营收增长百分之八十二点三。' }];
   fs.writeFileSync(scriptPath, JSON.stringify(script, null, 2));
   // 4. 最小 slide(过得了 check-slides: data-stage 配 fx 类, 变量有定义)
   fs.writeFileSync(path.join(proj, 'slides', '01-title.html'),
@@ -68,6 +69,15 @@ test('冒烟: 全链路出片', async t => {
     { encoding: 'utf8', windowsHide: true });
   const dur = parseFloat((d.stdout ?? '').trim());
   assert.ok(Math.abs(dur - timings.total) <= 0.3, `成片时长 ${dur} 应≈timings ${timings.total}`);
+  // 9. build-video --asr: 清单期望文必须取发音形态(say ?? text), 字幕/srt 恒为显示形态
+  r = runSkill('build-video.mjs', [proj, '--asr']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const ck = fs.readFileSync(path.join(proj, 'asr', 'checklist.md'), 'utf8');
+  assert.match(ck, /part-01-2\.mp3[^|]*\|[^|]*\|[^|]*百分之八十二点三/, 'ASR 清单第 2 句期望文应为 say 形态: ' + ck);
+  assert.ok(!/82\.3%[^|]*\| *\| *\|/.test(ck), '清单期望文不得回退显示形态(那会把正确发音判成数字不符)');
+  const srt = fs.readFileSync(path.join(proj, 'out', 'subs.srt'), 'utf8');
+  assert.match(srt, /82\.3%/, 'srt 恒为显示形态');
+  assert.ok(!srt.includes('百分之八十二点三'), 'say 不得泄漏进 srt/字幕');
 });
 
 test('still 复截后直接 build-video: 必须点名"静态图出片"警告(still 会作废帧目录, 动画无声丢失)', async t => {
@@ -396,6 +406,42 @@ test('plan-timings 字幕行宽: 折 2 行不报、3 行起报(样例 2/3/4 行)
   assert.ok(!/第 1 句.*会折/.test(out), '折 2 行不该报(1920 宽行宽 ≈33 字/行): ' + out.slice(-300));
   assert.match(out, /第 2 句.*会折 3 行/, '折 3 行必须报: ' + out.slice(-300));
   assert.match(out, /第 3 句.*会折 4 行/, '折 4 行必须报: ' + out.slice(-300));
+});
+
+// 2026-09-28 用户实测: TTS 把 2026年 念成"两千零二十六年"。显示与发音分离 —— text(2026年)
+// 上字幕, say(二零二六年)喂 TTS; 闸门只钉无歧义的"四位数字+年", 有 say 即静默, say 原样传递。
+test('plan-timings 年份读法闸门: 无 say 必须点名(给逐位写法), 有 say 静默, en 不误报, say 传递到 timings', async t => {
+  if (!FFMPEG || !FFPROBE) return t.skip('无 ffmpeg/ffprobe(ffprobe 实测音频)');
+  const proj = tmpdir();
+  assert.equal(runSkill('init-project.mjs', [proj, '--topic', 'YearGate']).status, 0);
+  const g = spawnSync(FFMPEG, ['-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=32000:cl=mono', '-t', '3',
+    '-c:a', 'libmp3lame', '-b:a', '64k', '-y', path.join(proj, 'audio', '01.mp3')], { windowsHide: true });
+  assert.equal(g.status, 0, g.stderr ?? '');
+  const sp = path.join(proj, 'script.json');
+  const s = JSON.parse(fs.readFileSync(sp, 'utf8'));
+  s.slides = [{ id: '01', html: '01-title.html', audio: '01.mp3', clauses: [
+    { stage: 1, text: '回顾2026年,七条要闻速览。' },                                   // 无 say → 必须点名
+    { stage: 2, text: '展望2027年,继续同行。', say: '展望二零二七年,继续同行。' },      // 有 say → 静默
+  ] }];
+  fs.writeFileSync(sp, JSON.stringify(s, null, 2));
+  fs.writeFileSync(path.join(proj, 'slides', '01-title.html'),
+    '<!doctype html><html><head><meta charset="utf-8"></head><body><div class="stage"></div></body></html>');
+  const r = runSkill('plan-timings.mjs', [proj]);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const out = r.stdout + r.stderr;
+  assert.match(out, /第 1 句.*2026年.*逐位读.*say:"二零二六年/, '无 say 的年份必须点名并给出逐位写法: ' + out.slice(-400));
+  assert.ok(!/第 2 句.*(整读|逐位)/.test(out), '有 say 的年份不得再报: ' + out.slice(-400));
+  // say 原样传递(build-video 的 ASR 清单要消费它, 丢了清单就回退显示形态)
+  const timings = JSON.parse(fs.readFileSync(path.join(proj, 'build', 'timings.json'), 'utf8'));
+  assert.equal(timings.slides[0].clauses[1].say, '展望二零二七年,继续同行。');
+  assert.ok(!('say' in timings.slides[0].clauses[0]), '无 say 的句子不得凭空造出 say');
+  // 英语面不误报(英语 TTS 自己读 twenty twenty-six, 且正则本身要求"年"字)
+  s.lang = 'en';
+  s.slides[0].clauses = [{ stage: 1, text: 'Looking back at 2026, seven stories.' }];
+  fs.writeFileSync(sp, JSON.stringify(s, null, 2));
+  const r2 = runSkill('plan-timings.mjs', [proj]);
+  assert.equal(r2.status, 0, r2.stdout + r2.stderr);
+  assert.ok(!/逐位读/.test(r2.stdout + r2.stderr), '英语面不得误报年份闸门: ' + (r2.stdout + r2.stderr).slice(-300));
 });
 
 // 2026-09-23 复核钉死: 胶囊几何唯一来源 tools.subLineCap —— 缩放带钳位, 按宽度线性外推是错的

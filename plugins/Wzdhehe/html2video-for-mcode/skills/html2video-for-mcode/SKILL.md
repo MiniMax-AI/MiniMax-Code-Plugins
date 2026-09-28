@@ -145,7 +145,9 @@ Fill it in slide by slide in `script.json` (the contract file that every later s
 }
 ```
 
-Optional fields: `clauses[].text2` = the second line of bilingual subtitles (omit it for Chinese-only subtitles); top-level `bgm` = `"assets/bgm.mp3"` or `{file, volume:0.12, fadeIn:1.5, fadeOut:2.5}` (when set, build-video loops it + fades it in and out underneath automatically).
+Optional fields: `clauses[].text2` = the second line of bilingual subtitles (omit it for Chinese-only subtitles); `clauses[].say` = the **spoken form** of that sentence for TTS and ASR verification (omit it to speak `text` as written); top-level `bgm` = `"assets/bgm.mp3"` or `{file, volume:0.12, fadeIn:1.5, fadeOut:2.5}` (when set, build-video loops it + fades it in and out underneath automatically).
+
+**Display form vs spoken form** — `text` is what goes on screen, `say` is what gets spoken. On-screen text always keeps the natural written form (`2026年`, `82.3%`, `SWE2.3`); when the broadcast reading differs, keep `text` as is and add `say`: years are read digit by digit (`say: "二零二六年…"` — TTS otherwise reads `2026年` as "两千零二十六年"; plan-timings warns), percentages/decimals speak the units (`82.3%` → `say: "…百分之八十二点三…"`), benchmark/model names follow reading habit (`SWE2.3` → `say: "SWE二点三"`). `say` never reaches the burned-in subtitles or `out/subs.srt` — those always come from `text` (see references/tts-and-timing.md).
 
 **Content-volume hard rules** (detailed version in `references/authoring.md`):
 

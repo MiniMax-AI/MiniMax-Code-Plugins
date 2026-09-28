@@ -63,7 +63,8 @@ for (const s of script.slides) {
   let cum = 0;
   for (const c of s.clauses) {
     const start = total > 0 ? (tts * cum) / total : 0;
-    clauses.push({ stage: c.stage ?? null, start: r3(start), chars: charCount(c.text), text: c.text, ...(c.text2 ? { text2: c.text2 } : {}) });
+    // say = 发音形态(只喂 TTS/ASR), text = 显示形态(字幕/画面) —— 原样传递给下游
+    clauses.push({ stage: c.stage ?? null, start: r3(start), chars: charCount(c.text), text: c.text, ...(c.text2 ? { text2: c.text2 } : {}), ...(c.say ? { say: c.say } : {}) });
     const t = Math.max(0, start - LEAD);
     if (c.stage != null) stageTime[c.stage] = c.stage in stageTime ? Math.min(stageTime[c.stage], t) : t;
     cum += charCount(c.text);
@@ -93,6 +94,17 @@ for (const s of script.slides) {
     const lines = Math.ceil(n / subCap);
     if (lines >= 3) warns.push(`${s.id} 第 ${clauses.indexOf(c) + 1} 句 ${n} ${CFG.unit}(行宽 ≈${subCap} ${CFG.unit}/行) 会折 ${lines} 行 — 3 行起可读性差, 建议拆句(≤2 行可接受)`);
     if (c.text2 && c.text2.length > 60) warns.push(`${s.id} 第 ${clauses.indexOf(c) + 1} 句双语第二行 ${c.text2.length} 字符 > 60 — 建议精简译文`);
+    // 年份读法闸门(2026-09-28 用户实测: TTS 把 2026年 念成"两千零二十六年"): 显示与发音
+    // 分离 —— text 保持 2026年 上字幕, 加 say:'二零二六年' 控制发音。判别只钉无歧义的
+    // "四位数字+年"(整读/逐位读是意图问题, 2026点 就该整读 —— 其余数字写法走文档纪律)。
+    if (CFG.emPer === 1) {   // 中文/粤语面; 英语 TTS 自己会读 twenty twenty-six
+      const spoken = c.say ?? c.text;
+      const ym = /(?:19|20)\d{2}\s*年/.exec(spoken);
+      if (ym) {
+        const digitsRead = ym[0].replace(/\D/g, '').split('').map(d => '零一二三四五六七八九'[+d]).join('');
+        warns.push(`${s.id} 第 ${clauses.indexOf(c) + 1} 句 "${ym[0]}" 会被 TTS 按整数读(2026年→"两千零二十六年") — 年份按播报惯例逐位读: text 原样上字幕, 加 say:"${digitsRead}年…"`);
+      }
+    }
   }
 
   rows.push({

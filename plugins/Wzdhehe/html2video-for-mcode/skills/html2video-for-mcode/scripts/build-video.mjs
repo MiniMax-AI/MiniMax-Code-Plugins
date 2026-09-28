@@ -428,7 +428,8 @@ if (WANT_ASR) {
       const part = path.join(dir, 'asr', `part-${tid}-${i + 1}.mp3`);
       run(FFMPEG, ['-y', '-ss', (cum + c.start).toFixed(3), '-t', (end - c.start).toFixed(3), '-i', audioWav,
         '-ac', '1', '-ar', '16000', '-c:a', 'libmp3lame', '-b:a', '128k', part], `ASR 切分 ${tid}-${i + 1}`);
-      lines.push(`| asr/part-${tid}-${i + 1}.mp3 | ${(cum + c.start).toFixed(1)}s | ${c.text} |  |  |`);
+      // 预期文本取发音形态(say ?? text): 音频里说的是 say; 显示形态(text)只进字幕/srt
+      lines.push(`| asr/part-${tid}-${i + 1}.mp3 | ${(cum + c.start).toFixed(1)}s | ${c.say ?? c.text} |  |  |`);
       count++;
     });
     cum += t.duration;

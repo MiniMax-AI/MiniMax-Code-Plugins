@@ -231,7 +231,7 @@ node --test "plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/te
 node --test "tests/*.test.mjs"
 ```
 
-273 tests in fifteen files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
+274 tests in fifteen files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
 escapes including a **dangling** link that must be caught rather than skipped), `no-clobber` (refusing to overwrite), `endpoint-allowlist` (key never leaves the official
 hosts — plus a local server that proves the gate sits before the request, and provider selection:
 `mmx speech transcribe` default vs `--provider api` fallback, with an mmx-shim integration pair

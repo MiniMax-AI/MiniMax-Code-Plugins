@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.9.12 — 2026-09-28
+
+**Field report: TTS reads numbers by its own rules — display form and spoken form are now separated (`clauses[].say`)** (user-reported: `2026年` was read as "两千零二十六年"; wanted: subtitle shows `2026年`, narration says "二零二六年"; same for `82.3%` → "百分之八十二点三" and `SWE2.3` → "SWE二点三")
+
+- **New optional field `clauses[].say`** — the spoken form of that sentence. `text` remains the on-screen/subtitle form and keeps the natural written form (Arabic numerals, original orthography — spelled-out digits like `八十二点三` belong in `say`, never on screen). **TTS input and the ASR checklist expectation are always `say ?? text`**; the burned-in subtitles and `out/subs.srt` always come from `text`. `say` propagates through `plan-timings` into `timings.json` (which is what `build-video --asr` reads); `say` applies to the main line only (`text2` stays display-only).
+- **Year-reading gate (plan-timings, zh/yue):** a clause whose effective spoken text (`say ?? text`) contains a four-digit year followed by 年 gets a warning that names the digit-by-digit broadcast form and hands over the ready-to-paste `say` value (`加 say:"二零二六年…"`). The gate is deliberately narrow — whether a number reads digit-by-digit or as an integer is intent (`2026年` digit-by-digit, `2026点` as an integer), so only the unambiguous year shape is gated and the rest of the number discipline lives in the docs (SKILL.md schema section + tts-and-timing.md, with all three reported examples).
+- **Tests +1 → 274 in fifteen files:** the year gate (no-`say` named with the paste-ready form / with-`say` silent / `en` not over-warned / `say` passed through to timings verbatim and never invented for `say`-less clauses), and the smoke pipeline now runs `build-video --asr` on a `say`-bearing clause and asserts the checklist expects the spoken form while the srt keeps the display form (`say` must not leak into subtitles). Each guard red-proofed: disabling the year gate, dropping the `say` propagation, or reverting the checklist to `c.text` reddens exactly its own case.
+
 ## 1.9.11 — 2026-09-28
 
 **Round-6 review: the SSRF policy now fails closed and is bound to the actual connection** (maintainer finding on 1.9.10: `assertResolvedHost` treated a DNS lookup error as "pass", and the real fetch/navigate resolved the hostname again on its own — exactly the DNS-rebinding window)
