@@ -128,13 +128,19 @@ test('ref 指向未登记的参考手册记 fail,不是静默通过', async () =
   assert.match(r.reason, /nope\.md/);
 });
 
-test('visibleText 剥掉 script/style,含 `>` 前带空白的闭合标签', () => {
-  // 回归:原先写死 `</script>`,匹配不到 `</script >` —— 而浏览器恰恰在
-  // 空白后终止脚本。漏掉的直接后果是脚本源码漏进可见文本,让 doc 断言
-  // 可能锚在 JS 代码上。上游 CodeQL(js/bad-html-filtering-regexp) 报的就是这条。
+test('visibleText 剥掉 script/style,含 `>` 前带空白或属性的闭合标签', () => {
+  // 回归:原先写死 `</script>`,匹配不到 `</script >`。浏览器在 `</script` 后
+  // 遇到空白、`/` 或 `>` 就终止脚本,`>` 前还能夹属性。漏掉这一类的直接后果是
+  // script/style 源码整段漏进可见文本,让 doc 断言可能锚在 JS 代码上 ——
+  // 而 doc 检查的前提正是「读可见文本,不读源码标记」。上游 CodeQL
+  // (js/bad-html-filtering-regexp) 报的就是这条。
+  //
+  // 三种闭合写法都必须覆盖:紧贴、带空白、带属性。
   const html = [
     '<p>可见正文</p>',
+    '<script>const a = "第一种";</script>',
     '<script>const leak = "脚本里的字";</script >',
+    '<script>const c = "第三种";</script\t\n bar>',
     '<style>.a{color:red}</style\n>',
     '<p>另一段可见正文</p>',
   ].join('\n');
@@ -142,9 +148,13 @@ test('visibleText 剥掉 script/style,含 `>` 前带空白的闭合标签', () =
   const out = visibleText(html);
   assert.match(out, /可见正文/);
   assert.match(out, /另一段可见正文/);
-  assert.doesNotMatch(out, /leak/, 'script 源码泄漏进可见文本');
-  assert.doesNotMatch(out, /脚本里的字/, 'script 源码泄漏进可见文本');
-  assert.doesNotMatch(out, /color:red/, 'style 源码泄漏进可见文本');
+  for (const leaked of ['leak', '脚本里的字', 'color:red', '第一种', '第三种']) {
+    assert.doesNotMatch(out, new RegExp(leaked), `源码泄漏进可见文本: ${leaked}`);
+  }
+});
+
+test('visibleText 在第一个闭合标签处终止,不吞并后续正文', () => {
+  assert.equal(visibleText('<script>x</script><p>正文</p>').trim(), '正文');
 });
 
 test('visibleText 不因标签缺失而静默丢正文', () => {
