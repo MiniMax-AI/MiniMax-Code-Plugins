@@ -433,14 +433,16 @@ ${preserveMatch[0].replace(/\$payload\s*=$/, '')}
 $ErrorActionPreference = 'Stop'
 $statusFile = $env:ISLAND_TEST_STATUS
 $KeepSubStep = [bool]::Parse($env:ISLAND_TEST_KEEP)
+# $S_DETECTOR is a script-scope constant in the detector; the extracted
+# block needs it to resolve the claim-ownership path.
+$S_DETECTOR = 'detector'
 function Read-StatusObj {
   if (!(Test-Path $statusFile)) { return $null }
   try { return ([System.IO.File]::ReadAllText($statusFile) | ConvertFrom-Json) } catch { return $null }
 }
 ${block[0].replace(/\$payload\s*=$/, '')}
-"$stepField|$totalField|$detailField"
+"$stepField|$totalField|$detailField|$sourceField"
 `;
-
         const statusFile = join(TMP, 'status.json');
         const run = (keep) => runPs(
             `$env:ISLAND_TEST_STATUS = '${statusFile.replace(/'/g, "''")}'\n` +
@@ -454,11 +456,27 @@ ${block[0].replace(/\$payload\s*=$/, '')}
         };
 
         writeFileSync(statusFile, JSON.stringify(stale), 'utf8');
-        eq('state-inference write clears the stale sub-step', run(false), '-1|-1|');
+        eq('state-inference write clears the stale sub-step', run(false).split('|').slice(0, 3).join('|'), '-1|-1|');
 
         writeFileSync(statusFile, JSON.stringify(stale), 'utf8');
         eq('metadata-refresh write (-KeepSubStep) still preserves it',
-            run(true), '1|1|curl -H "Authorization: Bearer <redacted>"');
+            run(true).split('|').slice(0, 3).join('|'), '1|1|curl -H "Authorization: Bearer <redacted>"');
+
+        // round-20 #7: a metadata refresh must not change who owns the
+        // state. `source` is the arbitration token -- the detector treats
+        // `source == detector` as "mine to rewrite" -- so a 5h-usage
+        // refresh that stamps `detector` onto an agent-owned state
+        // silently hands write authority back to the detector. The
+        // detector then re-derives `error` from the same stale failed
+        // toolResult on every poll and clobbers the Stop hook's `done`.
+        // That is the observed "pill stopped on Command failed".
+        writeFileSync(statusFile, JSON.stringify(stale), 'utf8');
+        eq('metadata-refresh write preserves the previous owner',
+            run(true).split('|')[3], 'agent');
+
+        writeFileSync(statusFile, JSON.stringify(stale), 'utf8');
+        eq('state-inference write claims ownership',
+            run(false).split('|')[3], 'detector');
     }
 
     // The call sites must actually differ. A switch nobody passes is the

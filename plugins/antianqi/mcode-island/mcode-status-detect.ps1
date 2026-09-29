@@ -682,12 +682,27 @@ function Write-Status($state, $message, $family, [switch]$KeepSubStep) {
   $stepField   = -1
   $totalField  = -1
   $detailField = ''
+  # `source` is the arbitration token, not a label (round-20 #7). The
+  # detector's settle logic reads `source == detector` as "this state is
+  # mine to rewrite". A metadata refresh restates the current state and
+  # refreshed numbers -- it does not claim the state -- so stamping
+  # `detector` on it silently hands write authority back to the detector.
+  #
+  # Observed consequence: a tool fails, the detector infers `error`, the
+  # PostToolUse hook pushes the same `error` (source=agent), then the 60s
+  # 5h-usage refresh stamps `detector` over it. From then on the detector
+  # owns the state and re-derives `error` from the same stale failed
+  # toolResult on every poll, clobbering the Stop hook's `done`. The pill
+  # sat on "Command failed" until the 60s no-event fallback finally
+  # dropped it to idle.
+  $sourceField = $S_DETECTOR
   if ($KeepSubStep) {
     $prev = Read-StatusObj
     if ($prev) {
       if ($prev.PSObject.Properties['step'])   { $stepField   = [int]$prev.step }
       if ($prev.PSObject.Properties['total'])  { $totalField  = [int]$prev.total }
       if ($prev.PSObject.Properties['detail'] -and $null -ne $prev.detail) { $detailField = [string]$prev.detail }
+      if ($prev.PSObject.Properties['source'] -and $prev.source) { $sourceField = [string]$prev.source }
     }
   }
   $payload = [PSCustomObject]@{
@@ -703,7 +718,7 @@ function Write-Status($state, $message, $family, [switch]$KeepSubStep) {
     total          = $totalField
     detail         = $detailField
     ts             = (Get-Date).ToString($FMT_O)
-    source         = $S_DETECTOR
+    source         = $sourceField
   } | ConvertTo-Json -Compress
   [System.IO.File]::WriteAllText($tmp, $payload, [System.Text.Encoding]::UTF8)
   Move-Item -Path $tmp -Destination $statusFile -Force
