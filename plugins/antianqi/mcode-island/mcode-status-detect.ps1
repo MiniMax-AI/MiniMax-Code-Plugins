@@ -164,6 +164,11 @@ $cfgFile    = Join-Path $configDir 'config.json'
 # mcode install on the runner. Dot-source the lib here so the
 # main loop's Refresh-5hUsage can call Get-5hUsage directly.
 . "$PSScriptRoot/scripts/lib/Get-5hUsage.ps1"
+# Shared redaction helper (round-20). The detector is the SECOND producer
+# of tool text -- it re-derives messages from mcode's session log rather
+# than from a hook event, so it needs the same redaction the hook path
+# applies. Wiring only the hook left the raw command in island.log.
+. "$PSScriptRoot/scripts/lib/Protect-Text.ps1"
 $PLAN_API_TTL  = [TimeSpan]::FromSeconds(60)
 $script:plan5hToken = $null
 if ($env:MINIMAX_OAUTH_TOKEN) { $script:plan5hToken = $env:MINIMAX_OAUTH_TOKEN }
@@ -266,10 +271,37 @@ $script:lastMcodePidAt   = [DateTime]::MinValue
 $script:lastLatestFile   = $null
 $script:lastLatestFileAt = [DateTime]::MinValue
 
+# island.log 上限（round-20）
+#
+# island.log 一直是裸 Add-Content，从 2026-08-22 起没有任何截断，
+# 38 天累积到 18MB。日志内容包含从 session log 推断出来的工具参数，
+# 所以"无上限保留"同时是磁盘问题也是留存问题。这里给一个硬上限：
+# 超过阈值时只保留最后 $logKeepLines 行。
+#
+# 阈值检查不每次调用都做：Add-Content 是 O(1) 追加，先用计数器累计到
+# 1/4 阈值才 stat 一次文件，避免在 400ms 轮询路径上反复摸磁盘。
+$script:logMaxBytes   = 1MB
+$script:logKeepLines  = 300
+$script:logPending    = 0
+
 function Log-Line($msg) {
   $ts = (Get-Date).ToString('HH:mm:ss')
   $line = "[$ts] [detect] $msg"
   Add-Content -Path $logFile -Value $line -Encoding UTF8
+  $script:logPending += $line.Length + 2
+  if ($script:logPending -ge [int]($script:logMaxBytes / 4)) {
+    $script:logPending = 0
+    try {
+      $fi = Get-Item -LiteralPath $logFile -ErrorAction Stop
+      if ($fi.Length -gt $script:logMaxBytes) {
+        $keep = @(Get-Content -LiteralPath $logFile -Tail $script:logKeepLines -Encoding UTF8)
+        [System.IO.File]::WriteAllLines(
+          $logFile, $keep, (New-Object System.Text.UTF8Encoding($false)))
+      }
+    } catch {
+      # 截断失败不能拖垮检测循环；下一轮阈值到了会再试一次。
+    }
+  }
   if (-not $Once) { Write-Output $line }
 }
 
@@ -514,6 +546,12 @@ function Infer-State($msg) {
       if ($args) {
         # ConvertTo-Json is a single .NET call; keep it (no pipeline leak).
         $argsJson = $args | ConvertTo-Json -Compress -Depth 2 -WarningAction SilentlyContinue
+        # Redact BEFORE truncating (round-20). This message reaches
+        # status.json, island.log and the pill, and `$args` is the raw
+        # tool argument object straight out of the session log -- so a
+        # Bash call carrying a bearer token or an API key was persisted
+        # verbatim even after the hook path was redacted.
+        $argsJson = Protect-SecretText $argsJson
         if ($argsJson.Length -gt 60) { $argsJson = $argsJson.Substring(0, 57) + $DOTS }
         return @{ state=$S_WORKING; message="$verb $argsJson"; family=(Get-ToolFamily $tool) }
       }

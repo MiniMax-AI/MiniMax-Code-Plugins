@@ -254,7 +254,7 @@ binary, no symlink, no `node_modules`.
 | .NET WPF runtime  | 4.x (ships with Windows 10/11)                        |
 | mcode             | any version (Mode B works everywhere); 0.2.4+ activates Mode A |
 | execution policy  | `Bypass` for this directory; not changed globally    |
-| network access    | **optional** — see "Network access" below. The widget itself is offline. `mcode-status-detect.ps1` only contacts `https://api.minimax.io/v1/coding_plan/remains` when a token is configured (see "Accounts" + "Data use"). |
+| network access    | **optional** — see "Network access" below. The widget itself is offline. `mcode-status-detect.ps1` only contacts `https://api.minimaxi.com/v1/coding_plan/remains` when a token is configured (see "Accounts" + "Data use"). |
 | accounts          | **optional** — see "Accounts" below. No account is required to run the widget; a token is only needed if you want the optional 5-hour usage readout in the pill. |
 | paid services     | **none added by this plugin** — the 5h usage endpoint is part of the user's existing MiniMax account, not a separate service |
 
@@ -289,7 +289,7 @@ when ALL of the following are true:
 
 When all three are true, the detector makes **one** GET to:
 
-- `https://api.minimax.io/v1/coding_plan/remains` (HTTPS, no credentials in
+- `https://api.minimaxi.com/v1/coding_plan/remains` (HTTPS, no credentials in
   the URL, no fragment, body is a small JSON object)
 
 The response is parsed and only two numbers are written to
@@ -314,7 +314,7 @@ the 5-hour usage readout in the pill.
 | `config.json:planApiToken`   | `set-token.ps1 <token>`                                | `%APPDATA%\mcode-island\config.json` (plaintext)  | `set-token.ps1 -Clear` or edit the file      |
 
 The token is **never logged, never written to any other file, and never
-sent to a host other than `api.minimax.io`**. `set-token.ps1` only writes
+sent to a host other than `api.minimaxi.com`**. `set-token.ps1` only writes
 to `config.json`; it makes no network call. The detector only reads the
 token to attach as an `Authorization: Bearer ...` header on the single
 GET documented above.

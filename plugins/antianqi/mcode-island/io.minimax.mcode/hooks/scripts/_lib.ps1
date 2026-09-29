@@ -12,6 +12,10 @@ $ErrorActionPreference = 'Stop'
 $script:PluginRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 $script:NotifyIsland = Join-Path $script:PluginRoot 'notify-island.ps1'
 
+# Shared redaction helper (round-20). Lives in a lib because the detector
+# is a second, independent producer of the same text and must redact too.
+. (Join-Path $script:PluginRoot 'scripts\lib\Protect-Text.ps1')
+
 function Set-ConsoleUtf8 {
     # Force UTF-8 so the PowerShell child that mcode spawns reads the
     # stdin JSON cleanly. notify-island.ps1 also does this internally,
@@ -135,6 +139,12 @@ function Format-ToolSummary {
         }
     }
     if ([string]::IsNullOrEmpty($detail)) { return $tool }
+    # Redact before collapsing/truncating (round-20). This is the single
+    # choke point for every tool branch above: the result is written to
+    # status.json, appended to island.log, AND rendered on the pill, so
+    # redacting here covers all three sinks at once. Without it a Bash
+    # command like `export API_KEY=sk-...` reached all three verbatim.
+    $detail = Protect-SecretText $detail
     # Collapse newlines, take first 80 chars.
     $detail = ($detail -replace "[\r\n]+", ' ').Trim()
     if ($detail.Length -gt 80) { $detail = $detail.Substring(0, 77) + '...' }

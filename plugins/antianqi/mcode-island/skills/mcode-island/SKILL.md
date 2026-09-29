@@ -207,7 +207,7 @@ All widget state lives under `%APPDATA%\mcode-island\`:
 
 No data leaves the local machine *unless* an opt-in 5-hour usage token is
 configured. See the **Network access** + **Accounts** sections in
-`README.md` for the exact host (`api.minimax.io/v1/coding_plan/remains`),
+`README.md` for the exact host (`api.minimaxi.com/v1/coding_plan/remains`),
 the rate limit (one GET per 60 s), and the storage locations
 (`config.json:planApiToken` or env `MINIMAX_OAUTH_TOKEN` / `MINIMAX_API_KEY`).
 When no token is configured the plugin makes no network requests at all.

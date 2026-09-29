@@ -4,11 +4,36 @@
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-# 调试日志（写到 %APPDATA%\mcode-island\widget.log，最后 1KB 即可）
-$script:dbg = Join-Path $env:APPDATA 'mcode-island\widget.log'
+# 调试日志（写到 %APPDATA%\mcode-island\widget.log，上限 1MB）
+#
+# 2026-08-22 起这个函数一直是裸 Add-Content，头注释写的"最后 1KB 即可"
+# 从来没有被实现过：38 天累积到 37MB，活跃使用时约 3.6MB/天（POLL 行）。
+# 现在真的实现这个上限。
+#
+# 检查不每次调用都做。Add-Content 是 O(1) 追加，先用计数器累计到 1/4
+# 阈值才 stat 一次文件，避免在 400ms 轮询路径上反复摸磁盘。
+$script:dbg         = Join-Path $env:APPDATA 'mcode-island\widget.log'
+$script:dbgMaxBytes = 1MB
+$script:dbgKeepLines = 300
+$script:dbgPending  = 0
 function Dbg($msg) {
   $ts = (Get-Date).ToString('HH:mm:ss.fff')
-  "[$ts] $msg" | Add-Content -Path $script:dbg -Encoding UTF8
+  $line = "[$ts] $msg"
+  Add-Content -Path $script:dbg -Value $line -Encoding UTF8
+  $script:dbgPending += $line.Length + 2
+  if ($script:dbgPending -ge [int]($script:dbgMaxBytes / 4)) {
+    $script:dbgPending = 0
+    try {
+      $fi = Get-Item -LiteralPath $script:dbg -ErrorAction Stop
+      if ($fi.Length -gt $script:dbgMaxBytes) {
+        $keep = @(Get-Content -LiteralPath $script:dbg -Tail $script:dbgKeepLines -Encoding UTF8)
+        [System.IO.File]::WriteAllLines(
+          $script:dbg, $keep, (New-Object System.Text.UTF8Encoding($false)))
+      }
+    } catch {
+      # 截断失败不能让 widget 挂掉；下一个阈值周期会再试。
+    }
+  }
 }
 Dbg "PID=$PID APART=$([System.Threading.Thread]::CurrentThread.ApartmentState)"
 

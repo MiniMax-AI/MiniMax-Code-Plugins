@@ -928,6 +928,219 @@ const main = async () => {
         if (bad === 0) out('PASS', 'Get-5hUsage.ps1: no hardcoded host paths');
     }
 
+    // 7. 5h endpoint disclosure consistency (round-20).
+    //
+    // Contract: every MiniMax API host the plugin NAMES in user-facing
+    // docs (and in the lib's own trailing comment) must be the SAME host
+    // the code actually calls. The code obfuscates the URL into a byte
+    // array as a PS 5.1 parser-quirk defense, so this check DECODES that
+    // array and compares the docs against the decoded truth. It never
+    // hard-codes the endpoint itself, which matters twice over: the check
+    // cannot drift into becoming a second copy of the disclosure it is
+    // meant to police, and it cannot be satisfied by "fixing" the docs to
+    // match whatever the code happens to be tomorrow.
+    //
+    // This exists because the two drifted. The README carried an absolute
+    // security claim ("no request is ever sent to a host other than
+    // api.minimax.io") that was simply false -- the code never called
+    // that host. A disclosure that overstates isolation is worse than no
+    // disclosure at all.
+    const planLibAbs = join(PLUGIN_ROOT, 'scripts', 'lib', 'Get-5hUsage.ps1');
+    if (await exists(planLibAbs)) {
+        const libText = await readFile(planLibAbs, 'utf8');
+        const hostArr = libText.match(/\$PLAN_API_HOST\s*=\s*_s\s*\(([^)]*)\)/);
+        if (!hostArr) {
+            out('FAIL', 'Get-5hUsage.ps1: cannot locate the $PLAN_API_HOST byte array (disclosure check has no truth to compare against)');
+        } else {
+            const bytes = hostArr[1]
+                .split(',')
+                .map(s => parseInt(s.trim().replace(/^0x/i, ''), 16))
+                .filter(n => Number.isFinite(n));
+            const realUrl = Buffer.from(bytes).toString('utf8');
+            let realHost = null;
+            try { realHost = new URL(realUrl).hostname; } catch { realHost = null; }
+            if (!realHost) {
+                out('FAIL', `Get-5hUsage.ps1: decoded $PLAN_API_HOST is not a parseable URL ("${realUrl}")`);
+            } else {
+                out('PASS', `Get-5hUsage.ps1: $PLAN_API_HOST decodes to a valid host (${realHost})`);
+
+                const namedHosts = [
+                    'README.md',
+                    join('skills', 'SKILL.md'),
+                    join('skills', 'mcode-island', 'SKILL.md'),
+                    join('scripts', 'lib', 'Get-5hUsage.ps1'),
+                ];
+                let drift = 0, named = 0;
+                for (const rel of namedHosts) {
+                    const abs = join(PLUGIN_ROOT, rel);
+                    if (!(await exists(abs))) continue;
+                    const text = await readFile(abs, 'utf8');
+                    // Fresh regex per line: no shared lastIndex state.
+                    for (const [i, line] of text.split(/\r?\n/).entries()) {
+                        for (const hit of line.match(/api\.minimax[a-z]*\.(?:com|io|ai|cn)/gi) || []) {
+                            named++;
+                            if (hit.toLowerCase() !== realHost.toLowerCase()) {
+                                out('FAIL', `${rel}:${i + 1}: names "${hit}" but the code calls "${realHost}"`);
+                                drift++;
+                            }
+                        }
+                    }
+                }
+                if (drift === 0) {
+                    out('PASS', `5h disclosure: all ${named} host mention(s) match the real endpoint (${realHost})`);
+                }
+            }
+        }
+    } else {
+        out('FAIL', 'scripts/lib/Get-5hUsage.ps1 missing (disclosure check skipped)');
+    }
+
+    // 8. Log growth is bounded (round-20).
+    //
+    // Contract: the two append-only logs under %APPDATA%\mcode-island\
+    // must cap their own size. mcode-island.ps1 line 7 has documented
+    // "keep only the last 1KB" since the widget was written, but Dbg was
+    // a bare Add-Content and never implemented it -- widget.log reached
+    // 37 MB in 38 days (~3.6 MB/day of POLL lines during active use), and
+    // nothing ever trimmed it. A stated cap that no code enforces is a
+    // comment, not a guarantee, so this check asserts the enforcement
+    // rather than trusting the prose.
+    for (const t of [
+        { rel: 'mcode-island.ps1',        fn: 'Dbg' },
+        { rel: 'mcode-status-detect.ps1', fn: 'Log-Line' },
+    ]) {
+        const abs = join(PLUGIN_ROOT, t.rel);
+        if (!(await exists(abs))) {
+            out('FAIL', `${t.rel} missing (log-cap check skipped)`);
+            continue;
+        }
+        const text = await readFile(abs, 'utf8');
+        const body = text.match(new RegExp(`function\\s+${t.fn}\\s*\\([^)]*\\)\\s*\\{([\\s\\S]*?)\\n\\}`));
+        if (!body) {
+            out('FAIL', `${t.rel}: function ${t.fn} not found (cannot verify the log cap)`);
+            continue;
+        }
+        const src = body[1];
+        const capped = /Length/i.test(src) &&
+                       /(gt|ge|gt\s)/i.test(src) &&
+                       /(SetLength|WriteAllText|Truncate|Get-Content|Rotate|-Tail)/i.test(src);
+        if (!capped) {
+            out('FAIL', `${t.rel}: ${t.fn} appends with no size cap (log grows without bound)`);
+        } else {
+            out('PASS', `${t.rel}: ${t.fn} bounds its own log size`);
+        }
+    }
+
+    // 9. Secret-shaped command text is redacted before it is persisted
+    //    (round-20).
+    //
+    // Contract: tool-input text (Bash commands, Computer Use keystrokes)
+    // is written to status.json, to the append-only logs, and rendered on
+    // an always-on-top pill. The Computer Use branch of Format-ToolSummary
+    // was redacted in round-19 #1; the Bash branch was not, so a command
+    // carrying a bearer token or an API key landed on disk verbatim.
+    //
+    // There are two independent producers of that text -- the hook path
+    // (_lib.ps1) and the detector, which re-derives messages from mcode's
+    // own session log -- so a helper wired into only one of them is a
+    // silent half-fix. The helper therefore lives in a shared lib, and
+    // this check asserts BOTH consumers route through it. Asserting the
+    // helper merely *exists* is the false-green shape: dead code passes it.
+    const protectLibAbs = join(PLUGIN_ROOT, 'scripts', 'lib', 'Protect-Text.ps1');
+    if (!(await exists(protectLibAbs))) {
+        out('FAIL', 'scripts/lib/Protect-Text.ps1 missing (command secrets are persisted verbatim)');
+    } else {
+        const protectLib = await readFile(protectLibAbs, 'utf8');
+        const helper = protectLib.match(/function\s+(Protect-SecretText|Redact-SecretText)/);
+        if (!helper) {
+            out('FAIL', 'scripts/lib/Protect-Text.ps1: Protect-SecretText not defined');
+        } else {
+            out('PASS', `scripts/lib/Protect-Text.ps1: ${helper[1]} defined`);
+
+            for (const consumer of [
+                { rel: join('io.minimax.mcode', 'hooks', 'scripts', '_lib.ps1'),  label: 'hook path' },
+                { rel: 'mcode-status-detect.ps1',                                  label: 'detector' },
+            ]) {
+                const abs = join(PLUGIN_ROOT, consumer.rel);
+                if (!(await exists(abs))) {
+                    out('FAIL', `${consumer.rel} missing (${consumer.label} redaction not verified)`);
+                    continue;
+                }
+                const text = await readFile(abs, 'utf8');
+                if (!/Protect-Text\.ps1/.test(text)) {
+                    out('FAIL', `${consumer.rel}: does not dot-source scripts/lib/Protect-Text.ps1`);
+                    continue;
+                }
+                // The helper is DEFINED in the other file, so every
+                // occurrence of its name in this consumer is an actual
+                // invocation -- the dot-source line names the .ps1 file,
+                // not the function. A consumer that dot-sources but never
+                // calls therefore scores 0 and fails here, which is the
+                // whole point of the check.
+                const uses = (text.match(new RegExp(helper[1], 'g')) || []).length;
+                if (uses < 1) {
+                    out('FAIL', `${consumer.rel}: dot-sources Protect-Text.ps1 but never calls ${helper[1]} (${consumer.label} is unredacted)`);
+                } else {
+                    out('PASS', `${consumer.rel}: ${consumer.label} calls ${helper[1]} (${uses} site(s))`);
+                }
+            }
+        }
+    }
+
+    // 10. Hook invocations survive an install path containing spaces
+    //     (round-20).
+    //
+    // Contract: a plugin can legitimately be installed under a path with
+    // spaces or shell metacharacters, and mcode 0.5.4 explicitly fixed
+    // its own managed updater for exactly that case. ${PLUGIN_ROOT} is
+    // substituted at runtime, so the only way to break a spaced path is
+    // to hand the shell a pre-joined string instead of an argv array.
+    // This asserts the array form survives -- a "command" that embeds the
+    // path in a quoted shell string, or an args entry that is itself a
+    // joined string with embedded quotes, is exactly the regression.
+    const hooksJsonAbs = join(PLUGIN_ROOT, 'io.minimax.mcode', 'hooks', 'hooks.json');
+    if (!(await exists(hooksJsonAbs))) {
+        out('FAIL', 'io.minimax.mcode/hooks/hooks.json missing (space-path check skipped)');
+    } else {
+        let parsed = null;
+        try {
+            parsed = JSON.parse(await readFile(hooksJsonAbs, 'utf8'));
+        } catch (e) {
+            out('FAIL', `io.minimax.mcode/hooks/hooks.json: not parseable as JSON (${e.message})`);
+        }
+        if (parsed) {
+            let entries = 0, bad = 0;
+            for (const [event, list] of Object.entries(parsed.hooks || {})) {
+                for (const h of (Array.isArray(list) ? list : [list])) {
+                    if (!h || typeof h !== 'object') continue;
+                    entries++;
+                    const cmd = typeof h.command === 'string' ? h.command : '';
+                    // A command that inlines the plugin root has been
+                    // flattened into a shell string; ${PLUGIN_ROOT} must
+                    // arrive as its own argv element.
+                    if (cmd.includes('${PLUGIN_ROOT}')) {
+                        out('FAIL', `${event}: command embeds ${PLUGIN_ROOT} ("${cmd}") - breaks on install paths with spaces`);
+                        bad++;
+                    }
+                    if (!Array.isArray(h.args)) {
+                        out('FAIL', `${event}: args is not an array (${JSON.stringify(h.args)}) - a joined string is not space-safe`);
+                        bad++;
+                    } else {
+                        for (const a of h.args) {
+                            if (typeof a === 'string' && /["']\s*\S+\s+.*\s*["']/.test(a)) {
+                                out('FAIL', `${event}: args entry looks pre-quoted/joined ("${a}") - breaks on spaced paths`);
+                                bad++;
+                            }
+                        }
+                    }
+                }
+            }
+            if (bad === 0 && entries > 0) {
+                out('PASS', `hooks.json: all ${entries} hook entr(ies) use argv arrays (space-safe)`);
+            }
+        }
+    }
+
     finish();
 };
 
