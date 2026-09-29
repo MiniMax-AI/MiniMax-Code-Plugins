@@ -446,6 +446,83 @@ function Get-ToolFamily($name) {
   return $null
 }
 
+# Human-readable one-liner for a tool's arguments (round-20 #6).
+#
+# The running-state message used to be built as
+#   "$verb " + (ConvertTo-Json $args -Compress)  truncated to 60 chars
+# which put this on an always-on-top, one-line pill:
+#
+#   Running {"command":"$ErrorActionPreference=\u0027Continue\u0027\n...
+#
+# Escaped quotes, a JSON key, and a truncation that can land mid-token.
+# `skill` is not in $TOOL_ACTIONS or $TOOL_FAMILIES, so it always took
+# that path -- one of the most frequent tools on screen was also the
+# least readable.
+#
+# Contract: return the single most informative field for the tool, or ''
+# when there is nothing worth showing. Callers render the verb alone in
+# that case. Raw JSON is never returned -- there is no fallback to it.
+#
+# Unknown tools get a generic sweep of the common field names before
+# giving up, because the tool taxonomy is hand-maintained and does not
+# cover every tool mcode ships.
+# NB: the second parameter must NOT be called `$args`. That name is a
+# reserved automatic variable in PowerShell, and binding a parameter to
+# it yields the unbound-argument Object[] rather than the object passed in
+# -- verified: `function T($n, $args) { $args.command }` called with
+# `[PSCustomObject]@{command='npm test'}` returns an empty string, because
+# the parameter arrives as Object[]. Symptom is a summary that is empty for
+# every single tool, which looks like "no data" rather than "bad binding".
+function Format-ToolArgs($name, $toolArgs) {
+  if (-not $toolArgs) { return '' }
+  $key  = ([string]$name).ToLowerInvariant()
+  $raw  = ''
+  switch ($key) {
+    'bash'          { $raw = [string]$toolArgs.command }
+    'shell'         { $raw = [string]$toolArgs.command }
+    'read'          { $raw = [string]$toolArgs.file_path }
+    'write'         { $raw = [string]$toolArgs.file_path }
+    'edit'          { $raw = [string]$toolArgs.file_path }
+    'notebookedit'  { $raw = [string]$toolArgs.notebook_path }
+    'grep'          { $raw = [string]$toolArgs.pattern }
+    'glob'          { $raw = [string]$toolArgs.pattern }
+    'list'          { $raw = [string]$toolArgs.path }
+    'search'        { $raw = [string]$toolArgs.query }
+    'web_search'    { $raw = [string]$toolArgs.query }
+    'web_fetch'     { $raw = [string]$toolArgs.url }
+    'skill'         { $raw = [string]$toolArgs.name }
+    'task'          { $raw = [string]$toolArgs.description }
+    'task_output'   { $raw = [string]$toolArgs.task_id }
+    'task_append'   { $raw = [string]$toolArgs.task_id }
+    'task_query'    { $raw = [string]$toolArgs.task_id }
+    default {
+      foreach ($f in 'name','command','file_path','path','pattern','query','url','description','task_id') {
+        if ($toolArgs.PSObject.Properties[$f]) {
+          $v = [string]$toolArgs.$f
+          if (-not [string]::IsNullOrWhiteSpace($v)) { $raw = $v; break }
+        }
+      }
+    }
+  }
+  if ([string]::IsNullOrWhiteSpace($raw)) { return '' }
+
+  # The pill is a single line. A PowerShell or bash command is frequently
+  # multi-line, so take the first non-empty line rather than letting the
+  # body spill in and get truncated mid-token.
+  $first = ''
+  foreach ($ln in ($raw -split "`r?`n")) {
+    if ($ln.Trim() -ne '') { $first = $ln.Trim(); break }
+  }
+  if ([string]::IsNullOrWhiteSpace($first)) { return '' }
+
+  # Same redaction the hook path applies, so a credential in a command
+  # cannot reach the pill or island.log through this route either.
+  $first = Protect-SecretText $first
+  $first = ($first -replace '\s+', ' ').Trim()
+  if ($first.Length -gt 60) { $first = $first.Substring(0, 57) + $DOTS }
+  return $first
+}
+
 # ask_user is the one tool whose "in flight" state means the agent is BLOCKED,
 # not busy. When the questionnaire pops, nothing progresses until the user
 # comes back and answers. Reporting it as `working` tells the user "leave it
@@ -543,17 +620,12 @@ function Infer-State($msg) {
       }
       $verb  = Get-ToolVerb $tool 'running'
       if (-not $verb) { $verb = Get-ToolVerbFallback $tool 'running' }
-      if ($args) {
-        # ConvertTo-Json is a single .NET call; keep it (no pipeline leak).
-        $argsJson = $args | ConvertTo-Json -Compress -Depth 2 -WarningAction SilentlyContinue
-        # Redact BEFORE truncating (round-20). This message reaches
-        # status.json, island.log and the pill, and `$args` is the raw
-        # tool argument object straight out of the session log -- so a
-        # Bash call carrying a bearer token or an API key was persisted
-        # verbatim even after the hook path was redacted.
-        $argsJson = Protect-SecretText $argsJson
-        if ($argsJson.Length -gt 60) { $argsJson = $argsJson.Substring(0, 57) + $DOTS }
-        return @{ state=$S_WORKING; message="$verb $argsJson"; family=(Get-ToolFamily $tool) }
+      # Readable summary, never raw JSON (round-20 #6). When there is
+      # nothing worth showing the pill wears the bare verb, which reads
+      # fine -- "Using" beats "Using {\"name\":\"...\"}".
+      $summary = Format-ToolArgs $tool $args
+      if ($summary) {
+        return @{ state=$S_WORKING; message="$verb $summary"; family=(Get-ToolFamily $tool) }
       }
       return @{ state=$S_WORKING; message=$verb; family=(Get-ToolFamily $tool) }
     }

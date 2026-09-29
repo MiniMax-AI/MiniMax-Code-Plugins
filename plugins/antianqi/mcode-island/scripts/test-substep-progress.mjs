@@ -479,6 +479,125 @@ ${block[0].replace(/\$payload\s*=$/, '')}
 }
 
 // ---------------------------------------------------------------------------
+// 6. The pill never renders raw tool JSON (round-20 #6)
+// ---------------------------------------------------------------------------
+//
+// The detector's `running` message used to be built as
+//   "$verb " + (ConvertTo-Json $args -Compress) truncated to 60 chars
+// which put this on screen:
+//
+//   Running {"command":"$ErrorActionPreference=\u0027Continue\u0027\n...
+//
+// Escaped quotes, a JSON key, and a truncation that can land mid-token.
+// `skill` is not in $TOOL_ACTIONS / $TOOL_FAMILIES, so it always took that
+// JSON path -- meaning one of the most frequent tools on screen was the
+// least readable.
+//
+// The contract: a human-readable field, never the serialised argument
+// object. Unknown tools resolve to the verb alone rather than dumping
+// JSON, because "Using" is a fine pill and "Using {\"name\":...}" is not.
+{
+    const detectPath = join(PLUGIN_ROOT, 'mcode-status-detect.ps1');
+    const detect = readFileSync(detectPath, 'utf8');
+
+    let formatArgs;
+    try {
+        formatArgs = extractFn(detect, 'Format-ToolArgs');
+    } catch (e) {
+        bad('Format-ToolArgs is extractable', e.message);
+    }
+
+    if (!formatArgs) {
+        bad('tool summaries are human-readable, not raw JSON',
+            'Format-ToolArgs not found: the detector still renders ConvertTo-Json output');
+    } else {
+        ok('Format-ToolArgs is extractable');
+
+        const protectLibPath = join(PLUGIN_ROOT, 'scripts', 'lib', 'Protect-Text.ps1');
+        const harness = `
+$ErrorActionPreference = 'Stop'
+. '${protectLibPath.replace(/'/g, "''")}'
+${formatArgs}
+$cases = ConvertFrom-Json $env:ISLAND_TEST_CASES
+foreach ($c in $cases) {
+  # $c.a is already a PSCustomObject -- the outer ConvertFrom-Json turned
+  # the nested object into one. Re-parsing it fails on the '@'.
+  $r = Format-ToolArgs $c.t $c.a
+  '{0}={1}' -f $c.n, $r
+}
+`;
+
+        const cases = [
+            { n: 'bash',      t: 'bash',        a: { command: 'npm test' },                                   want: 'npm test' },
+            { n: 'bashMulti', t: 'bash',        a: { command: "$x = 'Stop'\nGet-ChildItem" },                  want: '$x' },
+            { n: 'read',      t: 'read',        a: { file_path: 'C:\\proj\\a\\file.ts' },                       want: 'file.ts' },
+            { n: 'write',     t: 'write',       a: { file_path: 'C:\\proj\\a\\out.json' },                      want: 'out.json' },
+            { n: 'edit',      t: 'edit',        a: { file_path: 'C:\\proj\\a\\x.ps1' },                         want: 'x.ps1' },
+            { n: 'grep',      t: 'grep',        a: { pattern: 'TODO' },                                       want: 'TODO' },
+            { n: 'glob',      t: 'glob',        a: { pattern: '**/*.ps1' },                                    want: '*.ps1' },
+            { n: 'websearch', t: 'web_search',  a: { query: 'mcode changelog' },                              want: 'mcode changelog' },
+            { n: 'webfetch',  t: 'web_fetch',   a: { url: 'https://example.com/y' },                          want: 'example.com' },
+            // skill is absent from the tool taxonomy: this is the case
+            // that was guaranteed to render as raw JSON.
+            { n: 'skill',     t: 'skill',       a: { name: 'docx' },                                           want: 'docx' },
+            { n: 'taskout',   t: 'task_output', a: { task_id: 'bg_abc123' },                                   want: 'bg_abc123' },
+            // Unknown tool with an unrecognised shape: verb-only, not JSON.
+            { n: 'unknown',   t: 'wibble',      a: { zzz: 1 },                                                want: '' },
+            // Credential in a command must still be redacted on this path.
+            { n: 'secret',    t: 'bash',        a: { command: "curl -H 'Authorization: Bearer eyJhbGciOi.SUPERSECRET'" } },
+        ];
+
+        const out = runPs(
+            `$env:ISLAND_TEST_CASES = '${JSON.stringify(cases).replace(/'/g, "''")}'\n` + harness);
+        const got = {};
+        for (const line of out.split(/\r?\n/)) {
+            const m = line.match(/^(\w+)=(.*)$/);
+            if (m) got[m[1]] = m[2];
+        }
+
+        for (const c of cases) {
+            if (!(c.n in got)) {
+                bad(`summary ${c.n}`, `no output produced (got ${JSON.stringify(out.trim())})`);
+                continue;
+            }
+            const v = got[c.n];
+            // The blanket rule, asserted for every case including the
+            // secret one: nothing JSON-shaped reaches the pill.
+            const jsonish = /\{\s*"|":\s*"|\\u00[0-9a-f]{2}/i.test(v);
+            if (jsonish) {
+                bad(`summary ${c.n}`, `renders raw JSON: ${JSON.stringify(v)}`);
+                continue;
+            }
+            if (c.want === '') {
+                // Unknown tool with nothing worth showing: must be empty,
+                // not merely "not JSON". A partial dump is still a dump.
+                if (v !== '') {
+                    bad(`summary ${c.n}`, `expected empty, got ${JSON.stringify(v)}`);
+                    continue;
+                }
+            } else if (c.want !== undefined) {
+                if (!v.toLowerCase().includes(String(c.want).toLowerCase())) {
+                    bad(`summary ${c.n}`, `expected to contain ${JSON.stringify(c.want)}, got ${JSON.stringify(v)}`);
+                    continue;
+                }
+            }
+            if (c.n === 'secret' && /SUPERSECRET/.test(v)) {
+                bad('summary secret', `credential survived: ${JSON.stringify(v)}`);
+                continue;
+            }
+            ok(`summary ${c.n}${c.want !== undefined ? ` -> ${JSON.stringify(v)}` : ' (redacted)'}`);
+        }
+
+        // A multi-line command must not spill its body onto a one-line pill.
+        if ('bashMulti' in got && /Get-ChildItem/.test(got.bashMulti)) {
+            bad('summary bashMulti', 'a multi-line command leaked its second line onto the pill');
+        } else if ('bashMulti' in got) {
+            ok('summary bashMulti keeps only the first line');
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // summary
 // ---------------------------------------------------------------------------
 
