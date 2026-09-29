@@ -506,13 +506,28 @@ function Format-ToolArgs($name, $toolArgs) {
   }
   if ([string]::IsNullOrWhiteSpace($raw)) { return '' }
 
-  # The pill is a single line. A PowerShell or bash command is frequently
-  # multi-line, so take the first non-empty line rather than letting the
-  # body spill in and get truncated mid-token.
+  # The pill is a single line, and an agent command is usually a short
+  # script rather than one line. Prefer the first line that actually
+  # EXECUTES something over the first line that merely sets the stage.
+  #
+  # `$ErrorActionPreference='Continue'` is the opening line of most agent
+  # commands and says nothing about what is being worked on; reading it
+  # off a status pill is indistinguishable from the pill being stuck. The
+  # first real command below it -- `npm test`, `Get-ChildItem` -- is the
+  # line the user actually wants.
+  $fallback = ''
   $first = ''
   foreach ($ln in ($raw -split "`r?`n")) {
-    if ($ln.Trim() -ne '') { $first = $ln.Trim(); break }
+    $t = $ln.Trim()
+    if ($t -eq '') { continue }
+    if ($fallback -eq '') { $fallback = $t }
+    if ($t.StartsWith('#')) { continue }   # comment
+    if ($t.StartsWith('$')) { continue }   # variable assignment / preference set
+    $first = $t
+    break
   }
+  # Every line was boilerplate. Showing the assignment beats showing nothing.
+  if ($first -eq '') { $first = $fallback }
   if ([string]::IsNullOrWhiteSpace($first)) { return '' }
 
   # Same redaction the hook path applies, so a credential in a command

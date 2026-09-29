@@ -547,7 +547,15 @@ foreach ($c in $cases) {
 
         const cases = [
             { n: 'bash',      t: 'bash',        a: { command: 'npm test' },                                   want: 'npm test' },
-            { n: 'bashMulti', t: 'bash',        a: { command: "$x = 'Stop'\nGet-ChildItem" },                  want: '$x' },
+            // round-20 #8: a leading `$var = ...` preamble is agent boilerplate,
+            // not the work. The first *executed* line is what the user wants
+            // to read on the pill.
+            { n: 'bashMulti', t: 'bash',        a: { command: "$x = 'Stop'\nGet-ChildItem" },                  want: 'Get-ChildItem' },
+            // Every line an assignment: nothing to fall through to, so the
+            // first line must still render rather than the pill going blank.
+            { n: 'bashAllVar', t: 'bash',       a: { command: "$a = 1\n$b = 2" },                               want: '$a = 1' },
+            // Comments are boilerplate too.
+            { n: 'bashComment', t: 'bash',      a: { command: "# setup\nnpm run build" },                       want: 'npm run build' },
             { n: 'read',      t: 'read',        a: { file_path: 'C:\\proj\\a\\file.ts' },                       want: 'file.ts' },
             { n: 'write',     t: 'write',       a: { file_path: 'C:\\proj\\a\\out.json' },                      want: 'out.json' },
             { n: 'edit',      t: 'edit',        a: { file_path: 'C:\\proj\\a\\x.ps1' },                         want: 'x.ps1' },
@@ -606,11 +614,12 @@ foreach ($c in $cases) {
             ok(`summary ${c.n}${c.want !== undefined ? ` -> ${JSON.stringify(v)}` : ' (redacted)'}`);
         }
 
-        // A multi-line command must not spill its body onto a one-line pill.
-        if ('bashMulti' in got && /Get-ChildItem/.test(got.bashMulti)) {
-            bad('summary bashMulti', 'a multi-line command leaked its second line onto the pill');
+        // A multi-line command must not spill its body onto a one-line pill,
+        // and the boilerplate preamble must not be what the user reads.
+        if ('bashMulti' in got && /\$x/.test(got.bashMulti)) {
+            bad('summary bashMulti', 'the variable-assignment preamble was shown instead of the first executed line');
         } else if ('bashMulti' in got) {
-            ok('summary bashMulti keeps only the first line');
+            ok('summary bashMulti skips the assignment preamble');
         }
     }
 }
