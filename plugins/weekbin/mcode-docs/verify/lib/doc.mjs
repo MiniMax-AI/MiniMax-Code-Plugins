@@ -24,8 +24,10 @@ export const PAGES = [
  */
 export function visibleText(html) {
   return html
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+    // 闭合标签的 `>` 前允许带空白 —— 浏览器同样在 `</script >` 处终止脚本。
+    // 漏掉这一类,script/style 源码就会漏进可见文本,污染 doc 断言。
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, ' ')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, ' ')
     .replace(/<!--[\s\S]*?-->/g, ' ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&lt;/g, '<')

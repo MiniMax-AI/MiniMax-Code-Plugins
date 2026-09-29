@@ -5,6 +5,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { createSemaphore, runClaim, runCommand, buildSourceIndex, resetSourceIndex } from '../verify/lib/harness.mjs';
+import { visibleText } from '../verify/lib/doc.mjs';
 import { displayWidth, summarize } from '../verify/lib/report.mjs';
 
 // verify/ 自身的机械回归。
@@ -127,8 +128,30 @@ test('ref 指向未登记的参考手册记 fail,不是静默通过', async () =
   assert.match(r.reason, /nope\.md/);
 });
 
-/* ------------------------------------------------------------ 元数据兜底 */
+test('visibleText 剥掉 script/style,含 `>` 前带空白的闭合标签', () => {
+  // 回归:原先写死 `</script>`,匹配不到 `</script >` —— 而浏览器恰恰在
+  // 空白后终止脚本。漏掉的直接后果是脚本源码漏进可见文本,让 doc 断言
+  // 可能锚在 JS 代码上。上游 CodeQL(js/bad-html-filtering-regexp) 报的就是这条。
+  const html = [
+    '<p>可见正文</p>',
+    '<script>const leak = "脚本里的字";</script >',
+    '<style>.a{color:red}</style\n>',
+    '<p>另一段可见正文</p>',
+  ].join('\n');
 
+  const out = visibleText(html);
+  assert.match(out, /可见正文/);
+  assert.match(out, /另一段可见正文/);
+  assert.doesNotMatch(out, /leak/, 'script 源码泄漏进可见文本');
+  assert.doesNotMatch(out, /脚本里的字/, 'script 源码泄漏进可见文本');
+  assert.doesNotMatch(out, /color:red/, 'style 源码泄漏进可见文本');
+});
+
+test('visibleText 不因标签缺失而静默丢正文', () => {
+  assert.match(visibleText('<p>没有 script</p>'), /没有 script/);
+});
+
+/* ------------------------------------------------------------ 元数据兜底 */
 test('claim 元数据抛错时退化为该条 fail,不掀翻整轮运行', async () => {
   const bad = {
     id: 'a',
