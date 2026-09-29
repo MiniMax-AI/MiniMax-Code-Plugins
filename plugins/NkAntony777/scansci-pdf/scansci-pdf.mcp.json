@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "mcpServers": {
+    "scansci-pdf": {
+      "type": "stdio",
+      "command": "scansci-pdf",
+      "args": ["run"],
+      "description": "学术论文检索与下载 MCP server（20+ 数据源竞速、批量下载、机构访问） / Academic paper search and download MCP server (20+ racing sources, batch download, institutional access)"
+    }
+  }
+}
