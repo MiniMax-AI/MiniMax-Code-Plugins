@@ -1,6 +1,6 @@
 ---
 name: scansci-sort
-description: Sniff-first triage of large reading lists (hundreds to thousands of DOIs): classify into open-access / grey-source / needs-institutional buckets, then route batch downloads per bucket. Use before bulk-downloading any big list. / 大型文献清单分类摸底(嗅探优先)。当用户拿到数百篇以上的文献清单(WOS导出/Excel/DOI列表),要求分类、摸底、区分"哪些是OA开源、哪些Sci-Hub/灰色源有、哪些需机构权限"、为批量下载做路由规划时使用。先30分钟嗅探全分类,再分桶下载,不对全清单跑慢速竞速。
+description: Sniff-first triage of large reading lists (hundreds to thousands of DOIs), classifying into open-access / grey-source / needs-institutional buckets, then routing batch downloads per bucket. Use before bulk-downloading any big list. / 大型文献清单分类摸底(嗅探优先)。当用户拿到数百篇以上的文献清单(WOS导出/Excel/DOI列表),要求分类、摸底、区分"哪些是OA开源、哪些Sci-Hub/灰色源有、哪些需机构权限"、为批量下载做路由规划时使用。先30分钟嗅探全分类,再分桶下载,不对全清单跑慢速竞速。
 ---
 
 # ScanSci Sort — 大清单文献分类摸底
