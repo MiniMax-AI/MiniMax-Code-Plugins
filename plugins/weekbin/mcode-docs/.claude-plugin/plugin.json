@@ -1,0 +1,23 @@
+{
+  "name": "mcode-docs",
+  "version": "0.1.0",
+  "description": "MiniMax Code（mcode）概要说明与事实基线。逐节说明使用形态与安装、CLI 与无头执行全量参数、ACP 接入、52 条 TUI slash 命令全表、配置结构与开关、内置 Agent 与 Skill、插件与 MiniApp 编写契约、Hook 系统完整契约（事件、注册文档、stdin 契约、进程环境白名单、控制输出字段、权限更新、时间预算与诊断码）、MCP 与内置工具、权限模式与 Plan Mode、会话管理。本文档不止罗列功能：每条主张均按 A（本机实跑）／B（厂商随包文件）／C（官方源码定义）／D（运行时真实配置）四级取证，可追溯至 VERIFICATION.md；经核实不存在的能力明确标注为不存在并给出替代路径，而非省略或推测。功能定义取自官方开源仓库源码，界面行为取自本机实跑，取证基线版本 0.5.8。随附中英双语纯静态 HTML 文档站，无构建步骤、无 MCP 服务，可离线阅读。 / Overview and factual baseline for MiniMax Code (mcode). Walks through the usage forms and installation, the complete CLI and headless flag set, ACP integration, all 52 TUI slash commands, configuration structure and switches, the built-in agents and skills, the authoring contracts for plugins and MiniApps, the full Hook contract (events, registration document, stdin contract, process environment allow-list, control output fields, permission updates, time budgets and diagnostic codes), MCP and the built-in tools, permission modes and Plan Mode, and session management. This is not a feature list: every claim is graded A (live run on this machine), B (first-party vendor files shipped in the package), C (authoritative definitions in the official source) or D (real runtime configuration on this machine), and is traceable to VERIFICATION.md. Capabilities checked and found absent are stated as absent together with a substitute path, rather than being omitted or guessed. Functional definitions come from the official open-source repository, interface behaviour comes from live execution on a local installation, and the evidence baseline is version 0.5.8. The documentation site is a bilingual purely static HTML build with no build step and no MCP server, and reads offline.",
+  "author": {
+    "name": "weekbin",
+    "url": "https://github.com/weekbin"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/weekbin/MiniMax-Code-Plugins/tree/main/plugins/weekbin/mcode-docs",
+  "repository": "https://github.com/weekbin/MiniMax-Code-Plugins/tree/main/plugins/weekbin/mcode-docs",
+  "icon": "icon.png",
+  "keywords": [
+    "mcode",
+    "documentation",
+    "reference",
+    "cli",
+    "tui"
+  ],
+  "skills": [
+    "./skills/mcode-docs/SKILL.md"
+  ]
+}

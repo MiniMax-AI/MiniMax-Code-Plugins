@@ -1,0 +1,3 @@
+# 运行结果不进仓库。CI 可把 report.json 作为 artifact 上传。
+*
+!.gitignore

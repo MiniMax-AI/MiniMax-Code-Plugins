@@ -1,0 +1,1173 @@
+/* ============================================================
+   mcode-docs · 静态文档站样式
+   令牌来源：https://platform.minimax.cn/docs/api-reference/api-overview
+     · mint 调色板 14 令牌 —— 页面内联 <style> 的 :root 块，逐字抄录
+     · :root,:host 19 条 —— 官方 Tailwind 主题原语，逐字抄录
+     · --tw-prose-* —— 官方排版令牌（slate 色板），逐字抄录
+     · 其余组件值 —— 页面元素 getComputedStyle 实测
+  ①②③ 三组抄录令牌一律「仅保留本站实际引用项」：声明后若在任何地方都没有
+  var() 引用——包括只被另一个死令牌别名引用的情况——即不保留。
+  全表当前 114 条，声明数与可达数相等（无死变量）。
+   组件几何与中性灰 —— 另据 platform.minimaxi.com 官方文档站截图实测
+     （1920px 视口、浅色主题，1920 宽坐标系逐像素取样，见 ⑥）
+   ⚠ 上游 --tw-prose-* 为偏蓝的 slate 色板，官方文档站**实际渲染**的中性灰
+     与之不同；组件外观以 ⑥ 实测值为准，正文文字色仍沿用 ③。
+   浅色优先（不跟随系统偏好），深色为可选
+   无外部字体 / 无 CDN / 无网络请求
+   ============================================================ */
+
+/* ---------- ① mint 调色板（官方 :root，14 令牌，逐字） ---------- */
+:root {
+  --primary:            24 30 37;
+  --primary-light:      74 222 128;
+  --background-light:   255 255 255;
+  --background-dark:    10 13 13;
+  --gray-50:            243 243 243;
+  --gray-100:           238 238 239;
+  --gray-200:           223 223 223;
+  --gray-400:           159 159 159;
+  --gray-500:           112 112 113;
+  --gray-600:           80 80 81;
+  --gray-700:           63 63 63;
+  --gray-800:           38 38 38;
+  --gray-900:           23 23 23;
+  --gray-950:           10 11 11;
+}
+
+/* ---------- ② Tailwind 主题原语（官方 :root,:host，逐字；仅保留本站实际引用项） ---------- */
+:root, :host {
+  --color-green-400: #4ade80;
+  --color-green-600: #16a34a;
+
+  --text-sm: .875rem;  --text-base: 1rem;
+  --text-lg: 1.125rem; --text-xl: 1.25rem;
+
+  --font-weight-normal: 400;    --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+
+  --tracking-normal: 0em;
+
+  --leading-normal: 1.5;
+
+  --default-transition-duration: .15s;
+  --default-transition-timing-function: cubic-bezier(.4,0,.2,1);
+
+  --default-font-family: var(--font-inter),ui-sans-serif,system-ui,sans-serif,
+    "Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";
+  --default-mono-font-family: var(--font-paper-mono),ui-monospace,SFMono-Regular,
+    Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
+
+  --color-primary: rgb(var(--primary));
+  --color-background-light: rgb(var(--background-light));
+  --color-background-dark: rgb(var(--background-dark));
+
+  --default-border-color: var(--gray-100);
+}
+
+/* ---------- ③ 官方排版令牌 --tw-prose-*（slate 色板，逐字；仅保留本站实际引用项） ---------- */
+:root {
+  --tw-prose-body:          oklch(37.3% .034 259.733);
+  --tw-prose-headings:      oklch(21% .034 264.665);
+  --tw-prose-links:         oklch(21% .034 264.665);
+  --tw-prose-bullets:       oklch(86.9% .005 56.366);
+  --tw-prose-captions:      oklch(55.1% .027 264.364);
+  --tw-prose-kbd:           oklch(21% .034 264.665);
+  --tw-prose-kbd-shadows:   oklab(21% -.00316127 -.0338527/.1);
+  --tw-prose-code:          oklch(21% .034 264.665);
+  --tw-prose-th-borders:    oklch(86.9% .005 56.366);
+}
+
+/* ---------- ④ 语义别名：一律指向官方令牌 ---------- */
+:root {
+  --font-inter:     "Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  --font-paper-mono:"paperMono",ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,
+                    "Liberation Mono","Courier New",monospace;
+
+  /* 以下均为 ①②③ 中官方令牌的引用，不引入新值 */
+  --g-100: var(--gray-100);
+
+  --bg:        var(--color-background-light);
+  --bg-soft:   rgb(var(--gray-50));            /* 实测代码块语言栏 #FAFAFA 的近邻官方面 */
+  --bg-nav:    rgb(var(--background-light));
+  --fg:        var(--tw-prose-body);
+  --fg-strong: rgb(var(--gray-900));
+  --fg-muted:  rgb(var(--gray-500));
+  --fg-faint:  rgb(var(--gray-400));
+  --fg-heading: var(--tw-prose-headings);
+  --fg-link:    var(--tw-prose-links);
+  --link-weight: var(--font-weight-semibold);
+
+  --border:        rgb(var(--default-border-color));
+  --border-soft:   rgb(var(--gray-100));
+  --border-strong: rgb(var(--gray-200));
+
+  --accent:     var(--color-primary);
+  --accent-bg:  rgb(var(--primary) / 0.1);      /* 官网实测侧栏激活态 oklab(0.232…/0.1) */
+
+  --inline-bg:     rgb(var(--gray-100) / 0.5); /* 实测 oklab(...)/0.5 */
+  --inline-fg:     var(--tw-prose-code);
+  --inline-radius: 6px;
+  --inline-pad:    2px 8px;
+
+  /* 代码块：官网实测 灰壳 #F3F3F3 + 黑@10% 描边 + 2px 壳边距，
+     内层白面同为 16px 圆角；行高 21.6px（12px 字号 × 1.8） */
+  --code-fg:    #1F2328;                        /* 实测 shiki github-light-default */
+  --code-bg:    rgb(var(--background-light));    /* 官网内层白面 */
+  --code-shell-bg:    rgb(var(--gray-50));       /* 官网 rgb(243,243,243) */
+  --code-shell-border: rgb(0 0 0 / 0.1);         /* 官网 oklab(0.148…/0.1) */
+  --code-shell-pad:   2px;                        /* 官网 p-0.5 */
+  --code-pad:   14px 16px;
+
+  /* 官网实测 .callout 类名 border-blue-200 bg-blue-50（blue-200 / blue-50），
+     文字色不覆盖，继承正文 */
+  --note-bg:     #EFF6FF;
+  --note-border: #BFDBFE;
+
+  /* 表格分隔线：官网实测 表头 rgb(223,223,223)，行线 rgb(238,238,239) */
+  --table-head-border: #DFDFDF;
+  --table-row-border: rgb(var(--gray-100));
+  --th-fg:        #1E293B;
+
+  --mark-bg: color-mix(in oklab, var(--color-green-400) 30%, transparent);
+
+  --yes-fg: var(--color-green-600);
+  /* 以下取自官方 CSS 内既有的 Tailwind 工具值 */
+  --warn-bg: #FFFBEB;  --warn-border: #FDE68A; /* amber-50 / amber-200 */
+  --no-fg:   #991B1B;                           /* red-800 */
+
+  --ring: color-mix(in srgb, var(--color-primary) 55%, transparent);
+  --hr:   1px solid rgb(var(--default-border-color));   /* 官方 prose hr: border-top-width 1px */
+
+  --font-ui:      var(--default-font-family);
+  --font-display: var(--default-font-family);
+  --font-mono:    var(--default-mono-font-family);
+
+  --navbar-h: 64px;
+  --sidebar-w: 288px;  --toc-w: 212px;  --content-w: 760px;  --radius: 12px;  --radius-sm: 8px;
+  --radius-note: 16px;  --radius-code: 16px;    /* 官网 rounded-2xl */
+
+  color-scheme: light;
+}
+
+/* ---------- ⑥ 官方文档站截图实测（platform.minimaxi.com，1920 视口浅色） ----------
+     逐像素取样所得，与 ①②③ 的蓝调 slate 不同源；组件外观以此为准。 */
+:root {
+  --doc-active-bg:  rgb(232 232 232);   /* 左栏当前项 pill 底 */
+  --doc-active-fg:  rgb(16 17 19);      /* 左栏当前项文字 */
+  --doc-side-fg:    rgb(45 45 45);      /* 左栏非当前项文字 */
+  --doc-toc-fg:     rgb(66 66 66);      /* 右栏 TOC 非当前项 */
+  --doc-toc-on-fg:  rgb(8 9 11);        /* 右栏 TOC 当前项 / 标题 */
+  --doc-card-border: rgb(229 229 229);  /* 卡片描边 */
+  --doc-item-radius: 8px;               /* 左栏 pill 圆角实测 */
+  --doc-item-h: 48px;                   /* 左栏行高实测（pill 47 + 1 行隙） */
+  --doc-search-h: 40px;                 /* 搜索框高 */
+  --doc-search-w: 588px;                /* 搜索框宽（1920 视口） */
+}
+
+/* ---------- ⑤ 暗色：官方 .dark / prose-invert 映射，逐字 ---------- */
+html[data-theme="dark"] {
+  /* 官方 :root.dark 的 prose-invert 组 */
+  --tw-prose-invert-body:          oklch(86.9% .005 56.366);
+  --tw-prose-invert-headings:      #fff;
+  --tw-prose-invert-links:         #fff;
+  --tw-prose-invert-bullets:       oklch(44.4% .011 73.639);
+  --tw-prose-invert-hr:            oklch(37.3% .034 259.733);
+  --tw-prose-invert-captions:      oklch(70.7% .022 261.325);
+  --tw-prose-invert-kbd:           #fff;
+  --tw-prose-invert-kbd-shadows:   #ffffff1a;
+  --tw-prose-invert-code:          #fff;
+  --tw-prose-invert-pre-code:      oklch(86.9% .005 56.366);
+  --tw-prose-invert-th-borders:    oklch(44.4% .011 73.639);
+
+  /* 官方 dark 映射规则 */
+  --tw-prose-body:          var(--tw-prose-invert-body);
+  --tw-prose-headings:      var(--tw-prose-invert-headings);
+  --tw-prose-links:         var(--tw-prose-invert-links);
+  --tw-prose-bullets:       var(--tw-prose-invert-bullets);
+  --tw-prose-captions:      var(--tw-prose-invert-captions);
+  --tw-prose-kbd:           var(--tw-prose-invert-kbd);
+  --tw-prose-kbd-shadows:   var(--tw-prose-invert-kbd-shadows);
+  --tw-prose-code:          var(--tw-prose-invert-code);
+  --tw-prose-th-borders:    var(--tw-prose-invert-th-borders);
+
+  /* 以下全部由 ① 中官方令牌推导，不引入新值 */
+  --bg:          var(--color-background-dark);
+  --bg-soft:     rgb(var(--gray-950));
+  --bg-nav:      rgb(var(--background-dark));
+  --fg:          var(--tw-prose-body);
+  --fg-strong:   var(--tw-prose-invert-headings);
+  --fg-muted:    oklch(70.7% .022 261.325);
+  --fg-faint:    oklch(55.1% .027 264.364);
+  --fg-heading:  var(--tw-prose-invert-headings);
+  --fg-link:     var(--tw-prose-invert-links);
+
+  /* 官方 .dark 的 hr 取值本身即 oklch 颜色，不可再包 rgb()（rgb() 不接受 oklch 实参） */
+  --border:        var(--tw-prose-invert-hr);
+  --border-soft:   rgb(var(--gray-900));
+  --border-strong: rgb(var(--gray-800));
+
+  --accent:     var(--color-primary-light);
+  --accent-bg:  rgb(var(--primary-light) / 0.1);  /* 官网实测 oklab(0.800343…/0.1) */
+
+  --inline-bg:  rgb(var(--gray-900));
+  --inline-fg:  var(--tw-prose-invert-code);
+
+  --code-fg:    var(--tw-prose-invert-pre-code);
+  --code-bg:    #0B0C0E;                                    /* 官网内层 rgb(11,12,14) */
+  --code-shell-bg:    rgb(255 255 255 / 0.05);               /* 官网 oklab(0.9999…/0.05) */
+  --code-shell-border: rgb(255 255 255 / 0.1);               /* 官网 oklab(0.9999…/0.1) */
+
+  /* ⑥ 实测令牌的暗色派生：无官方深色截图，按浅色值的相对明度关系反推，
+     全部落在 ① 的灰阶上，不引入新色 */
+  --doc-active-bg:   rgb(var(--gray-800));
+  --doc-active-fg:   rgb(var(--gray-50));
+  --doc-side-fg:     rgb(var(--gray-400));
+  --doc-toc-fg:      rgb(var(--gray-500));
+  --doc-toc-on-fg:   rgb(var(--gray-50));
+  --doc-card-border: rgb(var(--gray-800));
+
+  /* 提示框暗色：官网页面实测 .callout 的类名为
+     dark:border-blue-900 dark:bg-blue-600/20，文字色不覆盖（继承正文）
+     官方样式表中同构规则还有 dark:bg-green-600/20 / dark:border-green-900 */
+  --note-bg:     oklab(54.615% -.026671 -.213549 / .2);  /* 官方 dark:bg-blue-600/20 */
+  --note-border: #1E3A8A;                                  /* 官方 dark:border-blue-900 */
+
+  /* 深色表格分隔线：官网实测 thead oklab(0.367679…/0.5)、行线 oklab(0.268617…/0.5) */
+  --table-head-border: oklch(0.367679 0.0000168085 0.00000736117 / .5);
+  --table-row-border: oklch(0.268617 0.000012286 0.00000536442 / .5);
+  --th-fg:        #fff;
+
+  --yes-fg:  var(--color-green-400);
+  --warn-bg: oklab(41.3707% .0733197 .0756701 / .2); /* dark:bg-amber-900/20 */
+  --warn-border: oklab(47.3189% .0863082 .0900034 / .5);                /* dark:border-amber-800/50 */
+  --no-fg:   #FECACA;                                                    /* dark:text-red-200 */
+  --ring:    rgb(var(--primary-light) / .9);
+
+  color-scheme: dark;
+}
+
+/* ---------------- 基础 ---------------- */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: var(--text-base);        /* 官方 --text-base: 1rem */
+  line-height: var(--leading-normal); /* 官方 --leading-normal: 1.5 */
+  letter-spacing: var(--tracking-normal);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  * { transition: none !important; animation: none !important; }
+}
+
+p { margin: 0 0 1.05em; }
+strong { color: rgb(var(--gray-900)); font-weight: var(--font-weight-semibold); }
+
+a {
+  color: var(--fg-link);
+  text-decoration: none;
+  transition: color 0.15s ease, text-decoration-color 0.15s ease;
+}
+/* 正文链接：实测 #1E293B + font-weight 600 + 下划线 */
+.doc-section a, .content a, main p a, main li a, main td a {
+  font-weight: var(--link-weight);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+.doc-section a:hover, .content a:hover, main a:hover { color: var(--primary); text-decoration-thickness: 2px; }
+
+/* 分隔线：实测 0.667px #EEEEEF */
+hr {
+  height: 0;
+  margin: 32px 0;
+  border: 0;
+  border-top: var(--hr);
+}
+
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link {
+  position: fixed;
+  top: -60px; left: 12px;
+  z-index: 100;
+  padding: 8px 14px;
+  background: var(--primary);
+  color: #fff;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  font-size: 13.5px;
+}
+.skip-link:focus { top: 0; border-bottom: 0; }
+
+/* ---------------- 导航栏 ---------------- */
+
+.navbar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  height: var(--navbar-h);
+  background: var(--bg-nav);
+  backdrop-filter: saturate(180%) blur(12px);
+  -webkit-backdrop-filter: saturate(180%) blur(12px);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.navbar-inner {
+  position: relative;
+  height: 100%;
+  max-width: 1560px;
+  margin: 0 auto;
+  padding: 0 20px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  color: var(--fg-strong);
+  border-bottom: 0;
+}
+.brand:hover { border-bottom: 0; }
+
+/* 官方 MiniMax 标识（favicon 同源）：粉红→橙红渐变圆角方块 + 白色声波 */
+.brand-mark {
+  width: 28px; height: 28px;
+  flex: none;
+  display: block;
+  border-radius: 8px;
+  object-fit: cover;
+}
+/* 官方图标自带深浅两版配色，无需按主题改色 */
+
+.brand-text { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+.brand-name { font-size: 14.5px; font-weight: 680; letter-spacing: -0.005em; }
+
+/* 搜索框脱离常规流后，需要把右侧图标组重新推回右缘 */
+.repo-link { margin-left: auto; }
+
+/* 官方截图实测：搜索框**居中**，x 666..1253（宽 587）、高约 44、圆角约 10、
+   白底、描边 rgb(223,223,223)~rgb(232,232,232) */
+.search-trigger {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: min(var(--doc-search-w), 46vw);
+  height: var(--doc-search-h);
+  padding: 0 12px 0 14px;
+  border: 1px solid var(--doc-active-bg);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 13.5px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.search-trigger:hover { border-color: var(--border-strong); }
+.search-trigger-label {
+  flex: 1;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search-trigger svg { flex: none; }
+
+.kbd {
+  flex: none;
+  display: inline-block;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--fg-faint);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+
+.icon-btn {
+  flex: none;
+  width: 34px; height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.icon-btn:hover { background: var(--g-100); color: var(--fg-strong); border-color: var(--border-soft); }
+html[data-theme="dark"] .icon-btn:hover { background: rgb(var(--gray-900)); }
+
+.nav-toggle { display: none; }
+
+/* 语言切换：与 .icon-btn 同盒型，仅按文字内容放宽宽度 */
+.lang-btn { width: auto; min-width: 34px; padding: 0 9px; text-decoration: none; }
+.lang-label {
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
+
+.icon-moon { display: none; }
+html[data-theme="dark"] .icon-sun { display: none; }
+html[data-theme="dark"] .icon-moon { display: block; }
+
+/* ---------------- 布局 ---------------- */
+
+.layout {
+  max-width: 1560px;
+  margin: 0 auto;
+  padding: 0 20px;
+  display: grid;
+  grid-template-columns: var(--sidebar-w) minmax(0, var(--content-w)) var(--toc-w);
+  gap: 40px;
+  align-items: start;
+}
+
+.sidebar {
+  position: sticky;
+  top: calc(var(--navbar-h) + 12px);
+  max-height: calc(100vh - var(--navbar-h) - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 22px 4px 40px 0;
+}
+
+.sidenav-list { list-style: none; margin: 0; padding: 0; }
+.sidenav-list li + li { margin-top: 0; }
+/* 官方截图实测：pill 高 47px、行距 48px、圆角 8px、**无左侧竖线** */
+.sidenav-list a {
+  display: block;
+  min-height: var(--doc-item-h);
+  padding: 12px 12px 12px 16px;
+  border-radius: var(--doc-item-radius);
+  color: var(--doc-side-fg);
+  font-size: 14px;
+  line-height: 24px;
+  border-bottom: 0;
+  transition: color 0.14s ease, background 0.14s ease;
+}
+.sidenav-list a:hover { color: var(--doc-active-fg); background: var(--doc-active-bg); border-bottom: 0; }
+html[data-theme="dark"] .sidenav-list a:hover { background: rgb(var(--gray-900)); }
+.sidenav-list a[aria-current="true"] {
+  color: var(--doc-active-fg);
+  background: var(--doc-active-bg);
+  font-weight: 500;
+}
+
+.content {
+  min-width: 0;
+  /* 正文容器与 body 同为 --text-base。原为 18px（官方 prose 容器实测），
+     但正文内各元素另有实测值：列表 16px、表格 14px、callout 16px、
+     card 14.2px，导致裸 <p> 18px 与紧邻的列表 16px 在同一段里差一档。
+     统一到 --text-base 后，段落与列表同为 16px，层级只由 h2/h3/h4 表达。 */
+  font-size: var(--text-base);
+  line-height: 28px;
+  padding: 30px 0 96px;
+}
+
+.toc {
+  position: sticky;
+  top: calc(var(--navbar-h) + 12px);
+  max-height: calc(100vh - var(--navbar-h) - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 30px 0 40px 2px;
+}
+/* 官方截图实测：条目**无左侧竖线**、非 uppercase；
+   当前项 rgb(8,9,11)，非当前项 rgb(66,66,66) */
+.toc a {
+  display: block;
+  padding: 5px 0;
+  color: var(--doc-toc-fg);
+  font-size: 13px;
+  line-height: 1.55;
+  border-bottom: 0;
+  transition: color 0.14s ease;
+}
+.toc a:hover { color: var(--doc-toc-on-fg); border-bottom: 0; }
+.toc a.toc-h3 { padding-left: 14px; font-size: 12.5px; }
+.toc a[aria-current="true"] {
+  color: var(--doc-toc-on-fg);
+  font-weight: 600;
+}
+
+/* ---------------- 排版 ---------------- */
+
+.doc-section { padding-bottom: 14px; }
+
+.page-title {
+  margin: 6px 0 16px;
+  color: var(--fg-strong);
+  font-family: var(--font-display);
+  font-size: 36px;
+  line-height: 40px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+
+.lede {
+  color: var(--fg);
+  font-size: 16px;
+  line-height: 24px;
+}
+
+.h2 {
+  margin: 52px 0 16px;
+  padding-top: 26px;
+  border-top: 1px solid var(--border-soft);
+  color: var(--fg-heading);
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 32px;
+  letter-spacing: -0.025em;
+}
+.doc-section:first-child .h2 { border-top: 0; padding-top: 8px; }
+
+.h3 {
+  margin: 36px 0 10px;
+  color: var(--fg-heading);
+  font-family: var(--font-display);
+  font-size: 18px;
+  line-height: 28px;
+  font-weight: 600;
+  letter-spacing: -0.006em;
+}
+
+.h4 {
+  margin: 22px 0 8px;
+  color: var(--fg-strong);
+  font-size: var(--text-base);        /* 与正文齐平：靠 660 字重与 --fg-strong 区分，
+                                          不小于它所辖的正文，也不与 .h3 的 18px 抢层级 */
+  font-weight: 660;
+  line-height: 1.6;
+}
+
+:target { scroll-margin-top: calc(var(--navbar-h) + 18px); }
+.h1, .h2, .h3, .h4, .page-title { scroll-margin-top: calc(var(--navbar-h) + 18px); }
+
+.anchor {
+  margin-left: 8px;
+  color: var(--fg-faint);
+  font-weight: 400;
+  font-size: 0.78em;
+  opacity: 0;
+  border-bottom: 0;
+  transition: opacity 0.14s ease, color 0.14s ease;
+}
+.h1:hover .anchor, .h2:hover .anchor, .h3:hover .anchor, .h4:hover .anchor,
+.anchor:focus-visible { opacity: 1; }
+.anchor:hover { color: var(--accent); border-bottom: 0; }
+
+.flash { animation: flash 1.5s ease-out; }
+@keyframes flash {
+  0%, 40% { background: var(--mark-bg); }
+  100%    { background: transparent; }
+}
+
+/* 列表 —— 官方 prose 实测值：ul 去标记，li 用 ::before 画 6px 灰点
+   作用域限定在正文容器（官方该组规则挂在 .prose 下），
+   避免污染侧栏 .sidenav-list 与搜索结果 .search-results */
+.content ul {
+  margin: 0 0 20px;
+  padding-left: 0;
+  list-style-type: none;
+}
+.content ol {
+  margin: 1.25em 0;
+  padding-inline-start: 1.625em;
+  list-style-type: decimal;
+}
+.content li {
+  position: relative;
+  margin: 8px 0;
+  padding-left: 32px;
+  list-style-type: none;
+}
+.content li::before {
+  content: "";
+  display: block;
+  position: absolute;
+  left: 8px;
+  top: 0.62em;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgb(var(--gray-600));
+}
+.content ol > li { padding-left: 0; }
+.content ol > li::before { content: none; }
+.content li > ul, .content li > ol { margin: 8px 0; }
+.content li::marker { color: var(--tw-prose-bullets); }
+
+/* 行内代码 */
+code {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  padding: var(--inline-pad);
+  border-radius: var(--inline-radius);
+  background: var(--inline-bg);
+  color: var(--inline-fg);
+  word-break: break-word;
+}
+a code { color: inherit; }
+
+/* 代码块 */
+/* 官方代码块为「灰壳 + 白色内层」双层结构：
+   外壳 rounded-2xl p-0.5 边框黑@10%，内层白面同样 16px 圆角 */
+.code-block {
+  position: relative;
+  margin: 0 0 1.2em;
+  padding: var(--code-shell-pad);
+  border: 1px solid var(--code-shell-border);
+  border-radius: var(--radius-code);
+  background: var(--code-shell-bg);
+}
+.code-head {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 10px 0 12px;
+  color: var(--fg-muted);
+}
+.code-lang {
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.code-block pre {
+  margin: 0;
+  padding: var(--code-pad);
+  border-radius: var(--radius-code);
+  background: var(--code-bg);
+  overflow-x: auto;
+  line-height: 21.6px;
+  scrollbar-width: thin;
+}
+.code-block code {
+  display: block;
+  padding: 0;
+  background: none;
+  color: var(--code-fg);
+  font-size: 12px;
+  line-height: 21.6px;
+  white-space: pre;
+  word-break: normal;
+  tab-size: 2;
+}
+
+.copy-btn {
+  /* 官方代码块复制按钮实测：26x26 透明底 / radius 6px / 文字 --gray-950 / 无边框 */
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: rgb(var(--gray-950));
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--default-transition-duration)
+              var(--default-transition-timing-function),
+              background-color var(--default-transition-duration)
+              var(--default-transition-timing-function),
+              color var(--default-transition-duration)
+              var(--default-transition-timing-function);
+}
+.copy-btn svg { display: block; pointer-events: none; }
+.code-block:hover .copy-btn,
+.copy-btn:focus-visible { opacity: 1; }
+.copy-btn:hover { background: rgb(var(--gray-100)); color: rgb(var(--gray-950)); }
+.copy-btn.is-done {
+  opacity: 1;
+  color: var(--yes-fg);
+}
+.copy-btn.is-fail {
+  opacity: 1;
+  color: var(--no-fg);
+}
+html[data-theme="dark"] .copy-btn { color: rgb(var(--gray-100)); }
+html[data-theme="dark"] .copy-btn:hover { background: rgb(var(--gray-800)); }
+
+/* 官方 .prose 体系中本文档用到的其余元素（此前遗漏） */
+
+/* h4：见上方 .h4（15px）。此处原有 `.h4, .doc-section h4 { font-size: 1.125em }`，
+   特异度更高且位置更靠后，把 .h4 覆盖成 20.25px —— 大于 .h3 的 18px，
+   41 个三级标题全部比其上方的二级标题还大。整条规则的每一项声明都与
+   上方 .h4 规则冲突，不提供任何独有样式，故整条移除。 */
+
+/* em */
+em { font-style: italic; }
+
+/* blockquote */
+blockquote {
+  margin-top: 1.6em;
+  margin-bottom: 1.6em;
+  padding-left: 1.5rem;
+  border-left: 4px solid rgb(var(--gray-200));
+  color: rgb(var(--gray-700));
+  font-style: normal;
+  font-weight: var(--font-weight-normal);
+}
+blockquote p:last-child { margin-bottom: 0; }
+
+/* kbd */
+kbd {
+  padding: 0.2em 0.4em 0.3em;
+  border-radius: 4px;
+  color: var(--tw-prose-kbd);
+  background: rgb(var(--background-light));
+  box-shadow: inset 0 0 0 1px var(--tw-prose-th-borders), 0 1px 2px var(--tw-prose-kbd-shadows);
+  font-family: var(--font-mono);
+  font-size: 0.75em;
+  font-weight: var(--font-weight-semibold);
+}
+
+/* small */
+small { font-size: 0.875em; font-weight: var(--font-weight-medium); color: rgb(var(--gray-500)); }
+
+/* sub / sup */
+sub, sup { font-size: 0.75em; line-height: 0; position: relative; vertical-align: baseline; }
+sup { top: -0.5em; }
+sub { bottom: -0.25em; }
+
+/* figure / caption */
+figure { margin: 1.6em 0; }
+figcaption, caption {
+  margin-top: 0.5em;
+  color: var(--tw-prose-captions);
+  font-size: 0.875em;
+}
+
+/* del / ins */
+del { text-decoration: line-through; }
+ins { text-decoration: underline; }
+
+/* ---------------- 表格 ---------------- */
+
+/* 官网表格无外框、无单元格边框、无底色、无阴影；
+   分隔线只画在 thead 与 tbody tr 上，表头线比行线更深 */
+.table-wrap {
+  margin: 0 0 1.3em;
+  overflow-x: auto;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  line-height: 20px;
+}
+thead {
+  border-bottom: 1px solid var(--table-head-border);
+}
+tbody tr {
+  border-bottom: 1px solid var(--table-row-border);
+}
+thead th {
+  padding: 0 8px 8px 0;
+  color: var(--th-fg);
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+tbody td {
+  padding: 8px 8px 8px 0;
+  color: var(--fg);
+  vertical-align: top;
+}
+tbody tr:last-child { border-bottom: 0; }
+tbody tr:hover td { background: var(--bg-soft); }
+/* 单元格内标识符不折行；仅当 <code> 与正文混排时允许换行 */
+td code { white-space: nowrap; }
+td code:not(:only-child) { white-space: normal; }
+
+/* ---------------- 提示框 ---------------- */
+
+/* 官网实测：callout 16px/28px、16px 圆角、16px 20px 内边距、无阴影 */
+.callout {
+  margin: 0 0 1.3em;
+  padding: 16px 20px;
+  border: 1px solid var(--note-border);
+  border-radius: var(--radius-note);
+  background: var(--note-bg);
+  color: var(--fg);
+  font-size: 16px;
+  line-height: 28px;
+  overflow: hidden;
+}
+.callout > :last-child { margin-bottom: 0; }
+.callout ul, .callout ol { margin-bottom: 0.2em; }
+.callout .table-wrap { margin-top: 8px; background: var(--bg); }
+
+/* 官方 .callout 盒型：rounded-2xl + 1px 整框描边 + 整框底色，无左侧强调条 */
+.callout-warn   { background: var(--warn-bg); border-color: var(--warn-border); }
+
+/* ---------------- 统计条 / 卡片 ---------------- */
+
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+  gap: 10px;
+  margin: 0 0 1.8em;
+}
+.stat {
+  padding: 16px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-soft);
+  text-align: center;
+}
+.stat-num {
+  display: block;
+  color: var(--fg-strong);
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+.stat-label {
+  display: block;
+  color: var(--fg-muted);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 16px;
+  margin: 0 0 1.6em;
+}
+/* 官网为扁平设计：导航、提示框、表格、代码块均无 box-shadow，
+   卡片同样只靠 1px 描边区分，悬停时描边加深 */
+/* 官方截图实测：白底、描边 rgb(229,229,229)、圆角 12、卡片间距 22、
+   图标距卡片左缘 31px */
+.card {
+  padding: 26px 30px;
+  border: 1px solid var(--doc-card-border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  transition: border-color .18s ease;
+}
+.card:hover { border-color: var(--border-strong); }
+.card p { margin: 0; font-size: 14.2px; line-height: 1.75; }
+.card-title {
+  color: var(--fg-strong) !important;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 15px !important;
+  margin-bottom: 7px !important;
+}
+
+.cmd-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 1.2em;
+}
+.cmd-strip code {
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-soft);
+  font-size: 12.4px;
+  white-space: nowrap;
+}
+
+/* ---------------- 搜索弹层 ---------------- */
+
+.search-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 11vh 16px 16px;
+}
+.search-modal[hidden] { display: none; }
+.search-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 11, 11, 0.52);
+  backdrop-filter: blur(2px);
+}
+.search-panel {
+  position: relative;
+  width: min(640px, 100%);
+  max-height: 74vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--bg);
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+.search-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--fg-muted);
+}
+.search-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-strong);
+  font: inherit;
+  font-size: 15px;
+  outline: none;
+}
+.search-input::placeholder { color: var(--fg-faint); }
+
+.search-results {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+  flex: 1;
+}
+.search-results:empty { display: none; }
+.search-result {
+  display: block;
+  padding: 8px 11px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.search-result[aria-selected="true"] { background: var(--accent-bg); }
+.search-result-title {
+  display: block;
+  color: var(--fg-strong);
+  font-size: 14px;
+  font-weight: 620;
+  line-height: 1.5;
+}
+.search-result-kind {
+  margin-left: 7px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--fg-faint);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  vertical-align: 1px;
+}
+.search-result-snippet {
+  display: block;
+  margin-top: 2px;
+  color: var(--fg-muted);
+  font-size: 12.6px;
+  line-height: 1.6;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.search-result-snippet mark {
+  padding: 0 1px;
+  border-radius: 3px;
+  background: var(--mark-bg);
+  color: inherit;
+}
+.search-empty {
+  padding: 22px 12px;
+  color: var(--fg-faint);
+  font-size: 13.5px;
+  text-align: center;
+}
+.search-hint {
+  margin: 0;
+  padding: 8px 13px;
+  border-top: 1px solid var(--border-soft);
+  color: var(--fg-faint);
+  font-size: 11.5px;
+  line-height: 1.9;
+}
+.search-hint .kbd { margin: 0 1px; }
+
+/* ---------------- 遮罩（移动端抽屉） ---------------- */
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 44;
+  background: rgba(10, 11, 11, 0.45);
+}
+.scrim[hidden] { display: none; }
+
+/* ---------------- 响应式 ---------------- */
+
+@media (max-width: 1240px) {
+  .layout { grid-template-columns: var(--sidebar-w) minmax(0, 1fr); gap: 32px; }
+  .toc { display: none; }
+}
+
+@media (max-width: 1024px) {
+  :root { --content-w: 100%; }
+  .nav-toggle { display: grid; }
+  /* 窄屏放弃居中，回到常规流内，避免与品牌区/右侧图标组重叠 */
+  .search-trigger {
+    position: static;
+    transform: none;
+    width: min(280px, 40vw);
+    height: 38px;
+  }
+
+  .layout { grid-template-columns: minmax(0, 1fr); padding: 0 18px; }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 45;
+    width: 282px;
+    max-width: 84vw;
+    height: 100vh;
+    max-height: 100vh;
+    padding: 20px 10px 40px 14px;
+    background: var(--bg);
+    border-right: 1px solid var(--border);
+    transform: translateX(-102%);
+    transition: transform 0.22s ease;
+    box-shadow: 12px 0 34px rgba(0, 0, 0, 0.16);
+  }
+  .sidebar.is-open { transform: translateX(0); }
+  .content { padding-top: 22px; }
+}
+
+@media (max-width: 620px) {
+  body { font-size: 15px; }
+  .navbar-inner { padding: 0 13px; gap: 9px; }
+  .layout { padding: 0 13px; }
+  .brand-name { font-size: 13.5px; }
+  .search-trigger { width: 34px; padding: 0; justify-content: center; }
+  .search-trigger-label, .search-trigger .kbd { display: none; }
+  .page-title { font-size: 26px; }
+  .lede { font-size: var(--text-sm); }      /* 官方 --text-sm: .875rem */
+  .h2 { font-size: var(--text-xl); }       /* 官方 --text-xl: 1.25rem */
+  .h3 { font-size: var(--text-lg); }       /* 官方 --text-lg: 1.125rem */
+  .stat-row { grid-template-columns: repeat(auto-fit, minmax(74px, 1fr)); }
+  .code-block pre { padding: 11px 12px; }
+  .code-block code { font-size: 12.2px; }
+  .copy-btn { opacity: 1; }
+  table { font-size: 13px; }
+  thead th, tbody td { padding: 7px 10px; }
+}
+
+@media print {
+  .navbar, .sidebar, .toc, .search-modal, .copy-btn, .scrim { display: none !important; }
+  .layout { display: block; max-width: none; }
+  body { font-size: 11pt; }
+  .code-block { break-inside: avoid; }
+}
+
+/* ---------------- 暗色下的官网化处理 ---------------- */
+
+/* .card 使用固定白底 surface，暗色下需回落到柔和面 */
+html[data-theme="dark"] .card { background: var(--bg-soft); }
+html[data-theme="dark"] .stat { background: var(--bg-soft); }
+
+/* 深色下激活态的文字与底色已由 ⑥ 的 --doc-active-fg / --doc-active-bg 随主题派生，
+   此处不再另写覆盖规则，避免与令牌打架 */
+
+/* 官方 .prose strong:is(.dark *) { color: rgb(var(--gray-50)) } —— 逐字照搬 */
+html[data-theme="dark"] .content strong { color: rgb(var(--gray-50)); }
+
+/* ---------------- 架构图组件 ----------------
+   主题感知：一律走既有语义令牌（--fg / --fg-muted / --border / --accent-bg），
+   暗色由 html[data-theme="dark"] 的令牌覆盖自动生效，图内不写死颜色。
+   图形用 SVG 而非图片：可随字号缩放、可被搜索命中、离线无请求。 */
+.diagram {
+  margin: 0 0 1.4em;
+  padding: 20px 16px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-note);
+  background: var(--bg-soft);
+  overflow-x: auto;
+}
+
+.diagram svg { display: block; width: 100%; height: auto; min-width: 560px; }
+
+.diagram figcaption {
+  margin-top: 12px;
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  color: var(--fg-muted);
+  text-align: center;
+}
+
+/* 节点 */
+.dg-node   { fill: var(--bg); stroke: var(--border-strong); stroke-width: 1; }
+.dg-node-core { fill: var(--accent-bg); stroke: var(--accent); stroke-width: 1.5; }
+.dg-node-seam { fill: var(--accent-bg); stroke: var(--accent); stroke-width: 2; }
+.dg-node-muted { fill: var(--bg); stroke: var(--border-soft); stroke-width: 1; stroke-dasharray: 4 3; }
+
+/* 文字 */
+.dg-t      { fill: var(--fg);        font-weight: 500; }
+.dg-t-sub  { fill: var(--fg-muted);  font-weight: 400; }
+.dg-t-core { fill: var(--fg-strong); font-weight: 600; }
+.dg-t-mono { fill: var(--fg-muted);  font-weight: 400; }
+
+/* 连线 */
+.dg-edge   { stroke: var(--fg-faint); stroke-width: 1.5; fill: none; }
+.dg-edge-core { stroke: var(--accent); stroke-width: 2; fill: none; }
+
+/* 分组底纹 */
+.dg-band   { fill: var(--inline-bg); stroke: var(--border-soft); stroke-width: 1; }
+.dg-band-label { fill: var(--fg-faint); font-weight: 500; }

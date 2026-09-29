@@ -1,0 +1,1802 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCode · MiniMax Code Overview</title>
+<meta name="description" content="Overview and factual baseline for MiniMax Code (mcode). Walks through the usage forms and installation, the complete CLI and headless flag set, ACP integration, the TUI slash command table, configuration structure and switches, the built-in agents and skills, the authoring contracts for plugins and MiniApps, the full Hook contract, MCP and the built-in tools, permission modes and Plan Mode, and session management. Capabilities that were checked and found absent are stated as absent together with a substitute path. Baseline version 0.5.8. Ships with a bilingual, purely static HTML documentation site: no build step, no MCP server, readable offline.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" type="image/png" href="assets/minimax.png">
+<link rel="stylesheet" href="assets/style.css">
+<script>
+  // Pre-paint theme resolution (must run before first paint to avoid a flash).
+  // Light is the default and is NOT overridden by the OS preference:
+  // this site follows the MiniMax official-site convention of a light-first
+  // reading experience. Dark mode is opt-in and persists once chosen.
+  (function () {
+    try {
+      var saved = localStorage.getItem('mcode-docs-theme');
+      var theme = saved === 'light' || saved === 'dark' ? saved : 'light';
+      document.documentElement.setAttribute('data-theme', theme);
+    } catch (e) {
+      document.documentElement.setAttribute('data-theme', 'light');
+    }
+  })();
+</script>
+</head>
+<body>
+
+<a class="skip-link" href="#main">Skip to main content</a>
+
+<header class="navbar" id="navbar">
+  <div class="navbar-inner">
+    <button type="button" class="icon-btn nav-toggle" id="navToggle" aria-expanded="false" aria-controls="sidebar" aria-label="Open side navigation">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M3 6h18M3 12h18M3 18h18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    </button>
+
+    <a class="brand" href="#intro">
+      <img class="brand-mark" src="assets/minimax.png" width="28" height="28" alt="">
+      <span class="brand-text">
+        <span class="brand-name">MCode Docs</span>
+      </span>
+    </a>
+
+    <button type="button" class="search-trigger" id="searchTrigger" aria-label="Open search (shortcut Ctrl or Cmd + K)">
+      <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="6.2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M15.6 15.6L20 20" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+      <span class="search-trigger-label">Search…</span>
+      <kbd class="kbd">Ctrl K</kbd>
+    </button>
+
+    <a class="icon-btn repo-link" href="https://github.com/MiniMax-AI/minimax-code" target="_blank" rel="noreferrer noopener" aria-label="View the official mcode repository (GitHub, opens in a new window)" title="Official mcode repository · GitHub">
+      <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" focusable="false"><path d="M8.6 7.4 4 12l4.6 4.6M15.4 7.4 20 12l-4.6 4.6M13.7 5.1l-3.4 13.8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </a>
+
+    <a class="icon-btn lang-btn" id="langSwitch" href="index.html" hreflang="zh-CN" aria-label="Currently in English, switch to 中文" title="Switch to 中文">
+      <span class="lang-label" aria-hidden="true">EN</span>
+    </a>
+
+    <button type="button" class="icon-btn" id="themeToggle" aria-label="Toggle dark / light theme" aria-pressed="false">
+      <svg class="icon-sun" viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.4 5.4l1.6 1.6M17 17l1.6 1.6M18.6 5.4L17 7M7 17l-1.6 1.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+      <svg class="icon-moon" viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" focusable="false"><path d="M20 14.2A8.2 8.2 0 019.8 4 8.4 8.4 0 1020 14.2z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+    </button>
+  </div>
+</header>
+
+<div class="scrim" id="scrim" hidden></div>
+
+<div class="layout">
+  <aside class="sidebar" id="sidebar" aria-label="Documentation navigation">
+    <nav class="sidenav">
+      <ul class="sidenav-list">
+        <li><a href="#intro">Overview</a></li>
+        <li><a href="#quickstart">Quick Start</a></li>
+        <li><a href="#cli">CLI &amp; Headless</a></li>
+        <li><a href="#commands">TUI Commands</a></li>
+        <li><a href="#config">Configuration</a></li>
+        <li><a href="#agents-skills">Agents &amp; Skills</a></li>
+        <li><a href="#plugins-hooks">Plugins</a></li>
+        <li><a href="#miniapp">MiniApp</a></li>
+        <li><a href="#mcp-browser">MCP &amp; Tools</a></li>
+        <li><a href="#permissions">Permissions &amp; Sessions</a></li>
+        <li><a href="#sharing">Sharing</a></li>
+      </ul>
+    </nav>
+  </aside>
+
+  <main class="content" id="main">
+
+    <!-- ══════════════════ 1. Overview ══════════════════ -->
+    <section class="doc-section" id="intro" aria-labelledby="h-intro">
+      <h1 class="page-title" id="h-intro">MCode Overview</h1>
+      <p class="lede">
+        MiniMax Code (<code>mcode</code>) is an AI coding agent that runs in the terminal: it parses codebases,
+        modifies files, runs commands and executes tests, and stores every unit of work as a resumable Session.
+        The sections below cover its command-line surface, command set, configuration, extension mechanisms
+        and permission model.
+      </p>
+
+      <h2 class="h2" id="h-three-forms">Three Usage Forms</h2>
+      <p>All three forms <strong>share one in-process Runtime lifecycle</strong>:</p>
+      <div class="card-grid">
+        <div class="card">
+          <p class="card-title"><code>mcode</code> · Interactive TUI</p>
+          <p>Starts the interactive terminal interface, with Composer, session view, status line and slash commands.</p>
+        </div>
+        <div class="card">
+          <p class="card-title"><code>mcode exec</code> · Headless</p>
+          <p>Runs a single task without the TUI, for use from scripts and CI.</p>
+        </div>
+        <div class="card">
+          <p class="card-title"><code>mcode acp</code> · ACP</p>
+          <p>Runs as an Agent Client Protocol service over stdio, for editors that support ACP.</p>
+        </div>
+      </div>
+
+      <h2 class="h2" id="h-install">Installation</h2>
+      <p>Requires Node.js <code>&gt;=22.19 &lt;23</code> or <code>&gt;=24 &lt;27</code>:</p>
+
+      <div class="code-block" data-lang="bash">
+        <div class="code-head"><span class="code-lang">bash</span></div>
+        <pre><code>npm install -g @minimax-ai/code \
+  --allow-scripts=@minimax-ai/code,better-sqlite3 \
+  --registry=https://registry.npmjs.org/</code></pre>
+      </div>
+
+      <p>Installation provides two commands, <code>mcode</code> and <code>mcode-tools</code>; <code>mcode-tools</code> is placed on <code>PATH</code> and needs no prior TUI launch. Uninstall with <code>npm uninstall -g @minimax-ai/code</code>, update with <code>mcode update</code>.</p>
+
+    </section>
+
+    <!-- ══════════════════ 2. Quick Start ══════════════════ -->
+    <section class="doc-section" id="quickstart" aria-labelledby="h-quickstart">
+      <h2 class="h2" id="h-quickstart">Quick Start</h2>
+
+      <p>Common commands:</p>
+      <div class="code-block" data-lang="bash">
+        <div class="code-head"><span class="code-lang">bash</span></div>
+        <pre><code>mcode                      # start the TUI
+mcode "task description"    # start with an initial task
+mcode --continue           # resume the most recent Session in this workspace
+mcode --session            # browse Sessions
+mcode --session &lt;id&gt;       # open by ID
+mcode --tui-mode fullscreen
+mcode -m &lt;provider/model&gt;  # switch model for this Session only
+mcode init                 # analyze the codebase and generate AGENTS.md
+mcode exec "..."           # run one headless task
+mcode exec review          # review staged/unstaged/untracked changes
+mcode acp                  # run as an ACP service
+mcode login / logout       # sign-in state (--region cn|global)
+mcode update
+mcode provider list|add|remove|test|use|set-minimax-key
+mcode plugin list|add|remove|enable|disable|marketplace</code></pre>
+      </div>
+
+      <p>See <a href="#cli">CLI, Headless &amp; ACP</a> for the full flag set.</p>
+    </section>
+
+    <!-- ══════════════════ 3. CLI and Headless ══════════════════ -->
+    <section class="doc-section" id="cli" aria-labelledby="h-cli">
+      <h2 class="h2" id="h-cli">CLI &amp; Headless</h2>
+      <p>The complete flag set follows.</p>
+
+      <h3 class="h3" id="h-cli-install">Installation &amp; Update</h3>
+      <div class="code-block" data-lang="bash">
+        <div class="code-head"><span class="code-lang">bash</span></div>
+        <pre><code>mcode --version          # print the version number
+mcode update             # check for and install an update
+npm uninstall -g @minimax-ai/code</code></pre>
+      </div>
+
+      <h3 class="h3" id="h-top-commands">Top-Level Commands</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Command</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>mcode [prompt]</code></td><td>Start the interactive TUI</td></tr>
+            <tr><td><code>mcode init [directory]</code></td><td>Analyze the codebase to create or complete <code>AGENTS.md</code> (using the built-in <code>init</code> Skill)</td></tr>
+            <tr><td><code>mcode exec [prompt]</code></td><td>Run a single task without starting the TUI</td></tr>
+            <tr><td><code>mcode exec review</code></td><td>Review staged, unstaged and untracked local changes</td></tr>
+            <tr><td><code>mcode acp</code></td><td>Run as an Agent Client Protocol service (stdio)</td></tr>
+            <tr><td><code>mcode login</code> / <code>logout</code></td><td>Manage sign-in state, <code>--region cn|global</code>; <code>login</code> also accepts <code>--no-browser</code></td></tr>
+            <tr><td><code>mcode update</code></td><td>Check for and install an update</td></tr>
+            <tr><td><code>mcode provider ...</code></td><td><code>list</code> / <code>add</code> / <code>remove</code> / <code>test</code> / <code>use</code> / <code>set-minimax-key</code></td></tr>
+            <tr><td><code>mcode plugin ...</code></td><td><code>list</code> / <code>add</code> / <code>remove</code> / <code>enable</code> / <code>disable</code> / <code>marketplace</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="h3" id="h-global-options">Global Options</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Option</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>-V, --version</code></td><td>Print the version number</td></tr>
+            <tr><td><code>-m, --model &lt;provider/model&gt;</code></td><td>Select a model for this Session only</td></tr>
+            <tr><td><code>--session [id]</code></td><td>Opens the Session picker when the id is omitted</td></tr>
+            <tr><td><code>-c, --continue</code></td><td>Resume the most recent Session in the current workspace</td></tr>
+            <tr><td><code>--tui-mode &lt;mode&gt;</code></td><td><code>regular</code> (default) or <code>fullscreen</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout callout-note">
+        <p><code>-m</code> affects only the Session being opened or created and does not change the global default model; it can be combined with <code>--continue</code> or <code>--session &lt;id&gt;</code>. <strong>The Session picker without an id cannot also specify a model.</strong></p>
+      </div>
+
+      <h3 class="h3" id="h-runtime-client">How Runtime and clients divide the work</h3><p>The three entry points render very different things—a terminal UI, a single headless task, and an external protocol server—but they share <strong>one in-process Runtime</strong>. The Runtime owns sessions, model calls, tools and permissions; a client only handles input and presentation.</p>
+      <p>That boundary is the <code>adapter</code>. Once the Runtime is up, a client receives exactly one thing: an <code>adapter</code> object, and it never reaches into the Runtime internals. The adapter speaks a Thrift-defined <code>DesktopService</code> contract under <code>/minimax-desktop/api/v1/</code>, with SSE for streaming responses.</p>
+      <figure class="diagram">
+<svg viewBox="0 0 760 434" role="img" aria-label="adapter — the only client entry point">
+<title>adapter — the only client entry point</title>
+<rect class="dg-band" x="8" y="136" width="744" height="80" rx="10"/>
+<text class="dg-band-label" x="18" y="151" font-size="11">Client layer</text>
+<rect class="dg-band" x="8" y="228" width="744" height="196" rx="10"/>
+<text class="dg-band-label" x="18" y="243" font-size="11">Runtime layer</text>
+<rect class="dg-node" x="280" y="8" width="200" height="44" rx="8"/>
+<text class="dg-t-mono" x="380" y="28" font-size="13" text-anchor="middle">cli.js</text>
+<text class="dg-t-sub" x="380" y="44" font-size="11" text-anchor="middle">parse argv · resolve data dir</text>
+<path class="dg-edge" d="M380 52 V 66" marker-end="url(#ar)"/>
+<rect class="dg-node" x="230" y="66" width="300" height="42" rx="8"/>
+<text class="dg-t-mono" x="380" y="85" font-size="13" text-anchor="middle">main-*.js</text>
+<text class="dg-t-sub" x="380" y="101" font-size="11" text-anchor="middle">runTuiCli — the only command dispatch point</text>
+<path class="dg-edge" d="M380 108 V 122 H 107 V 154" marker-end="url(#ar)"/>
+<path class="dg-edge" d="M380 108 V 122 H 289 V 154" marker-end="url(#ar)"/>
+<path class="dg-edge" d="M380 108 V 122 H 471 V 154" marker-end="url(#ar)"/>
+<path class="dg-edge" d="M380 108 V 122 H 653 V 154" marker-end="url(#ar)"/>
+<rect class="dg-node" x="22" y="154" width="170" height="50" rx="8"/>
+<text class="dg-t" x="107" y="176" font-size="12.5" text-anchor="middle">TUI</text>
+<text class="dg-t-mono" x="107" y="192" font-size="10.5" text-anchor="middle">surface "tui"</text>
+<rect class="dg-node" x="204" y="154" width="170" height="50" rx="8"/>
+<text class="dg-t" x="289" y="176" font-size="12.5" text-anchor="middle">exec (headless)</text>
+<text class="dg-t-mono" x="289" y="192" font-size="10.5" text-anchor="middle">surface "headless"</text>
+<rect class="dg-node" x="386" y="154" width="170" height="50" rx="8"/>
+<text class="dg-t" x="471" y="176" font-size="12.5" text-anchor="middle">ACP server</text>
+<text class="dg-t-mono" x="471" y="192" font-size="10.5" text-anchor="middle">surface "acp"</text>
+<rect class="dg-node-muted" x="568" y="154" width="170" height="50" rx="8"/>
+<text class="dg-t" x="653" y="176" font-size="12.5" text-anchor="middle">login / logout</text>
+<text class="dg-t-mono" x="653" y="192" font-size="10.5" text-anchor="middle">creates no Runtime</text>
+<path class="dg-edge-core" d="M107 204 V 256" marker-end="url(#ar)"/>
+<path class="dg-edge-core" d="M289 204 V 256" marker-end="url(#ar)"/>
+<path class="dg-edge-core" d="M471 204 V 256" marker-end="url(#ar)"/>
+<rect class="dg-node-seam" x="22" y="256" width="534" height="46" rx="8"/>
+<text class="dg-t-core" x="289" y="277" font-size="13" text-anchor="middle">adapter — the only client entry point</text>
+<text class="dg-t-mono" x="289" y="293" font-size="10.5" text-anchor="middle">Thrift DesktopService · /minimax-desktop/api/v1/* · SSE for streaming</text>
+<path class="dg-edge-core" d="M289 302 V 318" marker-end="url(#ar)"/>
+<rect class="dg-node-core" x="22" y="318" width="534" height="46" rx="8"/>
+<text class="dg-t-core" x="289" y="339" font-size="13" text-anchor="middle">Runtime core (shared in-process)</text>
+<text class="dg-t-mono" x="289" y="355" font-size="10.5" text-anchor="middle">createRuntime({ dataDir, workspaceDir, version, surface })</text>
+<path class="dg-edge" d="M289 364 V 374"/>
+<rect class="dg-node" x="22" y="374" width="124" height="36" rx="8"/>
+<text class="dg-t" x="84" y="391" font-size="11.5" text-anchor="middle">Skills</text>
+<text class="dg-t-sub" x="84" y="404" font-size="10" text-anchor="middle">how to work</text>
+<rect class="dg-node" x="158" y="374" width="124" height="36" rx="8"/>
+<text class="dg-t" x="220" y="391" font-size="11.5" text-anchor="middle">MCP servers</text>
+<text class="dg-t-sub" x="220" y="404" font-size="10" text-anchor="middle">tool access</text>
+<rect class="dg-node" x="294" y="374" width="124" height="36" rx="8"/>
+<text class="dg-t" x="356" y="391" font-size="11.5" text-anchor="middle">Hooks</text>
+<text class="dg-t-sub" x="356" y="404" font-size="10" text-anchor="middle">auto-run</text>
+<rect class="dg-node" x="430" y="374" width="124" height="36" rx="8"/>
+<text class="dg-t" x="492" y="391" font-size="11.5" text-anchor="middle">Plugin capabilities</text>
+<text class="dg-t-sub" x="492" y="404" font-size="10" text-anchor="middle">capability pack</text>
+<defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker></defs>
+</svg>
+</figure>
+      <p>So <strong>changing entry points does not mean swapping engines</strong>: config, permission mode, plugins and MCP servers in a given workspace are the same ones whether you start the TUI or <code>exec</code>. <code>login</code> / <code>logout</code> are the only commands that never create a Runtime at all.</p>
+
+      <h3 class="h3" id="h-exec">mcode exec (Headless)</h3>
+      <p>Runs a single task without starting the TUI:</p>
+      <div class="code-block" data-lang="bash">
+        <div class="code-head"><span class="code-lang">bash</span></div>
+        <pre><code># Basic: just give it a sentence
+mcode exec "Reply with OK only."
+
+# Run against a different working directory
+mcode exec --cwd ./repo "Summarize the structure of this directory."
+
+# Attach a file to analyze (the file must be inside the workspace)
+mcode exec --file ./error.log "Determine why this build failed."
+
+# Structured output, for scripts
+mcode exec --output-format json "Reply with OK only."
+
+# Save the final answer to a file
+mcode exec -o ./answer.md "Reply with OK only."
+
+# Read the task from stdin — do not pass a prompt argument in this form
+echo "Reply with OK only." | mcode exec --input -</code></pre>
+      </div>
+
+      <h4 class="h4" id="h-exec-flags">Full Flag Set</h4>
+      <p>This table matches <code>mcode exec --help</code> line by line, with <strong>nothing missing and nothing invented</strong>.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Flag</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>--input &lt;source&gt;</code></td><td>Read explicit input, <strong><code>-</code> (stdin) only</strong>; <strong>cannot be combined with a prompt argument</strong></td></tr>
+            <tr><td><code>--input-format &lt;format&gt;</code></td><td><code>text</code> (default) or <code>json</code></td></tr>
+            <tr><td><code>--cwd &lt;path&gt;</code></td><td>Workspace directory</td></tr>
+            <tr><td><code>--file &lt;path&gt;</code></td><td>Additional file, <strong>repeatable</strong>; must be inside the workspace, otherwise it needs interactive authorization</td></tr>
+            <tr><td><code>--model &lt;provider/model&gt;</code></td><td>Override for this Run only</td></tr>
+            <tr><td><code>--effort &lt;level&gt;</code></td><td>Override reasoning effort for this Run only</td></tr>
+            <tr><td><code>--prompt-mode &lt;mode&gt;</code></td><td><code>tui</code> (default) / <code>coding</code> / <code>work</code></td></tr>
+            <tr><td><code>--session &lt;id&gt;</code></td><td>Run inside an existing active Session</td></tr>
+            <tr><td><code>--continue</code></td><td>Continue the most recent active Session in <code>--cwd</code></td></tr>
+            <tr><td><code>--config &lt;path&gt;</code></td><td>Use an explicit Runtime configuration file for this process</td></tr>
+            <tr><td><code>--permission &lt;policy&gt;</code></td><td><code>smart</code> (default) / <code>full</code> / <code>off</code> (<code>ask</code> requires TUI/ACP)</td></tr>
+            <tr><td><code>--timeout &lt;duration&gt;</code></td><td>Run timeout, e.g. <code>30s</code>, <code>2m</code></td></tr>
+            <tr><td><code>--max-steps &lt;count&gt;</code></td><td>Maximum assistant steps; give it headroom when the task has to read files</td></tr>
+            <tr><td><code>--output-format &lt;format&gt;</code></td><td><code>text</code> / <code>json</code> / <code>stream-json</code></td></tr>
+            <tr><td><code>--diagnostics-dir &lt;path&gt;</code></td><td>Write bounded execution diagnostics to a <strong>brand-new empty directory</strong></td></tr>
+            <tr><td><code>--output-schema &lt;schema&gt;</code></td><td>JSON Schema file or inline object constraining the final answer</td></tr>
+            <tr><td><code>-o, --output-last-message &lt;path&gt;</code></td><td>Write the final message to a file</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4 class="h4" id="h-exec-semantics">Key Semantics</h4>
+      <ul>
+        <li><strong><code>--input</code> and the prompt argument are mutually exclusive</strong>: supplying both fails immediately with <code>The prompt argument and --input cannot be combined.</code> When reading from a pipe, pass only <code>--input -</code>.</li>
+        <li>A <code>--file</code> outside the workspace cannot be authorized interactively in headless mode and is rejected; move the file into the workspace or authorize it first.</li>
+        <li>Setting <code>--max-steps</code> too low returns <code>limit_exceeded</code> on tasks that need to read files. That is not a task failure — rerun with a larger limit.</li>
+        <li><code>--effort</code> applies to this Run only and is <strong>independent</strong> of <code>--model</code>; the declared strength is validated before launch, and validation failure ends the process with a non-zero exit code. The override is <strong>not written back to the Session</strong>.</li>
+        <li>The <code>--model provider/model#xhigh</code> suffix is <strong>not</strong> a reasoning effort: the Runtime treats it as part of the model identity and the requested strength is dropped silently. Use <code>--effort xhigh</code> to apply an effort.</li>
+        <li>Relative paths for <code>--diagnostics-dir</code> resolve against <code>--cwd</code>, and <strong>an existing non-empty directory is rejected</strong> so that prior evidence is not overwritten.</li>
+        <li>JSON validation failure still returns failure and is not repaired automatically; <code>--output-last-message</code> saves successful results only.</li>
+        <li>Diagnostics are kept out of stdout; a write failure only warns and does not replace the original execution error.</li>
+      </ul>
+
+      <h4 class="h4" id="h-exec-review">mcode exec review</h4>
+      <p>Reviews staged, unstaged and untracked local changes. It <strong>accepts</strong> <code>--cwd</code>, <code>--model</code>, <code>--effort</code>, <code>--config</code>, <code>--permission</code>, <code>--timeout</code>, <code>--max-steps</code>, <code>--output-format</code> and <code>--output-last-message</code>.</p>
+      <p><strong>It is neither a plain prompt handed to the model nor an invocation of the built-in <code>code-review</code> Skill.</strong> It is a <strong>structured Review mode</strong> built into the Runtime:</p>
+      <ul>
+        <li>Once the Run carries the review marker, the Runtime swaps in a dedicated review system prompt that requires read-only investigation, reporting only issues introduced by the change at hand, and re-verifying every finding against the current workspace.</li>
+        <li>Tools are restricted to <strong>read-only investigation</strong>; the prompt explicitly forbids modifying files or Git state, installing dependencies, committing, pushing or deploying.</li>
+        <li>While Review is active it <strong>forbids loading the <code>code-review</code> Skill or calling the <code>code_review</code> tool</strong>, so the outer review is not duplicated.</li>
+        <li>The result is returned as a fixed XML contract, so it can be parsed programmatically rather than read as free text.</li>
+      </ul>
+      <p><code>/review</code> in the TUI is the interactive entry to the same review engine. The <code>code-review</code> Skill is a general-purpose skill the model loads on its own judgement when it decides a review is needed — the two are not the same thing.</p>
+      <ul>
+        <li>Flags may be placed before or after <code>review</code>; when both positions specify a value, the explicit value after <code>review</code> wins.</li>
+        <li>Session and input/output flags (<code>--session</code>, <code>--continue</code>, <code>--input</code>, <code>--input-format</code>, <code>--file</code>, <code>--output-schema</code>, <code>--diagnostics-dir</code>) apply to <code>exec &lt;prompt&gt;</code>; the <code>review</code> form uses the flags listed above.</li>
+        <li><strong>Finding issues still returns exit code 0</strong>; a non-zero code is reserved for invocation, Runtime or review-protocol failures.</li>
+        <li>The default is <code>inline</code> mode (review completes within the current Turn); setting <code>review.mode: subagent</code> switches to a sub-agent.</li>
+      </ul>
+
+      <h3 class="h3" id="h-acp">mcode acp</h3>
+      <div class="code-block" data-lang="bash">
+        <div class="code-head"><span class="code-lang">bash</span></div>
+        <pre><code>mcode acp</code></pre>
+      </div>
+      <p>Starts an Agent Client Protocol service over stdin/stdout. ACP-capable editors and agent clients use it to create, load, continue and close mcode Sessions. The TUI, <code>exec</code> and ACP <strong>share one in-process Runtime lifecycle</strong>.</p>
+
+      <h3 class="h3" id="h-provider">mcode provider</h3>
+      <div class="code-block" data-lang="bash">
+        <div class="code-head"><span class="code-lang">bash</span></div>
+        <pre><code>mcode provider list
+mcode provider test &lt;provider-id&gt;
+mcode provider add --name Work --base-url https://example.com/v1 \
+  --api-format openai-completions --model vision-model \
+  --context-limit 128000 --output-limit 8192 --support-image --use
+mcode provider remove &lt;provider-id&gt; --yes
+mcode provider use &lt;source&gt;
+mcode provider set-minimax-key</code></pre>
+      </div>
+      <ul>
+        <li>The API key is read from <code>MCODE_PROVIDER_API_KEY</code> or from the environment variable named by <code>--api-key-env</code>.</li>
+        <li><code>--use</code> tests the first model first and saves it only on success, then selects it as the default; <strong>a failure is not saved</strong>. Without <code>--use</code> the entry can be saved first and tested later with <code>/provider</code>.</li>
+        <li>Token limits must be positive integers; <code>--support-image</code> declares image-input capability explicitly rather than inferring it from the model name.</li>
+        <li>Custom headers for third-party relays live under <code>custom_provider.&lt;id&gt;.options.headers</code>.</li>
+      </ul>
+
+      <h3 class="h3" id="h-plugin-cli">mcode plugin</h3>
+      <div class="code-block" data-lang="bash">
+        <div class="code-head"><span class="code-lang">bash</span></div>
+        <pre><code>mcode plugin list --available
+mcode plugin add &lt;plugin-id&gt;
+mcode plugin enable &lt;plugin-id&gt;
+mcode plugin disable &lt;plugin-id&gt;
+mcode plugin remove &lt;plugin-id&gt;
+mcode plugin marketplace</code></pre>
+      </div>
+      <p>Running <code>mcode plugin</code> directly opens the interactive Plugin manager. See <a href="#plugins-hooks">Plugins</a>.</p>
+
+      <h3 class="h3" id="h-troubleshooting">Installation Troubleshooting</h3>
+      <h4 class="h4" id="h-trouble-sqlite">npm 12 blocks install scripts / missing native SQLite dependency</h4>
+      <p>Symptoms: the install log shows <code>npm warn install-scripts</code>; at launch you get <code>Could not locate the bindings file</code>, a missing <code>better_sqlite3.node</code>, or <code>migration_failed</code>.</p>
+      <p>Fix (keeping the same package name, version and registry):</p>
+      <div class="code-block" data-lang="bash">
+        <div class="code-head"><span class="code-lang">bash</span></div>
+        <pre><code>npm install -g @minimax-ai/code@latest \
+  --registry=https://registry.npmjs.org/ \
+  --foreground-scripts --ignore-scripts=false \
+  --include=optional \
+  --allow-scripts=@minimax-ai/code,better-sqlite3</code></pre>
+      </div>
+      <ul>
+        <li>Adding only <code>--ignore-scripts=false</code> does <strong>not</strong> substitute for npm 12 script authorization.</li>
+        <li>Launch <code>mcode</code> only after <code>[MCode] Native SQLite check passed.</code> appears.</li>
+        <li>Users who installed through the official Shell/PowerShell installer can simply rerun the original install command.</li>
+      </ul>
+    </section>
+
+    <!-- ══════════════════ 4. TUI Commands ══════════════════ -->
+    <section class="doc-section" id="commands" aria-labelledby="h-commands">
+      <h2 class="h2" id="h-commands">TUI Commands</h2>
+      <p>Type <code>/</code> in the TUI composer to call any command; they are grouped by purpose:</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Group</th><th>What it covers</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Basic commands</strong></td><td>Switch model, check status, inspect config and usage, compact, export</td></tr>
+            <tr><td><strong>Session</strong></td><td>Create, switch, and archive sessions; rewind, resend, edit a prompt, ask a side question</td></tr>
+            <tr><td><strong>Application</strong></td><td>App-level settings: sidebar, status line, theme, keybindings</td></tr>
+            <tr><td><strong>Runtime</strong></td><td>Permission mode, background tasks, effective config, sign-in, providers</td></tr>
+            <tr><td><strong>Decision</strong></td><td>Answer the Agent one at a time: allow, deny, or add information</td></tr>
+            <tr><td><strong>Input</strong></td><td>Add and remove working directories, manage queued messages</td></tr>
+            <tr><td><strong>Transcript</strong></td><td>Browse and search this Session's input history</td></tr>
+            <tr><td><strong>Capability</strong></td><td>Browse, install, enable, and remove Plugins</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Every command is listed below by group, with its arguments and purpose.</p>
+
+      <p><strong>Aliases</strong>: <code>/clear</code> → <code>/new</code>, <code>/exit</code> → <code>/quit</code>, <code>/resume</code> → <code>/sessions</code>, <code>/side</code> → <code>/btw</code></p>
+
+      <h3 class="h3" id="h-input-disambiguation">Input Disambiguation Rules</h3>
+      <p>The Composer labels the current input as <code>Prompt</code>, <code>Command</code>, <code>Shell</code> or <code>Skill</code>, and indicates whether pressing Enter sends, executes or invokes it.</p>
+      <ul>
+        <li>A <strong>no-argument command</strong> executes <strong>only when there is no body text</strong> after the command name (trailing whitespace is allowed). If body text is entered, the whole line is sent as an <strong>ordinary prompt</strong>. For example, <code>/context</code> is a command, while <code>/context explain this project</code> is an ordinary prompt.</li>
+        <li><strong>Commands that accept arguments</strong> (such as <code>/sessions [query]</code>) are still treated as commands.</li>
+        <li>A Skill invocation such as <code>/docs explain the API</code> is displayed as a Skill call with instructions.</li>
+      </ul>
+
+      <h3 class="h3" id="h-core-commands">Basic Commands </h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Command</th><th>Alias</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>/help</code></td><td>—</td><td>Show available commands</td></tr>
+            <tr><td><code>/new</code></td><td><code>/clear</code></td><td>Start a fresh session in the current workspace</td></tr>
+            <tr><td><code>/model</code></td><td>—</td><td>Choose a model</td></tr>
+            <tr><td><code>/status</code></td><td>—</td><td>Show account and model status</td></tr>
+            <tr><td><code>/doctor</code></td><td>—</td><td>Check the local config file</td></tr>
+            <tr><td><code>/context</code></td><td>—</td><td>Show the Runtime-owned context snapshot</td></tr>
+            <tr><td><code>/skills</code></td><td>—</td><td>List built-in and user Skills</td></tr>
+            <tr><td><code>/mcp</code></td><td>—</td><td>Inspect MCP capabilities and project configuration</td></tr>
+            <tr><td><code>/usage</code></td><td>—</td><td>Show session usage</td></tr>
+            <tr><td><code>/compact</code></td><td>—</td><td>Shorten the active conversation</td></tr>
+            <tr><td><code>/export</code></td><td>—</td><td>Export the current Session as Markdown (<code>[path.md]</code>)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="h3" id="h-catalog-commands">Categorized Commands </h3>
+
+      <h4 class="h4" id="h-catalog-session">Session</h4>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Command</th><th>Argument</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>/sessions</code></td><td><code>[query]</code></td><td>Search, resume, and manage sessions</td></tr>
+            <tr><td><code>/goal</code></td><td><code>&lt;objective | action&gt;</code></td><td>Start or manage the current Session Goal</td></tr>
+            <tr><td><code>/plan</code></td><td><code>[on | off | status | view]</code></td><td>Switch Plan Mode or view the latest Plan</td></tr>
+            <tr><td><code>/review</code></td><td>—</td><td>Review staged, unstaged, and untracked local changes</td></tr>
+            <tr><td><code>/parent</code></td><td>—</td><td>Return from a sub-agent session to its parent</td></tr>
+            <tr><td><code>/btw</code></td><td><code>[question]</code></td><td>Ask a side question without interrupting the running task</td></tr>
+            <tr><td><code>/history</code></td><td>—</td><td>Browse the input history of the current Session</td></tr>
+            <tr><td><code>/fork</code></td><td>—</td><td>Fork from here: create a sub-session from a past user message, leaving the current session and files unchanged</td></tr>
+            <tr><td><code>/rewind</code></td><td>—</td><td>Rewind the conversation; choose "session only" or "session and files"</td></tr>
+            <tr><td><code>/edit</code></td><td><code>[instructions]</code></td><td>Edit this input: replace this prompt and regenerate from here</td></tr>
+            <tr><td><code>/retry</code></td><td>—</td><td>Resend the last message after a failed response</td></tr>
+            <tr><td><code>/rename</code></td><td><code>[title]</code></td><td>Rename the active session</td></tr>
+            <tr><td><code>/archive</code></td><td>—</td><td>Archive the active session</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4 class="h4" id="h-catalog-runtime">Runtime</h4>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Command</th><th>Argument</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>/permission</code></td><td><code>[status | ask | auto | full]</code></td><td>Choose or inspect the Runtime permission mode</td></tr>
+            <tr><td><code>/tasks</code></td><td>—</td><td>Inspect background agents and Runtime tasks</td></tr>
+            <tr><td><code>/config</code></td><td>—</td><td>Show the effective read-only configuration</td></tr>
+            <tr><td><code>/steer</code></td><td><code>&lt;message&gt;</code></td><td>Steer current work without interrupting it</td></tr>
+            <tr><td><code>/login</code></td><td>—</td><td>Sign in to use MiniMax Code Agent features</td></tr>
+            <tr><td><code>/logout</code></td><td>—</td><td>Sign out of the shared Desktop account</td></tr>
+            <tr><td><code>/provider</code></td><td>—</td><td>View providers and edit MiniMax credentials</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4 class="h4" id="h-catalog-capability">Capability</h4>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Command</th><th>Argument</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>/plugins</code></td><td><code>[filter]</code></td><td>Browse, install, enable, and remove Plugins</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4 class="h4" id="h-catalog-input">Input</h4>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Command</th><th>Argument</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>/add-dir</code></td><td><code>&lt;path&gt;</code></td><td>Add a readable and writable workspace directory</td></tr>
+            <tr><td><code>/queue</code></td><td>—</td><td>Manage messages that run after the current response</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4 class="h4" id="h-catalog-transcript">Transcript</h4>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Command</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>/transcript</code></td><td>Browse, search, and inspect the full conversation</td></tr>
+            <tr><td><code>/copy</code></td><td>Copy last response as Markdown</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4 class="h4" id="h-catalog-decision">Decision</h4>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Command</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>/decision</code></td><td>Reopen the pending action panel</td></tr>
+            <tr><td><code>/allow</code></td><td>Allow the pending tool once</td></tr>
+            <tr><td><code>/always</code></td><td>Always allow this action class</td></tr>
+            <tr><td><code>/deny</code></td><td>Deny the pending tool</td></tr>
+            <tr><td><code>/permissions</code></td><td>Show pending Runtime-owned permission requests</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4 class="h4" id="h-catalog-application">Application</h4>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Command</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>/settings</code></td><td>Configure the MCode terminal interface</td></tr>
+            <tr><td><code>/statusline</code></td><td>Choose, reorder, and preview status line items</td></tr>
+            <tr><td><code>/theme</code></td><td>Choose the MCode color theme and terminal appearance</td></tr>
+            <tr><td><code>/hotkeys</code></td><td>View and customize TUI keyboard shortcuts</td></tr>
+            <tr><td><code>/reload</code></td><td>Reload TUI configuration and Plugins</td></tr>
+            <tr><td><code>/stop</code></td><td>Interrupt the running turn</td></tr>
+            <tr><td><code>/feedback</code></td><td>Review and submit redacted product feedback (<code>&lt;message&gt;</code>)</td></tr>
+            <tr><td><code>/checkin</code></td><td>Claim the daily MiniMax account reward</td></tr>
+            <tr><td><code>/changelog</code></td><td>Show the packaged MCode update history</td></tr>
+            <tr><td><code>/update</code></td><td>Check for and install an MCode update</td></tr>
+            <tr><td><code>/quit</code></td><td>Exit Minimax Code (alias <code>/exit</code>)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="h3" id="h-history-commands">Actual Behaviour of /history, /fork, /rewind, /edit</h3>
+      <p>These three share one "history change" interaction (available only when the session is idle):</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Command</th><th>Behaviour</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><code>/fork</code></td>
+              <td>Creates a <strong>sub-session</strong> from a past user message, leaving the current session and files unchanged</td>
+            </tr>
+            <tr>
+              <td><code>/edit</code></td>
+              <td>Replaces that prompt and <strong>regenerates from here</strong>; later conversation and file changes are removed</td>
+            </tr>
+            <tr>
+              <td><code>/rewind</code></td>
+              <td>Removes later messages; optionally <strong>leaving files untouched</strong> or <strong>also restoring safely recoverable file changes</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Precondition: a Session must have been started or resumed; unavailable while a response is running (<code>Stop the running response before changing Session history.</code>).</p>
+
+      <h3 class="h3" id="h-btw">Side Session (BTW) Read-Only Commands</h3>
+      <p><code>/btw</code> (alias <code>/side</code>) forks a temporary side session from the most recent committed session boundary; the main task keeps running uninterrupted. The side session inherits the main session history as a read-only context, carries the same tool permissions, and is instructed to make no changes unless explicitly asked.</p>
+      <p>Only the following commands are available in the side session view:</p>
+      <p class="cmd-strip"><code>help</code><code>changelog</code><code>context</code><code>status</code><code>usage</code><code>export</code><code>transcript</code><code>copy</code><code>parent</code></p>
+      <ul>
+        <li><code>/parent</code> (or <code>Ctrl+/</code>) switches between the side session and the main session view without ending either.</li>
+        <li>Side sessions are temporary: they do not appear in <code>/sessions</code> and are cleaned up automatically when switching Sessions.</li>
+        <li>Press <code>Ctrl+C</code> in an empty Composer to close and discard the side session.</li>
+      </ul>
+
+      <h3 class="h3" id="h-statusline">Status Line Items (/statusline)</h3>
+      <p>Four valid items:</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Item</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>cache-read-ratio</code></td><td>Cache read ratio</td></tr>
+            <tr><td><code>context-remaining</code></td><td>Remaining context</td></tr>
+            <tr><td><code>context-meter</code></td><td>Context meter (off by default)</td></tr>
+            <tr><td><code>custom-command</code></td><td>Custom command</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Alias mapping provided by the source:</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Alias</th><th>Normalizes to</th></tr></thead>
+          <tbody>
+            <tr><td><code>status-protocol</code>, <code>vela</code></td><td><code>build-mode</code></td></tr>
+            <tr><td><code>workspace</code>, <code>cwd</code>, <code>project-dir</code></td><td><code>current-dir</code></td></tr>
+            <tr><td><code>git</code></td><td><code>git-branch</code></td></tr>
+            <tr><td><code>context-window</code></td><td><code>context-remaining</code></td></tr>
+            <tr><td><code>context-bar</code>, <code>context-gauge</code></td><td><code>context-meter</code></td></tr>
+            <tr><td><code>custom</code></td><td><code>custom-command</code></td></tr>
+          </tbody>
+        </table>
+      <p><code>custom-command</code> renders the output of the external command named by <code>tui.customStatusLine.command</code> into the status line. <strong>Smallest useful configuration</strong> — <code>command</code> is the only required key:</p>
+      <div class="code-block" data-lang="yaml">
+        <div class="code-head"><span class="code-lang">yaml</span></div>
+        <pre><code>tui:
+  statusLine:
+    - custom-command    # list the items you want, in order; custom-command is the external command
+    - current-dir
+  customStatusLine:
+    command: ~/bin/my-status    # the only required key</code></pre>
+      </div>
+      <p>Optional keys and their accepted values (<strong>keys you get wrong are silently dropped</strong>, no error is raised):</p>
+      <ul>
+        <li><code>display</code>: <code>inline</code> (same row as the status line, the default) or <code>block</code> (its own block).</li>
+        <li><code>position</code>: <code>above</code> or <code>below</code>; only meaningful with <code>block</code>.</li>
+        <li><code>colorMode</code>: <code>plain</code> or <code>ansi</code>.</li>
+        <li><code>maxLines</code>: maximum lines to display.</li>
+        <li><code>timeoutMs</code>: per-execution timeout.</li>
+        <li><code>intervalSeconds</code>: polling interval.</li>
+      </ul>
+      <p>The command's stdout becomes the status line content, so it should stay lightweight and avoid long blocking work.</p>
+      </div>
+
+      <h3 class="h3" id="h-shell-mode">Running Commands Directly in the Terminal</h3>
+      <p>Entering <code>!pwd</code> or <code>!git status</code> in the Composer and pressing Enter runs it immediately in the current Session working directory, showing stdout, stderr and the exit code live. The input line shows <code>Shell · Enter run</code>.</p>
+      <ul>
+        <li>The result of <code>!command</code> is passed to the model with the next message; the execution itself <strong>makes no model request</strong>.</li>
+        <li><code>!!command</code> shows its output <strong>only in the TUI</strong> and does not send it to the model.</li>
+        <li>Both the output and the pending context retain the most recent <strong>64 KiB</strong> characters; beyond that a truncation notice is shown.</li>
+        <li>Press <code>Tab</code> to request local completion (reads local directories only, does not call the model and does not execute the draft).</li>
+        <li>Each command starts an <strong>independent Shell</strong>; the effect of <code>cd</code> and <code>export</code> is limited to that command.</li>
+        <li>Commands run with the permissions of the current OS user; macOS uses Bash, Windows prefers PowerShell.</li>
+      </ul>
+    </section>
+
+    <!-- ══════════════════ 5. Configuration ══════════════════ -->
+    <section class="doc-section" id="config" aria-labelledby="h-config">
+      <h2 class="h2" id="h-config">Configuration</h2>
+
+      <h3 class="h3" id="h-config-paths">Configuration File Locations</h3>
+      <div class="callout callout-note">
+        <p>The "data directory" is the root where mcode keeps all configuration and state. Its <strong>default location differs per operating system</strong> and <strong>does not depend on system language or region</strong>. In the table below, <code>&lt;username&gt;</code> is the name of the signed-in user.</p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>System</th><th>Default data directory</th></tr></thead>
+          <tbody>
+            <tr><td>Windows</td><td><code>C:\Users\&lt;username&gt;\.minimax\</code></td></tr>
+            <tr><td>macOS</td><td><code>/Users/&lt;username&gt;/.minimax/</code></td></tr>
+            <tr><td>Ubuntu / Linux</td><td><code>/home/&lt;username&gt;/.minimax/</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>All three systems use <code>.minimax</code> under the <strong>user home directory</strong> — <code>%APPDATA%</code>, <code>%LOCALAPPDATA%</code> and <code>$XDG_DATA_HOME</code> are not used. Set the <code>MINIMAX_DATA_DIR</code> environment variable to move it elsewhere (for example to isolate a test configuration).</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Purpose</th><th>Path</th></tr></thead>
+          <tbody>
+            <tr><td>Main configuration</td><td><code>&lt;data dir&gt;/config.yaml</code></td></tr>
+            <tr><td>User-level MCP</td><td><code>&lt;data dir&gt;/mcp.json</code></td></tr>
+            <tr><td>Project-level MCP</td><td><code>&lt;workspace&gt;/.mcp.json</code></td></tr>
+            <tr><td>Runtime permission state</td><td><code>&lt;data dir&gt;/permission.json</code></td></tr>
+            <tr><td>Project rules</td><td><code>&lt;workspace&gt;/AGENTS.md</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>In the TUI, <code>/config</code> shows the <strong>effective read-only configuration</strong>; <code>mcode exec --config &lt;path&gt;</code> sets the configuration file for a single process.</p>
+
+      <h3 class="h3" id="h-config-keys">Verified Top-Level Keys</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Key</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>logLevel</code></td><td>Log level</td></tr>
+            <tr><td><code>provider</code></td><td>Built-in provider configuration</td></tr>
+            <tr><td><code>defaultModel</code></td><td>Default model, e.g. <code>minimax/MiniMax-M3.1-Flash-Preview</code></td></tr>
+            <tr><td><code>permissionMode</code></td><td>Permission mode; values are listed under <a href="#permissions">Permissions &amp; Sessions</a></td></tr>
+            <tr><td><code>custom_provider</code></td><td>Custom provider mapping</td></tr>
+            <tr><td><code>tui</code></td><td>Terminal interface behaviour</td></tr>
+            <tr><td><code>statusLine</code> / <code>customStatusLine</code></td><td>Status line items</td></tr>
+            <tr><td><code>defaultModelContextWindow</code></td><td>Default context window</td></tr>
+            <tr><td><code>defaultModelVariant</code></td><td>Default model variant, e.g. <code>thinking</code></td></tr>
+            <tr><td><code>defaultModelThinking</code></td><td>Contains <code>.effort</code>, stores the default reasoning effort</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="h3" id="h-config-tui">The tui Section</h3>
+      <div class="code-block" data-lang="yaml">
+        <div class="code-head"><span class="code-lang">yaml</span></div>
+        <pre><code>tui:
+  terminalTitle: [status, session-name, app-name]
+  notifications:
+    when: unfocused
+    method: auto
+    events: [turn-complete, turn-failed, permission-required, question-required]</code></pre>
+      </div>
+
+      <h4 class="h4" id="h-terminal-title">terminalTitle</h4>
+      <ul>
+        <li>Available items: <code>status</code>, <code>session-name</code>, <code>app-name</code>, <code>project-name</code>; they can be reordered or omitted.</li>
+        <li>Setting <code>null</code> or <code>[]</code> disables title updates.</li>
+        <li>Unknown items are ignored.</li>
+        <li>The terminal title takes the form <code>Needs approval | Fix login | MCode</code>; renaming or switching Sessions updates it.</li>
+        <li>Unnamed Sessions use the project name and a short Session ID.</li>
+      </ul>
+
+      <h4 class="h4" id="h-notifications">notifications</h4>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Key</th><th>Values</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>when</code></td><td><code>unfocused</code> / <code>always</code> / <code>never</code></td><td>When to notify</td></tr>
+            <tr><td><code>method</code></td><td><code>auto</code> / <code>osc9</code> / <code>osc777</code> / <code>bel</code></td><td>Notification protocol</td></tr>
+            <tr><td><code>events</code></td><td>Event array</td><td>Omitted = all four; <code>[]</code> = disabled</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <ul>
+        <li>Notifications identify the Session and suppress duplicates; a completion notification waits for that Session's queue to drain.</li>
+        <li><code>auto</code> uses the detected terminal notification protocol and falls back to the bell on failure.</li>
+        <li>Notifications are suppressed by default when the foreground window is known to be focused; when focus is unknown the behaviour is best-effort.</li>
+        <li>OSC notifications inside tmux require pass-through support from the outer terminal; <code>method: bel</code> is available as a fallback.</li>
+        <li><strong>Configuration changes take effect after restarting mcode.</strong></li>
+      </ul>
+      <p>The VS Code terminal shows the process name by default; to display the mcode Session title:</p>
+      <div class="code-block" data-lang="json">
+        <div class="code-head"><span class="code-lang">json</span></div>
+        <pre><code>"terminal.integrated.tabs.title": "${sequence}"</code></pre>
+      </div>
+
+      <h3 class="h3" id="h-config-agents">The agents Capability Switches</h3>
+      <div class="code-block" data-lang="yaml">
+        <div class="code-head"><span class="code-lang">yaml</span></div>
+        <pre><code>agents:
+  default:
+    persona:
+      enabled: false
+    tools: [read, write, edit, bash, grep, glob]
+    builtinTools: []
+    skills: []
+    features:
+      mavis: false
+      delegation: false
+      webSearch: false</code></pre>
+      </div>
+      <ul>
+        <li><code>tools</code> — allow-list of base tools</li>
+        <li><code>builtinTools</code> — additional built-in tools to enable</li>
+        <li><code>skills</code> — Skills to enable</li>
+        <li><code>features.mavis</code> / <code>delegation</code> / <code>webSearch</code> — sub-agents, delegation and web search switches</li>
+        <li><code>persona.enabled</code> — persona configuration</li>
+      </ul>
+
+      <h3 class="h3" id="h-config-memory">Memory and Other Switches</h3>
+      <p>These switches have <strong>defaults that cut against intuition</strong>: <code>memory</code>, <code>askUser</code> and <code>skillEvolve</code> are all <strong>on</strong> by default, so turning them off takes an explicit <code>enabled: false</code>. Only <code>memory.proactive</code> is off by default.</p>
+      <div class="code-block" data-lang="yaml">
+        <div class="code-head"><span class="code-lang">defaults</span></div>
+        <pre><code>memory:
+  enabled: true      # true by default; set false to disable Memory
+  proactive: false   # false by default; when on, the Agent writes memory proactively
+  dailyDigest:
+    enabled: false   # false by default
+
+askUser:
+  enabled: true      # true by default; setting false makes calls fail with ASK_USER_DISABLED
+
+skillEvolve:
+  enabled: true      # true by default</code></pre>
+      </div>
+      <p><strong>Memory has no TUI command entry point</strong>: there is no <code>/memory</code> in the command list. It is a background capability driven by configuration rather than something you invoke in the Composer; this plugin's <code>memory</code> section lives in the local <code>~/.minimax/config.yaml</code> and applies to mcode itself, not to this plugin.</p>
+
+      <h3 class="h3" id="h-config-proxy">Network Proxy</h3>
+      <p><code>HTTP_PROXY</code>, <code>HTTPS_PROXY</code>, <code>ALL_PROXY</code>, <code>NO_PROXY</code> and their lowercase forms are read. <code>NODE_USE_ENV_PROXY</code> is <strong>not required</strong>. <code>localhost</code>, <code>127.0.0.1</code> and <code>::1</code> always connect directly.</p>
+      <div class="code-block" data-lang="bash">
+        <div class="code-head"><span class="code-lang">bash</span></div>
+        <pre><code>HTTPS_PROXY=http://127.0.0.1:7890 mcode</code></pre>
+      </div>
+      <p>Interactive sessions, <code>exec</code>, update downloads and Matrix tool requests follow the same proxy rules.</p>
+
+      <h3 class="h3" id="h-config-telemetry">Telemetry</h3>
+      <p>All channels are off by default and must be enabled individually (<code>telemetry.diagnostics</code> and others). <code>MCODE_DISABLE_TELEMETRY</code> or <code>DO_NOT_TRACK</code> overrides every analytics channel.</p>
+
+      <h3 class="h3" id="h-config-reload">Applying Configuration Changes</h3>
+      <ul>
+        <li>Most configuration <strong>takes effect after restarting mcode</strong>, in particular the <code>tui</code> section.</li>
+        <li><code>/reload</code> inside the TUI reloads TUI configuration and Plugins.</li>
+        <li>After editing, <code>/config</code> is a convenient way to verify the effective values.</li>
+      </ul>
+    </section>
+
+    <!-- ══════════════════ 6. Agents and Skills ══════════════════ -->
+    <section class="doc-section" id="agents-skills" aria-labelledby="h-agents-skills">
+      <h2 class="h2" id="h-agents-skills">Agents &amp; Skills</h2>
+
+      <h3 class="h3" id="h-agents">Built-in Agents </h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Agent</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><code>mavis</code></td><td>Primary agent</td></tr>
+            <tr><td><code>explore</code></td><td>Read-only exploration: creates or edits no files</td></tr>
+            <tr><td><code>worker</code></td><td>Bounded task execution</td></tr>
+            <tr><td><code>verifier</code></td><td>Independent verification of deliverables</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Cross-checked from two sources: the packaged <code>assets/agents/builtin-agents.json</code> contains <code>["mavis", "explore", "worker", "verifier"]</code>, exactly matching the Agent directories present in the runtime data directory.</p>
+      <div class="callout callout-note">
+        <p><strong>Note</strong>: <code>assets/agents/</code> also contains directories such as <code>_default</code>, <code>desktop-task</code> and <code>workflow</code>. These are configuration/template assets and are <strong>not</strong> part of the built-in agent list.</p>
+      </div>
+
+      <h4 class="h4" id="h-sub-session">Sub-sessions</h4>
+      <ul>
+        <li>Use <code>/parent</code> in a sub-agent session to return to the parent session.</li>
+        <li>A side session (<code>/btw</code>) inherits the main session history as a read-only context, carries the same permissions, and makes no changes unless explicitly asked.</li>
+      </ul>
+
+      <h4 class="h4" id="h-agent-config">Agent Configuration</h4>
+      <p>Controlled by the <code>agents</code> section of <code>config.yaml</code>; see <a href="#h-config-agents">The agents Capability Switches</a>:</p>
+      <div class="code-block" data-lang="yaml">
+        <div class="code-head"><span class="code-lang">yaml</span></div>
+        <pre><code>agents:
+  default:
+    tools: [read, write, edit, bash, grep, glob]
+    builtinTools: []
+    skills: []
+    features:
+      mavis: false
+      delegation: false
+      webSearch: false</code></pre>
+      </div>
+      <p><code>features.delegation</code> controls whether subtasks can be delegated, <code>features.mavis</code> controls primary agent capabilities, and <code>features.webSearch</code> controls web search.</p>
+
+      <h3 class="h3" id="h-skills">Built-in Skills </h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Skill</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><code>code-review</code></td><td>Code review</td></tr>
+            <tr><td><code>deep-research</code></td><td>Deep research (executed step by step)</td></tr>
+            <tr><td><code>deploy-website</code></td><td>Publish a website to a public URL</td></tr>
+            <tr><td><code>edit-deployed-website</code></td><td>Edit an already-deployed website</td></tr>
+            <tr><td><code>docx</code></td><td>Word document creation, reading, editing and repair</td></tr>
+            <tr><td><code>pdf</code></td><td>PDF generation, formatting, filling and reading</td></tr>
+            <tr><td><code>pptx</code></td><td>PowerPoint reading, creation and editing</td></tr>
+            <tr><td><code>xlsx</code></td><td>Excel/CSV reading, creation, formulas and charts</td></tr>
+            <tr><td><code>init</code></td><td>Analyze the codebase and generate <code>AGENTS.md</code></td></tr>
+            <tr><td><code>lark-tools</code></td><td>Full Feishu/Lark capability (CLI plus native channel)</td></tr>
+            <tr><td><code>llm-call</code></td><td>Invoke a configured LLM model directly</td></tr>
+            <tr><td><code>mcode-tools-master</code></td><td>Discover and invoke App/Connector tools</td></tr>
+            <tr><td><code>resume-codex</code></td><td>Resume a task from a Codex CLI or VS Code session</td></tr>
+            <tr><td><code>skill-creator</code></td><td>Create or improve a Skill</td></tr>
+            <tr><td><code>skill-refiner</code></td><td>Refine a Skill with evidence-driven minimal patches</td></tr>
+            <tr><td><code>visual-page</code></td><td>Proactively generate a visual HTML page</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><code>/skills</code> in the TUI lists built-in and user Skills.</p>
+      <div class="callout callout-note">
+        <p><strong>Note</strong>: <code>xlsx</code>, <code>pdf</code>, <code>pptx</code> and <code>docx</code> require working local fonts on Linux; <code>visual-page</code> and <code>deploy-website</code> are output-producing Skills and need the corresponding host capability or network reachability.</p>
+      </div>
+
+      <h3 class="h3" id="h-custom-skill">Custom Skills</h3>
+      <p>A Skill is entered through <code>SKILL.md</code> and is mounted via the <code>skills</code> array of the plugin manifest:</p>
+      <div class="code-block" data-lang="json">
+        <div class="code-head"><span class="code-lang">json</span></div>
+        <pre><code>{ "skills": ["skills/my-skill/SKILL.md"] }</code></pre>
+      </div>
+      <p><code>SKILL.md</code> carries YAML frontmatter (at least <code>name</code> and <code>description</code>). Related switches: <code>skills.external.enabled</code> (external Skills) and <code>skillEvolve.enabled</code> (self-evolution).</p>
+
+      <h3 class="h3" id="h-tools">Host Tools </h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Tool</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>read</code></td><td>Read a file</td></tr>
+            <tr><td><code>write</code></td><td>Write a file</td></tr>
+            <tr><td><code>edit</code></td><td>Make a precise edit to a file</td></tr>
+            <tr><td><code>bash</code></td><td>Execute a terminal command</td></tr>
+            <tr><td><code>grep</code></td><td>Content search (ripgrep)</td></tr>
+            <tr><td><code>glob</code></td><td>Search by file name or path</td></tr>
+            <tr><td><code>task</code></td><td>Dispatch a sub-agent</td></tr>
+            <tr><td><code>todowrite</code></td><td>Maintain the task list</td></tr>
+            <tr><td><code>skill</code></td><td>Invoke a Skill</td></tr>
+            <tr><td><code>ask_user</code></td><td>Collect a structured decision from the user</td></tr>
+            <tr><td><code>web_search</code></td><td>Web search</td></tr>
+            <tr><td><code>web_fetch</code></td><td>Fetch the raw text of a URL</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Beyond these there are the <code>mcp__*</code> tools provided by MCP servers.</p>
+
+      <h3 class="h3" id="h-bash-behaviour">Actual Bash Tool Behaviour</h3>
+      <ul>
+        <li><strong>Only exit code 0 counts as success</strong>; the result preserves the facts of exit, signal, timeout, cancellation and partial output.</li>
+        <li>Large output keeps the <strong>head and tail</strong>; the first-response text budget is <strong>24 KiB</strong>, and a full log reference is given when persistence succeeds.</li>
+        <li>Foreground waiting: with a native <code>task_output</code> it waits up to <strong>60 seconds</strong>, then returns a background task ID for the same command; the total command timeout defaults to <strong>600 seconds</strong> with a ceiling of <strong>600 seconds</strong>. Without <code>task_output</code> it stays in the foreground, defaulting to <strong>120 seconds</strong> with a ceiling of <strong>300 seconds</strong>.</li>
+        <li><code>task_output</code> reads by byte offset; a successful read may still report a command failure.</li>
+        <li>The optional <code>description</code> affects only the TUI summary, not execution or permission checks.</li>
+      </ul>
+
+      <h3 class="h3" id="h-stopping-work">Stopping a Conversation and Background Work</h3>
+      <ul>
+        <li>An explicit stop (such as pressing <code>Esc</code> in the TUI) cancels the background Bash commands and sub-agents owned by that conversation within the current process, including work derived from <code>task_append</code> continuations and their sub-turns. Completion notifications do not wake the conversation automatically.</li>
+        <li>Leaving a conversation with <code>/clear</code> or by switching Sessions stops the current turn and suspends the Goal and queued instructions, but <strong>background work keeps running</strong>.</li>
+        <li>Only locally owned running tasks are cancelled; tasks held by other Runtime processes are unaffected.</li>
+      </ul>
+    </section>
+
+    <!-- ══════════════════ 7. Plugins ══════════════════ -->
+    <section class="doc-section" id="plugins-hooks" aria-labelledby="h-plugins-hooks">
+      <h2 class="h2" id="h-plugins-hooks">Plugins</h2>
+      <p>The things that extend mcode fall into <strong>three</strong> categories, and they are not peers of one another. This section covers only the second: <strong>a plugin is a distribution container</strong> — a folder on disk plus a manifest. It is not a capability in its own right.</p>
+      <h3 class="h3" id="h-c-three">Three Kinds of Thing — Do Not Conflate Them</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th></th><th>Capability unit</th><th>Plugin</th><th>MiniApp</th></tr></thead>
+          <tbody>
+            <tr><td>What it is</td><td>A part that extends the <strong>Agent</strong></td><td>A <strong>distribution container</strong>, not a capability</td><td>An <strong>interactive app a person operates</strong></td></tr>
+            <tr><td>Specifically</td><td>Skill / MCP server / Hook</td><td>The folder that packages the left-hand column</td><td>Dashboards, reports, approval panels</td></tr>
+            <tr><td>Who it is for</td><td>The Agent (reads / calls it) or the system (runs it automatically)</td><td>The installer and the Host</td><td>A person (opens it and clicks)</td></tr>
+            <tr><td>Has a runtime?</td><td>MCP in <code>stdio</code> form spawns a child process</td><td><strong>No</strong> — just a declaration read over and over</td><td><strong>A separate Node process</strong>, started on demand</td></tr>
+            <tr><td>Which section</td><td>Skill: <a href="#agents-skills">Agents &amp; Skills</a>; MCP: <a href="#mcp-browser">MCP &amp; Tools</a>; Hook: this section</td><td>This section</td><td><a href="#miniapp">MiniApp</a> (a chapter of its own)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout callout-note">
+        <p><strong>The easiest thing to get wrong</strong>: a MiniApp <strong>is distributed in plugin form</strong> — the official wording is "MiniApps are interactive apps packaged as MiniMax Plugins". But <strong>what they share is the distribution mechanism, not the category</strong>. The dividing line is three things: the <code>mcode</code> field in <code>package.json</code>, a <code>miniapp/</code> payload root, and a Node entry. All three present means MiniApp; anything less is a normal plugin. See <a href="#miniapp">MiniApp</a>.</p>
+      </div>
+      <h3 class="h3" id="h-c-units">Capability Units: Three Parts That Extend the Agent</h3>
+
+      <h4 class="h4" id="h-c-skill">Skill: a written method of working</h4>
+      <p>A Skill is a set of instructions telling the Agent what to do first for a given task, which tools to use, and how to check the result. It <strong>adds no new tools</strong> — it just makes the Agent more consistent at a particular kind of work.</p>
+      <p>Once installed, call it in the TUI with <code>/&lt;skill name&gt;</code>. mcode ships 16 built-in Skills, and you can write your own inside a plugin.</p>
+
+      <h4 class="h4" id="h-c-mcp">MCP server: new tools for the Agent</h4>
+      <p>MCP (Model Context Protocol) is an open protocol whose job is to <strong>give the Agent tools it can really call</strong> — a database, an internal API, a company system. It answers "what can the Agent do", not "how should the Agent work".</p>
+      <p>An MCP server declares which tools it offers; the Agent calls them and gets results back. See <a href="#h-mcp-config">MCP configuration</a> for the file format and fields.</p>
+
+      <h4 class="h4" id="h-c-hook">Hook: a command that runs by itself at the right moment</h4>
+      <p>A Hook is a command mcode executes automatically at a chosen moment, so you never run it by hand. Typical uses: "notify me when a reply finishes", "check before anything deletes a file".</p>
+      <p>Hooks are registered by a plugin. Event names come from Claude Code, so an existing Claude Code Hook configuration can be moved over as-is. See <a href="#h-hooks">Hook details</a> for the fields and registration format.</p>
+
+      <h3 class="h3" id="h-plugin-what">Plugins: the box that holds them</h3>
+      <p>A plugin is a folder on disk: it contains a manifest at <code>.minimax-plugin/plugin.json</code> declaring which Skills, MCP servers, and Hooks it provides. For the person installing it, the point is that <strong>one install brings everything into place</strong> — no separate Skill install, no MCP wiring, no manual hook registration.</p>
+      <p>It <strong>has no runtime of its own</strong> — no resident process, no port of its own, just a declaration the Host reads over and over. Once installed and enabled it is assembled in every subsequent session, until you explicitly <code>disable</code> or <code>remove</code> it. For when each of the three kinds takes effect, see <a href="#h-lifecycle">the lifecycle comparison</a>.</p>
+      <h3 class="h3" id="h-plugin-declare">What a Plugin Can Declare</h3>
+      <p>A manifest can declare three capability units, each in its own field:</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Capability unit</th><th>Manifest field</th><th>After installing</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Skill</strong></td><td><code>skills[]</code></td><td>Callable in the TUI with <code>/&lt;skill name&gt;</code></td></tr>
+            <tr><td><strong>MCP server</strong></td><td><code>mcpServers</code></td><td>Connected when the Runtime assembles; its tools enter the Agent list</td></tr>
+            <tr><td><strong>Hook</strong></td><td><code>hooks</code></td><td>Runs automatically at the right moment — see <a href="#h-hooks">Hook details</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>All three are <strong>capabilities for the Agent</strong>. A plugin may also carry a <a href="#miniapp">MiniApp</a>, but that is <strong>a different kind of thing</strong>: it brings its own runtime contract and is not "one of the things a plugin installs".</p>
+      <h3 class="h3" id="h-plugin-mgmt">Installing &amp; Managing Plugins</h3>
+      <div class="code-block" data-lang="bash">
+        <div class="code-head"><span class="code-lang">bash</span></div>
+        <pre><code># See what is installed and what can be installed
+mcode plugin list --available
+
+# Install one (&lt;plugin-id&gt; is the plugin identifier)
+mcode plugin add &lt;plugin-id&gt;
+
+# Turn off / turn back on without uninstalling
+mcode plugin disable &lt;plugin-id&gt;
+mcode plugin enable &lt;plugin-id&gt;
+
+# Uninstall
+mcode plugin remove &lt;plugin-id&gt;
+
+# Browse installable plugins
+mcode plugin marketplace</code></pre>
+      </div>
+      <p>Running <code>mcode plugin</code> directly opens an interactive plugin manager, which is easier to drive with the arrow keys; inside the TUI use <code>/plugins [filter]</code>.</p>
+      <div class="callout callout-note">
+        <p>Plugins come from two places: the official catalogue, and local plugin folders already discovered on your machine. <code>--available</code> lists only what can be installed. <code>disable</code> only switches a plugin off temporarily and <strong>does not</strong> delete it — <code>remove</code> is what uninstalls.</p>
+      </div>
+
+      <h3 class="h3" id="h-manifest">Writing the Plugin Manifest</h3>
+      <p>The manifest is always named <code>.minimax-plugin/plugin.json</code>, its <code>schemaVersion</code> <strong>must</strong> be <code>1</code>, and any key not in the field set below is rejected outright. Start from this minimal example:</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Field</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>$schema</code></td><td>JSON Schema URL</td></tr>
+            <tr><td><code>schemaVersion</code></td><td>Fixed at <code>1</code></td></tr>
+            <tr><td><code>name</code></td><td>Plugin identifier</td></tr>
+            <tr><td><code>displayName</code></td><td>Display name</td></tr>
+            <tr><td><code>version</code></td><td>Version</td></tr>
+            <tr><td><code>description</code></td><td>Description</td></tr>
+            <tr><td><code>author</code></td><td>Author</td></tr>
+            <tr><td><code>icon</code> / <code>darkIcon</code></td><td>Light and dark icons</td></tr>
+            <tr><td><code>category</code></td><td>Category</td></tr>
+            <tr><td><code>exampleQueries</code></td><td>Example queries</td></tr>
+            <tr><td><code>apps</code></td><td>App references</td></tr>
+            <tr><td><code>mcpServers</code></td><td>MCP server file references</td></tr>
+            <tr><td><code>skills</code></td><td>List of SKILL.md paths</td></tr>
+            <tr><td><code>hooks</code></td><td>Hook file references</td></tr>
+            <tr><td><code>hostBindings</code></td><td>Host capability bindings</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4 class="h4" id="h-host-bindings">hostBindings</h4>
+      <p>Each element uses a strict <code>schemaVersion: 1</code> and contains:</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Field</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>bindingId</code></td><td>Binding identifier</td></tr>
+            <tr><td><code>logicalToolName</code></td><td>Logical tool name</td></tr>
+            <tr><td><code>hostCapability</code></td><td><code>{ id, version }</code></td></tr>
+            <tr><td><code>requiredSkills</code></td><td>Dependent Skills</td></tr>
+            <tr><td><code>allowedSurfaces</code></td><td>Permitted host surfaces; currently only <code>interactive</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4 class="h4" id="h-placeholders">Path Placeholders</h4>
+      <p>Paths inside a plugin may use <code>${PLUGIN_ROOT}</code> (the plugin root) and <code>${PLUGIN_DATA}</code> (the plugin data directory).</p>
+
+      <h4 class="h4" id="h-manifest-example">Example</h4>
+      <div class="code-block" data-lang="json">
+        <div class="code-head"><span class="code-lang">json</span></div>
+        <pre><code>{
+  "schemaVersion": 1,
+  "name": "example-plugin",
+  "displayName": "Example Plugin",
+  "version": "0.1.0",
+  "description": "Example plugin",
+  "author": "you",
+  "icon": "icon.png",
+  "category": "Other",
+  "exampleQueries": ["Use this plugin to …"],
+  "apps": [],
+  "mcpServers": [],
+  "skills": ["skills/example/SKILL.md"],
+  "hooks": ["hooks/notify.json"]
+}</code></pre>
+      </div>
+
+      <h3 class="h3" id="h-hooks">Hook Details: Registering One in a Plugin</h3>
+      <p>A Hook is simply "a command that runs by itself at the right time". You write the command in your plugin and say when it should run; mcode then executes it every time that moment comes around.</p>
+      <p>The most common example: to get notified whenever a reply finishes, listen for the <code>Stop</code> event and point it at a small notification script. Event names come from Claude Code, so an existing Claude Code Hook configuration can be moved over as-is. Three source formats are supported: <code>MINIMAX</code>, <code>CLAUDE</code> and <code>CODEX</code>.</p>
+      <div class="callout callout-warn">
+        <p>A Hook <strong>blocks</strong> mcode until it finishes, so only synchronous command handlers (<code>type: "command"</code>) are supported. Writing <code>async</code> in the registration document is treated as unsupported.</p>
+      </div>
+
+      <h4 class="h4" id="h-hook-events">Complete Event Set </h4>
+      <div class="cmd-strip cmd-strip-wrap">
+        <code>SessionStart</code><code>SessionEnd</code><code>UserPromptSubmit</code><code>PreToolUse</code><code>PermissionRequest</code><code>PostToolUse</code><code>SubagentStart</code><code>SubagentStop</code><code>Stop</code><code>PreCompact</code><code>PostCompact</code>
+      </div>
+      <p><code>SessionStart</code> carries a source identifier:</p>
+      <div class="cmd-strip cmd-strip-wrap">
+        <code>startup</code><code>resume</code><code>clear</code><code>compact</code><code>fork</code><code>plugin_activation</code>
+      </div>
+
+      <h4 class="h4" id="h-hook-registration">The Registration Document</h4>
+      <p>The manifest's <code>hooks</code> field accepts five forms: a string path, a <code>{ "path": "…" }</code> object, an array of either, an <strong>inline registration document object</strong> (in which case <code>sourcePath</code> is recorded as <code>&lt;manifest&gt;</code>), and omission, in which case the default path is used when that file exists. The registration document envelope has two equivalent forms: an outer <code>"hooks"</code> key, or event names directly at the top level.</p>
+      <div class="code-block" data-lang="json">
+        <div class="code-head"><span class="code-lang">json</span></div>
+        <pre><code>{
+  "hooks": {
+    "Stop": [{
+      "hooks": [{
+        "type": "command",
+        "command": "node \"${PLUGIN_ROOT}/scripts/notice.cjs\"",
+        "timeout": 5
+      }]
+    }]
+  }
+}</code></pre>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Field</th><th>Required</th><th>Constraints</th></tr></thead>
+          <tbody>
+            <tr><td><code>type</code></td><td>Yes</td><td>Always <code>"command"</code></td></tr>
+            <tr><td><code>command</code></td><td>Yes</td><td>Non-empty string</td></tr>
+            <tr><td><code>commandWindows</code> / <code>command_windows</code></td><td>No</td><td>Effective on win32 only, taking precedence over <code>command</code></td></tr>
+            <tr><td><code>timeout</code></td><td>No</td><td><strong>Integer seconds</strong>, 1–10; default 5000 ms; ceiling 10000 ms</td></tr>
+            <tr><td><code>matcher</code></td><td>No</td><td>At event-group level; up to 256 characters; validated as described below</td></tr>
+            <tr><td><code>args</code></td><td>No</td><td>Array of strings; <strong><code>CLAUDE</code> only</strong>; supplying it selects the exec form</td></tr>
+            <tr><td><code>shell</code></td><td>No</td><td><code>bash</code> or <code>powershell</code>; <strong><code>CLAUDE</code> only</strong>; ignored when <code>args</code> is present</td></tr>
+            <tr><td><code>if</code></td><td>No</td><td>Tool predicate such as <code>Bash(rm *)</code>; <strong><code>CLAUDE</code> only</strong>; only for <code>PreToolUse</code>, <code>PermissionRequest</code> and <code>PostToolUse</code></td></tr>
+            <tr><td><code>additionalContextLimit</code></td><td>No</td><td>Non-negative safe integer; <strong><code>CODEX</code> only</strong>; only for five events</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><code>timeout</code> must be a whole number of seconds between <strong>1 and 10</strong>; a decimal, 0, or anything above 10 invalidates the whole registration (<code>HOOK_SCHEMA_INVALID</code>). In the <code>MINIMAX</code> format, <code>matcher</code> cannot be left blank.</p>
+      <p><strong><code>matcher</code> validation</strong> proceeds as follows: <code>*</code> is always valid; <code>UserPromptSubmit</code> and <code>Stop</code> do not have their content checked; <code>CODEX</code> accepts only <code>[A-Za-z0-9_|]+</code>; other formats split on <code>|</code> or <code>,</code> with each branch required to match <code>[A-Za-z0-9_.:/-]+</code> as a whole; otherwise a <strong>portable regular expression</strong> is required — only non-capturing groups <code>(?:...)</code> are allowed, and look-around, named groups, backreferences and dangling escapes are rejected, as is any atom with a repeated quantifier reaching four occurrences.</p>
+      <p>A single plugin may hold at most <strong>64</strong> executable handlers; the surplus records <code>HOOK_HANDLER_LIMIT_EXCEEDED</code>.</p>
+      <p><strong>Command resolution</strong>: when <code>args</code> is present the exec form is used and no shell is involved; in <code>MINIMAX</code>, without <code>args</code> the system default shell is used, with <code>shell: bash</code> becoming <code>bash -c</code> and <code>shell: powershell</code> becoming pwsh; in <code>CLAUDE</code> the default on POSIX is <code>sh -c</code>, and on win32 Git Bash is preferred over PowerShell. The <code>command</code> form requires Node.js to be present on the Hook process's <code>PATH</code>.</p>
+
+      <h4 class="h4" id="h-hook-io">Process Environment and stdin Input</h4>
+      <p><strong>Only 17 environment variables are inherited</strong>:</p>
+      <div class="cmd-strip cmd-strip-wrap">
+        <code>PATH</code><code>HOME</code><code>LANG</code><code>TERM</code><code>SHELL</code><code>USER</code><code>TMPDIR</code><code>TEMP</code><code>TMP</code><code>PATHEXT</code><code>SystemRoot</code><code>ComSpec</code><code>USERPROFILE</code><code>HOMEDRIVE</code><code>HOMEPATH</code><code>APPDATA</code><code>LOCALAPPDATA</code>
+      </div>
+      <p><strong>Injected by the host</strong>:</p>
+      <div class="cmd-strip cmd-strip-wrap">
+        <code>PLUGIN_ROOT</code><code>MINIMAX_PLUGIN_ROOT</code><code>CLAUDE_PLUGIN_ROOT</code><code>CODEX_PLUGIN_ROOT</code><code>PLUGIN_DATA</code><code>CLAUDE_PLUGIN_DATA</code><code>MINIMAX_PROJECT_DIR</code><code>CLAUDE_PROJECT_DIR</code><code>CODEX_PROJECT_DIR</code>
+      </div>
+      <p><code>CLAUDE_EFFORT</code> is added in the <code>CLAUDE</code> format when the event sits inside a tool-use context:</p>
+      <div class="cmd-strip cmd-strip-wrap">
+        <code>low</code><code>medium</code><code>high</code><code>xhigh</code><code>max</code>
+      </div>
+      <div class="callout callout-note">
+        <p>Hook scripts therefore <strong>must not</strong> depend on environment variables outside this allow-list, which includes every credential; whatever is needed has to be declared by the plugin itself. The plugin package root is <strong>read-only</strong>, and writable state belongs in <code>PLUGIN_DATA</code>, which the host creates with mode <code>0700</code>.</p>
+      </div>
+      <p>The Hook process reads a <strong>single</strong> UTF-8 JSON object from stdin. Event-specific fields are expanded first, after which the following fixed keys are written:</p>
+      <div class="code-block" data-lang="json">
+        <div class="code-head"><span class="code-lang">json</span></div>
+        <pre><code>{
+  "hook_event_name": "PreToolUse",
+  "session_id": "…",
+  "turn_id": "…",
+  "prompt_id": "…",
+  "transcript_path": "…",
+  "cwd": "…",
+  "model": "…",
+  "permission_mode": "…",
+  "effort": { "level": "high" },
+  "tool_name": "Bash",
+  "tool_input": { }
+}</code></pre>
+      </div>
+      <p><code>turn_id</code>, <code>prompt_id</code>, <code>model</code>, <code>permission_mode</code> and <code>effort</code> are absent when unset; <code>transcript_path</code> is <code>null</code> when no transcript exists yet; an input exceeding <strong>1 MiB</strong> once serialized is not delivered. The <code>MINIMAX</code> format requires only that <code>session_id</code> and <code>cwd</code> are non-empty, while <code>CLAUDE</code> additionally validates the turn-level fields.</p>
+
+      <h4 class="h4" id="h-hook-output">Exit Codes, Control Output and Verdict Merging</h4>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Situation</th><th>Result</th></tr></thead>
+          <tbody>
+            <tr><td>Empty output</td><td>The event's default verdict is used</td></tr>
+            <tr><td>Begins with <code>{</code> (<code>CODEX</code> also accepts <code>[</code>)</td><td>Parsed as JSON</td></tr>
+            <tr><td>Any other text</td><td>Merged into <code>additionalContext</code> when the event supports plain-text context, otherwise the default verdict is used</td></tr>
+            <tr><td><strong>exit 2</strong> (formats other than <code>MINIMAX</code>)</td><td>Triggers the event-level blocking effect, which <strong>JSON cannot override</strong></td></tr>
+            <tr><td><code>CODEX</code> with a non-zero exit code</td><td>stdout is not interpreted; the default verdict is used</td></tr>
+            <tr><td><code>CLAUDE</code> with any exit code</td><td>JSON is parsed</td></tr>
+            <tr><td>Terminated by a signal</td><td><code>HOOK_PROCESS_ERROR</code>, and remaining processes in the same process group are terminated</td></tr>
+            <tr><td>Timeout</td><td><code>HOOK_TIMEOUT</code></td></tr>
+            <tr><td>stdout or stderr exceeding <strong>64 KiB</strong></td><td><code>HOOK_INVALID_OUTPUT</code></td></tr>
+            <tr><td>Malformed JSON or unauthorized keys present</td><td><code>HOOK_INVALID_OUTPUT</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><code>hookSpecificOutput.hookEventName</code>, when present, must equal the current event; otherwise the entire output is discarded.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Field</th><th>Values</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>decision</code></td><td><code>allow</code> / <code>deny</code> / <code>ask</code> / <code>defer</code></td><td>General verdict</td></tr>
+            <tr><td><code>reason</code></td><td>≤ 4096 characters</td><td>Reason for the verdict</td></tr>
+            <tr><td><code>continue</code></td><td><code>false</code> ends the active run</td><td>General control</td></tr>
+            <tr><td><code>stopReason</code></td><td>String</td><td>Reason for termination</td></tr>
+            <tr><td><code>continuePrompt</code></td><td>String</td><td>Continuation prompt</td></tr>
+            <tr><td><code>defer</code></td><td>Boolean</td><td>Hand the decision back to the host</td></tr>
+            <tr><td><code>suppressOutput</code></td><td>Boolean</td><td><strong>Does not</strong> control <code>systemMessage</code></td></tr>
+            <tr><td><code>additionalContext</code></td><td>≤ 65536 characters</td><td>Injected into the model context</td></tr>
+            <tr><td><code>updatedInput</code></td><td>Object</td><td>Rewrites the tool input</td></tr>
+            <tr><td><code>updatedResult</code></td><td>Any</td><td>Replaces the model-visible tool result; auditing and persistence retain the original</td></tr>
+            <tr><td><code>updatedResultFormat</code></td><td><code>CLAUDE</code> / <code>MINIMAX</code></td><td>The contract owning <code>updatedResult</code></td></tr>
+            <tr><td><code>postToolFeedback</code></td><td>String</td><td><code>CODEX</code> <code>PostToolUse</code> error feedback for the next model step; <strong>not</strong> a hard stop</td></tr>
+            <tr><td><code>terminalSequence</code></td><td>String</td><td>Allow-listed terminal notification bytes, <code>CLAUDE</code> only</td></tr>
+            <tr><td><code>systemMessage</code></td><td>String</td><td>Shown to the user only; see below</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Both <code>decision: "block"</code> and <code>continue: false</code> mark a structured block. The default verdict for empty output is <code>decision: "allow"</code> plus <code>permissionDecision: 'abstain'</code> for <code>PermissionRequest</code>, <code>decision: "allow"</code> plus <code>toolPermissionDecision: 'abstain'</code> for <code>PreToolUse</code>, and <code>decision: "allow"</code> for every other event.</p>
+      <div class="callout callout-note">
+        <p>When several handlers act on the same event their verdicts are merged by <strong>strongest wins</strong> (<code>deny</code> over <code>ask</code>, <code>ask</code> over <code>defer</code>, <code>defer</code> over <code>allow</code>), rather than the last one overriding the others.</p>
+      </div>
+
+      <h4 class="h4" id="h-hook-perm">Permission Updates</h4>
+      <p><code>PermissionRequest</code> may return a <code>updatedPermissions</code> array, which the host applies <strong>atomically</strong> as a whole:</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Form</th><th>Required fields</th></tr></thead>
+          <tbody>
+            <tr><td><code>addRules</code> / <code>replaceRules</code> / <code>removeRules</code></td><td><code>rules</code>, <code>behavior</code> (<code>allow</code> / <code>deny</code> / <code>ask</code>), <code>destination</code></td></tr>
+            <tr><td><code>setMode</code></td><td><code>mode</code>, <code>destination</code></td></tr>
+            <tr><td><code>addDirectories</code> / <code>removeDirectories</code></td><td><code>directories</code>, <code>destination</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Field</th><th>Accepted values</th><th>Scope and constraints</th></tr></thead>
+          <tbody>
+            <tr><td><code>behavior</code></td><td><code>allow</code> / <code>deny</code> / <code>ask</code></td><td>Rule forms; one per entry in the <code>rules</code> array</td></tr>
+            <tr><td><code>destination</code></td><td><code>session</code> / <code>localSettings</code> / <code>projectSettings</code> / <code>userSettings</code></td><td>Shared by all three forms</td></tr>
+            <tr><td><code>mode</code></td><td><code>default</code> / <code>auto</code> / <code>acceptEdits</code> / <code>dontAsk</code> / <code>bypassPermissions</code> / <code>plan</code></td><td><code>setMode</code> only</td></tr>
+            <tr><td><code>permissionDecision</code></td><td><code>allow</code> / <code>deny</code> / <code>abstain</code> (the default)</td><td>General verdict; <code>allow</code> authorizes without presenting the product interface</td></tr>
+            <tr><td><code>permissionAutoApproval</code></td><td><code>ordinary_only</code> / <code>any_prompt</code></td><td><code>CLAUDE</code> still re-evaluates deny and ask rules, whereas <code>CODEX</code> treats the Hook verdict as final approval</td></tr>
+            <tr><td><code>interrupt</code></td><td>—</td><td>Specific to <code>PermissionRequest</code> in <code>CLAUDE</code>, requesting termination of the active run only on deny</td></tr>
+            <tr><td><code>toolPermissionDecision</code></td><td><code>allow</code> / <code>deny</code> / <code>ask</code> / <code>defer</code> / <code>abstain</code></td><td>Specific to <code>PreToolUse</code>, distinct from the absence of a verdict</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4 class="h4" id="h-hook-budget">Time Budgets and Diagnostic Codes</h4>
+      <p>The effective timeout of a single handler is the smaller of its declared value and the event's remaining budget. The total budget for ordinary events is <strong>15 000 ms</strong>, for <code>SessionEnd</code> it is <strong>3 000 ms</strong>, and the process drain window is <strong>500 ms</strong>.</p>
+      <p>Parse-time diagnostic codes:</p>
+      <div class="cmd-strip cmd-strip-wrap">
+        <code>HOOK_SCHEMA_INVALID</code><code>HOOK_EVENT_UNSUPPORTED</code><code>HOOK_HANDLER_UNSUPPORTED</code><code>HOOK_HANDLER_LIMIT_EXCEEDED</code>
+      </div>
+      <p>Run-time diagnostic codes:</p>
+      <div class="cmd-strip cmd-strip-wrap">
+        <code>HOOK_ABORTED</code><code>HOOK_INVALID_INPUT</code><code>HOOK_INVALID_OUTPUT</code><code>HOOK_PROCESS_ERROR</code><code>HOOK_PROCESS_EXITED</code><code>HOOK_TIMEOUT</code>
+      </div>
+
+      <h4 class="h4" id="h-system-message">systemMessage: Shown to the User, Kept Out of Model Context</h4>
+      <p>Write <strong>one</strong> JSON object to stdout and exit with code <strong>0</strong>:</p>
+      <div class="code-block" data-lang="js">
+        <div class="code-head"><span class="code-lang">js</span></div>
+        <pre><code>console.log(JSON.stringify({ systemMessage: "Checks complete. The report is ready." }));</code></pre>
+      </div>
+      <ul>
+        <li>It appears in the TUI as a <code>Hook · Stop</code> notice after the response.</li>
+        <li>It is <strong>excluded from</strong> canonical model history, compaction input, final-answer copying and the default Markdown export; it <strong>is</strong> written to local display storage.</li>
+        <li>Returning <code>systemMessage</code> alone <strong>does not</strong> trigger an additional model call.</li>
+        <li>Multiline text is supported; terminal control sequences in the message or title are stripped.</li>
+        <li>The notice colour is presentation only and does not indicate a failed turn.</li>
+        <li>The notice is persisted in Session display history and restored when the Session is reopened; replaying the same message does not duplicate it.</li>
+        <li>Separate Hook invocations may repeat the same text, each producing its own notice.</li>
+        <li>The notice belongs to the Session that produced it; a child Session's notice is <strong>not</strong> broadcast to the parent.</li>
+      </ul>
+      <p>When control fields such as <code>additionalContext</code> or <code>decision</code> are returned alongside, those fields keep their existing per-event semantics. <code>suppressOutput</code> <strong>does not</strong> control this notice.</p>
+      <div class="callout callout-note">
+        <p>This is the script's <strong>output</strong>, not the Hook registration document itself.</p>
+      </div>
+
+      <h4 class="h4" id="h-hook-limits">Event Limits</h4>
+      <ul>
+        <li>The same display behaviour applies to the events for which the Runtime already emits notices: <code>SessionStart</code> / <code>UserPromptSubmit</code>, <code>PreToolUse</code>, <code>PermissionRequest</code>, <code>PostToolUse</code>, <code>SubagentStart</code> / <code>SubagentStop</code>, and <strong>automatic</strong> <code>PostCompact</code>.</li>
+        <li><code>PreCompact</code> and <strong>manual</strong> <code>PostCompact</code> currently emit no such notice.</li>
+        <li><code>SessionEnd</code> delivery is best-effort and is not guaranteed to appear before exit.</li>
+        <li>The <strong>Claude-compatible adapter</strong> discards <code>systemMessage</code> for <code>PreCompact</code>, <code>PostCompact</code> and <code>SessionEnd</code>; the <strong>Codex adapter</strong> discards it for <code>SessionEnd</code>. These per-format differences are stable over time.</li>
+        <li>The above covers <strong>synchronous command Hooks</strong> only.</li>
+        <li>A cancelled or failed turn does <strong>not</strong> fire the normal <code>Stop</code> Hook.</li>
+        <li>Only categorized plugin user messages are shown; diagnostic messages, terminal-control notices and older events without a category remain hidden.</li>
+        <li>This behaviour concerns interactive TUI presentation only; headless and ACP output policies are unaffected.</li>
+      </ul>
+    </section>
+
+    <!-- ══════════════════ 8. MiniApp ══════════════════ -->
+    <section class="doc-section" id="miniapp" aria-labelledby="h-miniapp">
+      <h2 class="h2" id="h-miniapp">MiniApp</h2>
+      <p>A MiniApp is <strong>an interactive app with a UI that a person operates</strong> — not a tool the model calls. Once installed you open it on the desktop app and get an interactive page: a usage dashboard, a report, an approval panel.</p>
+      <div class="callout callout-warn">
+        <p><strong>MiniApps are a desktop-app feature only.</strong> The terminal build <code>mcode</code> has no such capability — <code>mcode --help</code> lists no miniapp command, which was confirmed by running it. <code>mcode exec</code> and ACP cannot use one either.</p>
+      </div>
+      <p>It <strong>is distributed in plugin form</strong>: copy the whole plugin directory (including the hidden <code>.minimax-plugin/</code>) into <code>&lt;data dir&gt;/plugins/</code>, restart the desktop app, then open it from the Mini App entry point. But "distributed as a plugin" is only its <strong>transport mechanism</strong> — it does not place it in the plugin category. For the dividing line, see <a href="#h-c-three">the three kinds</a>. The official community repository is <a href="https://github.com/MiniMax-AI/MiniMax-Code-MiniApps" target="_blank" rel="noopener">MiniMax-AI/MiniMax-Code-MiniApps</a>.</p>
+      <h3 class="h3" id="h-c-miniapp-vs-mcp">How MiniApp Differs from MCP</h3>
+      <p>These two are easiest to confuse, because both "extend mcode". The difference is <strong>who uses them and how</strong>:</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th></th><th>MCP server</th><th>MiniApp</th></tr></thead>
+          <tbody>
+            <tr><td>What it adds</td><td><strong>Tools</strong> for the model</td><td>An <strong>interface</strong> for the user</td></tr>
+            <tr><td>Who drives it</td><td>The model calls it by itself</td><td>The user opens it and clicks</td></tr>
+            <tr><td>Interaction</td><td>No UI; returns text or structured results</td><td>Has a UI: tables, charts, forms, dashboards</td></tr>
+            <tr><td>When it happens</td><td>The model decides</td><td>You open it</td></tr>
+            <tr><td>Model required?</td><td>Yes, otherwise the tool is pointless</td><td>Not always — pure front-end interactivity works alone</td></tr>
+            <tr><td>Where it runs</td><td>Desktop app, <code>mcode exec</code>, and ACP</td><td><strong>Desktop app only</strong></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>They are not mutually exclusive — <strong>a MiniApp can use MCP to fetch its data</strong>. The "Token Usage Board" in the official community repository is the textbook case: the panel itself is the MiniApp (charts for you to look at), while reading the local database is done by MCP or by a script the plugin ships. Put plainly: <strong>MCP fetches the data, the MiniApp shows it to a person</strong>.</p>
+
+      <h3 class="h3" id="h-lifecycle">Lifecycles: They Really Are Not One Kind of Thing</h3>
+      <p>Plugins, MCP servers and MiniApps are easy to lump together, but their <strong>lifecycle mechanics barely overlap</strong>. Getting this wrong is what produces bugs like "why did my MiniApp lose its data on restart".</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th></th><th>Plugin</th><th>MCP server</th><th>MiniApp</th></tr></thead>
+          <tbody>
+            <tr><td>What it is</td><td>A capability package on disk</td><td>Tool access</td><td>An app with a UI</td></tr>
+            <tr><td><strong>When it takes effect</strong></td><td>Once installed and enabled, <strong>across sessions</strong></td><td>When the Runtime loads config and connects</td><td><strong>Started on demand when you open it</strong></td></tr>
+            <tr><td><strong>Own process?</strong></td><td>No process of its own</td><td>A child process for stdio; remote for http/sse</td><td><strong>A separate Node process</strong>, port assigned by the Host</td></tr>
+            <tr><td><strong>When it ends</strong></td><td>You run <code>disable</code> or <code>remove</code></td><td>When the Runtime ends</td><td><strong>Reclaimed when idle, stoppable at any time</strong></td></tr>
+            <tr><td><strong>Where state lives</strong></td><td>The package on disk</td><td>Connection state</td><td><code>dataDir</code> (a private directory)</td></tr>
+            <tr><td>Hot swap</td><td>Needs <code>/reload</code> or a restart</td><td>Reconnect</td><td>Generation change with two-phase commit, rollback possible</td></tr>
+            <tr><td>On startup failure</td><td>Plugin is disabled</td><td>—</td><td><strong>Quarantined</strong> rather than restarted in a loop</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4 class="h4" id="h-life-plugin">Plugin: effective as soon as it is installed</h4>
+      <p>A plugin has <strong>no running process</strong> — it is a folder on disk. Once installed and enabled it is loaded in every subsequent session, until you explicitly <code>disable</code> or <code>remove</code> it. The enabled check happens every time capabilities are assembled, so a disabled plugin is never assembled.</p>
+      <p>When a plugin is activated it can raise <code>SessionStart</code> with the source <code>plugin_activation</code>. After editing a plugin, <code>/reload</code> re-reads it without restarting mcode.</p>
+
+      <p>The chain looks roughly like this:</p>
+      <figure class="diagram">
+<svg viewBox="0 0 760 452" role="img" aria-label="Discovery (manifest probed in precedence order)">
+<title>Discovery (manifest probed in precedence order)</title>
+<text class="dg-t-core" x="20" y="20" font-size="12.5">① Discovery (manifest probed in precedence order)</text>
+<rect class="dg-node" x="20" y="30" width="150" height="30" rx="7"/>
+<text class="dg-t-mono" x="95" y="49" font-size="11" text-anchor="middle">plugin.json</text>
+<rect class="dg-node-muted" x="192" y="30" width="150" height="30" rx="7"/>
+<text class="dg-t-mono" x="267" y="49" font-size="11" text-anchor="middle">.minimax-plugin/</text>
+<rect class="dg-node-muted" x="364" y="30" width="150" height="30" rx="7"/>
+<text class="dg-t-mono" x="439" y="49" font-size="11" text-anchor="middle">.claude-plugin/</text>
+<rect class="dg-node-muted" x="536" y="30" width="150" height="30" rx="7"/>
+<text class="dg-t-mono" x="611" y="49" font-size="11" text-anchor="middle">.codex-plugin/</text>
+<text class="dg-t-sub" x="20" y="78" font-size="10.5">none found → PLUGIN_MANIFEST_MISSING</text>
+<path class="dg-edge" d="M380 86 V 104" marker-end="url(#ar)"/>
+<text class="dg-t-core" x="20" y="124" font-size="12.5">② Capability wiring (fixed order)</text>
+<rect class="dg-node-core" x="20" y="134" width="132" height="30" rx="7"/>
+<text class="dg-t-mono" x="86" y="153" font-size="11" text-anchor="middle">apps</text>
+<rect class="dg-node-core" x="165" y="134" width="132" height="30" rx="7"/>
+<text class="dg-t-mono" x="231" y="153" font-size="11" text-anchor="middle">mcpServers</text>
+<rect class="dg-node-core" x="310" y="134" width="132" height="30" rx="7"/>
+<text class="dg-t-mono" x="376" y="153" font-size="11" text-anchor="middle">skills</text>
+<rect class="dg-node-core" x="455" y="134" width="132" height="30" rx="7"/>
+<text class="dg-t-mono" x="521" y="153" font-size="11" text-anchor="middle">hooks</text>
+<rect class="dg-node-core" x="600" y="134" width="132" height="30" rx="7"/>
+<text class="dg-t-mono" x="666" y="153" font-size="11" text-anchor="middle">hostBindings</text>
+<path class="dg-edge" d="M380 172 V 216" marker-end="url(#ar)"/>
+<text class="dg-t-core" x="20" y="236" font-size="12.5">③ State and activation</text>
+<rect class="dg-node-muted" x="20" y="246" width="150" height="32" rx="7"/>
+<text class="dg-t" x="95" y="267" font-size="11.5" text-anchor="middle">available</text>
+<rect class="dg-node" x="192" y="246" width="150" height="32" rx="7"/>
+<text class="dg-t" x="267" y="267" font-size="11.5" text-anchor="middle">disabled</text>
+<rect class="dg-node-seam" x="364" y="246" width="150" height="32" rx="7"/>
+<text class="dg-t" x="439" y="267" font-size="11.5" text-anchor="middle">enabled</text>
+<text class="dg-t-sub" x="20" y="296" font-size="10.5">Three states differ only by installed × enabled; there is no extra "activated" state</text>
+<text class="dg-t-sub" x="20" y="313" font-size="10.5">in-process singleton: snapshot + revision, republished when the directory changes</text>
+<path class="dg-edge" d="M380 321 V 336" marker-end="url(#ar)"/>
+<text class="dg-t-core" x="20" y="356" font-size="12.5">④ Writable state</text>
+<rect class="dg-node-muted" x="20" y="366" width="340" height="52" rx="8"/>
+<text class="dg-t" x="190" y="387" font-size="12" text-anchor="middle">Plugin package root</text>
+<text class="dg-t-sub" x="190" y="405" font-size="10.5" text-anchor="middle">read-only</text>
+<rect class="dg-node-core" x="400" y="366" width="340" height="52" rx="8"/>
+<text class="dg-t-core" x="570" y="387" font-size="12" text-anchor="middle">PLUGIN_DATA</text>
+<text class="dg-t-sub" x="570" y="405" font-size="10.5" text-anchor="middle">&lt;data dir&gt;/v2/plugin-data/agent-plugins/&lt;name&gt;, 0700</text>
+<text class="dg-t-sub" x="20" y="440" font-size="10.5">The package root is read-only: anything a plugin writes goes to PLUGIN_DATA and survives a restart.</text>
+<defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker></defs>
+</svg></figure>
+
+      <h4 class="h4" id="h-life-mcp">MCP server: born with the Runtime, dies with it</h4>
+      <p>An MCP server's lifecycle is <strong>tied to the Runtime</strong>: the Runtime reads configuration (<code>&lt;data dir&gt;/mcp.json</code>, <code>&lt;workspace&gt;/.mcp.json</code>, or a plugin's <code>mcpServers</code>), establishes the connection, and releases it when the Runtime ends.</p>
+      <ul>
+        <li><code>stdio</code>: the Host launches the server as a <strong>child process</strong>, which lives as long as the connection.</li>
+        <li><code>http</code> / <code>sse</code>: connects to a remote service; the Host holds only the connection and starts no local process.</li>
+        <li>The child process inherits only <strong>17 allowlisted environment variables</strong> (<code>PATH</code>, <code>HOME</code>, <code>APPDATA</code>, …) and no credentials; anything else must be declared explicitly in <code>env</code>.</li>
+      </ul>
+
+      <h4 class="h4" id="h-life-miniapp">MiniApp: started on demand, reclaimed when idle</h4>
+      <p>MiniApp is the only one of the three that <strong>carries its own runtime</strong>. Its manifest declares <code>runtime.lifecycle: on-demand</code>: a Node process starts <strong>only when you open the page</strong>, and the Host assigns the port — you never pick one yourself.</p>
+      <ul>
+        <li><strong>Reference counting</strong>: each page view takes a <em>lease</em>; closing the page releases it. The Host waits for the lease count to reach zero before stopping.</li>
+        <li><strong>Idle reclamation</strong>: with no leases left, an idle timer starts and eventually stops the process. So <strong>between two page views the process may well have been restarted</strong>.</li>
+        <li><strong>Reuse is possible</strong>: the Host first tries to reuse a still-running instance; only an explicit forced start guarantees a new process.</li>
+        <li><strong>Two-phase stop</strong>: stopping is a prepare-then-commit sequence, and a failed prepare rolls back instead of leaving you half-stopped.</li>
+        <li><strong>Quarantine</strong>: on startup failure, or when cleanup ownership cannot be proven, the MiniApp is quarantined instead of being retried forever.</li>
+      </ul>
+      <div class="callout callout-warn">
+        <p><strong>This is the trap people fall into</strong>: because the process can be reclaimed at any time, <strong>a MiniApp must not keep state in memory</strong>. The official guidance is explicit: "assume yours can be stopped and restarted between two page views: keep durable state in <code>dataDir</code>, not in memory". Anything that must survive is written to <code>dataDir</code>, a private directory the Host creates for each plugin.</p>
+      </div>
+      <p><code>dispose()</code> may only close what the entry itself started — the HTTP server, timers, child processes, file and database handles. The Host stops the entry process only; it does not discover or terminate processes the entry spawned.</p>
+
+      <p>Drawing the process topology and where things live makes it harder to put state in the wrong place:</p>
+      <figure class="diagram">
+<svg viewBox="0 0 760 452" role="img" aria-label="So: anything that must survive between two page views goes to dataDir — not memory, and not runtimeDir.">
+<title>So: anything that must survive between two page views goes to dataDir — not memory, and not runtimeDir.</title>
+<rect class="dg-node-core" x="20" y="14" width="250" height="54" rx="9"/>
+<text class="dg-t-core" x="145" y="36" font-size="12.5" text-anchor="middle">Host Runtime</text>
+<text class="dg-t-sub" x="145" y="54" font-size="10.5" text-anchor="middle">allocates ports · hands over config · reclaims leases</text>
+<rect class="dg-node" x="490" y="14" width="250" height="54" rx="9"/>
+<text class="dg-t" x="615" y="36" font-size="12.5" text-anchor="middle">MiniApp process (a separate Node child)</text>
+<text class="dg-t-sub" x="615" y="54" font-size="10.5" text-anchor="middle">renders and handles interaction only</text>
+<path class="dg-edge-core" d="M270 34 H 486" marker-end="url(#ar)"/>
+<text class="dg-t-mono" x="378" y="27" font-size="10.5" text-anchor="middle">spawn</text>
+<rect class="dg-node-seam" x="20" y="90" width="720" height="66" rx="9"/>
+<text class="dg-t-core" x="380" y="110" font-size="12" text-anchor="middle">IPC (the only config channel)</text>
+<text class="dg-t-mono" x="380" y="129" font-size="10" text-anchor="middle">↓ miniapp:init — pluginId / packageRoot / dataDir / listen / startupToken</text>
+<text class="dg-t-mono" x="380" y="146" font-size="10" text-anchor="middle">↑ miniapp:started · log · error · stopped</text>
+<rect class="dg-node" x="20" y="168" width="720" height="44" rx="9"/>
+<text class="dg-t" x="380" y="188" font-size="12" text-anchor="middle">TCP  127.0.0.1:49152–65535</text>
+<text class="dg-t-sub" x="380" y="204" font-size="10.5" text-anchor="middle">the host picks the port and probes for collisions</text>
+<rect class="dg-node-muted" x="20" y="224" width="720" height="44" rx="9"/>
+<text class="dg-t" x="380" y="244" font-size="12" text-anchor="middle">The runtime environment is nearly empty</text>
+<text class="dg-t-sub" x="380" y="260" font-size="10.5" text-anchor="middle">only a few vars are passed through (PATH / TEMP / HOME …) plus an injected ELECTRON_RUN_AS_NODE; config always travels over IPC</text>
+<path class="dg-edge" d="M380 274 V 292" marker-end="url(#ar)"/>
+<rect class="dg-band" x="20" y="286" width="720" height="96" rx="10"/>
+<rect class="dg-node-muted" x="36" y="300" width="336" height="66" rx="8"/>
+<text class="dg-t" x="204" y="324" font-size="12" text-anchor="middle">runtimeDir (ephemeral)</text>
+<text class="dg-t-sub" x="204" y="342" font-size="10" text-anchor="middle">mavis-miniapp-*/ under the system temp dir — gone as soon as the process stops</text>
+<rect class="dg-node-core" x="388" y="300" width="336" height="66" rx="8"/>
+<text class="dg-t-core" x="556" y="324" font-size="12" text-anchor="middle">dataDir (durable)</text>
+<text class="dg-t-sub" x="556" y="342" font-size="10" text-anchor="middle">&lt;data dir&gt;/v2/plugin-data/liveboards/&lt;plugin&gt; — still there after a restart</text>
+<rect class="dg-node-seam" x="20" y="396" width="720" height="40" rx="9"/>
+<text class="dg-t-core" x="380" y="421" font-size="11.5" text-anchor="middle">So: anything that must survive between two page views goes to dataDir — not memory, and not runtimeDir.</text>
+<defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker></defs>
+</svg></figure>
+
+      <h3 class="h3" id="h-c-miniapp-write">Writing a MiniApp</h3>
+      <p>A MiniApp is, concretely, "a Node service plus a page, with a manifest". Here is the full structure and a minimal working implementation.</p>
+
+      <h4 class="h4" id="h-ma-layout">Layout</h4>
+      <div class="code-block" data-lang="bash">
+        <div class="code-head"><span class="code-lang">bash</span></div>
+        <pre><code>&lt;plugin-id&gt;/
+  .minimax-plugin/plugin.json   # Plugin manifest: identity, icon, category, capabilities
+  package.json                  # Mini App declaration (below)
+  icon.png                      # Plugin icon (PNG / JPEG / WebP)
+  miniapp/
+    miniapp.json                # Payload roots, Node entry, page route
+    client/                     # Runtime payload: files served to the page
+    node/                       # Runtime payload: the Node entry and its imports
+  README.md
+  LICENSE
+  skills/&lt;name&gt;/SKILL.md        # Optional: also provides a Skill
+  *.mcp.json                    # Optional: also provides an MCP server
+  bindings/&lt;name&gt;.binding.json  # Optional: host capability bindings</code></pre>
+      </div>
+      <ul>
+        <li>The directory name must equal <code>name</code> in <code>plugin.json</code>, and must be unique repo-wide (the author directory is dropped at install time).</li>
+        <li><code>name</code> must match <code>^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$</code>, at most 80 characters.</li>
+        <li>Only the <code>client/</code> and <code>node/</code> paths listed under <code>artifacts</code> become the runtime payload; keep tests and docs outside <code>miniapp/</code>.</li>
+        <li>Limits: at most <strong>1024</strong> files, <strong>16 MiB</strong> per file, <strong>64 MiB</strong> total; no symbolic or hard links.</li>
+        <li>Paths must be portable: ASCII only, no <code>\</code>, no <code>.</code>/<code>..</code> segments, no segment ending in <code>.</code>.</li>
+      </ul>
+
+      <h4 class="h4" id="h-ma-pkg">package.json: declaring it a MiniApp</h4>
+      <p>This <code>mcode</code> field is what upgrades a plain plugin into a MiniApp:</p>
+      <div class="code-block" data-lang="json">
+        <div class="code-head"><span class="code-lang">json</span></div>
+        <pre><code>{
+  "mcode": {
+    "schemaVersion": 2,
+    "miniApp": "./miniapp/miniapp.json"
+  }
+}</code></pre>
+      </div>
+      <p>No other keys are allowed inside <code>mcode</code>. Other top-level fields such as <code>name</code>, <code>type</code> and <code>scripts</code> are fine.</p>
+
+      <h4 class="h4" id="h-ma-manifest">miniapp/miniapp.json: entry and route</h4>
+      <div class="code-block" data-lang="json">
+        <div class="code-head"><span class="code-lang">json</span></div>
+        <pre><code>{
+  "schemaVersion": 1,
+  "artifacts": {
+    "client": ["./miniapp/client"],
+    "node": ["./miniapp/node"]
+  },
+  "runtime": {
+    "kind": "process",
+    "entry": "./miniapp/node/server.mjs",
+    "lifecycle": "on-demand"
+  },
+  "surface": { "path": "/dashboard" },
+  "mcpEndpoints": []
+}</code></pre>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Field</th><th>Rule</th></tr></thead>
+          <tbody>
+            <tr><td><code>artifacts.client</code> / <code>artifacts.node</code></td><td>Non-empty, unique path arrays under <code>miniapp/</code>; each must exist. These two are exactly what gets hashed and installed; <code>node_modules</code> is excluded</td></tr>
+            <tr><td><code>runtime.kind</code></td><td>Always <code>process</code></td></tr>
+            <tr><td><code>runtime.entry</code></td><td>Ends in <code>.mjs</code>, <code>.js</code> or <code>.cjs</code>, exists, and lies inside <code>artifacts.node</code>. <strong>Use <code>.mjs</code></strong> so you can use ESM <code>export</code></td></tr>
+            <tr><td><code>runtime.lifecycle</code></td><td><code>on-demand</code> or omitted</td></tr>
+            <tr><td><code>surface.path</code></td><td>The route the entry serves, e.g. <code>/dashboard</code>; no origin, query, fragment or backslash; a missing leading <code>/</code> is added</td></tr>
+            <tr><td><code>mcpEndpoints</code></td><td>Array of <code>{server, path}</code>. <code>server</code> must name a server already declared in <code>plugin.json.mcpServers</code> — checked at install time. Use <code>[]</code> when there are none</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4 class="h4" id="h-ma-entry">The Node entry: export start(context)</h4>
+      <p>The Host imports <code>runtime.entry</code> as an ES module and requires a named export <code>start</code>. Return <code>{dispose}</code> — <strong>an object without <code>dispose</code> is rejected as an invalid lifecycle</strong>.</p>
+      <div class="code-block" data-lang="js">
+        <div class="code-head"><span class="code-lang">js</span></div>
+        <pre><code>import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
+export async function start(context) {
+  const { pluginRoot, dataDir, listen, signal, logger } = context;
+
+  const server = createServer(async (req, res) =&gt; {
+    // The page itself can be a single static HTML file
+    const html = await readFile(join(pluginRoot, 'miniapp/client/index.html'));
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(html);
+  });
+
+  // Bind exactly the address the Host gives you; never pick your own port
+  await new Promise((resolve) =&gt; server.listen(listen.port, listen.host, resolve));
+  logger.info('miniapp ready');
+
+  // Do not fetch business data inside start(): register handlers and resolve
+  signal.addEventListener('abort', () =&gt; server.close());
+
+  return {
+    async dispose() {
+      // Close only what you started: server, timers, child processes, handles
+      await new Promise((resolve) =&gt; server.close(resolve));
+    }
+  };
+}</code></pre>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>context field</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>pluginId</code></td><td>The plugin ID, i.e. <code>plugin.json.name</code></td></tr>
+            <tr><td><code>pluginRoot</code></td><td>Real path of the installed package; read your client files from here</td></tr>
+            <tr><td><code>dataDir</code></td><td><strong>A private directory the Host creates and owns for this plugin</strong>; its location is opaque and may change. Put durable state here</td></tr>
+            <tr><td><code>listen</code></td><td><code>{ host: "127.0.0.1", port }</code> — <strong>bind exactly this address</strong></td></tr>
+            <tr><td><code>signal</code></td><td>An <code>AbortSignal</code> that fires when the Host stops the MiniApp</td></tr>
+            <tr><td><code>logger</code></td><td><code>debug/info/warn/error(message, fields?)</code>, messages truncated at 4 KiB. <strong>Only the keys of <code>fields</code> leave the process</strong>, so put diagnostic detail in the message</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <ul>
+        <li><strong>Never use <code>console.log</code> or <code>process.stdout.write</code></strong> — stdout/stdin belong to the Host; log through <code>context.logger</code>.</li>
+        <li>Resolving <code>start()</code> <em>is</em> the readiness signal; there is <strong>no health route</strong>.</li>
+        <li>Vendor third-party runtime code <strong>inside the <code>artifacts</code> roots</strong> rather than relying on <code>node_modules</code>.</li>
+        <li>The official repository ships <code>examples/hello-miniapp/</code> as a starting template, along with <code>miniapp-api.ts</code> type declarations (editor hints only; never imported at runtime).</li>
+      </ul>
+      <div class="callout callout-note">
+        <p><strong>Scope</strong>: this contract comes from the official repository <a href="https://github.com/MiniMax-AI/MiniMax-Code-MiniApps" target="_blank" rel="noopener">MiniMax-AI/MiniMax-Code-MiniApps</a>, which states it is <strong>verified against MiniMax Code desktop 3.0.73</strong>. The desktop app currently supports <strong>macOS and Windows</strong>; the terminal <code>mcode</code> covered by the rest of this manual does not provide MiniApps at all.</p>
+      </div>
+
+    </section>
+    <!-- ══════════════════ 9. MCP and Tools ══════════════════ -->
+    <section class="doc-section" id="mcp-browser" aria-labelledby="h-mcp-browser">
+      <h2 class="h2" id="h-mcp-browser">MCP &amp; Tools</h2>
+
+      <h3 class="h3" id="h-mcp-config">MCP Configuration</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Level</th><th>Path</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>User level</td><td><code>&lt;data dir&gt;/mcp.json</code></td><td>Applies across workspaces</td></tr>
+            <tr><td>Project level</td><td><code>&lt;workspace&gt;/.mcp.json</code></td><td>Loaded automatically by the Runtime</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Project-level MCP <strong>shares configuration rules</strong> with Desktop, <code>exec</code> and ACP. Inside the TUI, <code>/mcp</code> shows MCP capabilities and project configuration.</p>
+
+      <h4 class="h4" id="h-mcp-format">User-Level Format</h4>
+      <div class="code-block" data-lang="json">
+        <div class="code-head"><span class="code-lang">json</span></div>
+        <pre><code>{
+  "mcpServers": {
+    "codegraph": {
+      "type": "stdio",
+      "command": "codegraph",
+      "args": ["serve", "--mcp"]
+    },
+    "my-server": {
+      "command": "python3",
+      "args": ["${PLUGIN_ROOT}/scripts/server.py"],
+      "env": {
+        "MCP_STATE_DIR": "${PLUGIN_DATA}/state"
+      },
+      "description": "Free-text description",
+      "enabled": true,
+      "configured": true
+    }
+  }
+}</code></pre>
+      </div>
+      <p>Fields: <code>type</code>, <code>command</code>, <code>args</code>, <code>env</code>, <code>description</code>, <code>enabled</code>, <code>configured</code>. The <code>${PLUGIN_ROOT}</code> and <code>${PLUGIN_DATA}</code> placeholders may be used inside <code>env</code>.</p>
+
+      <h3 class="h3" id="h-mcp-tools">Tools</h3>
+      <p>The base tools are listed under <a href="#h-tools">Host Tools</a>. Tools contributed by MCP servers appear as <code>mcp__&lt;server&gt;__&lt;tool&gt;</code>.</p>
+
+      <h3 class="h3" id="h-attachments">Attachments and References</h3>
+      <h4 class="h4" id="h-attach-cli">Command Line</h4>
+      <div class="code-block" data-lang="bash">
+        <div class="code-head"><span class="code-lang">bash</span></div>
+        <pre><code>mcode exec --file error.log --file ./trace.json "Determine why this build failed."</code></pre>
+      </div>
+      <p><code>--file</code> is <strong>repeatable</strong>.</p>
+
+      <h4 class="h4" id="h-attach-tui">TUI</h4>
+      <ul>
+        <li>After an image is pasted, the Composer labels it with a number of the form <code>[Image #1]</code> and shows a preview above the input line.</li>
+        <li>Typing further or moving the caret away collapses the preview; the left and right arrow keys return to the image tag to view it again.</li>
+        <li>Pressing <code>Esc</code> twice in an empty input, or editing the previous message with <code>/edit</code>, restores the image as an actionable tag supporting deletion, undo and resending.</li>
+        <li>Terminals supporting the Kitty image protocol, and iTerm2 in regular mode, display images directly; other terminals show the format, dimensions and file size.</li>
+        <li>The preview reads at most <strong>20 MB</strong> and processes at most <strong>25 megapixels</strong>; on overrun or a read failure the text information and the original attachment are retained. The preview copy does not affect what is sent as the original image and is not de-duplicated automatically.</li>
+      </ul>
+      <p>Absolute image paths containing spaces can be pasted directly in macOS/Linux terminals, wrapped in outer quotes (for example <code>"/path/Screenshot 2026.png"</code>) or supplied as a bare escaped path (for example <code>/path/Screenshot\ 2026.png</code>).</p>
+
+      <h3 class="h3" id="h-mcp-network">Network</h3>
+      <p><code>HTTP_PROXY</code>, <code>HTTPS_PROXY</code>, <code>ALL_PROXY</code>, <code>NO_PROXY</code> and their lowercase forms are all read; <code>localhost</code>, <code>127.0.0.1</code> and <code>::1</code> always connect directly. See <a href="#h-config-proxy">Network Proxy</a>.</p>
+    </section>
+
+    <!-- ══════════════════ 10. Permissions and Sessions ══════════════════ -->
+    <section class="doc-section" id="permissions" aria-labelledby="h-permissions">
+      <h2 class="h2" id="h-permissions">Permissions &amp; Sessions</h2>
+
+      <h3 class="h3" id="h-permission-modes">Permission Modes</h3>
+      <p>The <code>PermissionMode</code> values (source <code>packages/config/src</code>):</p>
+      <div class="code-block" data-lang="text">
+        <div class="code-head"><span class="code-lang">text</span></div>
+        <pre><code>"default" | "acceptEdits" | "bypassPermissions" | "auto" | "off"</code></pre>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Internal value</th><th>Interface label</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>default</code></td><td>Ask</td><td>Confirm sensitive actions</td></tr>
+            <tr><td><code>auto</code></td><td>Auto</td><td>Ask only when risk is high</td></tr>
+            <tr><td><code>bypassPermissions</code></td><td>Full access</td><td>Run without confirmation</td></tr>
+            <tr><td><code>acceptEdits</code></td><td>—</td><td>Automatically accept edit-type operations</td></tr>
+            <tr><td><code>off</code></td><td>—</td><td>Turns permission control off</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4 class="h4" id="h-permission-namespaces">Three Namespaces — Do Not Mix Them</h4>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Context</th><th>Values</th></tr></thead>
+          <tbody>
+            <tr><td>TUI <code>/permission [status | ask | auto | full]</code></td><td><code>ask</code> / <code>auto</code> / <code>full</code> (interface semantics)</td></tr>
+            <tr><td><code>permissionMode</code> in <code>config.yaml</code></td><td><code>default</code> / <code>acceptEdits</code> / <code>bypassPermissions</code> / <code>auto</code> / <code>off</code></td></tr>
+            <tr><td><code>mcode exec --permission</code></td><td><code>smart</code> / <code>full</code> / <code>off</code> (<code>ask</code> requires TUI/ACP)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><strong>Recommendation</strong>: in an unfamiliar codebase, choose the <strong>smallest permission</strong> that still completes the task.</p>
+      <p>The Runtime additionally writes <code>&lt;data dir&gt;/permission.json</code> to record the current permission state.</p>
+
+      <h3 class="h3" id="h-decisions">Handling a Single Decision</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Command</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>/allow</code></td><td>Allow the pending tool once</td></tr>
+            <tr><td><code>/always</code></td><td>Always allow this action class</td></tr>
+            <tr><td><code>/deny</code></td><td>Deny the pending tool</td></tr>
+            <tr><td><code>/decision</code></td><td>Reopen the pending action panel</td></tr>
+            <tr><td><code>/permissions</code></td><td>Show pending permission requests held by the Runtime</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout callout-warn">
+        <p><strong>Note</strong>: <code>/always</code> grants permanent permission at the <strong>action class</strong> level, a scope broader than a single tool. Use it with care in unfamiliar repositories.</p>
+      </div>
+
+      <h3 class="h3" id="h-plan-mode">Plan Mode</h3>
+      <p><code>/plan [on | off | status | view]</code> — review the implementation plan before modifying code.</p>
+      <ul>
+        <li>The next message after entering or leaving Plan goes through the resume-choice flow.</li>
+        <li>After choosing <code>Keep my draft</code> or pressing <code>Esc</code>, the draft can still be edited and resent; the result of that send is not published.</li>
+        <li>A Plan switch that has not taken effect is retained.</li>
+        <li>If the session has been claimed by another turn when the send is resumed, the draft is retained, the failure is reported, and the user sends again.</li>
+      </ul>
+
+      <h3 class="h3" id="h-session-mgmt">Session Management</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Capability</th><th>Entry point</th></tr></thead>
+          <tbody>
+            <tr><td>Create</td><td><code>/new</code> (alias <code>/clear</code>), command line <code>mcode</code></td></tr>
+            <tr><td>Browse / resume / manage</td><td><code>/sessions [query]</code> (alias <code>/resume</code>), <code>mcode --session</code>, <code>mcode --continue</code></td></tr>
+            <tr><td>Rename</td><td><code>/rename [title]</code></td></tr>
+            <tr><td>Archive</td><td><code>/archive</code></td></tr>
+            <tr><td>Name</td><td><code>/name</code> (session display name)</td></tr>
+            <tr><td>History navigation</td><td><code>/history</code>, <code>/fork</code>, <code>/rewind</code>, <code>/edit</code></td></tr>
+            <tr><td>Export</td><td><code>/export [path.md]</code></td></tr>
+            <tr><td>Copy the last response</td><td><code>/copy</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><code>/sessions</code> supports free-text search as well as the <code>id:</code>, <code>path:</code>, <code>type:</code>, <code>status:</code> and <code>model:</code> filters.</p>
+
+      <h4 class="h4" id="h-history-three">The Three History-Change Commands</h4>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Command</th><th>Behaviour</th></tr></thead>
+          <tbody>
+            <tr><td><code>/fork</code></td><td>Creates a <strong>sub-session</strong> from a past user message, leaving the current session and files unchanged</td></tr>
+            <tr><td><code>/edit</code></td><td>Replaces that prompt and <strong>regenerates from here</strong>; later conversation and file changes are removed</td></tr>
+            <tr><td><code>/rewind</code></td><td>Removes later messages; optionally "session only (files unchanged)" or "session and files (restoring safely recoverable file changes)"</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Precondition: a Session must have been started or resumed; unavailable while a response is running (<code>Stop the running response before changing Session history.</code>).</p>
+
+      <h3 class="h3" id="h-run-control">Run Control</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Command</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>/stop</code></td><td>Interrupt the current turn</td></tr>
+            <tr><td><code>/queue</code></td><td>Manage messages that run after the current response; press <code>c</code> on a paused queue to resume from the head</td></tr>
+            <tr><td><code>/steer &lt;message&gt;</code></td><td>Steer the current work without interrupting it</td></tr>
+            <tr><td><code>/tasks</code></td><td>View background agents and Runtime tasks</td></tr>
+            <tr><td><code>/goal &lt;objective | action&gt;</code></td><td>Start or manage the current Session Goal</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Without an action, <code>/goal</code> takes the following text as the <strong>objective</strong> and creates or replaces the current Session's Goal. With an action it performs one of the following:</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>action</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>pause</code></td><td>Pause Goal auto-continuation</td></tr>
+            <tr><td><code>resume</code></td><td>Resume a paused or blocked Goal</td></tr>
+            <tr><td><code>edit</code></td><td>Edit the current Goal objective</td></tr>
+            <tr><td><code>clear</code></td><td>Remove the current Goal</td></tr>
+            <tr><td><code>help</code></td><td>Show Goal syntax and budget examples</td></tr>
+            <tr><td><code>budget=&lt;n&gt;</code></td><td>Set a token budget; a value follows the <code>=</code>, for example <code>budget=50K</code></td></tr>
+            <tr><td><code>budget=clear</code></td><td>Remove the Goal token budget (back to unlimited)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Typing <code>/goal</code> in the Composer completes these actions. A Goal is <code>active</code> or <code>paused</code>; an absent <code>budget</code> means no token cap, and reaching a set cap ends the Goal through the normal termination flow.</p>
+      <p>Pressing <code>Enter</code> in the Composer steers the input into the current turn; <code>Alt+Enter</code> places it in the Queue for the next turn. The most recent queued message can be recalled with <code>Alt+↑</code> (<code>Option+↑</code> on macOS) or <code>Shift+←</code>.</p>
+
+      <h3 class="h3" id="h-side-session">Side Session (/btw)</h3>
+      <ul>
+        <li><code>/btw [question]</code> (alias <code>/side</code>) forks a temporary side session from the most recent committed session boundary, and <strong>the main task keeps running uninterrupted</strong>.</li>
+        <li>The side session inherits the main session history as a read-only context, carries the same tool permissions, follows the current permission mode and adds no separate confirmation.</li>
+        <li><code>/parent</code> or <code>Ctrl+/</code> switches between the side session and the main session view without ending either.</li>
+        <li>Side sessions are <strong>temporary</strong>: they do not appear in <code>/sessions</code> and are cleaned up automatically when switching Sessions.</li>
+        <li>The switch shortcut only switches to an already-created side session and does <strong>not</strong> create one; before <code>/btw</code> has run it shows an amber notice.</li>
+      </ul>
+      <p>Only read-only commands are available in the side session view: <code>help</code>, <code>changelog</code>, <code>context</code>, <code>status</code>, <code>usage</code>, <code>export</code>, <code>transcript</code>, <code>copy</code> and <code>parent</code>.</p>
+
+    </section>
+
+    <!-- ══════════════════ 11. Sharing ══════════════════ -->
+    <section class="doc-section" id="sharing" aria-labelledby="h-sharing">
+      <h2 class="h2" id="h-sharing">Sharing</h2>
+      <p>This document and the plugin that ships it are released under the <code>Apache-2.0</code> license and may be freely shared, cited and redistributed. Both repositories below are <strong>maintained by MiniMax officially</strong>:</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Repository</th><th>Address</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>Plugin repository</td>
+              <td><a href="https://github.com/MiniMax-AI/MiniMax-Code-Plugins" target="_blank" rel="noreferrer noopener">github.com/MiniMax-AI/<wbr>MiniMax-Code-Plugins</a></td>
+              <td>Community registry and contribution toolkit for MiniMax Code plugins (<code>Apache-2.0</code>). This plugin is organized to that specification and can be contributed upstream directly</td>
+            </tr>
+            <tr>
+              <td>MiniApps repository</td>
+              <td><a href="https://github.com/MiniMax-AI/MiniMax-Code-MiniApps" target="_blank" rel="noreferrer noopener">github.com/MiniMax-AI/<wbr>MiniMax-Code-MiniApps</a></td>
+              <td>MiniApp plugin collection for MiniMax Code (<code>MIT</code>)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>The official source repository for mcode itself is <a href="https://github.com/MiniMax-AI/minimax-code" target="_blank" rel="noreferrer noopener">github.com/MiniMax-AI/<wbr>minimax-code</a>. The <span aria-hidden="true">⟨⟩</span> button in the top bar links straight to it.</p>
+    </section>
+
+  </main>
+
+  <aside class="toc" id="toc" aria-label="Page outline">
+    <nav id="tocNav" aria-label="Page outline navigation"></nav>
+  </aside>
+</div>
+
+<div class="search-modal" id="searchModal" role="dialog" aria-modal="true" aria-labelledby="searchTitle" hidden>
+  <div class="search-backdrop" id="searchBackdrop"></div>
+  <div class="search-panel" role="document">
+    <h2 class="sr-only" id="searchTitle">Search the documentation</h2>
+    <div class="search-head">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="6.2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M15.6 15.6L20 20" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+      <input type="text" id="searchInput" class="search-input" placeholder="Search sections, slash commands or text…" autocomplete="off" spellcheck="false" aria-label="Search sections, slash commands or text" aria-controls="searchResults" aria-expanded="false">
+      <button type="button" class="icon-btn" id="searchClose" aria-label="Close search">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <ul class="search-results" id="searchResults" role="listbox" aria-label="Search results"></ul>
+    <p class="search-hint" id="searchHint">
+      <kbd class="kbd">↑</kbd><kbd class="kbd">↓</kbd> to select · <kbd class="kbd">Enter</kbd> to jump · <kbd class="kbd">Esc</kbd> to close
+    </p>
+  </div>
+</div>
+
+<script src="assets/app.js" defer></script>
+</body>
+</html>
