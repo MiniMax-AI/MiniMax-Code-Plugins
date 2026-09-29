@@ -10,7 +10,10 @@ param(
   [ValidateSet('idle','thinking','working','waiting','done','error')]
   [string]$State = 'idle',
   [string]$Message = '',
-  [int]$Progress = -1
+  [int]$Progress = -1,
+  [int]$Step = -1,
+  [int]$Total = -1,
+  [string]$Detail = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -113,6 +116,9 @@ $payload = [PSCustomObject]@{
   state    = $State
   message  = $Message
   progress = $Progress
+  step     = $Step
+  total    = $Total
+  detail   = $Detail
   ts       = $ts
   source   = 'agent'
 } | ConvertTo-Json -Compress

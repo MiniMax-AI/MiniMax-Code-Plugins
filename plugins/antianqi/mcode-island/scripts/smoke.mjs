@@ -23,7 +23,7 @@
 //   6. cross-platform: no hardcoded host-absolute paths, no
 //      /Users/ or /home/ literals in any script or hooks.json entry
 
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, stat, readdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve, sep } from 'node:path';
 
@@ -155,7 +155,7 @@ const checkEntry = async (event, entry) => {
 };
 
 const main = async () => {
-    console.log(`mcode-island v0.3.0 self-check`);
+    console.log(`mcode-island v0.4.0 self-check`);
     console.log(`plugin root: ${PLUGIN_ROOT}`);
     console.log('-'.repeat(60));
 
@@ -182,8 +182,8 @@ const main = async () => {
     } else {
         out('PASS', `plugin.json: name is "${plugin.name}"`);
     }
-    if (plugin.version !== '0.3.0') {
-        out('FAIL', `plugin.json: version is "${plugin.version}", expected "0.3.0"`);
+    if (plugin.version !== '0.4.0') {
+        out('FAIL', `plugin.json: version is "${plugin.version}", expected "0.4.0"`);
     } else {
         out('PASS', `plugin.json: version is "${plugin.version}"`);
     }
@@ -338,6 +338,492 @@ const main = async () => {
         }
     }
 
+    // 5c1. Sub-step progress extension (round-13 refactor).
+    // notify-island.ps1 must accept -Step/-Total/-Detail and write them
+    // into status.json. mcode-island.ps1 widget must define
+    // Build-DisplayMessage and pass step/total/detail to it.
+    // _lib.ps1 Format-ToolSummary must extract mcode-computer-use
+    // action+coordinate; Push-Island must forward the new fields.
+    // The detailed functional tests live in test-substep-progress.mjs;
+    // here we lock the surface contract so a future refactor that
+    // drops the params surfaces in smoke (fast path) before reaching
+    // the slower pwsh-spawned tests.
+    const substepNotifyPath = join(PLUGIN_ROOT, 'notify-island.ps1');
+    const substepWidgetPath = join(PLUGIN_ROOT, 'mcode-island.ps1');
+    if (!(await exists(substepNotifyPath))) {
+        out('FAIL', 'notify-island.ps1 missing (sub-step lock skipped)');
+    } else {
+        const notify = await readFile(substepNotifyPath, 'utf8');
+        if (!/\[int\]\$Step\s*=\s*-1/.test(notify) ||
+            !/\[int\]\$Total\s*=\s*-1/.test(notify) ||
+            !/\[string\]\$Detail\s*=\s*''/.test(notify)) {
+            out('FAIL', 'notify-island.ps1: missing -Step/-Total/-Detail params');
+        } else {
+            out('PASS', 'notify-island.ps1: declares -Step -Total -Detail');
+        }
+        if (!/step\s*=\s*\$Step/.test(notify) ||
+            !/total\s*=\s*\$Total/.test(notify) ||
+            !/detail\s*=\s*\$Detail/.test(notify)) {
+            out('FAIL', 'notify-island.ps1: status.json payload missing step/total/detail fields');
+        } else {
+            out('PASS', 'notify-island.ps1: writes step/total/detail to status.json');
+        }
+    }
+    if (await exists(substepWidgetPath)) {
+        const widget = await readFile(substepWidgetPath, 'utf8');
+        if (!/function Build-DisplayMessage/.test(widget)) {
+            out('FAIL', 'mcode-island.ps1: Build-DisplayMessage function missing');
+        } else {
+            out('PASS', 'mcode-island.ps1: Build-DisplayMessage function present');
+        }
+        if (!/\[int\]\$Step\s*=\s*-1/.test(widget) ||
+            !/\[int\]\$Total\s*=\s*-1/.test(widget)) {
+            out('FAIL', 'mcode-island.ps1: Update-State missing Step/Total params');
+        } else {
+            out('PASS', 'mcode-island.ps1: Update-State accepts Step/Total/Detail');
+        }
+    }
+    const substepTestPath = join(PLUGIN_ROOT, 'scripts', 'test-substep-progress.mjs');
+    if (!(await exists(substepTestPath))) {
+        out('WARN', 'scripts/test-substep-progress.mjs missing (sub-step detailed tests not run)');
+    } else {
+        out('PASS', 'scripts/test-substep-progress.mjs exists (run separately for full suite)');
+    }
+
+    // 5c2. Click toggle extension (round-14 refactor).
+    // The pill's MouseLeftButtonUp must call Toggle-CallerWindow, NOT
+    // Focus-CallerWindow. Single-click show is one-way and forces the
+    // CLI to the front every time the user clicks, which is wrong for
+    // "I clicked the pill to hide the CLI" — the second click would
+    // re-show it and surprise the user. Toggle semantics match the
+    // user's "单击收起单击调出" mental model.
+    // Drift lock: Resolve-CallerWindow + Toggle-CallerWindow must
+    // exist as named functions (refactor target), and the click
+    // handler must invoke Toggle-CallerWindow, not Focus-CallerWindow.
+    if (await exists(substepWidgetPath)) {
+        const widget = await readFile(substepWidgetPath, 'utf8');
+        if (!/function Resolve-CallerWindow\b/.test(widget)) {
+            out('FAIL', 'mcode-island.ps1: Resolve-CallerWindow function missing (toggle refactor target)');
+        } else {
+            out('PASS', 'mcode-island.ps1: Resolve-CallerWindow function present');
+        }
+        if (!/function Toggle-CallerWindow\b/.test(widget)) {
+            out('FAIL', 'mcode-island.ps1: Toggle-CallerWindow function missing');
+        } else {
+            out('PASS', 'mcode-island.ps1: Toggle-CallerWindow function present');
+        }
+        // Toggle-CallerWindow must dispatch on IsWindowVisible (the
+        // core visibility check). A regression that always calls
+        // ShowWindow(SW_HIDE) without checking state would silently
+        // break the toggle (every click = hide, never show).
+        if (!/IsWindowVisible\s*\(\s*\$r\.Hwnd\s*\)/.test(widget)) {
+            out('FAIL', 'mcode-island.ps1: Toggle-CallerWindow does not check IsWindowVisible');
+        } else {
+            out('PASS', 'mcode-island.ps1: Toggle-CallerWindow gates on IsWindowVisible');
+        }
+        // The click handler must call Toggle-CallerWindow, not Focus.
+        // We anchor on the MouseLeftButtonUp event to scope the check.
+        const clickMatch = widget.match(/Add_MouseLeftButtonUp\([\s\S]*?\}\s*\)\s*$/m);
+        if (!clickMatch) {
+            out('WARN', 'mcode-island.ps1: Add_MouseLeftButtonUp handler not found (drift lock skipped)');
+        } else if (!/Toggle-CallerWindow\b/.test(clickMatch[0])) {
+            out('FAIL', 'mcode-island.ps1: MouseLeftButtonUp does not invoke Toggle-CallerWindow (still using Focus-only)');
+        } else if (/Focus-CallerWindow\b/.test(clickMatch[0])) {
+            out('FAIL', 'mcode-island.ps1: MouseLeftButtonUp invokes both Toggle and Focus — pick one');
+        } else {
+            out('PASS', 'mcode-island.ps1: MouseLeftButtonUp invokes Toggle-CallerWindow (single click toggles show/hide)');
+        }
+
+        // Round-15: Toggle's restore branch must call SW_MAXIMIZE (3), not
+        // SW_SHOW (5) / SW_RESTORE (9). SW_HIDE preserves the window's
+        // "non-maximized size"; if the WT window got accidentally resized
+        // to a thin strip (e.g., 480x84 from a snap gesture or our own
+        // mouse_event test artifacts), SW_SHOW / SW_RESTORE would re-show
+        // it as that strip — the user's complaint was "hide works, show is
+        // a thin strip". SW_MAXIMIZE forces full-screen on hidden /
+        // minimized / normal windows alike; no-op on already-maximized.
+        const toggleMatch = widget.match(/function Toggle-CallerWindow[\s\S]*?\n\}\n/);
+        if (!toggleMatch) {
+            out('WARN', 'mcode-island.ps1: Toggle-CallerWindow body not found (drift lock skipped)');
+        } else {
+            const toggleBody = toggleMatch[0];
+            // Extract the `else` branch (the restore path) so the check
+            // is anchored on the show branch, not the hide branch (which
+            // intentionally uses SW_HIDE=0).
+            const elseMatch = toggleBody.match(/else\s*\{([\s\S]*?)\n\s*\}\s*\n\s*\}\s*$/m);
+            const restoreBody = elseMatch ? elseMatch[1] : '';
+            if (!restoreBody) {
+                out('FAIL', 'mcode-island.ps1: Toggle-CallerWindow else branch not parseable');
+            } else if (!/ShowWindow\(\s*\$r\.Hwnd\s*,\s*3\s*\)/.test(restoreBody)) {
+                out('FAIL', 'mcode-island.ps1: Toggle restore branch does not call SW_MAXIMIZE (ShowWindow(_, 3)). A regression to SW_SHOW (5) or SW_RESTORE (9) re-shows the window at its pre-hide size (e.g., 480x84 strip if WT got accidentally resized).');
+            } else if (/ShowWindow\(\s*\$r\.Hwnd\s*,\s*5\s*\)/.test(restoreBody)) {
+                out('FAIL', 'mcode-island.ps1: Toggle restore branch calls SW_SHOW (5) in addition to SW_MAXIMIZE — keep only SW_MAXIMIZE; SW_SHOW re-shows at pre-hide size and defeats the maximize intent.');
+            } else {
+                out('PASS', 'mcode-island.ps1: Toggle restore branch forces SW_MAXIMIZE (full-screen on show, fixes 480x84 strip bug)');
+            }
+
+            // Round-16: Toggle's restore branch must also force the window
+            // to fill the actual monitor work area (MonitorFromWindow +
+            // GetMonitorInfo + SetWindowPos). SW_MAXIMIZE alone is
+            // insufficient on multi-monitor + DPI-virtualized setups: the
+            // user's primary monitor is physically 2560x1440, but WinForms
+            // [Screen]::PrimaryScreen reports 1920x1080 (DPI virtualization).
+            // SW_MAXIMIZE follows the 1920x1080 number and leaves WT at
+            // ~75% of the physical screen — visually "in the top-left corner"
+            // of the user's 2K monitor. The drift lock forces the explicit
+            // SetWindowPos path.
+            if (!/GetWorkAreaForWindow|GetMonitorInfo|MonitorFromWindow/.test(toggleBody)) {
+                out('FAIL', 'mcode-island.ps1: Toggle restore branch does not query monitor work area. Without MonitorFromWindow + SetWindowPos(explicit size), SW_MAXIMIZE alone fills only the WinForms 1920x1080 logical work area, not the actual 2560x1440 physical monitor — leaves WT at the top-left 75%.');
+            } else if (!/SetWindowPos\([^)]*\$wa\.|SetWindowPos\(\$r\.Hwnd,[^,]+,\s*\$wa\.Left,\s*\$wa\.Top,\s*\$cx,\s*\$cy/.test(toggleBody)) {
+                out('FAIL', 'mcode-island.ps1: Toggle restore branch has monitor query but does not SetWindowPos with work-area coords. The contract is: read monitor work area, then SetWindowPos with explicit (Left, Top, cx, cy) — never rely on SW_MAXIMIZE alone for size.');
+            } else {
+                out('PASS', 'mcode-island.ps1: Toggle restore branch forces work-area size via MonitorFromWindow + SetWindowPos (fills 2560x1440 physical monitor, not just 1920x1080 logical)');
+            }
+
+            // Round-17 + round-19: the follow-up z-order SetWindowPos call
+            // (HWND_TOP, to push WT forward without foreground permission)
+            // must carry both SWP_NOSIZE and SWP_NOMOVE, and must NOT carry
+            // SWP_NOZORDER.
+            //
+            //   SWP_NOSIZE  cx=0/cy=0 is otherwise "resize to 0x0", triggering
+            //               WT's min-size fallback to a 480x76 strip — the
+            //               exact regression the user saw in round-17.
+            //   SWP_NOMOVE  X=0/Y=0 is otherwise "move to (0,0)". Invisible on
+            //               a single primary monitor, but any secondary monitor
+            //               whose origin is not 0 gets the restored window
+            //               yanked to the primary's top-left corner
+            //               (round-19 review #3).
+            //   no SWP_NOZORDER  that flag makes Windows ignore
+            //               hWndInsertAfter entirely, so passing HWND_TOP
+            //               alongside it is self-defeating: the whole point of
+            //               this call is the z-order change.
+            //
+            // The round-17 version of this lock asserted the literal
+            // `SWP_NOZORDER -bor SWP_NOSIZE`, which is exactly the pair the
+            // review asked to change, so it had to be rewritten rather than
+            // updated. Match on the flag names, not their order.
+            if (!/SWP_NOSIZE\s*=\s*0x0001/.test(widget)) {
+                out('FAIL', 'mcode-island.ps1: WinAPI class missing SWP_NOSIZE constant (0x0001).');
+            } else if (!/SWP_NOMOVE\s*=\s*0x0002/.test(widget)) {
+                out('FAIL', 'mcode-island.ps1: WinAPI class missing SWP_NOMOVE constant (0x0002).');
+            } else {
+                // Pull the flags expression that feeds the HWND_TOP call. It
+                // is assigned just ABOVE the call, not inside it, so anchor on
+                // the assignment and look for the HWND_TOP call within the
+                // same statement rather than scanning forward from the call.
+                const flagsExpr = (toggleBody.match(/\$nofollow\s*=\s*([^\n\r]+)/) || [null, ''])[1];
+                const hasZorderCall = /SetWindowPos\([^)]*HWND_TOP/.test(toggleBody);
+
+                const problems = [];
+                if (!hasZorderCall) {
+                    problems.push('the HWND_TOP SetWindowPos call is gone, so the window is never pushed forward');
+                }
+                if (!/SWP_NOSIZE/.test(flagsExpr)) {
+                    problems.push('SWP_NOSIZE (cx=0/cy=0 would resize WT to 0x0 and trigger its 480x76 min-size fallback)');
+                }
+                if (!/SWP_NOMOVE/.test(flagsExpr)) {
+                    problems.push('SWP_NOMOVE (X=0/Y=0 would move the window to (0,0) on any monitor whose origin is not 0)');
+                }
+                if (/SWP_NOZORDER/.test(flagsExpr)) {
+                    problems.push('SWP_NOZORDER is present, which makes Windows ignore hWndInsertAfter and defeats the HWND_TOP z-order call');
+                }
+
+                if (problems.length > 0) {
+                    for (const p of problems) {
+                        out('FAIL', `mcode-island.ps1: Toggle z-order SetWindowPos(HWND_TOP) — ${p}`);
+                    }
+                } else {
+                    out('PASS', 'mcode-island.ps1: Toggle z-order SetWindowPos carries SWP_NOSIZE + SWP_NOMOVE and omits SWP_NOZORDER (size preserved, position preserved, z-order actually applied)');
+                }
+            }
+        }
+    }
+
+    // 5d. Drift lock: the round-18 tool-verb table. The pill shows a
+    // present-tense verb ("Running") while a tool is in flight and a
+    // past-tense one ("Ran") once it returns, mirroring the mcode CLI TUI
+    // descriptor table (launcher-GHPADSKI.js HL[]). Before this the pill
+    // showed the bare tool name for every phase, so "working" and "done"
+    // were indistinguishable at a glance.
+    //
+    // These locks are deliberately text-shaped rather than behavioral: a
+    // behavioral test would need a real mcode session log. What we can
+    // cheaply guarantee is that (a) the table exists, (b) it covers the
+    // tools the detector actually infers, and (c) all three Infer-State
+    // branches route through the verb lookup instead of hardcoding names.
+    const detectPath = join(PLUGIN_ROOT, 'mcode-status-detect.ps1');
+    if (!(await exists(detectPath))) {
+        out('FAIL', 'mcode-status-detect.ps1 missing (tool-verb drift lock skipped)');
+    } else {
+        const detect = await readFile(detectPath, 'utf8');
+
+        // (a) table + helpers present
+        for (const [label, re] of [
+            ['$TOOL_ACTIONS table', /\$TOOL_ACTIONS\s*=\s*@\{/],
+            ['$TOOL_FAMILIES table', /\$TOOL_FAMILIES\s*=\s*@\{/],
+            ['Get-ToolKey helper', /function Get-ToolKey\s*\(/],
+            ['Get-ToolVerb helper', /function Get-ToolVerb\s*\(/],
+            ['Get-ToolVerbFallback helper', /function Get-ToolVerbFallback\s*\(/],
+            ['Get-ToolFamily helper', /function Get-ToolFamily\s*\(/],
+        ]) {
+            if (re.test(detect)) {
+                out('PASS', `mcode-status-detect.ps1: ${label} present`);
+            } else {
+                out('FAIL', `mcode-status-detect.ps1: ${label} missing (round-18 tool-verb contract broken)`);
+            }
+        }
+
+        // (b) the table covers the tools users actually see. Each entry must
+        // carry all three phases; a partial entry would render an empty
+        // message and the pill would silently go blank for that tool.
+        const actionsMatch = detect.match(/\$TOOL_ACTIONS\s*=\s*@\{([\s\S]*?)\n\}/);
+        if (!actionsMatch) {
+            out('FAIL', 'mcode-status-detect.ps1: cannot slice $TOOL_ACTIONS body');
+        } else {
+            const body = actionsMatch[1];
+            const entryRe = /'([a-z0-9_]+)'\s*=\s*@\{\s*running\s*=\s*'([^']*)'\s*;\s*done\s*=\s*'([^']*)'\s*;\s*fail\s*=\s*'([^']*)'\s*\}/g;
+            const found = new Map();
+            let m;
+            while ((m = entryRe.exec(body)) !== null) {
+                found.set(m[1], { running: m[2], done: m[3], fail: m[4] });
+            }
+            out('PASS', `mcode-status-detect.ps1: $TOOL_ACTIONS has ${found.size} entries with all 3 phases`);
+
+            for (const required of ['bash', 'read', 'write', 'edit', 'grep', 'glob', 'task']) {
+                if (found.has(required)) {
+                    out('PASS', `$TOOL_ACTIONS covers "${required}"`);
+                } else {
+                    out('FAIL', `$TOOL_ACTIONS is missing "${required}" (the pill would show a bare name for it)`);
+                }
+            }
+            // Every mapped family must resolve to a family, otherwise the
+            // widget's $familyMap lookup silently falls back to the state
+            // color and the round-18 tinting never happens.
+            const famMatch = detect.match(/\$TOOL_FAMILIES\s*=\s*@\{([\s\S]*?)\n\}/);
+            if (!famMatch) {
+                out('FAIL', 'mcode-status-detect.ps1: cannot slice $TOOL_FAMILIES body');
+            } else {
+                for (const [key, fam] of Object.entries({
+                    bash: 'shell', read: 'read', edit: 'write', write: 'write',
+                    grep: 'search', glob: 'search', task: 'task',
+                    task_output: 'task', ask_user: 'task',
+                    web_search: 'web', web_fetch: 'web', todowrite: 'plan',
+                })) {
+                    // ask_user is intentionally excluded from this list. It was
+                    // mapped to the 'task' family in round-18 and is deliberately
+                    // unmapped in 5d2, where it reports `waiting` instead.
+                    if (key === 'ask_user') continue;
+                    const re = new RegExp(`'${key}'\\s*=\\s*'${fam}'`);
+                    if (re.test(famMatch[1])) {
+                        out('PASS', `$TOOL_FAMILIES maps "${key}" -> "${fam}"`);
+                    } else {
+                        out('FAIL', `$TOOL_FAMILIES does not map "${key}" -> "${fam}" (widget tinting will not fire for it)`);
+                    }
+                }
+            }
+        }
+
+        // (c) all three Infer-State branches must route through the verb
+        // lookup. This is the actual regression: reverting any one branch to
+        // `"$($m.toolName) $MSG_OK"` would still pass a "table exists" check
+        // while the pill went back to showing a bare name.
+        //
+        // There are TWO sites per state (the ledger.jsonl branch and the
+        // messages.jsonl branch), so a presence test is not enough -- breaking
+        // only the ledger branch leaves the messages branch matching and the
+        // check stays green. These locks assert a minimum occurrence count so
+        // that reverting EITHER site goes red.
+        for (const [label, re, min] of [
+            ['WORKING branch uses Get-ToolVerb', /state=\$S_WORKING;\s*message="\$verb\s/g, 2],
+            ['DONE branch uses Get-ToolVerb', /state=\$S_DONE;\s*message=\$verb/g, 2],
+            ['ERROR branch uses Get-ToolVerb', /state=\$S_ERROR;\s*message=\$verb/g, 2],
+        ]) {
+            const hits = detect.match(re);
+            const n = hits ? hits.length : 0;
+            if (n >= min) {
+                out('PASS', `mcode-status-detect.ps1: ${label} (${n}/${min} sites)`);
+            } else {
+                out('FAIL', `mcode-status-detect.ps1: ${label} -- only ${n}/${min} sites use the verb lookup; a branch was reverted to a hardcoded tool name`);
+            }
+        }
+
+        // (d) family must be threaded to disk, or the widget can never tint.
+        if (/family\s*=\s*\$famField/.test(detect)) {
+            out('PASS', 'mcode-status-detect.ps1: Write-Status emits the family field');
+        } else {
+            out('FAIL', 'mcode-status-detect.ps1: Write-Status does not emit `family` (widget tinting is dead code)');
+        }
+
+        // 5d2. Drift lock: ask_user must report `waiting`, not `working`.
+        //
+        // ask_user is the only tool whose "in flight" state means the agent is
+        // BLOCKED on the user rather than busy. Showing it as `working` tells
+        // the user "leave it alone, it is making progress", which is the
+        // opposite of the truth and defeats the entire point of the state.
+        // This matters most on `full access` setups, where the permission hook
+        // never fires and ask_user is the only thing that ever blocks.
+        for (const [label, re] of [
+            ['$S_WAITING is defined', /\$S_WAITING\s*=\s*_s\s*\(/],
+            ['Test-IsAskUser helper', /function Test-IsAskUser\s*\(/],
+            ['Get-AskQuestionCount helper', /function Get-AskQuestionCount\s*\(/],
+        ]) {
+            if (re.test(detect)) {
+                out('PASS', `mcode-status-detect.ps1: ${label} present`);
+            } else {
+                out('FAIL', `mcode-status-detect.ps1: ${label} missing (ask_user cannot report waiting)`);
+            }
+        }
+
+        // Both tool paths (ledger.jsonl and messages.jsonl) must route
+        // ask_user to waiting. A presence test is not enough here for the same
+        // reason as the verb locks above: there are two sites, and breaking one
+        // leaves the other matching.
+        const askSites = detect.match(/state=\$S_WAITING;\s*message="Asking \$n question/g) || [];
+        if (askSites.length >= 2) {
+            out('PASS', `mcode-status-detect.ps1: both ask_user tool paths report waiting (${askSites.length}/2 sites)`);
+        } else {
+            out('FAIL', `mcode-status-detect.ps1: only ${askSites.length}/2 ask_user paths report waiting; a path still treats a blocked agent as busy`);
+        }
+
+        // $args is a PowerShell automatic variable. Naming a function parameter
+        // $args shadows it, and every read inside the function returns the
+        // function's own argument list instead of the caller's value -- which
+        // here silently produced a question count of 0 for every input. Lock
+        // the parameter name so the regression cannot come back unnoticed.
+        if (/function Get-AskQuestionCount\(\$toolArgs\)/.test(detect)) {
+            out('PASS', 'mcode-status-detect.ps1: Get-AskQuestionCount avoids the $args automatic variable');
+        } else {
+            out('FAIL', 'mcode-status-detect.ps1: Get-AskQuestionCount takes $args, which shadows the PowerShell automatic variable and always yields a count of 0');
+        }
+
+        // waiting must be in BOTH settle sets. The 60s no-activity fallback
+        // would otherwise downgrade a pending questionnaire to "已静默 60s"
+        // exactly when the user has been away longest, and the takeover
+        // arbitration would let a hook-pushed `working` win forever.
+        for (const [label, re] of [
+            ['60s idle fallback exempts waiting', /\$isSettled\s*=.*-or\s*\(\$curState\s+-eq\s+\$S_WAITING\)/],
+            ['takeover arbitration treats waiting as settle', /\$isSettleNew\s*=.*-or\s*\(\$newState\s+-eq\s+\$S_WAITING\)/],
+        ]) {
+            if (re.test(detect)) {
+                out('PASS', `mcode-status-detect.ps1: ${label}`);
+            } else {
+                out('FAIL', `mcode-status-detect.ps1: ${label} (a pending ask_user would be downgraded or shadowed)`);
+            }
+        }
+
+        // ask_user must NOT carry a family tint: it wears the waiting state
+        // color, and painting it the task cyan would look like an in-flight
+        // delegation -- the confusion this change exists to remove.
+        if (!/'ask_user'\s*=\s*'task'/.test(detect)) {
+            out('PASS', 'mcode-status-detect.ps1: ask_user carries no family tint (waits in the state color)');
+        } else {
+            out('FAIL', "mcode-status-detect.ps1: ask_user is still mapped to the 'task' family, so a blocked agent wears the delegation color");
+        }
+    }
+
+    // 5e. Drift lock: the widget must consume `family` and apply it ONLY to
+    // active states. Tinting `done`/`error` by family would destroy the
+    // green=success / red=failure signal the user relies on.
+    const widgetPath = join(PLUGIN_ROOT, 'mcode-island.ps1');
+    if (!(await exists(widgetPath))) {
+        out('FAIL', 'mcode-island.ps1 missing (family-tint drift lock skipped)');
+    } else {
+        const widget = await readFile(widgetPath, 'utf8');
+        // Hoisted out of the if/else below: the hue-separation check further
+        // down needs the same slice, and a block-scoped const would be out of
+        // scope by then.
+        const famBlock = widget.match(/\$familyMap\s*=\s*@\{([\s\S]*?)\n\}/);
+        if (!famBlock) {
+            out('FAIL', 'mcode-island.ps1: $familyMap table missing');
+        } else {
+            for (const fam of ['shell', 'read', 'write', 'search', 'task', 'web', 'plan']) {
+                if (new RegExp(`^\\s*${fam}\\s*=`, 'm').test(famBlock[1])) {
+                    out('PASS', `$familyMap covers "${fam}"`);
+                } else {
+                    out('FAIL', `$familyMap does not cover "${fam}"`);
+                }
+            }
+        }
+        if (/\[string\]\$Family\s*=\s*''/.test(widget)) {
+            out('PASS', 'mcode-island.ps1: Update-State takes a $Family parameter');
+        } else {
+            out('FAIL', 'mcode-island.ps1: Update-State has no $Family parameter');
+        }
+        // The gate must be checked on the *family tint* line specifically.
+        // `$State -in @('thinking','working','waiting')` also appears on the
+        // pulse / elapsed / progress branches, so a bare substring test stays
+        // green after the tint is ungated -- a false green this section exists
+        // to prevent. Anchor on the `$Family -and $State` conjunction instead.
+        if (/\$Family\s+-and\s+\$State\s+-in\s+@\('thinking','working','waiting'\)/.test(widget)) {
+            out('PASS', 'mcode-island.ps1: family tint is gated to active states (done/error keep their result color)');
+        } else {
+            out('FAIL', 'mcode-island.ps1: family tint is not gated to active states (done/error would lose their green/red result signal)');
+        }
+        if (/\$script:statusDot\.Fill\s*=\s*C\s+\$dotHex/.test(widget)
+            && /\$script:pulseRing\.Fill\s*=\s*C\s+\$ringHex/.test(widget)) {
+            out('PASS', 'mcode-island.ps1: dot/ring are painted from the resolved color (family-aware)');
+        } else {
+            out('FAIL', 'mcode-island.ps1: dot/ring still read $s.dot directly, bypassing family tinting');
+        }
+
+        // Perceptual separation. Two families landing on near-identical colors
+        // are indistinguishable on the pill, which defeats the point of
+        // tinting. Measured with CIE76 dE in CIELAB, NOT raw luminance:
+        // luminance alone calls blue and purple "identical" (0.02 apart) even
+        // though they are plainly different hues, so a luminance threshold
+        // just produces false alarms. dE < 20 is the usual "not the same color
+        // to a human eye" cutoff for flat UI fills.
+        const famColors = new Map();
+        // No `^` anchor: with the `m` flag a leading `\s*` is free to swallow
+        // the preceding newline and match mid-line, and with a greedy
+        // [\s\S]* body it can also skip the first entry. A `g`-only scan with
+        // a `[ \t]*` (not `\s*`) indent keeps one match per table row.
+        // Colors in the table are 8-digit #AARRGGBB (the alpha byte is FF),
+        // so the pattern has to be {8} or the closing quote never lines up.
+        const colorRe = /[ \t]*([a-z]+)[ \t]*=[ \t]*'(#[0-9A-Fa-f]{8})'/g;
+        let cm;
+        while ((cm = colorRe.exec(famBlock[1])) !== null) {
+            famColors.set(cm[1], cm[2].slice(3).toUpperCase()); // drop #FF alpha
+        }
+        if (famColors.size < 7) {
+            out('FAIL', `$familyMap: parsed only ${famColors.size}/7 family colors; the separation check below would be vacuous`);
+        } else {
+            out('PASS', `$familyMap: parsed all ${famColors.size} family colors`);
+        }
+        // sRGB -> XYZ (D65) -> CIELAB
+        const toLab = (hex) => {
+            const ch = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+            const lin = ch.map((v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+            const [r, g, b] = lin;
+            const X = (0.4124564 * r + 0.3575761 * g + 0.1804375 * b) / 0.95047;
+            const Y = (0.2126729 * r + 0.7151522 * g + 0.0721750 * b);
+            const Z = (0.0193339 * r + 0.1191920 * g + 0.9503041 * b) / 1.08883;
+            const f = (t) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
+            const [fx, fy, fz] = [f(X), f(Y), f(Z)];
+            return [116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)];
+        };
+        const deltaE = (a, b) => {
+            const [la, aa, ba] = toLab(a);
+            const [lb, ab, bb] = toLab(b);
+            return Math.hypot(la - lb, aa - ab, ba - bb);
+        };
+        const MIN_DE = 20;
+        const keys = [...famColors.keys()];
+        let tooClose = 0;
+        for (let i = 0; i < keys.length; i++) {
+            for (let j = i + 1; j < keys.length; j++) {
+                const d = deltaE(famColors.get(keys[i]), famColors.get(keys[j]));
+                if (d < MIN_DE) {
+                    out('FAIL', `$familyMap colors "${keys[i]}" (#${famColors.get(keys[i])}) and "${keys[j]}" (#${famColors.get(keys[j])}) are only dE ${d.toFixed(1)} apart (< ${MIN_DE}); they read as the same color on the pill`);
+                    tooClose++;
+                }
+            }
+        }
+        if (tooClose === 0) {
+            out('PASS', `$familyMap: all ${keys.length} family colors are perceptually distinct (min pairwise CIELAB dE >= ${MIN_DE})`);
+        }
+    }
+
     // 5b. Drift lock: permission-request.ps1 must emit `{"decision":"ask"}`,
     // not `allow` or `deny`. The 0.2.4 Runtime default for PermissionRequest
     // is fail-closed; an observer Hook that returns `allow` or `deny`
@@ -440,6 +926,279 @@ const main = async () => {
             }
         }
         if (bad === 0) out('PASS', 'Get-5hUsage.ps1: no hardcoded host paths');
+    }
+
+    // 7. 5h endpoint disclosure consistency (round-20).
+    //
+    // Contract: every MiniMax API host the plugin NAMES in user-facing
+    // docs (and in the lib's own trailing comment) must be the SAME host
+    // the code actually calls. The code obfuscates the URL into a byte
+    // array as a PS 5.1 parser-quirk defense, so this check DECODES that
+    // array and compares the docs against the decoded truth. It never
+    // hard-codes the endpoint itself, which matters twice over: the check
+    // cannot drift into becoming a second copy of the disclosure it is
+    // meant to police, and it cannot be satisfied by "fixing" the docs to
+    // match whatever the code happens to be tomorrow.
+    //
+    // This exists because the two drifted. The README carried an absolute
+    // security claim ("no request is ever sent to a host other than
+    // api.minimax.io") that was simply false -- the code never called
+    // that host. A disclosure that overstates isolation is worse than no
+    // disclosure at all.
+    const planLibAbs = join(PLUGIN_ROOT, 'scripts', 'lib', 'Get-5hUsage.ps1');
+    if (await exists(planLibAbs)) {
+        const libText = await readFile(planLibAbs, 'utf8');
+        const hostArr = libText.match(/\$PLAN_API_HOST\s*=\s*_s\s*\(([^)]*)\)/);
+        if (!hostArr) {
+            out('FAIL', 'Get-5hUsage.ps1: cannot locate the $PLAN_API_HOST byte array (disclosure check has no truth to compare against)');
+        } else {
+            const bytes = hostArr[1]
+                .split(',')
+                .map(s => parseInt(s.trim().replace(/^0x/i, ''), 16))
+                .filter(n => Number.isFinite(n));
+            const realUrl = Buffer.from(bytes).toString('utf8');
+            let realHost = null;
+            try { realHost = new URL(realUrl).hostname; } catch { realHost = null; }
+            if (!realHost) {
+                out('FAIL', `Get-5hUsage.ps1: decoded $PLAN_API_HOST is not a parseable URL ("${realUrl}")`);
+            } else {
+                out('PASS', `Get-5hUsage.ps1: $PLAN_API_HOST decodes to a valid host (${realHost})`);
+
+                const namedHosts = [
+                    'README.md',
+                    join('skills', 'SKILL.md'),
+                    join('skills', 'mcode-island', 'SKILL.md'),
+                    join('scripts', 'lib', 'Get-5hUsage.ps1'),
+                ];
+                let drift = 0, named = 0;
+                for (const rel of namedHosts) {
+                    const abs = join(PLUGIN_ROOT, rel);
+                    if (!(await exists(abs))) continue;
+                    const text = await readFile(abs, 'utf8');
+                    // Fresh regex per line: no shared lastIndex state.
+                    for (const [i, line] of text.split(/\r?\n/).entries()) {
+                        for (const hit of line.match(/api\.minimax[a-z]*\.(?:com|io|ai|cn)/gi) || []) {
+                            named++;
+                            if (hit.toLowerCase() !== realHost.toLowerCase()) {
+                                out('FAIL', `${rel}:${i + 1}: names "${hit}" but the code calls "${realHost}"`);
+                                drift++;
+                            }
+                        }
+                    }
+                }
+                if (drift === 0) {
+                    out('PASS', `5h disclosure: all ${named} host mention(s) match the real endpoint (${realHost})`);
+                }
+            }
+        }
+    } else {
+        out('FAIL', 'scripts/lib/Get-5hUsage.ps1 missing (disclosure check skipped)');
+    }
+
+    // 8. Log growth is bounded (round-20).
+    //
+    // Contract: the two append-only logs under %APPDATA%\mcode-island\
+    // must cap their own size. mcode-island.ps1 line 7 has documented
+    // "keep only the last 1KB" since the widget was written, but Dbg was
+    // a bare Add-Content and never implemented it -- widget.log reached
+    // 37 MB in 38 days (~3.6 MB/day of POLL lines during active use), and
+    // nothing ever trimmed it. A stated cap that no code enforces is a
+    // comment, not a guarantee, so this check asserts the enforcement
+    // rather than trusting the prose.
+    for (const t of [
+        { rel: 'mcode-island.ps1',        fn: 'Dbg' },
+        { rel: 'mcode-status-detect.ps1', fn: 'Log-Line' },
+    ]) {
+        const abs = join(PLUGIN_ROOT, t.rel);
+        if (!(await exists(abs))) {
+            out('FAIL', `${t.rel} missing (log-cap check skipped)`);
+            continue;
+        }
+        const text = await readFile(abs, 'utf8');
+        const body = text.match(new RegExp(`function\\s+${t.fn}\\s*\\([^)]*\\)\\s*\\{([\\s\\S]*?)\\n\\}`));
+        if (!body) {
+            out('FAIL', `${t.rel}: function ${t.fn} not found (cannot verify the log cap)`);
+            continue;
+        }
+        const src = body[1];
+        const capped = /Length/i.test(src) &&
+                       /(gt|ge|gt\s)/i.test(src) &&
+                       /(SetLength|WriteAllText|Truncate|Get-Content|Rotate|-Tail)/i.test(src);
+        if (!capped) {
+            out('FAIL', `${t.rel}: ${t.fn} appends with no size cap (log grows without bound)`);
+        } else {
+            out('PASS', `${t.rel}: ${t.fn} bounds its own log size`);
+        }
+    }
+
+    // 9. Secret-shaped command text is redacted before it is persisted
+    //    (round-20).
+    //
+    // Contract: tool-input text (Bash commands, Computer Use keystrokes)
+    // is written to status.json, to the append-only logs, and rendered on
+    // an always-on-top pill. The Computer Use branch of Format-ToolSummary
+    // was redacted in round-19 #1; the Bash branch was not, so a command
+    // carrying a bearer token or an API key landed on disk verbatim.
+    //
+    // There are two independent producers of that text -- the hook path
+    // (_lib.ps1) and the detector, which re-derives messages from mcode's
+    // own session log -- so a helper wired into only one of them is a
+    // silent half-fix. The helper therefore lives in a shared lib, and
+    // this check asserts BOTH consumers route through it. Asserting the
+    // helper merely *exists* is the false-green shape: dead code passes it.
+    const protectLibAbs = join(PLUGIN_ROOT, 'scripts', 'lib', 'Protect-Text.ps1');
+    if (!(await exists(protectLibAbs))) {
+        out('FAIL', 'scripts/lib/Protect-Text.ps1 missing (command secrets are persisted verbatim)');
+    } else {
+        const protectLib = await readFile(protectLibAbs, 'utf8');
+        const helper = protectLib.match(/function\s+(Protect-SecretText|Redact-SecretText)/);
+        if (!helper) {
+            out('FAIL', 'scripts/lib/Protect-Text.ps1: Protect-SecretText not defined');
+        } else {
+            out('PASS', `scripts/lib/Protect-Text.ps1: ${helper[1]} defined`);
+
+            for (const consumer of [
+                { rel: join('io.minimax.mcode', 'hooks', 'scripts', '_lib.ps1'),  label: 'hook path' },
+                { rel: 'mcode-status-detect.ps1',                                  label: 'detector' },
+            ]) {
+                const abs = join(PLUGIN_ROOT, consumer.rel);
+                if (!(await exists(abs))) {
+                    out('FAIL', `${consumer.rel} missing (${consumer.label} redaction not verified)`);
+                    continue;
+                }
+                const text = await readFile(abs, 'utf8');
+                if (!/Protect-Text\.ps1/.test(text)) {
+                    out('FAIL', `${consumer.rel}: does not dot-source scripts/lib/Protect-Text.ps1`);
+                    continue;
+                }
+                // The helper is DEFINED in the other file, so every
+                // occurrence of its name in this consumer is an actual
+                // invocation -- the dot-source line names the .ps1 file,
+                // not the function. A consumer that dot-sources but never
+                // calls therefore scores 0 and fails here, which is the
+                // whole point of the check.
+                const uses = (text.match(new RegExp(helper[1], 'g')) || []).length;
+                if (uses < 1) {
+                    out('FAIL', `${consumer.rel}: dot-sources Protect-Text.ps1 but never calls ${helper[1]} (${consumer.label} is unredacted)`);
+                } else {
+                    out('PASS', `${consumer.rel}: ${consumer.label} calls ${helper[1]} (${uses} site(s))`);
+                }
+            }
+        }
+    }
+
+    // 10. Hook invocations survive an install path containing spaces
+    //     (round-20).
+    //
+    // Contract: a plugin can legitimately be installed under a path with
+    // spaces or shell metacharacters, and mcode 0.5.4 explicitly fixed
+    // its own managed updater for exactly that case. ${PLUGIN_ROOT} is
+    // substituted at runtime, so the only way to break a spaced path is
+    // to hand the shell a pre-joined string instead of an argv array.
+    // This asserts the array form survives -- a "command" that embeds the
+    // path in a quoted shell string, or an args entry that is itself a
+    // joined string with embedded quotes, is exactly the regression.
+    const hooksJsonAbs = join(PLUGIN_ROOT, 'io.minimax.mcode', 'hooks', 'hooks.json');
+    if (!(await exists(hooksJsonAbs))) {
+        out('FAIL', 'io.minimax.mcode/hooks/hooks.json missing (space-path check skipped)');
+    } else {
+        let parsed = null;
+        try {
+            parsed = JSON.parse(await readFile(hooksJsonAbs, 'utf8'));
+        } catch (e) {
+            out('FAIL', `io.minimax.mcode/hooks/hooks.json: not parseable as JSON (${e.message})`);
+        }
+        if (parsed) {
+            let entries = 0, bad = 0;
+            for (const [event, list] of Object.entries(parsed.hooks || {})) {
+                for (const h of (Array.isArray(list) ? list : [list])) {
+                    if (!h || typeof h !== 'object') continue;
+                    entries++;
+                    const cmd = typeof h.command === 'string' ? h.command : '';
+                    // A command that inlines the plugin root has been
+                    // flattened into a shell string; ${PLUGIN_ROOT} must
+                    // arrive as its own argv element.
+                    if (cmd.includes('${PLUGIN_ROOT}')) {
+                        out('FAIL', `${event}: command embeds ${PLUGIN_ROOT} ("${cmd}") - breaks on install paths with spaces`);
+                        bad++;
+                    }
+                    if (!Array.isArray(h.args)) {
+                        out('FAIL', `${event}: args is not an array (${JSON.stringify(h.args)}) - a joined string is not space-safe`);
+                        bad++;
+                    } else {
+                        for (const a of h.args) {
+                            if (typeof a === 'string' && /["']\s*\S+\s+.*\s*["']/.test(a)) {
+                                out('FAIL', `${event}: args entry looks pre-quoted/joined ("${a}") - breaks on spaced paths`);
+                                bad++;
+                            }
+                        }
+                    }
+                }
+            }
+            if (bad === 0 && entries > 0) {
+                out('PASS', `hooks.json: all ${entries} hook entr(ies) use argv arrays (space-safe)`);
+            }
+        }
+    }
+
+    // 11. Non-ASCII .ps1 files carry a UTF-8 BOM (round-20 #4).
+    //
+    // Contract: every hook and every script the plugin spawns with
+    // `powershell` (Windows PowerShell 5.1) must survive 5.1's parser.
+    // 5.1 decodes a BOM-less script using the system ANSI codepage, so a
+    // file containing non-ASCII comments is mis-decoded and the C#
+    // here-string in the detector stops being a here-string -- `using
+    // System;` is then parsed as PowerShell and the script dies before
+    // its first statement.
+    //
+    // .gitattributes pins `*.ps1 text eol=lf`, and its comment claims
+    // "LF avoids both failure modes". That is backwards: bare LF is part
+    // of the problem, and the guarantee is what propagates it. Either CRLF
+    // or a UTF-8 BOM fixes the parse (both verified against 5.1), but
+    // flipping .gitattributes to CRLF would re-break the Linux-side
+    // validator the same comment is trying to protect. The BOM is the
+    // narrower fix: it leaves the line-ending policy alone and is just
+    // three bytes at the head of the file.
+    //
+    // This was not hypothetical. Syncing the committed tree into the
+    // install directory via the documented `Copy-Item -Recurse -Force`
+    // flow installed a detector that could not start under 5.1 -- the
+    // only reason the running copy worked is that it had a BOM that the
+    // repository does not carry.
+    const ps1Files = [];
+    const walk = async (dir) => {
+        let entries;
+        try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+        for (const ent of entries) {
+            const abs = join(dir, ent.name);
+            if (ent.isDirectory()) {
+                if (ent.name === 'node_modules' || ent.name === '.git') continue;
+                await walk(abs);
+            } else if (ent.name.endsWith('.ps1')) {
+                ps1Files.push(abs);
+            }
+        }
+    };
+    await walk(PLUGIN_ROOT);
+
+    let missingBom = 0, nonAsciiCount = 0;
+    for (const abs of ps1Files) {
+        const buf = await readFile(abs);
+        const rel = abs.slice(PLUGIN_ROOT.length + 1);
+        const hasBom = buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf;
+        let nonAscii = false;
+        for (let i = 0; i < buf.length; i++) {
+            if (buf[i] > 0x7f) { nonAscii = true; break; }
+        }
+        if (!nonAscii) continue;      // ASCII-only is safe without a BOM
+        nonAsciiCount++;
+        if (!hasBom) {
+            out('FAIL', `${rel}: contains non-ASCII but has no UTF-8 BOM (Windows PowerShell 5.1 cannot parse it)`);
+            missingBom++;
+        }
+    }
+    if (missingBom === 0) {
+        out('PASS', `ps1 encoding: all ${nonAsciiCount} non-ASCII .ps1 file(s) carry a UTF-8 BOM (${ps1Files.length} scanned)`);
     }
 
     finish();

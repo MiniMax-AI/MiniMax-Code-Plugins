@@ -1,4 +1,4 @@
-# mcode-island: shared library for io.minimax.mcode Hooks scripts.
+﻿# mcode-island: shared library for io.minimax.mcode Hooks scripts.
 # Loaded via dot-source at the top of each event script:
 #     . "$PSScriptRoot\_lib.ps1"
 # All event scripts under this directory MUST exit 0 (or 2 with a stderr
@@ -11,6 +11,10 @@ $ErrorActionPreference = 'Stop'
 # $PSScriptRoot\..\..\.. is the plugin root.
 $script:PluginRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 $script:NotifyIsland = Join-Path $script:PluginRoot 'notify-island.ps1'
+
+# Shared redaction helper (round-20). Lives in a lib because the detector
+# is a second, independent producer of the same text and must redact too.
+. (Join-Path $script:PluginRoot 'scripts\lib\Protect-Text.ps1')
 
 function Set-ConsoleUtf8 {
     # Force UTF-8 so the PowerShell child that mcode spawns reads the
@@ -43,7 +47,10 @@ function Push-Island {
         [ValidateSet('idle','thinking','working','waiting','done','error')]
         [string]$State,
 
-        [string]$Message = ''
+        [string]$Message = '',
+        [int]$Step = -1,
+        [int]$Total = -1,
+        [string]$Detail = ''
     )
     if (-not (Test-Path -LiteralPath $script:NotifyIsland)) {
         # Widget is not installed yet — silent no-op. The plugin's
@@ -52,7 +59,7 @@ function Push-Island {
         return
     }
     try {
-        & $script:NotifyIsland -State $State -Message $Message 2>$null | Out-Null
+        & $script:NotifyIsland -State $State -Message $Message -Step $Step -Total $Total -Detail $Detail 2>$null | Out-Null
     } catch {
         # Hook must never block the agent on a notification failure.
     }
@@ -97,10 +104,47 @@ function Format-ToolSummary {
             'WebSearch'     { $detail = [string]$Event.tool_input.query }
             'Task'          { $detail = [string]$Event.tool_input.description }
             'NotebookEdit'  { $detail = [string]$Event.tool_input.notebook_path }
+            # mcode-internal: Computer Use 抽 action + coordinate。
+            # 例: "mcode-computer-use : click at (1024,768)"
+            # 注意：coordinate 是 array,PowerShell 默认 $OFS=' ' 会让
+            # "$coord" 渲染成 "(1024 768)" 不是 "(1024,768)"。必须
+            # 显式 -join ','。' ' 在 pill 上看起来像数字被截断,
+            # 影响用户判断坐标。
+            #
+            # SECURITY: `tool_input.text` is whatever the user typed. It
+            # reaches this function verbatim, and its output is written to
+            # status.json, the append-only island.log, and rendered on an
+            # always-on-top pill. That surface is shared-screen visible, so
+            # any password / token / verification code typed through Computer
+            # Use ends up in a screenshot, a screen share, or a screen
+            # recording. Never echo the raw text. Report the action and a
+            # length only, so the pill still answers "is the agent typing?"
+            # without carrying the secret.
+            'mcode-computer-use' {
+                $act = if ($Event.tool_input.action) { [string]$Event.tool_input.action } else { '' }
+                if ($Event.tool_input.coordinate) {
+                    $coord = $Event.tool_input.coordinate
+                    $coordStr = "($($coord -join ','))"
+                    $detail = "$act at $coordStr"
+                } elseif ($Event.tool_input.text) {
+                    # Length only. No substring, no length bucketing that
+                    # could leak content shape, no echo of the value.
+                    $len = ([string]$Event.tool_input.text).Length
+                    $detail = "$act <$len chars, redacted>"
+                } else {
+                    $detail = $act
+                }
+            }
             default         { $detail = '' }
         }
     }
     if ([string]::IsNullOrEmpty($detail)) { return $tool }
+    # Redact before collapsing/truncating (round-20). This is the single
+    # choke point for every tool branch above: the result is written to
+    # status.json, appended to island.log, AND rendered on the pill, so
+    # redacting here covers all three sinks at once. Without it a Bash
+    # command like `export API_KEY=sk-...` reached all three verbatim.
+    $detail = Protect-SecretText $detail
     # Collapse newlines, take first 80 chars.
     $detail = ($detail -replace "[\r\n]+", ' ').Trim()
     if ($detail.Length -gt 80) { $detail = $detail.Substring(0, 77) + '...' }

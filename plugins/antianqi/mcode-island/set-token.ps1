@@ -1,4 +1,4 @@
-# mcode-island - 设置 5h 用量 API token
+﻿# mcode-island - 设置 5h 用量 API token
 # 用法：
 #   set-token.ps1 <token>           # 写 token 到 %APPDATA%\mcode-island\config.json
 #   set-token.ps1 -Show             # 显示当前是否已配置

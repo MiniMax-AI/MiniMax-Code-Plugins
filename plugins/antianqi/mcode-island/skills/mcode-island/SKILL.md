@@ -130,6 +130,33 @@ $plugin = "<plugin install dir>"   # directory that contains notify-island.ps1
 & "$plugin\notify-island.ps1" -State waiting  -Message "permission prompt"
 ```
 
+For sub-step progress (Computer Use iterative loops, multi-step plans,
+long-running tool sequences) push `-Step` / `-Total` / `-Detail` so the pill
+shows what the agent is doing *right now* instead of only the coarse state:
+
+```powershell
+& "$plugin\notify-island.ps1" -State working -Message "Computer Use" `
+                              -Step 3 -Total 12 -Detail "fill username field"
+# → pill renders: "step 3/12 · fill username field"
+
+& "$plugin\notify-island.ps1" -State working -Message "Bash" `
+                              -Step 5 -Detail "npm install"
+# → pill renders: "step 5 · npm install"  (total omitted → no "/N")
+
+& "$plugin\notify-island.ps1" -State done -Message "Bash ok"
+# → pill renders: "Bash ok"  (no step → legacy behavior, fully backward compat)
+```
+
+Semantics:
+- `-Step` is 1-based; omit (or pass `-1`) to keep the coarse state-only display.
+- `-Total` is optional; pass `-1` or omit when the iteration count is unknown.
+- `-Detail` is free text. When present, it replaces `Message` in the pill
+  ("step 3/12 · detail") to avoid stacking ("Bash ok · fill username"). When
+  absent, only the step number renders.
+
+All three params are optional and the schema is backward compatible — old
+callers that omit them see no behavior change.
+
 `<plugin install dir>` is the directory that contains `notify-island.ps1`.
 Substitute the absolute path your user installed the plugin at. The Skill body
 deliberately avoids hard-coded paths so any user / any install location works.
@@ -180,7 +207,7 @@ All widget state lives under `%APPDATA%\mcode-island\`:
 
 No data leaves the local machine *unless* an opt-in 5-hour usage token is
 configured. See the **Network access** + **Accounts** sections in
-`README.md` for the exact host (`api.minimax.io/v1/coding_plan/remains`),
+`README.md` for the exact host (`api.minimaxi.com/v1/coding_plan/remains`),
 the rate limit (one GET per 60 s), and the storage locations
 (`config.json:planApiToken` or env `MINIMAX_OAUTH_TOKEN` / `MINIMAX_API_KEY`).
 When no token is configured the plugin makes no network requests at all.

@@ -1,14 +1,39 @@
-﻿# mcode 灵动岛 v1 - WPF + PowerShell
+# mcode 灵动岛 v1 - WPF + PowerShell
 # 用法：右键 → 用 PowerShell 运行；或通过 start-island.ps1 启动
 
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-# 调试日志（写到 %APPDATA%\mcode-island\widget.log，最后 1KB 即可）
-$script:dbg = Join-Path $env:APPDATA 'mcode-island\widget.log'
+# 调试日志（写到 %APPDATA%\mcode-island\widget.log，上限 1MB）
+#
+# 2026-08-22 起这个函数一直是裸 Add-Content，头注释写的"最后 1KB 即可"
+# 从来没有被实现过：38 天累积到 37MB，活跃使用时约 3.6MB/天（POLL 行）。
+# 现在真的实现这个上限。
+#
+# 检查不每次调用都做。Add-Content 是 O(1) 追加，先用计数器累计到 1/4
+# 阈值才 stat 一次文件，避免在 400ms 轮询路径上反复摸磁盘。
+$script:dbg         = Join-Path $env:APPDATA 'mcode-island\widget.log'
+$script:dbgMaxBytes = 1MB
+$script:dbgKeepLines = 300
+$script:dbgPending  = 0
 function Dbg($msg) {
   $ts = (Get-Date).ToString('HH:mm:ss.fff')
-  "[$ts] $msg" | Add-Content -Path $script:dbg -Encoding UTF8
+  $line = "[$ts] $msg"
+  Add-Content -Path $script:dbg -Value $line -Encoding UTF8
+  $script:dbgPending += $line.Length + 2
+  if ($script:dbgPending -ge [int]($script:dbgMaxBytes / 4)) {
+    $script:dbgPending = 0
+    try {
+      $fi = Get-Item -LiteralPath $script:dbg -ErrorAction Stop
+      if ($fi.Length -gt $script:dbgMaxBytes) {
+        $keep = @(Get-Content -LiteralPath $script:dbg -Tail $script:dbgKeepLines -Encoding UTF8)
+        [System.IO.File]::WriteAllLines(
+          $script:dbg, $keep, (New-Object System.Text.UTF8Encoding($false)))
+      }
+    } catch {
+      # 截断失败不能让 widget 挂掉；下一个阈值周期会再试。
+    }
+  }
 }
 Dbg "PID=$PID APART=$([System.Threading.Thread]::CurrentThread.ApartmentState)"
 
@@ -73,9 +98,37 @@ public class WinAPI {
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
   [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc lpEnumFunc, IntPtr lParam);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint dwFlags);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool GetMonitorInfoW(IntPtr hMonitor, ref MONITORINFO lpmi);
+  [StructLayout(LayoutKind.Sequential)]
+  public struct RECT { public int Left, Top, Right, Bottom; }
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  public struct MONITORINFO {
+    public int cbSize;
+    public RECT rcMonitor;
+    public RECT rcWork;
+    public uint dwFlags;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szDevice;
+  }
   public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
   public static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+  public static readonly IntPtr HWND_TOP = new IntPtr(0);
   public const uint SWP_NOACTIVATE = 0x0010;
+  public const uint SWP_NOZORDER = 0x0004;
+  public const uint SWP_NOSIZE = 0x0001;
+  public const uint SWP_NOMOVE = 0x0002;
+  public const uint MONITOR_DEFAULTTONEAREST = 0x00000002;
+
+  // 取窗口所在 monitor 的 work area。如果失败返回 (-1,-1)-(-1,-1) 表示无效。
+  public static RECT GetWorkAreaForWindow(IntPtr hWnd) {
+    var bad = new RECT { Left = -1, Top = -1, Right = -1, Bottom = -1 };
+    IntPtr hMon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+    if (hMon == IntPtr.Zero) return bad;
+    var mi = new MONITORINFO();
+    mi.cbSize = System.Runtime.InteropServices.Marshal.SizeOf(mi);
+    if (!GetMonitorInfoW(hMon, ref mi)) return bad;
+    return mi.rcWork;
+  }
 
   // 找 pid 的第一个可见窗口
   public static IntPtr FindVisibleWindowForPid(uint targetPid) {
@@ -259,6 +312,23 @@ $stateMap = @{
   error    = @{ dot='#FFEF4444'; ring='#FFEF4444'; label='mcode · 出错';       icon='✕' }
 }
 
+# 工具家族配色：working 态下用 family 色盖掉 state 色，一眼分辨"在读"和"在改"。
+# 只覆盖 dot/ring（视觉识别），不动 stateText 文案。
+# family 名与 detector 的 $TOOL_FAMILIES 值一一对应；缺 family 时回落到 state 色。
+#
+# 色相分布刻意拉开：绿(shell) / 蓝(read) / 黄(write) / 紫(search) / 青(task) /
+# 粉(web) / 灰蓝(plan)。plan 早先用的是 #8B5CF6，和 search 的 #A855F7 在深色
+# pill 上几乎分不开，换成去饱和的灰蓝。
+$familyMap = @{
+  shell  = '#FF22C55E'   # bash / shell  → 绿
+  read   = '#FF3B82F6'   # read         → 蓝
+  write  = '#FFEAB308'   # edit / write → 黄
+  search = '#FFA855F7'   # grep / glob  → 紫
+  task   = '#FF06B6D4'   # task         → 青
+  web    = '#FFEC4899'   # web_search/fetch → 粉
+  plan   = '#FF94A3B8'   # todowrite    → 灰蓝
+}
+
 # 颜色转 brush
 function C($hex) { return (New-Object System.Windows.Media.SolidColorBrush([System.Windows.Media.ColorConverter]::ConvertFromString($hex))) }
 
@@ -370,8 +440,44 @@ function Stop-IndeterminateShimmer {
   $script:progressShimmerTransform.X = -130  # 重置到起点
 }
 
+# Sub-step 渲染（"step N[/M] · detail"）：
+#   Step > 0 + Total > 0   → "step 3/12 · fill username"
+#   Step > 0 + Total <= 0  → "step 3 · fill username"
+#   Step > 0 + Detail 空  → "step 3/12"
+#   Step <= 0               → 原 Message 字段
+# 这样 message 字段保持"工具名"("Bash ok"),detail 字段填具体动作,
+# 渲染时拼成 "step 3/12 · Bash ok · fill username" 或者更精确的
+# "step 3/12 · fill username"(detail 存在时优先覆盖 message)。
+# 注意：detail 非空时**完全替换** message,避免双重信息("Bash ok · ls -la")。
+function Build-DisplayMessage {
+  param(
+    [string]$Message,
+    [int]$Step,
+    [int]$Total,
+    [string]$Detail
+  )
+  $base = if ($Message) { $Message } else { '' }
+  if ($Step -le 0) { return $base }
+
+  $stepStr = if ($Total -gt 0) { "step $Step/$Total" } else { "step $Step" }
+  if ($Detail) {
+    # detail 非空时优先用 detail(agent 已经表达了"我在做什么")
+    return "$stepStr · $Detail"
+  }
+  # detail 空但 step 给出 → 只显示 step,避免重复 message 造成噪声
+  return $stepStr
+}
+
 # 状态更新
 # Progress 取值约定（跟 notify-island.ps1 / detector 对齐）：
+#   -1     → 没有进度信息，进度条隐藏
+#   0..100 → 百分比，0=空条，100=满条；超出范围会被 clamp
+# Usage5h：剩余百分比（0..100）；-2 = 未提供
+# Usage5hResetMs：距下次 5h 刷新的毫秒数；0 = 未知
+# TodoProgress：todowrite 列表的完成百分比（0..100）；-2 = 未提供
+# Step/Total/Detail：sub-step 进度（agent 自报），参 Build-DisplayMessage
+#   - 优先级：显式 Progress > TodoProgress > shimmer
+#   - 即：agent 直接传 progress 最高；否则如果有 todo 列表就用 todo 完成度；都没就 shimmer 动画
 #   -1     → 没有进度信息，进度条隐藏
 #   0..100 → 百分比，0=空条，100=满条；超出范围会被 clamp
 # Usage5h：剩余百分比（0..100）；-2 = 未提供
@@ -386,14 +492,26 @@ function Update-State {
     [int]$Progress = -1,
     [int]$Usage5h = -2,
     [int]$Usage5hResetMs = 0,
-    [int]$TodoProgress = -2
+    [int]$TodoProgress = -2,
+    [int]$Step = -1,
+    [int]$Total = -1,
+    [string]$Detail = '',
+    [string]$Family = ''
   )
   $s = $script:stateMap[$State]
   if (!$s) { $s = $script:stateMap['idle'] }
-  $script:statusDot.Fill = C $s.dot
-  $script:pulseRing.Fill = C $s.ring
+  # 家族色只作用于 active 态（thinking/working/waiting），这样 done 绿 / error 红
+  # 依然是"结果"语义，家族色只用来区分"在做什么"。
+  $dotHex  = $s.dot
+  $ringHex = $s.ring
+  if ($Family -and $State -in @('thinking','working','waiting')) {
+    $famHex = $script:familyMap[$Family]
+    if ($famHex) { $dotHex = $famHex; $ringHex = $famHex }
+  }
+  $script:statusDot.Fill = C $dotHex
+  $script:pulseRing.Fill = C $ringHex
   $script:stateText.Text = $s.label
-  $script:messageText.Text = if ($Message) { $Message } else { '' }
+  $script:messageText.Text = Build-DisplayMessage -Message $Message -Step $Step -Total $Total -Detail $Detail
   $script:actionIcon.Text = $s.icon
 
   if ($State -in @('thinking','working','waiting')) { Start-Pulse } else { Stop-Pulse }
@@ -447,20 +565,20 @@ function Update-State {
     $script:progressFill.Visibility = 'Visible'
     $script:progressIndeterminate.Visibility = 'Collapsed'
     $script:progressScale.ScaleX = $clamped / 100.0
-    $script:progressFill.Background = C $s.dot
+    $script:progressFill.Background = C $dotHex
     Stop-IndeterminateShimmer
   } elseif ($isActive -and $hasTodoProgress) {
     $script:progressBar.Visibility = 'Visible'
     $script:progressFill.Visibility = 'Visible'
     $script:progressIndeterminate.Visibility = 'Collapsed'
     $script:progressScale.ScaleX = $todoClamped / 100.0
-    $script:progressFill.Background = C $s.dot
+    $script:progressFill.Background = C $dotHex
     Stop-IndeterminateShimmer
   } elseif ($isActive) {
     $script:progressBar.Visibility = 'Visible'
     $script:progressFill.Visibility = 'Collapsed'
     $script:progressIndeterminate.Visibility = 'Visible'
-    $script:progressShimmer.Fill = C $s.dot
+    $script:progressShimmer.Fill = C $dotHex
     $script:progressScale.ScaleX = 0
     Start-IndeterminateShimmer
   } else {
@@ -477,10 +595,12 @@ function Update-State {
   "[$ts] $State :: $Message$progTag" | Add-Content -Path $script:logFile -Encoding UTF8
 }
 
-# 切回调用方窗口（点击 pill 时调用）
-function Focus-CallerWindow {
+# 解析调用方窗口（caller.json → targetHwnd / targetPid）。
+# 处理三种死法：hwnd 死了 / 进程死了（fallback 到父进程 terminal）/
+# hwnd 被销毁重建。返回 [PSCustomObject]@{ Hwnd; Pid; Exe } 或 $null。
+function Resolve-CallerWindow {
   $callerFile = Join-Path $env:APPDATA 'mcode-island\caller.json'
-  if (!(Test-Path $callerFile)) { Dbg 'FOCUS: no caller file'; return }
+  if (!(Test-Path $callerFile)) { Dbg 'RESOLVE: no caller file'; return $null }
 
   $hwnd = [IntPtr]::Zero
   $targetPid = 0
@@ -491,69 +611,130 @@ function Focus-CallerWindow {
     $targetPid = [int]$data.targetPid
     $targetExe = if ($data.targetExe) { [string]$data.targetExe } else { '' }
   } catch {
-    Dbg "FOCUS: caller.json parse error"
-    return
+    Dbg "RESOLVE: caller.json parse error"
+    return $null
   }
-  if ($targetPid -le 0) { Dbg 'FOCUS: no target'; return }
+  if ($targetPid -le 0) { Dbg 'RESOLVE: no target'; return $null }
 
-  # 1) 检查 hwnd 是否还活着
+  # 1) hwnd 死了 → 重找
   if ($hwnd -ne [IntPtr]::Zero -and -not [WinAPI]::IsWindow($hwnd)) {
-    Dbg "FOCUS: hwnd $hwnd dead, re-resolving"
+    Dbg "RESOLVE: hwnd $hwnd dead, re-resolving"
     $hwnd = [IntPtr]::Zero
   }
 
-  # 2) 进程死了 → 找它的父进程（terminal）兜底
+  # 2) 进程死了 → fallback 到父进程（terminal）兜底
   $proc = Get-Process -Id $targetPid -ErrorAction SilentlyContinue
   if (-not $proc) {
-    Dbg "FOCUS: target PID $targetPid gone, finding parent (terminal)"
+    Dbg "RESOLVE: target PID $targetPid gone, finding parent (terminal)"
     $parent = Get-CimInstance Win32_Process -Filter "ProcessId=$targetPid" -ErrorAction SilentlyContinue
     if ($parent -and $parent.ParentProcessId -and $parent.ParentProcessId -gt 0) {
       $parentProc = Get-Process -Id ([int]$parent.ParentProcessId) -ErrorAction SilentlyContinue
       if ($parentProc) {
         $targetPid = $parentProc.Id
         $targetExe = $parentProc.ProcessName
-        # 优先用 MainWindowHandle，失败就用第一个可见窗口
         if ($parentProc.MainWindowHandle -ne [IntPtr]::Zero) {
           $hwnd = $parentProc.MainWindowHandle
         } else {
           $hwnd = [WinAPI]::FindVisibleWindowForPid([uint32]$targetPid)
         }
-        Dbg "FOCUS: fall back to parent $($parentProc.ProcessName) PID=$targetPid hwnd=$hwnd"
+        Dbg "RESOLVE: fall back to parent $($parentProc.ProcessName) PID=$targetPid hwnd=$hwnd"
       }
     }
     if ($hwnd -eq [IntPtr]::Zero) {
-      Dbg 'FOCUS: no parent fallback available'
-      return
+      Dbg 'RESOLVE: no parent fallback available'
+      return $null
     }
-  }
-  # 3) 进程还在但 hwnd 死了（被销毁/重建）→ 找进程的第一个可见窗口
-  if ($hwnd -eq [IntPtr]::Zero -or -not [WinAPI]::IsWindow($hwnd)) {
-    Dbg "FOCUS: hwnd invalid, finding new visible window for PID $targetPid ($targetExe)"
-    $hwnd = [WinAPI]::FindVisibleWindowForPid([uint32]$targetPid)
-    if ($hwnd -eq [IntPtr]::Zero) {
-      Dbg 'FOCUS: no visible window found for target process'
-      return
-    }
-    Dbg "FOCUS: re-resolved to hwnd $hwnd"
   }
 
-  try {
-    # 1) 授权目标进程可以切前台（modern Windows 强制）
-    [WinAPI]::AllowSetForegroundWindow([uint32]$targetPid) | Out-Null
-    # 2) 最小化就还原
-    if ([WinAPI]::IsIconic($hwnd)) {
-      [WinAPI]::ShowWindow($hwnd, 9) | Out-Null   # SW_RESTORE
+  # 3) 进程还在但 hwnd 死了（被销毁/重建）→ 找新可见窗口
+  if ($hwnd -eq [IntPtr]::Zero -or -not [WinAPI]::IsWindow($hwnd)) {
+    Dbg "RESOLVE: hwnd invalid, finding new visible window for PID $targetPid ($targetExe)"
+    $hwnd = [WinAPI]::FindVisibleWindowForPid([uint32]$targetPid)
+    if ($hwnd -eq [IntPtr]::Zero) {
+      Dbg 'RESOLVE: no visible window found for target process'
+      return $null
     }
-    # 3) 设顶
-    [WinAPI]::SetWindowPos($hwnd, [WinAPI]::HWND_TOPMOST, 0, 0, 0, 0, [WinAPI]::SWP_NOACTIVATE) | Out-Null
-    [WinAPI]::SetWindowPos($hwnd, [IntPtr]::new(-2), 0, 0, 0, 0, [WinAPI]::SWP_NOACTIVATE) | Out-Null  # HWND_NOTOPMOST
-    # 4) 抢焦点
-    [WinAPI]::BringWindowToTop($hwnd) | Out-Null
-    [WinAPI]::SetForegroundWindow($hwnd) | Out-Null
-    $proc2 = Get-Process -Id $targetPid -ErrorAction SilentlyContinue
-    Dbg ("FOCUS OK: target=" + $proc2.ProcessName + " PID=" + $targetPid + " hwnd=" + $hwnd)
+    Dbg "RESOLVE: re-resolved to hwnd $hwnd"
+  }
+
+  return [PSCustomObject]@{ Hwnd = $hwnd; Pid = $targetPid; Exe = $targetExe }
+}
+
+# 强制把调用方窗口拉到前台（modern Windows 要求 AllowSetForegroundWindow）。
+# 不管当前 visible 与否,都做 show + focus。Focus-CallerWindow 保留,
+# 因为它是 Resolve-CallerWindow + 强制 show 的最小封装,可用于自动聚焦
+# 流程（needs_input 状态自动弹窗那种）。
+function Focus-CallerWindow {
+  $r = Resolve-CallerWindow
+  if (-not $r) { return }
+
+  try {
+    [WinAPI]::AllowSetForegroundWindow([uint32]$r.Pid) | Out-Null
+    if ([WinAPI]::IsIconic($r.Hwnd)) {
+      [WinAPI]::ShowWindow($r.Hwnd, 9) | Out-Null   # SW_RESTORE
+    }
+    [WinAPI]::SetWindowPos($r.Hwnd, [WinAPI]::HWND_TOPMOST, 0, 0, 0, 0, [WinAPI]::SWP_NOACTIVATE) | Out-Null
+    [WinAPI]::SetWindowPos($r.Hwnd, [IntPtr]::new(-2), 0, 0, 0, 0, [WinAPI]::SWP_NOACTIVATE) | Out-Null  # HWND_NOTOPMOST
+    [WinAPI]::BringWindowToTop($r.Hwnd) | Out-Null
+    [WinAPI]::SetForegroundWindow($r.Hwnd) | Out-Null
+    $proc2 = Get-Process -Id $r.Pid -ErrorAction SilentlyContinue
+    Dbg ("FOCUS OK: target=" + $proc2.ProcessName + " PID=" + $r.Pid + " hwnd=" + $r.Hwnd)
   } catch {
     Dbg "FOCUS FAIL: $($_.Exception.Message)"
+  }
+}
+
+# 单击 pill toggle：可见 → 隐藏；隐藏 → 全屏还原 + 抢焦点。
+# 设计取舍 (round-14+15+16):
+#   hide 分支用 SW_HIDE (而不是 SW_MINIMIZE)：
+#     SW_MINIMIZE 在某些终端配置下(Windows Terminal "Always show tabs on top")
+#     会保留一个 thin tab-bar strip 浮在桌面顶部,不算真"藏"。
+#   show 分支先 SW_MAXIMIZE (激活+最大化),再用 SetWindowPos 强制拉到
+#   MonitorFromWindow+GetMonitorInfo 拿到的真实 work area(2560x1392 而
+#   不是 [Screen]::PrimaryScreen 报告的 1920x1080 — WinForms DPI 虚拟化
+#   会把 2560x1440 物理像素报成 1920x1080 逻辑像素,SW_MAXIMIZE 跟着
+#   1920x1080 走,结果 WT 只填了物理显示器的左上 75%)。
+#   最后 SetWindowPos(HWND_TOP) + BringWindowToTop 抢 z-order,绕过
+#   widget PID 没有 foreground 权限的限制。
+# 状态判定: IsWindowVisible 在 SW_HIDE 和 SW_MINIMIZE 后都返回 false
+# (区别是 IsIconic:SW_HIDE 后 false,SW_MINIMIZE 后 true)。toggle 只看
+# IsWindowVisible 即可,SW_MAXIMIZE 在内部正确处理两种 case。
+function Toggle-CallerWindow {
+  $r = Resolve-CallerWindow
+  if (-not $r) { return }
+
+  try {
+    $isShown = [WinAPI]::IsWindowVisible($r.Hwnd)
+    if ($isShown) {
+      [WinAPI]::ShowWindow($r.Hwnd, 0) | Out-Null   # SW_HIDE
+      Dbg "TOGGLE: hid target=$($r.Exe) PID=$($r.Pid) hwnd=$($r.Hwnd)"
+    } else {
+      # 1) SW_MAXIMIZE 激活+标记 maximized
+      [WinAPI]::ShowWindow($r.Hwnd, 3) | Out-Null   # SW_MAXIMIZE
+      # 2) SetWindowPos 强制拉到 monitor work area (绕过 DPI/remembered-size 限制)
+      $wa = [WinAPI]::GetWorkAreaForWindow($r.Hwnd)
+      if ($wa.Left -ne -1) {
+        $cx = $wa.Right - $wa.Left
+        $cy = $wa.Bottom - $wa.Top
+        [WinAPI]::SetWindowPos($r.Hwnd, [IntPtr]::Zero, $wa.Left, $wa.Top, $cx, $cy, [WinAPI]::SWP_NOZORDER) | Out-Null
+        Dbg "TOGGLE: forced to work area ({0},{1}) {2}x{3}" -f $wa.Left, $wa.Top, $cx, $cy
+      }
+      # 3) 抢 z-order 到最前(SetWindowPos(HWND_TOP) 不需要 foreground 权限)
+      #    SWP_NOSIZE：cx=0/cy=0 缺它会被 Windows 当成"resize 到 0x0"，
+      #    触发 WT 的 min-size 兜底，变成 480x76 strip。
+      #    SWP_NOMOVE：X=0/Y=0 缺它会把窗口真的挪到 (0,0)。单屏时无所谓，
+      #    但副屏（monitor 原点非 0）上会把还原后的窗口甩到主屏左上角。
+      #    同样不能加 SWP_NOZORDER——那个 flag 会让 hWndInsertAfter 被忽略，
+      #    HWND_TOP 就白传了，BringWindowToTop 之后仍可能被别的窗口盖住。
+      [WinAPI]::AllowSetForegroundWindow([uint32]$r.Pid) | Out-Null
+      $nofollow = [WinAPI]::SWP_NOACTIVATE -bor [WinAPI]::SWP_NOSIZE -bor [WinAPI]::SWP_NOMOVE
+      [WinAPI]::SetWindowPos($r.Hwnd, [WinAPI]::HWND_TOP, 0, 0, 0, 0, $nofollow) | Out-Null
+      [WinAPI]::BringWindowToTop($r.Hwnd) | Out-Null
+      [WinAPI]::SetForegroundWindow($r.Hwnd) | Out-Null
+      Dbg "TOGGLE: shown (maximized + work-area) target=$($r.Exe) PID=$($r.Pid) hwnd=$($r.Hwnd)"
+    }
+  } catch {
+    Dbg "TOGGLE FAIL: $($_.Exception.Message)"
   }
 }
 
@@ -653,7 +834,7 @@ $window.Add_MouseLeftButtonUp({
     if ($script:dragStart -and -not $script:didDrag) {
       Dbg 'CLICK detected'
       Flash-Click
-      Focus-CallerWindow
+      Toggle-CallerWindow
     }
   } catch {
     Dbg "CLICK FAIL: $($_.Exception.Message)"
@@ -689,18 +870,28 @@ $timer.Add_Tick({
     $script:lastStatusMtime = $mtime
     $data = Get-Content $statusFile -Raw -Encoding UTF8 | ConvertFrom-Json
     # progress 也要进 sig，否则 agent 连续推 working+相同 message+不同 progress 会被去重
+    # step/total/detail 也要进 sig,否则连续推同 state 但不同 step 会被去重
     $prog = if ($data.PSObject.Properties['progress']) { [int]$data.progress } else { -1 }
     $usage = $null
     $resetMs = 0
     $todoP = -2
+    $step = -1
+    $total = -1
+    $detail = ''
     if ($data.PSObject.Properties['usage5h'] -and $null -ne $data.usage5h) { $usage = [int]$data.usage5h }
     if ($data.PSObject.Properties['usage5hResetMs'] -and $null -ne $data.usage5hResetMs) { $resetMs = [int]$data.usage5hResetMs }
     if ($data.PSObject.Properties['todoProgress'] -and $null -ne $data.todoProgress) { $todoP = [int]$data.todoProgress }
-    $sig = "$($data.state)|$($data.message)|$prog|$usage|$resetMs|$todoP|$($data.ts)"
+    if ($data.PSObject.Properties['step'] -and $null -ne $data.step) { $step = [int]$data.step }
+    if ($data.PSObject.Properties['total'] -and $null -ne $data.total) { $total = [int]$data.total }
+    if ($data.PSObject.Properties['detail'] -and $null -ne $data.detail) { $detail = [string]$data.detail }
+    # family 也进 sig，否则同一工具连续 working 但换了家族不会重新上色
+    $family = ''
+    if ($data.PSObject.Properties['family'] -and $data.family) { $family = [string]$data.family }
+    $sig = "$($data.state)|$($data.message)|$family|$prog|$usage|$resetMs|$todoP|$step|$total|$detail|$($data.ts)"
     if ($sig -eq $script:lastStatusSig) { return }
     $script:lastStatusSig = $sig
-    Dbg "POLL: $($data.state) :: $($data.message) (progress=$prog usage5h=$usage resetMs=$resetMs todoProgress=$todoP)"
-    Update-State -State $data.state -Message $data.message -Progress $prog -Usage5h $usage -Usage5hResetMs $resetMs -TodoProgress $todoP
+    Dbg "POLL: $($data.state) :: $($data.message) family=$family step=$step/$total detail=$detail (progress=$prog usage5h=$usage resetMs=$resetMs todoProgress=$todoP)"
+    Update-State -State $data.state -Message $data.message -Progress $prog -Usage5h $usage -Usage5hResetMs $resetMs -TodoProgress $todoP -Step $step -Total $total -Detail $detail -Family $family
   } catch {
     Dbg "POLL ERR: $($_.Exception.Message)"
   }
@@ -717,12 +908,20 @@ if (Test-Path $statusFile) {
     $initUsage = $null
     $initReset = 0
     $initTodo = -2
+    $initStep = -1
+    $initTotal = -1
+    $initDetail = ''
     if ($init.PSObject.Properties['usage5h'] -and $null -ne $init.usage5h) { $initUsage = [int]$init.usage5h }
     if ($init.PSObject.Properties['usage5hResetMs'] -and $null -ne $init.usage5hResetMs) { $initReset = [int]$init.usage5hResetMs }
     if ($init.PSObject.Properties['todoProgress'] -and $null -ne $init.todoProgress) { $initTodo = [int]$init.todoProgress }
-    $script:lastStatusSig = "$($init.state)|$($init.message)|$initProg|$initUsage|$initReset|$initTodo|$($init.ts)"
+    if ($init.PSObject.Properties['step'] -and $null -ne $init.step) { $initStep = [int]$init.step }
+    if ($init.PSObject.Properties['total'] -and $null -ne $init.total) { $initTotal = [int]$init.total }
+    if ($init.PSObject.Properties['detail'] -and $null -ne $init.detail) { $initDetail = [string]$init.detail }
+    $initFamily = ''
+    if ($init.PSObject.Properties['family'] -and $init.family) { $initFamily = [string]$init.family }
+    $script:lastStatusSig = "$($init.state)|$($init.message)|$initFamily|$initProg|$initUsage|$initReset|$initTodo|$initStep|$initTotal|$initDetail|$($init.ts)"
     $script:lastStatusMtime = (Get-Item $statusFile).LastWriteTimeUtc.Ticks
-    Update-State -State $init.state -Message $init.message -Progress $initProg -Usage5h $initUsage -Usage5hResetMs $initReset -TodoProgress $initTodo
+    Update-State -State $init.state -Message $init.message -Progress $initProg -Usage5h $initUsage -Usage5hResetMs $initReset -TodoProgress $initTodo -Step $initStep -Total $initTotal -Detail $initDetail -Family $initFamily
   } catch {}
 } else {
   Update-State -State 'idle' -Message ''
