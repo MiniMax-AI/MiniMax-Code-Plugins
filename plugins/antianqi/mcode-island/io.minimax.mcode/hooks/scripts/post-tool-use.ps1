@@ -1,4 +1,4 @@
-# Hook: PostToolUse
+﻿# Hook: PostToolUse
 # Event:  io.minimax.mcode / PostToolUse
 # State:  done / error
 # Note:   Fires after every tool call returns. Heuristic: if the

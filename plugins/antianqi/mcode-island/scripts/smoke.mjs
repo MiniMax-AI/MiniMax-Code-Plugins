@@ -23,7 +23,7 @@
 //   6. cross-platform: no hardcoded host-absolute paths, no
 //      /Users/ or /home/ literals in any script or hooks.json entry
 
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, stat, readdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve, sep } from 'node:path';
 
@@ -1139,6 +1139,66 @@ const main = async () => {
                 out('PASS', `hooks.json: all ${entries} hook entr(ies) use argv arrays (space-safe)`);
             }
         }
+    }
+
+    // 11. Non-ASCII .ps1 files carry a UTF-8 BOM (round-20 #4).
+    //
+    // Contract: every hook and every script the plugin spawns with
+    // `powershell` (Windows PowerShell 5.1) must survive 5.1's parser.
+    // 5.1 decodes a BOM-less script using the system ANSI codepage, so a
+    // file containing non-ASCII comments is mis-decoded and the C#
+    // here-string in the detector stops being a here-string -- `using
+    // System;` is then parsed as PowerShell and the script dies before
+    // its first statement.
+    //
+    // .gitattributes pins `*.ps1 text eol=lf`, and its comment claims
+    // "LF avoids both failure modes". That is backwards: bare LF is part
+    // of the problem, and the guarantee is what propagates it. Either CRLF
+    // or a UTF-8 BOM fixes the parse (both verified against 5.1), but
+    // flipping .gitattributes to CRLF would re-break the Linux-side
+    // validator the same comment is trying to protect. The BOM is the
+    // narrower fix: it leaves the line-ending policy alone and is just
+    // three bytes at the head of the file.
+    //
+    // This was not hypothetical. Syncing the committed tree into the
+    // install directory via the documented `Copy-Item -Recurse -Force`
+    // flow installed a detector that could not start under 5.1 -- the
+    // only reason the running copy worked is that it had a BOM that the
+    // repository does not carry.
+    const ps1Files = [];
+    const walk = async (dir) => {
+        let entries;
+        try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+        for (const ent of entries) {
+            const abs = join(dir, ent.name);
+            if (ent.isDirectory()) {
+                if (ent.name === 'node_modules' || ent.name === '.git') continue;
+                await walk(abs);
+            } else if (ent.name.endsWith('.ps1')) {
+                ps1Files.push(abs);
+            }
+        }
+    };
+    await walk(PLUGIN_ROOT);
+
+    let missingBom = 0, nonAsciiCount = 0;
+    for (const abs of ps1Files) {
+        const buf = await readFile(abs);
+        const rel = abs.slice(PLUGIN_ROOT.length + 1);
+        const hasBom = buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf;
+        let nonAscii = false;
+        for (let i = 0; i < buf.length; i++) {
+            if (buf[i] > 0x7f) { nonAscii = true; break; }
+        }
+        if (!nonAscii) continue;      // ASCII-only is safe without a BOM
+        nonAsciiCount++;
+        if (!hasBom) {
+            out('FAIL', `${rel}: contains non-ASCII but has no UTF-8 BOM (Windows PowerShell 5.1 cannot parse it)`);
+            missingBom++;
+        }
+    }
+    if (missingBom === 0) {
+        out('PASS', `ps1 encoding: all ${nonAsciiCount} non-ASCII .ps1 file(s) carry a UTF-8 BOM (${ps1Files.length} scanned)`);
     }
 
     finish();

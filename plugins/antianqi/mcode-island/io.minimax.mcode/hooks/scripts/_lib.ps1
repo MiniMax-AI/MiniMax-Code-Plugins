@@ -1,4 +1,4 @@
-# mcode-island: shared library for io.minimax.mcode Hooks scripts.
+﻿# mcode-island: shared library for io.minimax.mcode Hooks scripts.
 # Loaded via dot-source at the top of each event script:
 #     . "$PSScriptRoot\_lib.ps1"
 # All event scripts under this directory MUST exit 0 (or 2 with a stderr

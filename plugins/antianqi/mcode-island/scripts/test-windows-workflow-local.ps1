@@ -1,4 +1,4 @@
-# test-windows-workflow-local.ps1
+﻿# test-windows-workflow-local.ps1
 #
 # Local runner that mirrors `.github/workflows/mcode-island-windows.yml`
 # 1:1 on a Windows host. Use this when:

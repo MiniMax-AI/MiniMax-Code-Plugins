@@ -1,4 +1,4 @@
-# mcode-status-detect.ps1 - 后台守护进程 (v0.2.1)
+﻿# mcode-status-detect.ps1 - 后台守护进程 (v0.2.1)
 # 监听 mcode session log，实时推断 agent 状态，写到 status.json
 # 让 widget 不依赖 agent 主动调 notify-island.ps1 也能跟着动
 #
