@@ -580,7 +580,7 @@ function Infer-State($msg) {
   return $null
 }
 
-function Write-Status($state, $message, $family) {
+function Write-Status($state, $message, $family, [switch]$KeepSubStep) {
   $tmp = "$statusFile.tmp"
   # usage5h：0..100 表示"剩余"百分比（不是已用！）；null = 未知/未拉到
   # usage5hResetMs：距下次刷新的毫秒数；null = 未知
@@ -592,17 +592,31 @@ function Write-Status($state, $message, $family) {
   $todoCnt     = if ($null -ne $script:plan5hTodoData)    { ("{0}/{1}" -f $script:plan5hTodoData.completed, $script:plan5hTodoData.total) } else { $null }
   $famField    = if ($family) { [string]$family } else { $null }
   # step / total / detail 是 agent（hook）推的 sub-step 状态，不是 detector
-  # 推的。detector 每次刷 5h 用量或 todo 进度都会重写整个 payload，如果这里
-  # 不把现有值读回来合并，正常使用中的 sub-step 进度会被静默清零
-  # （round-19 review hetaoBackend #2）。读-改-写，不是覆盖。
-  $prev = Read-StatusObj
+  # 推的。detector 重写整个 payload 时，这里怎么处理取决于"为什么写"。
+  #
+  # 两种写入语义完全不同（round-20 #5）：
+  #
+  #   - 元数据刷新（-KeepSubStep）：每 60s 刷 5h 用量、每次刷 todo 进度。
+  #     这两次的 state/message 是从当前 status.json 读回来原样再写回去的，
+  #     不代表"agent 进入了新的一步"，所以必须把已有的 sub-step 合并回来，
+  #     否则正常使用中的进度会被静默清零（round-19 #2）。
+  #
+  #   - 状态推断（默认）：detector 从 session log 推出一个新状态并写入。
+  #     这条消息的语义是"agent 现在在干这个"，它和上一条 hook 推的
+  #     sub-step 没有任何承接关系。无条件合并会让 pill 一直挂着上一步的
+  #     计数：实测里 agent 早已换工具、甚至这一轮都结束了，pill 还卡在
+  #     "step 1/1" 显示一条早就跑完的 curl 命令，而且没有任何后续写入会
+  #     把它清掉。所以状态推断一律重置。
   $stepField   = -1
   $totalField  = -1
   $detailField = ''
-  if ($prev) {
-    if ($prev.PSObject.Properties['step'])   { $stepField   = [int]$prev.step }
-    if ($prev.PSObject.Properties['total'])  { $totalField  = [int]$prev.total }
-    if ($prev.PSObject.Properties['detail'] -and $null -ne $prev.detail) { $detailField = [string]$prev.detail }
+  if ($KeepSubStep) {
+    $prev = Read-StatusObj
+    if ($prev) {
+      if ($prev.PSObject.Properties['step'])   { $stepField   = [int]$prev.step }
+      if ($prev.PSObject.Properties['total'])  { $totalField  = [int]$prev.total }
+      if ($prev.PSObject.Properties['detail'] -and $null -ne $prev.detail) { $detailField = [string]$prev.detail }
+    }
   }
   $payload = [PSCustomObject]@{
     state          = $state
@@ -808,7 +822,8 @@ try {
       $sForU = if ($curForUsage) { [string]$curForUsage.state } else { $S_IDLE }
       $mForU = if ($curForUsage) { [string]$curForUsage.message } else { '' }
       $fForU = if ($curForUsage -and $curForUsage.PSObject.Properties['family']) { $curForUsage.family } else { $null }
-      Write-Status $sForU $mForU $fForU
+      # 元数据刷新：原样写回当前状态，必须保留 sub-step（-KeepSubStep）
+      Write-Status $sForU $mForU $fForU -KeepSubStep
       Log-Line ("5h usage refreshed: remaining=" + $curPct + "% resetMs=" + $curMs)
     }
 
@@ -822,7 +837,8 @@ try {
       $sForT = if ($curForTodo) { [string]$curForTodo.state } else { $S_IDLE }
       $mForT = if ($curForTodo) { [string]$curForTodo.message } else { '' }
       $fForT = if ($curForTodo -and $curForTodo.PSObject.Properties['family']) { $curForTodo.family } else { $null }
-      Write-Status $sForT $mForT $fForT
+      # 元数据刷新：原样写回当前状态，必须保留 sub-step（-KeepSubStep）
+      Write-Status $sForT $mForT $fForT -KeepSubStep
       $script:plan5hLastWrittenTodoPct = $curTodoPct
       if ($null -ne $curTodoData) {
         Log-Line ("todo refreshed: " + $curTodoData.completed + "/" + $curTodoData.total + " = " + $curTodoPct + "%")

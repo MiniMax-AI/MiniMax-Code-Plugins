@@ -139,6 +139,13 @@ if (!PS_BIN) {
     const libPath = join(PLUGIN_ROOT, 'io.minimax.mcode', 'hooks', 'scripts', '_lib.ps1');
     const lib = readFileSync(libPath, 'utf8');
 
+    // Format-ToolSummary calls Protect-SecretText, which lives in a
+    // separate lib (round-20). Extracting the function body alone would
+    // leave the call unresolvable and the harness would die on an
+    // undefined command rather than on a real assertion -- so the harness
+    // dot-sources the lib, exactly as _lib.ps1 does in production.
+    const protectLibPath = join(PLUGIN_ROOT, 'scripts', 'lib', 'Protect-Text.ps1');
+
     let formatToolSummary;
     try {
         formatToolSummary = extractFn(lib, 'Format-ToolSummary');
@@ -151,6 +158,7 @@ if (!PS_BIN) {
 
         const harness = `
 $ErrorActionPreference = 'Stop'
+. '${protectLibPath.replace(/'/g, "''")}'
 ${formatToolSummary}
 $evt = [PSCustomObject]@{
   tool_name = 'mcode-computer-use'
@@ -179,6 +187,7 @@ Format-ToolSummary $evt
         // the redaction could have been implemented by disabling the branch.
         const coordHarness = `
 $ErrorActionPreference = 'Stop'
+. '${protectLibPath.replace(/'/g, "''")}'
 ${formatToolSummary}
 $evt = [PSCustomObject]@{
   tool_name = 'mcode-computer-use'
@@ -300,29 +309,33 @@ if (PS_BIN) {
 
     const writeStatusFn = extractFn(detect, 'Write-Status');
 
-    // Extract just the sub-step preservation lines as a standalone repro of
-    // the logic, so the test does not need the detector's whole environment.
-    const preserveMatch = writeStatusFn.match(
-        /\$prev = Read-StatusObj[\s\S]*?\$detailField = ''[\s\S]*?if \(\$prev\)\s*\{[\s\S]*?\n\s*\}/);
+    // Extract the sub-step decision block as a standalone repro of the
+    // logic, so the test does not need the detector's whole environment.
+    //
+    // The block is bounded by two stable statements rather than by the
+    // internal ordering of the read-modify-write: round-20 #5 wrapped it
+    // in `if ($KeepSubStep) { ... }`, so a regex anchored on `$prev`
+    // appearing before `$detailField` silently stopped matching. Anchor on
+    // the initialisers and the payload construction instead, and drive the
+    // switch explicitly -- this section pins the PRESERVE half; section 5
+    // pins the reset half and the call-site wiring.
+    const preserveMatch = writeStatusFn.match(/\$stepField\s*=\s*-1[\s\S]*?\$payload\s*=/);
 
     if (!preserveMatch) {
         bad('Write-Status preserves sub-step fields',
-            'could not find the step/total/detail read-modify-write block in Write-Status');
+            'could not find the step/total/detail decision block in Write-Status');
     } else {
         ok('Write-Status preserves sub-step fields');
 
         const harness = `
 $ErrorActionPreference = 'Stop'
 $statusFile = $env:ISLAND_TEST_STATUS
+$KeepSubStep = $true
 function Read-StatusObj {
   if (!(Test-Path $statusFile)) { return $null }
   try { return ([System.IO.File]::ReadAllText($statusFile) | ConvertFrom-Json) } catch { return $null }
 }
-$prev = Read-StatusObj
-$stepField   = -1
-$totalField  = -1
-$detailField = ''
-${preserveMatch[0].split('\n').slice(1).join('\n')}
+${preserveMatch[0].replace(/\$payload\s*=$/, '')}
 "$stepField|$totalField|$detailField"
 `;
         const statusFile = join(TMP, 'status.json');
@@ -374,6 +387,95 @@ ${preserveMatch[0].split('\n').slice(1).join('\n')}
             !/SWP_NOZORDER/.test(flagsExpr),
             'the restore path passes HWND_TOP together with SWP_NOZORDER, which makes Windows ignore hWndInsertAfter and defeats the z-order call');
     }
+}
+
+// ---------------------------------------------------------------------------
+// 5. A detector state-inference write must CLEAR a stale sub-step
+//    (round-20 #5)
+// ---------------------------------------------------------------------------
+//
+// Section 3 pins the other half of the same contract: a metadata refresh
+// must PRESERVE step/total/detail, because the 60s 5h-usage rewrite and
+// the todo rewrite restate the current state rather than announcing a new
+// step. Preserving unconditionally is only half right.
+//
+// A detector state-inference write is different in kind. It read a new
+// tool call out of the session log and is asserting "the agent is doing
+// THIS now". That message has no relationship to whatever sub-step a hook
+// pushed last, so inheriting step/total/detail leaves the previous turn's
+// counter on the pill indefinitely. Observed live: the pill sat on
+// "step 1/1" showing a curl command from a finished tool call, through
+// several subsequent turns, because nothing ever cleared it.
+//
+// The two write paths must therefore be distinguished explicitly, not by
+// guessing from the message text.
+{
+    const detectPath = join(PLUGIN_ROOT, 'mcode-status-detect.ps1');
+    const detect = readFileSync(detectPath, 'utf8');
+    const writeStatusFn = extractFn(detect, 'Write-Status');
+
+    const hasSwitch = /function\s+Write-Status[\s\S]*?\[switch\]\$KeepSubStep/.test(writeStatusFn);
+    check('Write-Status exposes a -KeepSubStep switch',
+        hasSwitch,
+        'state-inference and metadata-refresh writes are not distinguished, so a stale sub-step can never be cleared');
+
+    // Anchor on the two stable statements either side of the decision so
+    // the extraction survives reformatting inside the block.
+    const block = writeStatusFn.match(/\$stepField\s*=\s*-1[\s\S]*?\$payload\s*=/);
+
+    if (!hasSwitch || !block) {
+        bad('detector state write clears a stale sub-step',
+            'could not extract the sub-step decision block from Write-Status');
+    } else {
+        ok('detector state write clears a stale sub-step');
+
+        const harness = `
+$ErrorActionPreference = 'Stop'
+$statusFile = $env:ISLAND_TEST_STATUS
+$KeepSubStep = [bool]::Parse($env:ISLAND_TEST_KEEP)
+function Read-StatusObj {
+  if (!(Test-Path $statusFile)) { return $null }
+  try { return ([System.IO.File]::ReadAllText($statusFile) | ConvertFrom-Json) } catch { return $null }
+}
+${block[0].replace(/\$payload\s*=$/, '')}
+"$stepField|$totalField|$detailField"
+`;
+
+        const statusFile = join(TMP, 'status.json');
+        const run = (keep) => runPs(
+            `$env:ISLAND_TEST_STATUS = '${statusFile.replace(/'/g, "''")}'\n` +
+            `$env:ISLAND_TEST_KEEP = '${keep ? 'True' : 'False'}'\n` + harness).trim();
+
+        // Previous status carries a finished sub-step from an agent push.
+        const stale = {
+            state: 'done', message: 'Bash ok', family: 'shell',
+            step: 1, total: 1, detail: 'curl -H "Authorization: Bearer <redacted>"',
+            source: 'agent',
+        };
+
+        writeFileSync(statusFile, JSON.stringify(stale), 'utf8');
+        eq('state-inference write clears the stale sub-step', run(false), '-1|-1|');
+
+        writeFileSync(statusFile, JSON.stringify(stale), 'utf8');
+        eq('metadata-refresh write (-KeepSubStep) still preserves it',
+            run(true), '1|1|curl -H "Authorization: Bearer <redacted>"');
+    }
+
+    // The call sites must actually differ. A switch nobody passes is the
+    // dead-code shape this suite exists to catch.
+    const callSites = detect.split('\n')
+        .map((l, i) => ({ l, n: i + 1 }))
+        .filter(({ l }) => /^\s*Write-Status\s+\$/.test(l));
+    const keeps = callSites.filter(({ l }) => /-KeepSubStep/.test(l));
+    const infers = callSites.filter(({ l }) => /\$inferred\.state/.test(l));
+
+    eq('Write-Status has 3 call sites', callSites.length, 3);
+    check('the state-inference call site does NOT pass -KeepSubStep',
+        infers.length === 1 && !/-KeepSubStep/.test(infers[0].l),
+        `inference call site must clear stale sub-step (line ${infers[0]?.n})`);
+    check('the 5h-usage and todo call sites DO pass -KeepSubStep',
+        keeps.length === 2,
+        `expected 2 -KeepSubStep call sites, found ${keeps.length}`);
 }
 
 // ---------------------------------------------------------------------------
