@@ -110,6 +110,25 @@ permissions, or sessions.
 
 For direct reading: open `site/index.html` (Chinese) or `site/index.en.html` (English).
 
+## Example
+
+**Prompt**
+
+```text
+Does mcode have filesystem snapshots with point-in-time rollback?
+I need to restore a file to how it looked 20 minutes ago.
+```
+
+**Expected result**
+
+The agent answers that `mcode` has **no** global filesystem snapshot facility, and does
+not stop at the denial. It states that `/history`, `/fork` and `/rewind` act on **sessions
+and conversation history** rather than on the filesystem, so they are not a substitute; it
+gives git as the supported alternative; and it cites both the ledger entry in
+`VERIFICATION.md` and the manual section that settles the question. The answer separates
+what was checked from what is assumed, rather than inferring from similarly named tools in
+other agents.
+
 ## Documented scope
 
 **Verified as implemented**, and documented in full: the TUI slash command table; the complete
