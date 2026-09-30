@@ -7741,11 +7741,14 @@ var Store = class {
     }
     this.owner = randomUUID();
     this.txDepth = 0;
+    this.volatileTypes = /* @__PURE__ */ new Set(["step.progress"]);
+    this.volatileBuffer = [];
+    this.volatileTimer = null;
     try {
       writeFileSync(this.fd, JSON.stringify({ pid: process.pid, owner: this.owner }));
       this.db = new DatabaseSync(join(dir, "workflows.sqlite"));
       this.db.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT;");
-      this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+      this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS templates(id TEXT PRIMARY KEY,body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,requestId TEXT UNIQUE,requestHash TEXT NOT NULL,body TEXT NOT NULL);
@@ -7754,6 +7757,8 @@ var Store = class {
       CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT,runId TEXT,body TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS run_events ON events(runId,seq);
       CREATE TABLE IF NOT EXISTS integrity_rows(surface TEXT NOT NULL,pos INTEGER NOT NULL,key TEXT NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(surface,pos));`);
+      const eventSeq = this.db.prepare("SELECT MAX(COALESCE((SELECT seq FROM sqlite_sequence WHERE name='events'),0),COALESCE((SELECT MAX(seq) FROM events),0)) AS seq").get().seq;
+      this.nextEventSequence = Number(eventSeq ?? 0);
       const unfinished = this.db.prepare("SELECT body FROM runs WHERE json_extract(body,'$.status') IN ('running','queued','stopping','pausing')").all();
       for (const row of unfinished) {
         const run = JSON.parse(row.body);
@@ -7848,14 +7853,59 @@ var Store = class {
   }
   event(runId, type, data2 = {}) {
     const event = { ...data2, type, time: Date.now() };
+    if (this.volatileTypes.has(type)) return this.stageVolatile(runId, event);
+    this.flushVolatile();
     return this.transaction(() => {
       const seq = Number(this.db.prepare("INSERT INTO events(runId,body) VALUES(?,?)").run(runId, JSON.stringify(event)).lastInsertRowid);
+      this.nextEventSequence = seq;
       this.chainAdvance("event", "events", "SELECT seq AS pos,runId,body FROM events WHERE seq>? AND seq<=? ORDER BY seq", seq, (r) => `${r.runId}:${r.pos}`);
       return { seq, ...event };
     });
   }
+  stageVolatile(runId, event) {
+    const staged = { seq: ++this.nextEventSequence, ...event };
+    this.volatileBuffer.push({ runId, body: staged });
+    if (this.volatileBuffer.length >= 64) this.flushVolatile();
+    else this.scheduleVolatileFlush();
+    return staged;
+  }
+  scheduleVolatileFlush() {
+    if (this.volatileTimer) return;
+    this.volatileTimer = setTimeout(() => {
+      this.volatileTimer = null;
+      try {
+        this.flushVolatile();
+      } catch {
+      }
+    }, 1e3);
+    this.volatileTimer.unref?.();
+  }
+  flushVolatile() {
+    if (this.volatileTimer) {
+      clearTimeout(this.volatileTimer);
+      this.volatileTimer = null;
+    }
+    if (!this.volatileBuffer.length) return;
+    const batch = this.volatileBuffer;
+    this.volatileBuffer = [];
+    try {
+      this.transaction(() => {
+        const ins = this.db.prepare("INSERT INTO events(seq,runId,body) VALUES(?,?,?)");
+        for (const { runId, body } of batch) {
+          ins.run(body.seq, runId, JSON.stringify(body));
+          this.chainAdvance("event", "events", "SELECT seq AS pos,runId,body FROM events WHERE seq>? AND seq<=? ORDER BY seq", body.seq, (r) => `${r.runId}:${r.pos}`);
+        }
+      });
+    } catch (error2) {
+      this.volatileBuffer = [...batch, ...this.volatileBuffer];
+      this.scheduleVolatileFlush();
+      throw error2;
+    }
+  }
   events(runId, after = 0, limit = 150) {
-    return this.db.prepare("SELECT seq,body FROM events WHERE runId=? AND seq>? ORDER BY seq LIMIT ?").all(runId, after, limit).map((e) => ({ seq: e.seq, ...JSON.parse(e.body) }));
+    const persisted = this.db.prepare("SELECT seq,body FROM events WHERE runId=? AND seq>? ORDER BY seq LIMIT ?").all(runId, after, limit).map((e) => ({ seq: e.seq, ...JSON.parse(e.body) }));
+    const buffered = this.volatileBuffer.filter((e) => e.runId === runId && e.body.seq > after).map((e) => e.body);
+    return [...persisted, ...buffered].sort((a, b2) => a.seq - b2.seq).slice(0, limit);
   }
   rowHash(prev, kind, key, body) {
     return createHash("sha256").update(`${prev}:${kind}:${key}:${body}`).digest("hex");
@@ -7917,6 +7967,7 @@ var Store = class {
     }
   }
   close() {
+    this.flushVolatile();
     this.db.close();
     this.releaseLock();
   }

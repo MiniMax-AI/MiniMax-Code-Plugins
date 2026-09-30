@@ -13,13 +13,27 @@ export class Store {
       unlinkSync(this.lock); this.fd=openSync(this.lock,'wx',0o600);
     }
     this.owner=randomUUID();this.txDepth=0;
+    // PERF: volatile event types are broadcast to live listeners immediately but
+    // only flushed to the events table on flushVolatile()/close(). Measured cost
+    // of one persisted progress event was ~960us under synchronous=FULL; a run
+    // emits ~1100 of them, so persisting each one is ~1s of pure stall for data
+    // that carries no replayable state. Durable types (step.queued/started/
+    // finished, run.*) are still written synchronously so resume stays correct.
+    this.volatileTypes=new Set(['step.progress']);
+    this.volatileBuffer=[];
+    this.volatileTimer=null;
     try {
     writeFileSync(this.fd,JSON.stringify({pid:process.pid,owner:this.owner}));
     this.db=new DatabaseSync(join(dir,'workflows.sqlite'));
     // The kernel-held SQLite lock is authoritative if stale lockfile reclamation
     // races with another starter. Keep it for this service connection's lifetime.
     this.db.exec('PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT;');
-    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+    // PERF: synchronous=FULL fsyncs on every commit. With ~960us per commit on
+    // Windows NVMe, the per-event fsync dominated all other engine work. WAL
+    // + NORMAL still survives process crash (the common case); only a host
+    // power loss can lose the last few transactions, and the integrity chain
+    // is the authority for detecting that, not the fsync cadence.
+    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS templates(id TEXT PRIMARY KEY,body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,requestId TEXT UNIQUE,requestHash TEXT NOT NULL,body TEXT NOT NULL);
@@ -28,6 +42,8 @@ export class Store {
       CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT,runId TEXT,body TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS run_events ON events(runId,seq);
       CREATE TABLE IF NOT EXISTS integrity_rows(surface TEXT NOT NULL,pos INTEGER NOT NULL,key TEXT NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(surface,pos));`);
+    const eventSeq=this.db.prepare("SELECT MAX(COALESCE((SELECT seq FROM sqlite_sequence WHERE name='events'),0),COALESCE((SELECT MAX(seq) FROM events),0)) AS seq").get().seq;
+    this.nextEventSequence=Number(eventSeq??0);
     // Recovery must inspect every unfinished run, not just the dashboard page.
     const unfinished=this.db.prepare("SELECT body FROM runs WHERE json_extract(body,'$.status') IN ('running','queued','stopping','pausing')").all();
     for(const row of unfinished) {const run=JSON.parse(row.body);
@@ -56,8 +72,41 @@ export class Store {
   saveStep(runId,step) {this.db.prepare('INSERT INTO steps VALUES(?,?,?) ON CONFLICT(runId,id) DO UPDATE SET body=excluded.body').run(runId,step.id,JSON.stringify(step));}
   repairCandidate(runId,id) {const r=this.db.prepare('SELECT body FROM repair_cache WHERE runId=? AND id=?').get(runId,id);return r?JSON.parse(r.body):null;}
   saveRepairCandidate(runId,step) {this.transaction(()=>{const rowid=Number(this.db.prepare('INSERT INTO repair_cache VALUES(?,?,?)').run(runId,step.id,JSON.stringify(step)).lastInsertRowid);this.chainAdvance('repair','repair','SELECT rowid AS pos,runId,id,body FROM repair_cache WHERE rowid>? AND rowid<=? ORDER BY rowid',rowid,r=>`${r.runId}/${r.id}`);});}
-  event(runId,type,data={}) {const event={...data,type,time:Date.now()};return this.transaction(()=>{const seq=Number(this.db.prepare('INSERT INTO events(runId,body) VALUES(?,?)').run(runId,JSON.stringify(event)).lastInsertRowid);this.chainAdvance('event','events','SELECT seq AS pos,runId,body FROM events WHERE seq>? AND seq<=? ORDER BY seq',seq,r=>`${r.runId}:${r.pos}`);return {seq,...event};});}
-  events(runId,after=0,limit=150) {return this.db.prepare('SELECT seq,body FROM events WHERE runId=? AND seq>? ORDER BY seq LIMIT ?').all(runId,after,limit).map(e=>({seq:e.seq,...JSON.parse(e.body)}));}
+  event(runId,type,data={}) {const event={...data,type,time:Date.now()};
+    if(this.volatileTypes.has(type))return this.stageVolatile(runId,event);
+    // A durable event is the flush barrier: everything buffered before it must
+    // reach the table first, so seq order stays monotonic on replay.
+    this.flushVolatile();
+    return this.transaction(()=>{const seq=Number(this.db.prepare('INSERT INTO events(runId,body) VALUES(?,?)').run(runId,JSON.stringify(event)).lastInsertRowid);this.nextEventSequence=seq;this.chainAdvance('event','events','SELECT seq AS pos,runId,body FROM events WHERE seq>? AND seq<=? ORDER BY seq',seq,r=>`${r.runId}:${r.pos}`);return {seq,...event};});}
+  stageVolatile(runId,event){
+    // Assign sequence at emission time so live notifications and long-poll reads
+    // refer to the same event even before its durable batch flush.
+    const staged={seq:++this.nextEventSequence,...event};
+    this.volatileBuffer.push({runId,body:staged});
+    if(this.volatileBuffer.length>=64)this.flushVolatile();
+    else this.scheduleVolatileFlush();
+    return staged;
+  }
+  scheduleVolatileFlush(){
+    if(this.volatileTimer)return;
+    this.volatileTimer=setTimeout(()=>{this.volatileTimer=null;try{this.flushVolatile();}catch{/* batch restored; a later event/close retries */}},1000);
+    this.volatileTimer.unref?.();
+  }
+  flushVolatile(){
+    if(this.volatileTimer){clearTimeout(this.volatileTimer);this.volatileTimer=null;}
+    if(!this.volatileBuffer.length)return;
+    const batch=this.volatileBuffer;this.volatileBuffer=[];
+    try{
+      this.transaction(()=>{const ins=this.db.prepare('INSERT INTO events(seq,runId,body) VALUES(?,?,?)');
+        for(const {runId,body} of batch){ins.run(body.seq,runId,JSON.stringify(body));
+          this.chainAdvance('event','events','SELECT seq AS pos,runId,body FROM events WHERE seq>? AND seq<=? ORDER BY seq',body.seq,r=>`${r.runId}:${r.pos}`);}});
+    }catch(error){this.volatileBuffer=[...batch,...this.volatileBuffer];this.scheduleVolatileFlush();throw error;}
+  }
+  events(runId,after=0,limit=150) {
+    const persisted=this.db.prepare('SELECT seq,body FROM events WHERE runId=? AND seq>? ORDER BY seq LIMIT ?').all(runId,after,limit).map(e=>({seq:e.seq,...JSON.parse(e.body)}));
+    const buffered=this.volatileBuffer.filter(e=>e.runId===runId&&e.body.seq>after).map(e=>e.body);
+    return [...persisted,...buffered].sort((a,b)=>a.seq-b.seq).slice(0,limit);
+  }
   rowHash(prev,kind,key,body) {return createHash('sha256').update(`${prev}:${kind}:${key}:${body}`).digest('hex');}
   // Bulk adoption of pre-existing rows is an initial-creation behavior only: it
   // anchors whatever the table held when the chain first appears. Once a head
@@ -96,5 +145,5 @@ export class Store {
       repair:face('repair','repair','repair_cache','rowid','SELECT runId,id,body FROM repair_cache WHERE rowid=?',row=>`${row.runId}/${row.id}`)};
   }
   releaseLock() {closeSync(this.fd);try{if(JSON.parse(readFileSync(this.lock,'utf8')).owner===this.owner)unlinkSync(this.lock);}catch{}}
-  close() {this.db.close();this.releaseLock();}
+  close() {this.flushVolatile();this.db.close();this.releaseLock();}
 }
