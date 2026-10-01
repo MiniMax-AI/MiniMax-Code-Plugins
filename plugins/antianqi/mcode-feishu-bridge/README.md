@@ -43,31 +43,123 @@ with its normal tool access, and the answer comes back **in the same message**.
 The intermediate states and the final answer are the same Feishu message, so the
 conversation stays readable and nothing is duplicated.
 
-## Install
+## Setup
 
-The Plugin is Skill-only and has no `mcp.json` and no `package.json`. It needs two
-CLIs that you already have or can install yourself:
+The Plugin is Skill-only: no `mcp.json`, no `package.json`, no install step. But it
+does need three things lined up, and two of them are easy to get half-right.
 
-| requirement | what it is | check |
+### 1. MiniMax Code
+
+Installed and runnable:
+
+```bash
+mcode --version
+```
+
+### 2. A Feishu/Lark app, with **two** working identities
+
+This is the part that trips people up. The bridge reads and writes through
+**different identities**, and both have to work:
+
+| what | identity | why |
 |---|---|---|
-| [`lark-cli`](https://www.npmjs.com/package/@larksuite/cli) | the official Lark/Feishu CLI, already configured for your account | `lark-cli auth status` |
-| MiniMax Code | the agent, installed and runnable | `mcode --version` |
+| read the conversation, download attachments | **user** | the bot cannot see a p2p conversation's history |
+| send, reply, and edit the answer | **bot** | only a bot may edit a message it sent |
 
-Then configure a conversation and start the bridge:
+```bash
+lark-cli auth status
+```
+
+Both `identities.bot.status` and `identities.user.status` must read `ready`.
+If either is not, fix that before going further — otherwise the bridge reads
+nothing or writes nothing, and the log only says `fetch messages failed`.
+
+The app needs at least these scopes, derived from the operations it performs:
+
+| scope | needed for | identity |
+|---|---|---|
+| `im:message:readonly` | reading messages in the conversation | user |
+| `im:resource` | downloading an image or file you send | user |
+| `im:message` | sending the placeholder and the answer | bot |
+| `im:message:update` | editing that placeholder into the answer | bot |
+| `offline_access` | letting the user token refresh instead of expiring | user |
+
+`offline_access` is the one people miss. Without it the user token stops working
+after a couple of hours and the bridge goes quiet, with no error at the time it
+happens. Note also that the user identity here is **your** account: the bridge acts
+as you, with everything that implies.
+
+Publish the app (Feishu requires an app to be published before another user can
+talk to it), then open a chat with it. A p2p chat with your own app is the simplest
+arrangement and the one this Plugin is built and tested for.
+
+### 3. A chat id
+
+There is deliberately no default: a chat id is a private identifier, so it has to be
+yours to supply.
+
+```bash
+lark-cli im +chat-list --types=p2p,group --page-all --as user --format json
+```
+
+Find your conversation in the output. The `--page-all` matters — without it the
+listing silently truncates and you may not see the conversation you are looking for.
+
+### 4. Start it
 
 ```bash
 node scripts/mcode-feishu-bridge.mjs --watch --chat <your-chat-id>
 ```
 
-How to obtain a chat id: send a message in the conversation, then
+On the first run the bridge creates a workspace for that conversation and picks up
+nothing historical: it starts from the newest message at the time it launches. Send
+it a message after starting, not before.
+
+Full operating instructions are in
+[`skills/mcode-feishu-bridge/SKILL.md`](skills/mcode-feishu-bridge/SKILL.md).
+
+## Running it in the background
+
+The Plugin ships no service manager, on purpose: a login hook that runs a hidden
+process forever is exactly the kind of thing that should be a deliberate, visible
+choice by the person running the machine, not a default a Plugin installs.
+
+If you do want it always on, run the watcher under whatever supervisor you already
+use, and make sure it inherits a real `PATH` so the bridge can find `lark-cli` and
+`mcode`:
 
 ```bash
-lark-cli im +chat-messages-list --chat-id <chat-id> --as user --format json
+nohup node scripts/mcode-feishu-bridge.mjs --watch --chat <chat-id> >> bridge.log 2>&1 &
 ```
 
-or list your conversations with `lark-cli im +chat-list --types=p2p,group --page-all --as user`.
+Two rules that follow from how this is built:
 
-Full operating instructions are in [`skills/mcode-feishu-bridge/SKILL.md`](skills/mcode-feishu-bridge/SKILL.md).
+- **Do not redirect the watcher's stdout from a supervisor that waits on the
+  child's pipe.** A long-lived child spawned with inherited std handles keeps that
+  pipe open, and the supervisor blocks forever. Start the watcher with std handles
+  closed or detached, or let the bridge write its own log via `--log`.
+- **The bridge takes a single-instance lock, so a second copy is refused with exit
+  code 3** rather than corrupting state. If that is not what you wanted, find the
+  first one: `bridge.lock` in the data directory holds its pid.
+
+## Uninstall
+
+There is nothing to uninstall. To stop it and remove its data:
+
+```bash
+node scripts/mcode-feishu-bridge.mjs --stop
+```
+
+Then delete the data directory (`$PLUGIN_DATA`, else `~/.mcode-feishu-bridge`).
+That removes the per-conversation workspaces and the downloaded media. Removing the
+Plugin from MiniMax Code leaves that directory alone, by design — it is the user's
+data, and a Plugin should not delete it on uninstall.
+
+## Network
+
+Outbound HTTPS to the Feishu/Lark Open Platform, through `lark-cli`. No inbound
+listener, no local port, no other host. If your machine reaches Feishu through a
+proxy, `lark-cli` needs it configured; the bridge does not set one.
 
 ## How it works
 
@@ -224,6 +316,22 @@ next to the fix.
 5. **Windows PowerShell 5.1 reads BOM-less UTF-8 as the local code page.** Relevant
    if you write a launcher script for it; not applicable to this Plugin, which ships
    no `.ps1`.
+
+## When it does not work
+
+| symptom | most likely cause | check |
+|---|---|---|
+| no reply at all, log says `fetch messages failed` | the **user** identity is not usable: token expired, or `offline_access` was never granted | `lark-cli auth status` — look at `identities.user` |
+| the bridge never starts, exits 1 at launch | `lark-cli` or `mcode` is not on the `PATH` the bridge inherited | run `which lark-cli` / `which mcode` in that same environment |
+| a reply appears, but it is always the failure notice | the **bot** identity cannot send, so even the fallback reply fails | `lark-cli auth status` — look at `identities.bot` |
+| works for hours, then goes quiet | the user token expired because `offline_access` was not granted at authorisation time | re-authorise with `lark-cli auth login` and request that scope |
+| attachments are ignored | missing `im:resource` | the app's permission list |
+| nothing happens, and the log says the watermark is not on the page | the bridge fell too far behind and the full-pagination fallback also failed | restart the watcher; it re-reads the newest page |
+| a second watcher refuses to start with exit 3 | one is already running, which is the point | `bridge.lock` holds its pid; use `--stop` |
+| a turn is reported as timed out | mcode hung, most often on an interactive prompt | the notice names how many tool calls had already run; check the workspace |
+
+None of these are silent: every one of them produces a line in `bridge.log`. If the
+log is empty and the chat is silent, the watcher is not running at all.
 
 ## License
 

@@ -28,8 +28,20 @@ be configured for the user. Check first:
 lark-cli auth status
 ```
 
-If that is not signed in, do not attempt to sign in for the user. Tell them to run
-`lark-cli config init` and `lark-cli auth login` themselves, and stop there.
+Two things must both be true, and they are the two that actually go wrong:
+
+- `identities.bot.status` is `ready` — the bridge **reads with the user identity but
+  writes with the bot identity**, because only a bot may edit a message it sent, and
+  a bot cannot see a p2p conversation's history.
+- `identities.user.status` is `ready` and the token is `valid`.
+
+The app needs at least `im:message:readonly` and `im:resource` for the user side, and
+`im:message` plus `im:message:update` for the bot side. `offline_access` matters most
+in practice: without it the user token stops working after a couple of hours and the
+bridge goes quiet with no error at the time it happens.
+
+If `lark-cli` is not signed in, do not attempt to sign in for the user. Tell them to
+run `lark-cli config init` and `lark-cli auth login` themselves, and stop there.
 
 `mcode` must be installed and runnable. The bridge discovers both CLIs from `PATH`
 and the install layout; it never hardcodes a path.
@@ -97,22 +109,32 @@ Useful flags:
 
 ## If the user says a message got no reply
 
-Work through this order; the first three are the ones that actually happen:
+Work through this order; the first four are the ones that actually happen.
 
 1. **Read the log.** The bridge logs to `<data-dir>/bridge.log` and the file is
-   readable while it runs.
+   readable while it runs. An empty log plus a silent chat means the watcher is not
+   running at all — start it.
    - No `✓` line for that message means it was never picked up.
-   - `✗ fetch messages failed` means `lark-cli` failed: the usual cause is an
-     expired user token. Have the user re-run `lark-cli auth login`.
-   - `✗ the watermark is not on this page` means the bridge fell too far behind;
-     it escalates to full pagination on its own, so this line means that also failed.
-2. **Check the process and the lock.** `bridge.lock` in the data directory holds a
+   - `✗ fetch messages failed` means the **user** identity failed. Usually an expired
+     token, or `offline_access` was never granted. Have the user re-run
+     `lark-cli auth login`.
+   - The answer is a failure notice even though the message was picked up: the **bot**
+     identity cannot send, so even the fallback reply failed.
+   - `✗ the watermark is not on this page` means the bridge fell too far behind; it
+     escalates to full pagination on its own, so this line means that also failed.
+2. **Check both identities.** `lark-cli auth status`. `identities.user` covers
+   reading and attachments; `identities.bot` covers sending, replying and editing.
+   They fail independently and the symptoms differ.
+3. **Check the process and the lock.** `bridge.lock` in the data directory holds a
    pid. A lock whose pid no longer exists is stale and is reclaimed automatically.
-3. **Check the watermark.** `state.json` records the last processed message per
+4. **Check the watermark.** `state.json` records the last processed message per
    chat. If it is ahead of the user's message, the message was already handled.
-4. **Run the tests.** `node scripts/mcode-feishu-bridge.test.mjs` is self-contained
+5. **Run the tests.** `node scripts/mcode-feishu-bridge.test.mjs` is self-contained
    and prints a pass/fail summary. It is the fastest way to tell whether the host
    is broken or the conversation simply outgrew one page.
+
+`README.md` has a symptom-to-cause table covering the permission and identity
+failures, which are the ones users cannot diagnose from the log alone.
 
 ## Tests
 
@@ -127,6 +149,14 @@ module rather than a copy, so a green run says something about the shipped code.
 
 Two cases (`O` and `V`) read this plugin's own source. If you add a spawn call,
 keep `shell: false`; case `O` fails otherwise.
+
+## Running it unattended
+
+The Plugin ships no autostart mechanism, deliberately. If the user wants it always
+on, put it under a supervisor they already run, and warn them about one specific
+trap: **do not start a long-lived child with std handles inherited from a parent that
+waits on the pipe.** The caller blocks until the child closes it, which is forever.
+Start it detached, or let the bridge write its own log with `--log`.
 
 ## Network destinations
 
