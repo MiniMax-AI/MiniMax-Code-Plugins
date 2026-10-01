@@ -43,6 +43,32 @@ with its normal tool access, and the answer comes back **in the same message**.
 The intermediate states and the final answer are the same Feishu message, so the
 conversation stays readable and nothing is duplicated.
 
+## What you get
+
+- **One message per task.** The placeholder, every tool call, and the final answer
+  are the same Feishu message, edited in place. A turn that runs twelve tools
+  produces one bubble.
+- **Live progress.** The message flips to `⚙️ calling \`write\`…` while a tool runs,
+  so a two-minute task does not look like a hang.
+- **Real tool access.** mcode runs with its normal tools in a per-conversation
+  workspace, so the bridge can create files, run commands, and read results.
+- **Continuous context.** The conversation keeps one mcode session, so "and now
+  read it back" works. Each conversation gets its own session, so two do not bleed
+  into each other.
+- **Attachments.** Images and files you send are downloaded into the conversation's
+  workspace and passed to mcode.
+- **A hung turn is killed, not waited on.** After a configurable ceiling the process
+  tree is terminated and the chat gets an explicit notice naming how many tool calls
+  had already run.
+- **A footer on every answer** — elapsed time, token count, tool-call count.
+- **Delivery that does not lose your result.** If the edit fails, the answer is sent
+  as a reply instead. If that fails too, it is retried with a linear backoff and
+  then given up on loudly, rather than retried forever.
+- **One bridge at a time.** A second watcher is refused rather than silently racing
+  the first one over the same state.
+- **Readable while running.** The log is written by the bridge itself, so you can
+  read it without the file being locked.
+
 ## Setup
 
 The Plugin is Skill-only: no `mcp.json`, no `package.json`, no install step. But it
@@ -117,6 +143,59 @@ it a message after starting, not before.
 
 Full operating instructions are in
 [`skills/mcode-feishu-bridge/SKILL.md`](skills/mcode-feishu-bridge/SKILL.md).
+
+## Usage
+
+```bash
+# one pass, then exit — the quickest way to try it
+node scripts/mcode-feishu-bridge.mjs --chat <chat-id>
+
+# the long-running watcher
+node scripts/mcode-feishu-bridge.mjs --watch --chat <chat-id>
+
+# stop the running watcher; kills any mcode turn with it
+node scripts/mcode-feishu-bridge.mjs --stop
+```
+
+| flag | default | meaning |
+|---|---|---|
+| `--chat <id>` | none | conversation to watch; required |
+| `--watch` | off | keep polling instead of one pass |
+| `--interval <ms>` | 3000 | poll interval |
+| `--timeout <ms>` | 600000 | hard ceiling on one mcode turn |
+| `--log <path>` | `<data-dir>/bridge.log` in watch mode | also append output to this file |
+| `--stop` | — | stop the running watcher |
+
+Only `--watch` takes the single-instance lock, so one-shot runs never block each
+other.
+
+The conversation can also be configured once, instead of on every start:
+
+```bash
+MCODE_FEISHU_CHAT=oc_xxxxxxxxxxxxxxxx     # environment
+# or <data-dir>/config.json  ->  { "chatId": "oc_xxxxxxxxxxxxxxxx" }
+```
+
+## What's in the package
+
+```text
+mcode-feishu-bridge/
+├── plugin.json                     portable Agent Plugins 1.0 manifest
+├── .claude-plugin/plugin.json      v0.4.0+ manifest
+├── skills/
+│   ├── SKILL.md                    v0.4.0+ Skill
+│   └── mcode-feishu-bridge/
+│       └── SKILL.md                v0.3.x Skill, byte-identical to the above
+├── scripts/
+│   ├── mcode-feishu-bridge.mjs     the bridge
+│   └── mcode-feishu-bridge.test.mjs the suite
+├── README.md
+└── LICENSE
+```
+
+Two Skill copies because the two runtimes discover Skills differently; the
+recommended cross-version layout keeps them byte-identical, and this Plugin follows
+it. There is no `mcp.json`, no `package.json`, and no bundled binary.
 
 ## Running it in the background
 
@@ -332,6 +411,10 @@ next to the fix.
 
 None of these are silent: every one of them produces a line in `bridge.log`. If the
 log is empty and the chat is silent, the watcher is not running at all.
+
+The same table, in the order to work through it when a user reports silence, is in
+[`skills/mcode-feishu-bridge/SKILL.md`](skills/mcode-feishu-bridge/SKILL.md), along
+with the identity and scope pre-flight an agent should check before starting.
 
 ## License
 
