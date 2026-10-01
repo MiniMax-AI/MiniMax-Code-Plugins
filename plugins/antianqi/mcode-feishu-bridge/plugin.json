@@ -1,0 +1,22 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "mcode-feishu-bridge",
+  "version": "0.1.0",
+  "description": "Drive MiniMax Code remotely from a Lark/Feishu conversation. A message you send in Feishu becomes a local mcode turn with full tool access, and the answer is written back into that same message in place, so a long task does not flood the chat. Requires the lark-cli and mcode CLIs the user already has; ships no credentials of its own.",
+  "author": {
+    "name": "antianqi",
+    "url": "https://github.com/antianqi"
+  },
+  "homepage": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins/tree/main/plugins/antianqi/mcode-feishu-bridge",
+  "repository": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins.git",
+  "license": "Apache-2.0",
+  "keywords": [
+    "mcode",
+    "feishu",
+    "lark",
+    "remote-control",
+    "chatops",
+    "cli",
+    "zero-dependency"
+  ]
+}
