@@ -1,0 +1,11 @@
+# Keep everything in this Plugin byte-stable.
+#
+# The suite reads this Plugin's own source for two static checks (no shell
+# routing, no bare "asc without --page-all" fetch), and a CRLF checkout would
+# change what those checks see. JSON must also stay BOM-free: the repository
+# validator rejects a BOM in plugin.json.
+* text=auto eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.mjs text eol=lf
+LICENSE text eol=lf
