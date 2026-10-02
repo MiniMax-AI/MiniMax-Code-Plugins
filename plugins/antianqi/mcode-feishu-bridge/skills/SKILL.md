@@ -21,6 +21,14 @@ twelve tool calls still produces one bubble, not twelve.
 
 ## Before starting anything
 
+> **Do not confuse this with the built-in `lark-tools` Skill.** `lark-tools` drives
+> Feishu *from* mcode — documents, calendar, Base, mail, approvals. This Plugin is
+> the opposite direction: a Feishu message becomes a local `mcode` turn. The
+> desktop runtime also has a Feishu channel, which is the same reverse direction but
+> needs the Mavis desktop app running and a Feishu app bound to it. Never present
+> this Plugin as a replacement for `lark-tools`; they do different jobs and can run
+> side by side.
+
 The bridge has **no credentials of its own**. It uses `lark-cli`, which must already
 be configured for the user. Check first:
 

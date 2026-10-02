@@ -69,6 +69,37 @@ conversation stays readable and nothing is duplicated.
 - **Readable while running.** The log is written by the bridge itself, so you can
   read it without the file being locked.
 
+## How this differs from the built-in Feishu support
+
+MiniMax Code ships Feishu support in two places already, and neither one is this
+Plugin. This one sends messages in the opposite direction, against a local mcode
+CLI rather than the desktop runtime.
+
+| | direction | what it is for |
+|---|---|---|
+| `lark-tools` (built-in Skill) | mcode → Feishu | office work: read and write docs, calendar, Base, mail, approvals |
+| Feishu channel (local-runtime) | Feishu → agent | driving the Mavis desktop runtime through a bound Feishu app |
+| **This Plugin** | **Feishu → mcode** | **driving a local mcode CLI install** |
+
+The first is not a remote control. Ask it to summarise this week's meeting notes
+and it does that inside Feishu; it does not run a task on your machine.
+
+The second has the same shape as this Plugin but a different host. It lives in the
+Mavis desktop runtime, so it needs the desktop app running and a Feishu app bound
+to it, and it answers with interactive cards — including a permission card that
+approves a pending tool call by tapping. Prefer it if the desktop app is already
+your working environment.
+
+This Plugin covers the remaining case: a headless machine with `mcode` and
+`lark-cli` on `PATH` and nothing else. It is a plain polling process, so any
+supervisor you already use can restart it, and there is nothing to install. In
+exchange it edits plain text messages instead of sending cards, and it runs with
+`--permission full` because there is no in-chat approval prompt to tap — see
+[Security model](#security-model).
+
+The two do not conflict. Installing this Plugin neither requires nor disables the
+built-in channel, and both can run at once.
+
 ## Setup
 
 The Plugin is Skill-only: no `mcp.json`, no `package.json`, no install step. But it
