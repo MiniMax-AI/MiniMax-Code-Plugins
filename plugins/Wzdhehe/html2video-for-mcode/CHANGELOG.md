@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.9.15 — 2026-10-03
+
+**Marketplace submission fix: the SKILL.md frontmatter failed real YAML parsing** (submission PLUGIN-202610030176 rejected with `SKILL_FRONTMATTER_INVALID`; the first submission, PLUGIN-202610020174, had failed earlier on the missing `.minimax-plugin/plugin.json` — fixed by the repo's plugin-package root layout)
+
+- **Root cause, reproduced locally with PyYAML:** the frontmatter `description` carried one unquoted ASCII `": "` — "(regulated subjects): finance/…" — and an unquoted plain scalar containing colon-space is a YAML parse error (`ScannerError: mapping values are not allowed here`). Every strict parser rejects it; the community repo's validator reads the line with a regex, which is why this passed 28 rounds of hosted validation. The guide's canonical example and the one marketplace-passed precedent both avoid the shape.
+- **Fix (description only, 977 → 970 chars, every trigger phrase kept):** the colon becomes an em-dash, and the four `**bold**` markers are stripped (the marketplace renders manifest/SKILL text as plain text — markdown emphasis shows up literally). The frontmatter now parses clean under PyYAML and stays within the 1024-char cap.
+- **Version discipline:** package content changed, so the version increments in all three manifests (`plugin.json`, `.claude-plugin/plugin.json`, `.minimax-plugin/plugin.json`), per the submission guide's "any content change must bump the version" rule. No code or behavior changed; tests stay at 285 in fifteen files (verified green on the dev tree before pushing).
+
 ## 1.9.14 — 2026-09-28
 
 **Field handoff (Mavis, billing-arena project): the subtitle pill's `max-width` was unreachable dead code — subtitles wrapped at half the designed width, and the band gate couldn't see the collision** (A/B reproduced on our tree with the reporter's probe before fixing: 22 real narration sentences, 8 wrapped wrong; the fix yields 0 wraps)
