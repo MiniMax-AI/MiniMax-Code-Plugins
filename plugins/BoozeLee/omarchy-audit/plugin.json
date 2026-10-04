@@ -1,0 +1,20 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "omarchy-audit",
+  "version": "0.1.0",
+  "description": "Static security triage for an Omarchy checkout: shebang-based script discovery, batched shellcheck, and a fix-pattern map so already-patched findings are not re-reported.",
+  "author": {
+    "name": "BoozeLee",
+    "url": "https://github.com/BoozeLee"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/BoozeLee/awesome-mcode",
+  "repository": "https://github.com/BoozeLee/awesome-mcode",
+  "keywords": [
+    "security",
+    "static-analysis",
+    "shellcheck",
+    "omarchy",
+    "audit"
+  ]
+}
