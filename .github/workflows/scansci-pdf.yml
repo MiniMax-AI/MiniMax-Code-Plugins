@@ -1,0 +1,25 @@
+name: ScanSci PDF engine checks
+on:
+  pull_request:
+    paths:
+      - 'plugins/NkAntony777/scansci-pdf/**'
+      - '.github/workflows/scansci-pdf.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  engine:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.13']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b18
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install --require-hashes -r plugins/NkAntony777/scansci-pdf/vendor/scansci-pdf/requirements-browser.lock
+      - run: python -m pip install pytest cryptography
+      - run: python -m pytest plugins/NkAntony777/scansci-pdf/vendor/scansci-pdf/tests -q
+      - run: python plugins/NkAntony777/scansci-pdf/vendor/scansci-pdf/scripts/check_mcp_package.py plugins/NkAntony777/scansci-pdf/vendor/scansci-pdf/run_secure.py
