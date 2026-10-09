@@ -28,12 +28,9 @@ export class Store {
     // The kernel-held SQLite lock is authoritative if stale lockfile reclamation
     // races with another starter. Keep it for this service connection's lifetime.
     this.db.exec('PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT;');
-    // PERF: synchronous=FULL fsyncs on every commit. With ~960us per commit on
-    // Windows NVMe, the per-event fsync dominated all other engine work. WAL
-    // + NORMAL still survives process crash (the common case); only a host
-    // power loss can lose the last few transactions, and the integrity chain
-    // is the authority for detecting that, not the fsync cadence.
-    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;
+    // Batching reduces commit count without weakening durable workflow writes.
+    // A hash chain cannot detect loss of a complete row/head transaction.
+    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS templates(id TEXT PRIMARY KEY,body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,requestId TEXT UNIQUE,requestHash TEXT NOT NULL,body TEXT NOT NULL);
@@ -43,7 +40,8 @@ export class Store {
       CREATE INDEX IF NOT EXISTS run_events ON events(runId,seq);
       CREATE TABLE IF NOT EXISTS integrity_rows(surface TEXT NOT NULL,pos INTEGER NOT NULL,key TEXT NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(surface,pos));`);
     const eventSeq=this.db.prepare("SELECT MAX(COALESCE((SELECT seq FROM sqlite_sequence WHERE name='events'),0),COALESCE((SELECT MAX(seq) FROM events),0)) AS seq").get().seq;
-    this.nextEventSequence=Number(eventSeq??0);
+    this.nextEventSequence=Math.max(Number(eventSeq??0),this.setting('event_sequence_lease')??0);
+    this.eventSequenceLimit=this.nextEventSequence;
     // Recovery must inspect every unfinished run, not just the dashboard page.
     const unfinished=this.db.prepare("SELECT body FROM runs WHERE json_extract(body,'$.status') IN ('running','queued','stopping','pausing')").all();
     for(const row of unfinished) {const run=JSON.parse(row.body);
@@ -51,7 +49,25 @@ export class Store {
     }
     }catch(error){this.db?.close();this.releaseLock();throw error;}
   }
-  transaction(fn) {if(this.txDepth)return fn();this.txDepth=1;this.db.exec('BEGIN IMMEDIATE');try{const r=fn();this.db.exec('COMMIT');return r;}catch(e){this.db.exec('ROLLBACK');throw e;}finally{this.txDepth=0;}}
+  transaction(fn) {if(this.txDepth)return fn();this.reserveEventSequences();this.db.exec('BEGIN IMMEDIATE');this.txDepth=1;this.txVolatile=[];
+    try{const r=fn();this.db.exec('COMMIT');return r;}
+    catch(e){this.db.exec('ROLLBACK');const restored=new Map([...this.txVolatile,...this.volatileBuffer].map(item=>[item.body.seq,item]));this.volatileBuffer=[...restored.values()].sort((a,b)=>a.body.seq-b.body.seq);if(this.volatileBuffer.length)this.scheduleVolatileFlush();throw e;}
+    finally{this.txDepth=0;this.txVolatile=null;}}
+  reserveEventSequences() {
+    const persisted=Number(this.db.prepare("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='events'),0) AS seq").get().seq);
+    this.nextEventSequence=Math.max(this.nextEventSequence,persisted);
+    if(this.nextEventSequence<this.eventSequenceLimit)return;
+    // Commit the high watermark independently, before publishing any cursor.
+    // Restart discards unused numbers in this lease; sequence gaps are valid.
+    if(this.txDepth)throw new Error('Event sequence lease exhausted inside a transaction');
+    const limit=this.nextEventSequence+1024;
+    if(!Number.isSafeInteger(limit))throw new Error('Event sequence exhausted');
+    this.db.exec('BEGIN IMMEDIATE');
+    try{this.saveSetting('event_sequence_lease',limit);this.db.exec('COMMIT');}
+    catch(error){this.db.exec('ROLLBACK');throw error;}
+    this.eventSequenceLimit=limit;
+  }
+  allocateEventSequence() {this.reserveEventSequences();return ++this.nextEventSequence;}
   templates() {return this.db.prepare('SELECT body FROM templates ORDER BY rowid DESC').all().map(r=>JSON.parse(r.body));}
   template(id) {const r=this.db.prepare('SELECT body FROM templates WHERE id=?').get(id);return r?JSON.parse(r.body):null;}
   saveTemplate(value) {this.db.prepare('INSERT INTO templates VALUES(?,?)').run(value.id,JSON.stringify(value));}
@@ -77,18 +93,18 @@ export class Store {
     // A durable event is the flush barrier: everything buffered before it must
     // reach the table first, so seq order stays monotonic on replay.
     this.flushVolatile();
-    return this.transaction(()=>{const seq=Number(this.db.prepare('INSERT INTO events(runId,body) VALUES(?,?)').run(runId,JSON.stringify(event)).lastInsertRowid);this.nextEventSequence=seq;this.chainAdvance('event','events','SELECT seq AS pos,runId,body FROM events WHERE seq>? AND seq<=? ORDER BY seq',seq,r=>`${r.runId}:${r.pos}`);return {seq,...event};});}
+    return this.transaction(()=>{const seq=this.allocateEventSequence();this.db.prepare('INSERT INTO events(seq,runId,body) VALUES(?,?,?)').run(seq,runId,JSON.stringify(event));this.chainAdvance('event','events','SELECT seq AS pos,runId,body FROM events WHERE seq>? AND seq<=? ORDER BY seq',seq,r=>`${r.runId}:${r.pos}`);return {seq,...event};});}
   stageVolatile(runId,event){
     // Assign sequence at emission time so live notifications and long-poll reads
     // refer to the same event even before its durable batch flush.
-    const staged={seq:++this.nextEventSequence,...event};
+    const staged={...event,seq:this.allocateEventSequence()};
     this.volatileBuffer.push({runId,body:staged});
     if(this.volatileBuffer.length>=64)this.flushVolatile();
     else this.scheduleVolatileFlush();
     return staged;
   }
   scheduleVolatileFlush(){
-    if(this.volatileTimer)return;
+    if(this.volatileTimer||this.closing)return;
     this.volatileTimer=setTimeout(()=>{this.volatileTimer=null;try{this.flushVolatile();}catch{/* batch restored; a later event/close retries */}},1000);
     this.volatileTimer.unref?.();
   }
@@ -96,6 +112,7 @@ export class Store {
     if(this.volatileTimer){clearTimeout(this.volatileTimer);this.volatileTimer=null;}
     if(!this.volatileBuffer.length)return;
     const batch=this.volatileBuffer;this.volatileBuffer=[];
+    if(this.txDepth)this.txVolatile.push(...batch);
     try{
       this.transaction(()=>{const ins=this.db.prepare('INSERT INTO events(seq,runId,body) VALUES(?,?,?)');
         for(const {runId,body} of batch){ins.run(body.seq,runId,JSON.stringify(body));
@@ -144,6 +161,14 @@ export class Store {
     return {events:face('event','events','events','seq','SELECT runId,body FROM events WHERE seq=?',(row,pos)=>`${row.runId}:${pos}`),
       repair:face('repair','repair','repair_cache','rowid','SELECT runId,id,body FROM repair_cache WHERE rowid=?',row=>`${row.runId}/${row.id}`)};
   }
-  releaseLock() {closeSync(this.fd);try{if(JSON.parse(readFileSync(this.lock,'utf8')).owner===this.owner)unlinkSync(this.lock);}catch{}}
-  close() {this.flushVolatile();this.db.close();this.releaseLock();}
+  releaseLock() {if(this.fd===undefined)return;try{closeSync(this.fd);}finally{this.fd=undefined;try{if(JSON.parse(readFileSync(this.lock,'utf8')).owner===this.owner)unlinkSync(this.lock);}catch{}}}
+  close() {
+    if(this.closing)return;this.closing=true;
+    const errors=[];
+    try{this.flushVolatile();}catch(error){errors.push(error);}
+    try{this.db.close();}catch(error){errors.push(error);}
+    try{this.releaseLock();}catch(error){errors.push(error);}
+    if(errors.length===1)throw errors[0];
+    if(errors.length)throw new AggregateError(errors,'Store shutdown failed');
+  }
 }

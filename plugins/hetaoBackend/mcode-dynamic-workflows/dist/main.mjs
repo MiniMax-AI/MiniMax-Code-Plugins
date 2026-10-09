@@ -7748,7 +7748,7 @@ var Store = class {
       writeFileSync(this.fd, JSON.stringify({ pid: process.pid, owner: this.owner }));
       this.db = new DatabaseSync(join(dir, "workflows.sqlite"));
       this.db.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT;");
-      this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;
+      this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS templates(id TEXT PRIMARY KEY,body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,requestId TEXT UNIQUE,requestHash TEXT NOT NULL,body TEXT NOT NULL);
@@ -7758,7 +7758,8 @@ var Store = class {
       CREATE INDEX IF NOT EXISTS run_events ON events(runId,seq);
       CREATE TABLE IF NOT EXISTS integrity_rows(surface TEXT NOT NULL,pos INTEGER NOT NULL,key TEXT NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(surface,pos));`);
       const eventSeq = this.db.prepare("SELECT MAX(COALESCE((SELECT seq FROM sqlite_sequence WHERE name='events'),0),COALESCE((SELECT MAX(seq) FROM events),0)) AS seq").get().seq;
-      this.nextEventSequence = Number(eventSeq ?? 0);
+      this.nextEventSequence = Math.max(Number(eventSeq ?? 0), this.setting("event_sequence_lease") ?? 0);
+      this.eventSequenceLimit = this.nextEventSequence;
       const unfinished = this.db.prepare("SELECT body FROM runs WHERE json_extract(body,'$.status') IN ('running','queued','stopping','pausing')").all();
       for (const row of unfinished) {
         const run = JSON.parse(row.body);
@@ -7774,18 +7775,45 @@ var Store = class {
   }
   transaction(fn) {
     if (this.txDepth) return fn();
-    this.txDepth = 1;
+    this.reserveEventSequences();
     this.db.exec("BEGIN IMMEDIATE");
+    this.txDepth = 1;
+    this.txVolatile = [];
     try {
       const r = fn();
       this.db.exec("COMMIT");
       return r;
     } catch (e) {
       this.db.exec("ROLLBACK");
+      const restored = new Map([...this.txVolatile, ...this.volatileBuffer].map((item) => [item.body.seq, item]));
+      this.volatileBuffer = [...restored.values()].sort((a, b2) => a.body.seq - b2.body.seq);
+      if (this.volatileBuffer.length) this.scheduleVolatileFlush();
       throw e;
     } finally {
       this.txDepth = 0;
+      this.txVolatile = null;
     }
+  }
+  reserveEventSequences() {
+    const persisted = Number(this.db.prepare("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='events'),0) AS seq").get().seq);
+    this.nextEventSequence = Math.max(this.nextEventSequence, persisted);
+    if (this.nextEventSequence < this.eventSequenceLimit) return;
+    if (this.txDepth) throw new Error("Event sequence lease exhausted inside a transaction");
+    const limit = this.nextEventSequence + 1024;
+    if (!Number.isSafeInteger(limit)) throw new Error("Event sequence exhausted");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.saveSetting("event_sequence_lease", limit);
+      this.db.exec("COMMIT");
+    } catch (error2) {
+      this.db.exec("ROLLBACK");
+      throw error2;
+    }
+    this.eventSequenceLimit = limit;
+  }
+  allocateEventSequence() {
+    this.reserveEventSequences();
+    return ++this.nextEventSequence;
   }
   templates() {
     return this.db.prepare("SELECT body FROM templates ORDER BY rowid DESC").all().map((r) => JSON.parse(r.body));
@@ -7856,21 +7884,21 @@ var Store = class {
     if (this.volatileTypes.has(type)) return this.stageVolatile(runId, event);
     this.flushVolatile();
     return this.transaction(() => {
-      const seq = Number(this.db.prepare("INSERT INTO events(runId,body) VALUES(?,?)").run(runId, JSON.stringify(event)).lastInsertRowid);
-      this.nextEventSequence = seq;
+      const seq = this.allocateEventSequence();
+      this.db.prepare("INSERT INTO events(seq,runId,body) VALUES(?,?,?)").run(seq, runId, JSON.stringify(event));
       this.chainAdvance("event", "events", "SELECT seq AS pos,runId,body FROM events WHERE seq>? AND seq<=? ORDER BY seq", seq, (r) => `${r.runId}:${r.pos}`);
       return { seq, ...event };
     });
   }
   stageVolatile(runId, event) {
-    const staged = { seq: ++this.nextEventSequence, ...event };
+    const staged = { ...event, seq: this.allocateEventSequence() };
     this.volatileBuffer.push({ runId, body: staged });
     if (this.volatileBuffer.length >= 64) this.flushVolatile();
     else this.scheduleVolatileFlush();
     return staged;
   }
   scheduleVolatileFlush() {
-    if (this.volatileTimer) return;
+    if (this.volatileTimer || this.closing) return;
     this.volatileTimer = setTimeout(() => {
       this.volatileTimer = null;
       try {
@@ -7888,6 +7916,7 @@ var Store = class {
     if (!this.volatileBuffer.length) return;
     const batch = this.volatileBuffer;
     this.volatileBuffer = [];
+    if (this.txDepth) this.txVolatile.push(...batch);
     try {
       this.transaction(() => {
         const ins = this.db.prepare("INSERT INTO events(seq,runId,body) VALUES(?,?,?)");
@@ -7960,16 +7989,38 @@ var Store = class {
     };
   }
   releaseLock() {
-    closeSync(this.fd);
+    if (this.fd === void 0) return;
     try {
-      if (JSON.parse(readFileSync(this.lock, "utf8")).owner === this.owner) unlinkSync(this.lock);
-    } catch {
+      closeSync(this.fd);
+    } finally {
+      this.fd = void 0;
+      try {
+        if (JSON.parse(readFileSync(this.lock, "utf8")).owner === this.owner) unlinkSync(this.lock);
+      } catch {
+      }
     }
   }
   close() {
-    this.flushVolatile();
-    this.db.close();
-    this.releaseLock();
+    if (this.closing) return;
+    this.closing = true;
+    const errors = [];
+    try {
+      this.flushVolatile();
+    } catch (error2) {
+      errors.push(error2);
+    }
+    try {
+      this.db.close();
+    } catch (error2) {
+      errors.push(error2);
+    }
+    try {
+      this.releaseLock();
+    } catch (error2) {
+      errors.push(error2);
+    }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length) throw new AggregateError(errors, "Store shutdown failed");
   }
 };
 
@@ -27830,10 +27881,15 @@ if (values.stdio && process.env.MCODE_WORKFLOW_CHILD === "1") {
     async function close() {
       if (closing) return;
       closing = true;
-      await engine.close();
-      await panel.close();
-      store.close();
-      process.exitCode = 0;
+      const errors = [];
+      for (const cleanup of [() => engine.close(), () => panel.close(), () => store.close()]) try {
+        await cleanup();
+      } catch (error2) {
+        errors.push(error2);
+      }
+      process.exitCode = errors.length ? 1 : 0;
+      if (errors.length) process.stderr.write(`Workflow shutdown failed: ${errors.map((e) => e.message).join("; ")}
+`);
     }
     process.once("SIGINT", () => void close());
     process.once("SIGTERM", () => void close());
