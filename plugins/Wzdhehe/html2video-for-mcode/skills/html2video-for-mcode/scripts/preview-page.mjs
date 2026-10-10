@@ -58,20 +58,43 @@ export function fallbackStages(html, { start = 0.3, step = 1 } = {}) {
 // 属性匹配要认双引号/单引号/无引号三种写法(二审 P2): 旧实现只认双引号, 遇到
 // <html class='theme' style='--t2:800ms'> 会再插一组重复属性, 浏览器保留**先出现的那组** →
 // 实测延迟/画布尺寸全部失效、no-fx 也加不上(实测: 原延迟仍在、没有画布宽、动效关不掉)
-const ATTR_RE = name => new RegExp(`\\b${name}\\s*=\\s*("([^"]*)"|'([^']*)'|([^\\s"'>]+))`, 'i');
+// 前置不能紧跟 `-`/字母数字: 否则 data-style / data-class 这类属性名里含 style/class 的,
+// 会被误认成真属性(于是真 style 没被改、画布尺寸与动画延迟静默丢失)。
+const ATTR_RE = name => new RegExp(`(?<![-\\w])${name}\\s*=\\s*("([^"]*)"|'([^']*)'|([^\\s"'>]+))`, 'i');
 const attrValue = (tag, name) => {
   const m = ATTR_RE(name).exec(tag);
   return m ? (m[2] ?? m[3] ?? m[4]) : null;
 };
 
+// 属性值重新序列化进双引号前必须转义(2026-10-10 独立安全审计 H1): 值可能是从**单引号**
+// 属性里取出来的原文, 原样塞进双引号就能提前闭合属性并追加一个活的 on* 处理器 ——
+// 实测 <html class='x" onmouseover=window.FIRED=1 data-x='> 经 addNoFx 后变成
+// class="x" onmouseover=window.FIRED=1 data-x= no-fx", 打开放映页即任意 JS 执行。
+// & 先转, 免得把作者的 &amp; 再编一次(& 本身是实体前缀)。
+const escapeAttrValue = v => String(v)
+  .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
 function firstTag(html, name) {
-  const m = html.match(new RegExp(`<${name}\\b[^>]*>`, 'i'));
-  return m ? { tag: m[0], index: m.index } : null;
+  // 属性值里可以合法出现 >, 所以标签体不能简单用 [^>]* 一刀切(否则 style='--x: calc(1>0)'
+  // 之后的属性全部读不到); 双引号/单引号区段放行。
+  // 注释里的 <html> 是诱饵: 命中它就会去改注释, 真标签反而没被改(no-fx 加不上 → X 键对照
+  // 静默失效, 画布尺寸/动画延迟也丢)。所以先算出注释区段, 落在里面的命中一律跳过。
+  const comments = [
+    ...[...html.matchAll(/<!--[\s\S]*?-->/g)].map(m => [m.index, m.index + m[0].length]),
+    ...[...html.matchAll(/<!--[\s\S]*$/g)].map(m => [m.index, m.index + m[0].length]),
+  ];
+  const inComment = i => comments.some(([a, b]) => i >= a && i < b);
+  const re = new RegExp(`<${name}\\b(?:[^>"']|"[^"]*"|'[^']*')*>`, 'gi');
+  for (const m of html.matchAll(re)) {
+    if (!inComment(m.index)) return { tag: m[0], index: m.index };
+  }
+  return null;
 }
 
 function setAttr(tag, name, value) {
-  if (attrValue(tag, name) !== null) return tag.replace(ATTR_RE(name), () => `${name}="${value}"`);
-  return tag.replace(/\s*\/?>$/, m => ` ${name}="${value}"${m.endsWith('/>') ? '/>' : '>'}`);
+  const v = escapeAttrValue(value);
+  if (attrValue(tag, name) !== null) return tag.replace(ATTR_RE(name), () => `${name}="${v}"`);
+  return tag.replace(/\s*\/?>$/, m => ` ${name}="${v}"${m.endsWith('/>') ? '/>' : '>'}`);
 }
 
 function addStyleDecl(tag, decl) {
@@ -675,9 +698,13 @@ function main() {
 
   if (OPEN) {
     const target = path.join(outDir, 'index.html');
-    const cmd = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', target]]
+    // 自己引用, 不依赖 Node 的"含空格才加引号"(2026-10-10 独立安全审计 M1): Windows 路径
+    // 允许含 & 而不含空格, 未被引用的 & 会让 cmd 起第二条命令 —— 实测 `&rem` 真的执行了。
+    // 引号由我们显式补上, cmd 在引号内不再解析 & | < > ^ 等元字符。
+    const q = t => `"${String(t).replace(/"/g, '""')}"`;
+    const cmd = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', q(target)]]
       : process.platform === 'darwin' ? ['open', [target]] : ['xdg-open', [target]];
-    spawn(cmd[0], cmd[1], { detached: true, stdio: 'ignore' }).unref();
+    spawn(cmd[0], cmd[1], { detached: true, stdio: 'ignore', windowsVerbatimArguments: process.platform === 'win32' }).unref();
     console.log('  已在浏览器打开(若没弹出, 手动双击上面的 index.html)');
   }
 }

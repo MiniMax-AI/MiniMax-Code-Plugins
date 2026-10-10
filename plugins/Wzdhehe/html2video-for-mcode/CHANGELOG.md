@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.9.18 — 2026-10-10
+
+**Independent security audit of the "parse and generate" dimension — the one the hosted review rounds never covered.** The auditor was barred from reading the earlier review records so as not to anchor; it reported 2 HIGH / 4 MEDIUM / 6 LOW. Every finding was reproduced on our own tree before acting, three of its claims did not survive that, and what it confirmed is fixed here.
+
+**HIGH — fixed**
+
+- **H1 · attribute injection in the play page (`preview-page.mjs`).** `setAttr` re-serialised a value it had just read out of a **single-quoted** attribute into double quotes **without escaping**, so an author's `<html class='x" onmouseover=window.FIRED=1 data-x='>` came back from `addNoFx` with a live event handler — and `X` (the animation toggle the docs push) is the trigger. Reproduced by calling the real function. Values are now HTML-escaped on the way out (`&` `"` `<` `>`); the same applies to `injectHtmlVars`'s `style` path. The regression test **parses attribute names** instead of searching for `on*=` text — after the fix the text legitimately lives inside the attribute value, so a text search would report a false red — and it carries a detector self-check (the unescaped shape must be recognised) so the pair cannot be green for free.
+- **H2 · SRT cue injection (`build-video.mjs`).** `clause` text was spliced into `out/subs.srt` verbatim, so a clause containing `\n\n99\n00:59:00,000 --> 01:00:00,000\n…` produced **more timecodes than cues** — forged cues in a file that gets uploaded to a platform. SRT generation moved to a single source, `tools.buildSrt`, which sanitises each line: bidi and C0/C1 control characters stripped, all whitespace runs folded to one space (so a cue is always one line), a residual inline `-->` turned into `→` because lenient parsers — ffmpeg's srt demuxer scans lines for timecodes — would otherwise still mis-read it. The invariant asserted is *line-anchored*: line-anchored timecode lines === cue count.
+
+**MEDIUM — fixed**
+
+- **M1 · `--open` could run a second command.** `spawn('cmd', ['/c','start','',target])` relied on Node quoting the target, and Node only quotes when the argument contains spaces or quotes — a Windows path may contain `&` without a space. Reproduced with a controlled origin: the second command really executed. The target is now quoted explicitly with `windowsVerbatimArguments`. The test runs both shapes and requires the unquoted one to still be exploitable, so it cannot pass for the wrong reason.
+- **M2 · `fx-*` classes were trusted by prefix.** `class="fx-notreal"` satisfied the data-stage rule while nothing animates, and a locally defined `.fx-mine` with a keyframe lacking `opacity` was never inspected (only `tokens.css` classes were). Both now check the slide's own `<style>` as well; a class with no animation declaration is named.
+- **M3 · HTML comments could stand in for a definition.** `<!-- --c-fake: 1 -->` satisfied the undefined-variable gate. Comments (closed and unterminated) are stripped before both the definition and the usage scan.
+- **M4 · external-resource gate had holes.** Only double-quoted `src|href="https://…"` was seen, so `<IMG SRC=https://…>`, protocol-relative `//host/x.png`, `@import url(…)` and `background:url(…)` all passed. The scan is now case-insensitive, covers unquoted values and `srcset`, and covers CSS regions — while deliberately **not** flagging links written as slide prose.
+
+**LOW — addressed**
+
+- **L1** the image gate claimed to prevent second-order escapes but compared lexically; it now also compares canonical paths when the file exists (junction under `slides/` no longer reads outside). **L2** Windows `cmd` expands `%VAR%` even inside quotes and cannot be escaped on a command line — the ASR path now refuses such paths with an actionable message instead of mangling them (the old comment understated this). **L3** `data-style`/`data-class` no longer shadow the real attributes, a `>` inside a quoted value no longer truncates the tag, and a decoy `<html>` inside a comment is no longer patched. **L4** control and bidi characters are stripped from transcript text before comparison, printing and `checklist.md`. **L5** `isBlockedHost` now catches the expanded IPv4-mapped form (`0:0:0:0:0:ffff:7f00:1`) that only `net.isIP()` recognised. **L6** ffmpeg's concat list cannot represent a quote inside a quoted path, so such paths now fail loudly via `tools.assertConcatPathSafe` instead of writing a silently broken list.
+
+**Reported, reproduced, refuted** — recorded so they are not re-litigated: the auditor's claim that `rmSync(recursive)` follows junctions into the project parent (it does not — the guards are load-bearing, as we had already established), its suggestion that the missing exact-head runs could be self-served (they cannot; base-repo admin approval returns 403), and the suspicion that our escape guards might not run at all (the junction matrices came back 10/10 blocked).
+
+**Tests +19 → 314 in sixteen files**, including a Windows-only behavioural test for M1 that requires the control case to still fail. Seven red-proofs: reverting each of the seven guards turns exactly its own case red, and every restore is byte-compared. One red-proof initially did **not** redden, which exposed dead code rather than a weak test — the sanitizer had a dedicated CRLF fold that the trailing whitespace collapse already subsumed; it was removed and the proof now pins the load-bearing step.
+
 ## 1.9.17 — 2026-10-10
 
 **Self-review round on the round-7 head (two-axis `/code-review`): the security findings were re-derived and one residual hardening landed; two reported findings did not survive reproduction and are recorded as such**

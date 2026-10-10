@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { XFADE_DEFAULT_DUR, flagValue, positionalDir, probeDuration as ffprobeDuration, probeSize as ffprobeDims, readTransition, requireFreshCss, requireTool, safeId, safeOut, safeRel, validateScriptPaths, validateTimingsIds } from './tools.mjs';
+import { XFADE_DEFAULT_DUR, assertConcatPathSafe, stripControlChars, buildSrt, flagValue, positionalDir, probeDuration as ffprobeDuration, probeSize as ffprobeDims, readTransition, requireFreshCss, requireTool, safeId, safeOut, safeRel, validateScriptPaths, validateTimingsIds } from './tools.mjs';
 
 const argv = process.argv.slice(2);
 const dir = positionalDir(argv);
@@ -254,7 +254,14 @@ if (TRANSITION.type === 'xfade' && segs.length > 1) {
   vd = probeDur(noaudio);
 } else {
   const listFile = safeOut(dir, 'build', 'concat.txt');
-  fs.writeFileSync(listFile, segs.map(s => `file '${abs(s).replace(/'/g, "'\\''")}'`).join('\n') + '\n');
+  // 守卫在 tools.assertConcatPathSafe(单源, 可单测): 见那里的 av_get_token 约定说明
+  try {
+    segs.forEach(s => assertConcatPathSafe(abs(s)));
+  } catch (e) {
+    console.error(`✗ ${e.message}`);
+    process.exit(1);
+  }
+  fs.writeFileSync(listFile, segs.map(s => `file '${abs(s)}'`).join('\n') + '\n');
   run(FFMPEG, ['-y', '-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', noaudio], '拼接(copy)');
   vd = probeDur(noaudio);
 }
@@ -381,27 +388,12 @@ for (const g of gates) console.log(`  ${g.ok ? '✓' : '✗'} ${g.msg}`);
 if (!okDur || !okDecode || gates.some(g => !g.ok)) process.exit(1);
 
 // ── 7. SRT 字幕文件(与烧录字幕同源同窗, 供平台上传用) ────────
-const srt = [];
-let srtIdx = 1, cum = 0;
-for (const t of timings.slides) {
-  if (Array.isArray(t.clauses)) {
-    for (let i = 0; i < t.clauses.length; i++) {
-      const c = t.clauses[i];
-      const start = cum + c.start;
-      const end = cum + (t.clauses[i + 1]?.start ?? t.duration);
-      if (end - start < 0.05) continue;
-      const fmt = s => {
-        const ms = Math.round((s % 1) * 1000), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60);
-        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
-      };
-      srt.push(`${srtIdx++}\n${fmt(start)} --> ${fmt(end)}\n${c.text}${c.text2 ? '\n' + c.text2 : ''}\n`);
-    }
-  }
-  cum += t.duration;
-}
-if (srt.length) {
-  fs.writeFileSync(safeOut(dir, 'out', 'subs.srt'), srt.join('\n'));
-  console.log(`  字幕 out/subs.srt (${srt.length} 条, 与画面烧录字幕同源)`);
+// 生成逻辑在 tools.buildSrt(单一来源): clause 文案是不可信输入, 换行会在成品里伪造成
+// 额外 cue —— 净化与编号都在那一处, 测试也能直接断言。
+const srt = buildSrt(timings);
+if (srt.count) {
+  fs.writeFileSync(safeOut(dir, 'out', 'subs.srt'), srt.text);
+  console.log(`  字幕 out/subs.srt (${srt.count} 条, 与画面烧录字幕同源)`);
 }
 
 // ── 8. ASR 按句切分 + 校验清单 ──────────────────────────────
@@ -419,20 +411,20 @@ if (WANT_ASR) {
     '不过关的 slide: 改口播或重做该段 TTS → 重跑 plan-timings → 删 build/frames/<id>/ 与 out/slide-<id>.mp4 后重建。', '',
     '| part | 全片时间 | 预期文本 | ASR 转写 | 通过? |', '|---|---|---|---|---|'];
   let count = 0;
-  cum = 0;
+  let asrCum = 0;                 // 全片时间轴在本段的累计起点(SRT 那份累计在 tools.buildSrt 里)
   for (const t of timings.slides) {
     const tid = safeId(t.id);
     const clauses = Array.isArray(t.clauses) && t.clauses.length ? t.clauses : [{ start: 0, text: t.script }];
     clauses.forEach((c, i) => {
       const end = t.clauses[i + 1]?.start ?? t.duration;
       const part = path.join(dir, 'asr', `part-${tid}-${i + 1}.mp3`);
-      run(FFMPEG, ['-y', '-ss', (cum + c.start).toFixed(3), '-t', (end - c.start).toFixed(3), '-i', audioWav,
+      run(FFMPEG, ['-y', '-ss', (asrCum + c.start).toFixed(3), '-t', (end - c.start).toFixed(3), '-i', audioWav,
         '-ac', '1', '-ar', '16000', '-c:a', 'libmp3lame', '-b:a', '128k', part], `ASR 切分 ${tid}-${i + 1}`);
       // 预期文本取发音形态(say ?? text): 音频里说的是 say; 显示形态(text)只进字幕/srt
-      lines.push(`| asr/part-${tid}-${i + 1}.mp3 | ${(cum + c.start).toFixed(1)}s | ${c.say ?? c.text} |  |  |`);
+      lines.push(`| asr/part-${tid}-${i + 1}.mp3 | ${(asrCum + c.start).toFixed(1)}s | ${stripControlChars(c.say ?? c.text)} |  |  |`);
       count++;
     });
-    cum += t.duration;
+    asrCum += t.duration;
   }
   fs.writeFileSync(safeOut(dir, 'asr', 'checklist.md'), lines.join('\n') + '\n');
   console.log(`  ASR 素材与清单已生成: asr/ (${count} 句, 每句独立切分)`);

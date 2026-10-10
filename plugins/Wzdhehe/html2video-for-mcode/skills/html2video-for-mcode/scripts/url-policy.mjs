@@ -69,6 +69,11 @@ export function isBlockedHost(hostname) {
     const embedded = (() => {
       let m = /^::ffff:(.+)$/.exec(h);
       if (m) return m[1];
+      // 展开写法 0:0:0:0:0:ffff:7f00:1 —— 同一台机器的 net.isIP() 认它是 IPv6(6),
+      // 而它不以 ::ffff: 开头, 旧写法整条漏判(2026-10-10 审计 L5; 目前经 new URL() 规范化
+      // 后不可达, 属于潜伏缺陷, 但这是安全函数, 补上更便宜)。
+      m = /^(?:0*:)*ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(h);
+      if (m) return `${m[1]}:${m[2]}`;
       m = /^64:ff9b::(.+)$/.exec(h);
       if (m) return m[1];
       m = /^2002:([0-9a-f]{1,4}):([0-9a-f]{1,4})/.exec(h);

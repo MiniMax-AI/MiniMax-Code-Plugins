@@ -21,7 +21,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { flagValue, positionals, probeDuration, requireTool, safeId, safeOut, validateTimingsIds } from './tools.mjs';
+import { flagValue, positionals, probeDuration, requireTool, safeId, safeOut, stripControlChars, validateTimingsIds } from './tools.mjs';
 import { assertAsrEndpoint, PolicyError } from './url-policy.mjs';
 
 const argv = process.argv.slice(2);
@@ -71,6 +71,16 @@ const mmxRun = (args, opts = {}) => {
   delete env.MINIMAX_API_KEY;
   delete env.MINIMAX_BASE_URL;
   const common = { encoding: 'utf8', windowsHide: true, ...opts, env };
+  if (IS_WIN) {
+    // Windows 上必须经 cmd(mmx 是 npm 的 .cmd shim, Node 不允许无 shell 执行 .cmd)。
+    // **双引号拦不住 cmd 的 %VAR% 展开** —— 引号内的 %NAME% 照样展开, 变量值里若带 "
+    // 还能把整条命令拆开(2026-10-10 独立审计 L2; 旧注释把它说成"错路径、响亮失败", 说轻了)。
+    // 命令行层面没有可用的转义手段, 所以 fail closed: 明确拒绝并给出可执行的提示。
+    const bad = args.find(a => /%/.test(String(a)));
+    if (bad) {
+      return { status: 1, stdout: '', stderr: `参数里不能有 % (Windows cmd 会在引号内展开 %VAR%, 无法安全转义): ${bad}\n   请把项目目录或文件名里的 % 去掉再重跑` };
+    }
+  }
   return IS_WIN
     ? spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', ['mmx', ...args].map(a => /[\s"&|<>^()%]/.test(a) ? `"${a.replace(/"/g, '""')}"` : a).join(' ')], common)
     : spawnSync('mmx', args, common);
@@ -296,6 +306,9 @@ for (const p of parts) {
   const f = path.join(asrDir, p);
   try {
     const r = FROM ? { text: fromLookup(p) ?? '' } : await transcribe(f, { language: useLang });
+    // 转写文本来自不可信音频内容: 控制字节能改终端标题/染色, bidi 覆盖能让比对与阅读都被骗
+    // (2026-10-10 审计 L4)。判定的输入用净化后的文本, 写回与打印也用它。
+    r.text = stripControlChars(r.text);
     const rowRe = new RegExp(`\\|\\s*asr/${p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\|([^|]*)\\|([^|]*)\\|([^|]*)\\|([^|]*)\\|`);
     const mm = ck.match(rowRe);
     const expected = mm ? mm[2].trim() : '';

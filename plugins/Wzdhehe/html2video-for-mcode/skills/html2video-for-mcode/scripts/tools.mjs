@@ -307,6 +307,74 @@ export function subtitleKeyframes(clauses, duration) {
   }).join('');
 }
 
+// 控制字符与双向覆盖字符剔除(2026-10-10 审计 L4): 字幕/转写文本来自不可信输入,
+// OSC/ANSI 控制序列能把终端染色改标题, bidi 覆盖能让"IMDb"之类显示成别的词。
+// 注意: **不**动普通空格与制表, 也不做大小写或符号改写 —— 只剔掉不可见控制面。
+export function stripControlChars(s) {
+  return String(s ?? '')
+    .replace(/[\u202a-\u202e\u2066-\u2069\u200e\u200f\u202c\u202d\u202e]/g, '')
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, '')
+    .replace(/\r\n?/g, '\n');
+}
+
+// ffmpeg concat 列表的路径守卫(2026-10-10 审计 L6): concat 解复用器用 av_get_token 读条目,
+// 单引号里**放不下**一个单引号, shell 风格的 '\'' 在这里不是转义 —— 路径被悄悄改坏比报错更糟。
+// 路径 = 用户自选项目目录 + 受监 id, 撞上就明确失败, 不产出被改坏的列表文件。
+export function assertConcatPathSafe(p, { where = 'concat 列表' } = {}) {
+  const s = String(p);
+  if (/['\r\n]/.test(s)) {
+    throw new Error(`${where}: 路径里不能有单引号或换行(ffmpeg concat 列表无法安全表示): ${s}\n   请把项目目录或文件名里的 ' 去掉, 或在 script.json 里改用 transition:"xfade"`);
+  }
+  return s;
+}
+
+// ── 字幕文本净化 + SRT 生成(单一来源, 2026-10-10 独立安全审计 H2/L4) ──
+// clause 文案是**不可信输入**, 而 out/subs.srt 是要上传给平台的成品: 文本里带换行就能
+// 伪造成额外的 cue/时间码(实测 2 条 clause 产出 3 个时间码, 伪造块随视频上屏), 控制字符
+// 与 bidi 覆盖字符还能污染播放器/清单的显示。
+// 规则(**承重的一步是最后那条空白折叠** —— JS 的 \s 含 \r \n \u2028 \u2029, 所以换行/CR/
+// 段分隔符都在这一步被折成空格, cue 必然单行): bidi 与控制字符剔除、行内 "-->" 中和、限长。
+// 烧录字幕那条路不需要同一套处理: 那里的文本经 DOM textContent 写入, 没有任何标记语义。
+export function sanitizeCaptionText(s, { maxLen = 400 } = {}) {
+  return String(s ?? '')
+    .replace(/[\u202a-\u202e\u2066-\u2069\u200e\u200f]/g, '')
+    // 行内残留的 "-->" 也要中和: 结构已经安全, 但宽松的 SRT 解析器(ffmpeg 的 srt
+    // demuxer 会**扫行**找时间码)可能把正文里的时间码样式当新 cue 起点。
+    // 字幕几乎不需要字面 "-->", 换成箭头语义不变、歧义消失。
+    .replace(/-->/g, '→')
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLen);
+}
+
+const srtTime = s => {
+  const ms = Math.round((s % 1) * 1000), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60);
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
+};
+
+// timings.json → SRT 正文。测试直接调它, 所以**别**在这里做 CLI 副作用。
+export function buildSrt(timings) {
+  const cues = [];
+  let idx = 1, cum = 0;
+  for (const t of timings?.slides ?? []) {
+    if (Array.isArray(t.clauses)) {
+      for (let i = 0; i < t.clauses.length; i++) {
+        const c = t.clauses[i];
+        const start = cum + c.start;
+        const end = cum + (t.clauses[i + 1]?.start ?? t.duration);
+        const main = sanitizeCaptionText(c.text);
+        const second = sanitizeCaptionText(c.text2);
+        if (!main && !second) continue;
+        if (end - start < 0.05) continue;
+        cues.push(`${idx++}\n${srtTime(start)} --> ${srtTime(end)}\n${main}${second ? '\n' + second : ''}\n`);
+      }
+    }
+    cum += t.duration;
+  }
+  return { text: cues.join('\n'), count: cues.length };
+}
+
 // ── 路径规范化(比较用) ─────────────────────────────────────────────────
 // 取最深已存在祖先的 realpath 再拼回来: macOS 上 /var/... 与 /private/var/... 是同一目录的两种
 // 写法, 纯字符串比较会把"项目内的合法路径"误判成越界(二审 P2 在官方 CI 的 macOS 上实测踩到)。

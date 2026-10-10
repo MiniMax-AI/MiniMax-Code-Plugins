@@ -27,7 +27,7 @@
 //      提醒确认领域与免责口径(见 references/compliance.md); 用户明确不要免责时可忽略
 import fs from 'node:fs';
 import path from 'node:path';
-import { expectedTokens, flagValue, inside, positionalDir, readTransition, safeId, safeRel, subBandTop } from './tools.mjs';
+import { canonicalPath, expectedTokens, flagValue, inside, positionalDir, readTransition, safeId, safeRel, subBandTop } from './tools.mjs';
 import { kitStatuses } from './css-kit.mjs';
 import { MAX_SCAN_BYTES } from './limits.mjs';   // 对 tokens.css 与 HTML 都生效, 单一来源(见 limits.mjs)
 
@@ -107,24 +107,43 @@ for (const s of slides) {
     errors++;
     continue;
   }
-  const localDefs = new Set([...html.matchAll(/(--[\w-]+)\s*:/g)].map(m => m[1]));
+  // 注释不是代码: 注释里的 `--x:` 曾经能顶替变量定义、注释里的 var() 又会变成"用到它"的
+  // 假需求(2026-10-10 审计 M3: `<!-- --c-fake: 1 -->` + `var(--c-fake)` 能让未定义检查全绿)。
+  // 未闭合的 `<!--` 也要兜住, 否则尾部整段注释仍会被扫。
+  const htmlCode = html.replace(/<!--[\s\S]*?-->/g, ' ').replace(/<!--[\s\S]*$/, ' ');
+  const localDefs = new Set([...htmlCode.matchAll(/(--[\w-]+)\s*:/g)].map(m => m[1]));
   deckText.push({ id: s.id, text: html.replace(/<[^>]*>/g, ' ') });
 
+  // 本张的 CSS 区域(<style> 块 + style 属性), 供 fx 类与外链两处检查共用
+  const cssRegions = [
+    ...[...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)].map(m => m[1]),
+    ...[...html.matchAll(/(?<![-\w])style\s*=\s*(?:"([^"]*)"|'([^']*)')/gi)].map(m => m[1] ?? m[2] ?? ''),
+  ].join('\n');
+  const localFx = fxClassKeyframes(cssRegions);
+  const localKfOpacity = opacityAwareKeyframes(cssRegions);
+
   // 1. 未定义变量(只报没有 fallback 的)
-  for (const m of html.matchAll(/var\(\s*(--[\w-]+)\s*(,)?/g)) {
+  for (const m of htmlCode.matchAll(/var\(\s*(--[\w-]+)\s*(,)?/g)) {
     const name = m[1], hasFallback = !!m[2];
     if (hasFallback || defined.has(name) || localDefs.has(name) || RUNTIME_VARS.has(name)) continue;
     report.push({ id: s.id, level: 'error', msg: `变量 ${name} 未定义且无 fallback → 该声明会失效(文字可能直接隐形)` });
     errors++;
   }
 
-  // 2. 图片: 文件必须存在; SVG 建议 inline(引用必须落在项目目录内, 防二阶越界读)
+  // 2. 图片: 文件必须存在; SVG 建议 inline。除词法判定外, 已存在的文件再按**真实路径**比一次 ——
+  //    纯词法 inside() 挡不住"slides/ 下的目录段是 junction/符号链接"这种二阶越界读(词法上
+  //    引用还在项目里, 真实路径已经在项目外)。2026-10-10 审计 L1: 旧注释声称防了二阶, 实际没防。
   for (const m of html.matchAll(/<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/g)) {
     const src = m[1];
     if (/^(https?:)?\/\//.test(src) || src.startsWith('data:')) continue; // 外链单独在下面报
     const resolved = path.resolve(path.dirname(file), src);
     if (path.isAbsolute(src) || !inside(dir, resolved)) {
       report.push({ id: s.id, level: 'error', msg: `图片引用越出项目目录: ${src} — 素材必须先落 assets/ 再引用` });
+      errors++;
+      continue;
+    }
+    if (fs.existsSync(resolved) && !inside(canonicalPath(dir), canonicalPath(resolved))) {
+      report.push({ id: s.id, level: 'error', msg: `图片引用经链接指向项目外: ${src} — 真实路径已越出项目目录(素材必须先落 assets/ 再引用)` });
       errors++;
       continue;
     }
@@ -145,30 +164,57 @@ for (const s of slides) {
     warns++;
   }
 
-  // 4. 外链资源
-  for (const m of html.matchAll(/(?:src|href)\s*=\s*["'](https?:\/\/[^"']+)["']/g)) {
-    report.push({ id: s.id, level: 'error', msg: `外链资源: ${m[1].slice(0, 60)} — 离线沙箱取不到, 且字体会 FOUT` });
+  // 4. 外链资源(2026-10-10 审计 M4 收紧)。旧规则只认 `src|href="https://…"` 的双引号形式,
+  //    于是大写 SRC=、未加引号、协议相对 //host/x.png、以及 CSS 里的 @import/url(...) 全部漏过。
+  //    只在**属性**与**CSS 区域**里找, 散文里的可见 URL 不算(幻灯片正文本来就常写链接)。
+  const isRemote = v => /^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(v) || /^file:/i.test(v);
+  for (const m of html.matchAll(/(?<![-\w])(?:src|href|poster|data-src|data-href|srcset)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`]+))/gi)) {
+    const raw = m[1] ?? m[2] ?? m[3] ?? '';
+    for (const piece of raw.split(/\s*,\s*/)) {
+      if (!piece || !isRemote(piece)) continue;
+      report.push({ id: s.id, level: 'error', msg: `外链资源: ${piece.slice(0, 60)} — 离线沙箱取不到, 且字体会 FOUT` });
+      errors++;
+      break;
+    }
+  }
+  for (const m of cssRegions.matchAll(/(?:url\(\s*['"]?|@import\s+['"])([^'")\s]+)/gi)) {
+    if (!isRemote(m[1])) continue;
+    report.push({ id: s.id, level: 'error', msg: `CSS 外链: ${m[1].slice(0, 60)}(@import / url()) — 离线沙箱取不到` });
     errors++;
   }
 
   // 5. data-stage 没配 fx-* 类(容器/子元素都一样: stagger 规则带 :not([data-stage]), 不再兜底)
-  for (const m of html.matchAll(/<[^>]*\bdata-stage\s*=\s*["'][^"']*["'][^>]*>/g)) {
+  for (const m of html.matchAll(/<[^>]*\bdata-stage\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'<>`]+)[^>]*>/gi)) {
     const tag = m[0];
-    if (/class\s*=\s*["'][^"']*\bfx-/.test(tag)) continue;
-    report.push({ id: s.id, level: 'warn', msg: `有 data-stage 但没有 fx-* 类: ${tag.slice(0, 70)}… — 元素会永远停在 opacity:0(.fx-stagger 不兜底带 data-stage 的元素; 给它配一个 fx-up/fx-fade, 或去掉 data-stage 让 stagger 管)` });
-    warns++;
+    const cls = /(?<![-\w])class\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`]+))/i.exec(tag);
+    const list = cls ? (cls[1] ?? cls[2] ?? cls[3] ?? '').split(/\s+/).filter(Boolean) : [];
+    const fx = list.filter(x => x.startsWith('fx-'));
+    if (!fx.length) {
+      report.push({ id: s.id, level: 'warn', msg: `有 data-stage 但没有 fx-* 类: ${tag.slice(0, 70)}… — 元素会永远停在 opacity:0(.fx-stagger 不兜底带 data-stage 的元素; 给它配一个 fx-up/fx-fade, 或去掉 data-stage 让 stagger 管)` });
+      warns++;
+      continue;
+    }
+    // 只认"真有动画声明"的 fx 类(2026-10-10 审计 M2): class="fx-notreal" 这类只借前缀就能
+    // 过关, 元素其实不会动 —— 于是 data-stage 的入场时刻是空的。
+    const declared = fx.filter(c => c === 'fx-stagger' || fxKeyframes.has(c) || localFx.has(c));
+    if (!declared.length) {
+      report.push({ id: s.id, level: 'warn', msg: `fx 类没有对应动画声明: ${fx.map(c => '.' + c).join(' .')} — 元素不会动(data-stage 的入场时刻是空的); 补 @keyframes/animation, 或改用 tokens.css 里已有的 fx-* 类` });
+      warns++;
+    }
   }
 
   // 5b. fx 类的关键帧不改 opacity → 基础态 opacity:0 抬不回来, 元素永远隐形
-  for (const m of html.matchAll(/<[^>]*\bdata-stage\s*=\s*["'][^"']*["'][^>]*>/g)) {
+  for (const m of html.matchAll(/<[^>]*\bdata-stage\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'<>`]+)[^>]*>/gi)) {
     const tag = m[0];
-    const cls = /class\s*=\s*["']([^"']*)["']/.exec(tag);
+    const cls = /(?<![-\w])class\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`]+))/i.exec(tag);
     if (!cls) continue;
-    if (/\bfx-stagger\b/.test(cls[1])) continue;
-    for (const c of cls[1].split(/\s+/).filter(x => x.startsWith('fx-'))) {
-      const kf = fxKeyframes.get(c);
-      if (!kf) continue;                       // 未在 tokens.css 定义(环境类/氛围类), 交给别的检查
-      const aware = kfOpacity.get(kf);
+    const list = (cls[1] ?? cls[2] ?? cls[3] ?? '').split(/\s+/).filter(Boolean);
+    if (list.includes('fx-stagger')) continue;
+    for (const c of list.filter(x => x.startsWith('fx-'))) {
+      // tokens.css 与**本张 CSS** 都要查(旧实现只看 tokens.css, 本地自定义 fx 类整体漏检)
+      const kf = fxKeyframes.get(c) ?? localFx.get(c);
+      if (!kf) continue;
+      const aware = (kfOpacity.get(kf) ?? localKfOpacity.get(kf));
       if (aware === false) {
         report.push({ id: s.id, level: 'error', msg: `.${c} 的关键帧 ${kf} 没声明 opacity, 而 [data-stage] 基础态是 opacity:0 → 该元素入场后永远不可见; 在关键帧里补 opacity:1` });
         errors++;
