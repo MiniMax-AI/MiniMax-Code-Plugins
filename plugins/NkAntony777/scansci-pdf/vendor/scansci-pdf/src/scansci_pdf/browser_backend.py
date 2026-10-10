@@ -337,14 +337,23 @@ def _bundled_chromium_kwargs(driver: Any, config: dict[str, Any] | None) -> dict
 def _patchright_launch_attempts(config: dict[str, Any] | None, driver: Any) -> list[dict[str, Any]]:
     """Every launch attempt, each with a gate-verified ``executable_path``.
 
-    A resolution failure raises instead of falling through: refusing a binary
-    and silently starting a different one would hide the refusal.
+    A refusal of an installed local browser still raises: silently starting a
+    different binary would hide that decision. A missing bundled Chromium, or
+    one the gate rejects, does not discard a local browser that already passed.
     """
+    from .security import SecurityError
+
     attempts: list[dict[str, Any]] = []
     local = _patchright_browser_kwargs(config)
     if local:
         attempts.append(local)
-    attempts.append(_bundled_chromium_kwargs(driver, config))
+    try:
+        attempts.append(_bundled_chromium_kwargs(driver, config))
+    except SecurityError:
+        if not attempts:
+            raise
+    if not attempts:
+        raise SecurityError("No verified browser executable is available")
     return attempts
 
 

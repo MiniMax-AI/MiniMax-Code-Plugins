@@ -119,16 +119,21 @@ def _system_roots() -> tuple[str, ...]:
 
 
 def _per_user_roots() -> tuple[str, ...]:
-    """Roots that are user-writable: acceptable only with a pinned digest."""
+    """Roots that are user-writable: acceptable only with a pinned digest.
+
+    ``Program Files`` is an administrator-writable system location and stays
+    on the system allowlist, which does not require a digest. Only the
+    per-user profile (``LOCALAPPDATA``) is treated as writable at runtime.
+    """
     if os.name != "nt":
         return ()
-    roots = []
-    for variable in ("LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)"):
-        base = os.environ.get(variable, "")
-        if base:
-            roots.append(os.path.join(base, "Google", "Chrome"))
-            roots.append(os.path.join(base, "Microsoft", "Edge"))
-    return tuple(roots)
+    base = os.environ.get("LOCALAPPDATA", "")
+    if not base:
+        return ()
+    return (
+        os.path.join(base, "Google", "Chrome"),
+        os.path.join(base, "Microsoft", "Edge"),
+    )
 
 
 def _under(path: Path, root: Path) -> bool:

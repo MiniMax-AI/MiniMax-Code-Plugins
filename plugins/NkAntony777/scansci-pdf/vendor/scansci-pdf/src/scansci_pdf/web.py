@@ -52,24 +52,14 @@ TOKEN_CONFIG_KEY = "web_token"
 _TOKEN_BYTES = 32
 _generated_token = ""
 # The token is handed over once, as an HttpOnly cookie, and never rendered into
-# the page. It must not travel in the query string: uvicorn's access log
-# records the full request target, and a URL also leaks through history and
-# Referer. It must not be readable by page JavaScript either, so the Tailwind
-# and Alpine scripts this template loads from a CDN cannot lift it and call
-# the local API on the user's behalf.
+# the page. Page scripts are inline and nonce-bound. No third-party script is
+# allowed to run on this origin: a CDN script could set X-Requested-With and
+# call the API with the cookie even though it cannot read the cookie.
 _AUTH_COOKIE = "scansci_token"
-# Restrictive default: no framing, no cross-origin anything, no plugin
-# content. script-src additionally allows the two CDNs the shipped template
-# uses; scripts they inject are same-origin from the browser's perspective.
-_CSP = (
-    "default-src 'self'; "
-    "script-src 'self' https://cdn.tailwindcss.com https://cdn.jsdelivr.net; "
-    "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; "
-    "img-src 'self' data:; "
-    "connect-src 'self'; "
-    "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
-)
-_AUTH_SHIM = """<script>
+_NONCE_SLOT = "__CSP_NONCE__"
+# API and other non-document responses. The HTML route sets its own nonce CSP.
+_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+_AUTH_SHIM = """<script nonce="__CSP_NONCE__">
 (function () {
   // The bearer token lives in an HttpOnly cookie; JavaScript cannot read it.
   // Requests are same-origin, so the cookie authenticates them; the custom
@@ -124,11 +114,26 @@ def require_csrf(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Missing X-Requested-With header")
 
 
-def _auth_page(html_text: str) -> str:
-    """Inject the fetch shim. No token is rendered into the page."""
+def _page_csp(nonce: str) -> str:
+    """CSP for the document. Only the nonce-bearing inline scripts may run."""
+    return (
+        "default-src 'none'; "
+        f"script-src 'nonce-{nonce}'; "
+        "style-src 'unsafe-inline'; "
+        "img-src 'none'; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+    )
+
+
+def _auth_page(html_text: str, nonce: str) -> str:
+    """Inject the fetch shim and stamp the page nonce. No token is rendered."""
+    shim = _AUTH_SHIM.replace(_NONCE_SLOT, nonce)
     if "</head>" in html_text:
-        return html_text.replace("</head>", _AUTH_SHIM + "</head>", 1)
-    return _AUTH_SHIM + html_text
+        page = html_text.replace("</head>", shim + "</head>", 1)
+    else:
+        page = shim + html_text
+    return page.replace(_NONCE_SLOT, nonce)
 
 
 # --- Security headers ---
@@ -233,8 +238,9 @@ def _check_sources(config: dict[str, Any]) -> dict[str, Any]:
 
 @app.get("/", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 async def index(request: Request):
+    nonce = secrets.token_urlsafe(16)
     page = templates.get_template("index.html").render({"request": request})
-    response = HTMLResponse(_auth_page(page))
+    response = HTMLResponse(_auth_page(page, nonce))
     # A ?t= link is a one-time handover: hand the token to an HttpOnly cookie
     # so later requests never repeat it in a URL that uvicorn logs.
     if request.query_params.get("t", "").strip():
@@ -247,7 +253,7 @@ async def index(request: Request):
         )
     response.headers["Cache-Control"] = "no-store"
     response.headers["Referrer-Policy"] = "no-referrer"
-    response.headers["Content-Security-Policy"] = _CSP
+    response.headers["Content-Security-Policy"] = _page_csp(nonce)
     return response
 
 

@@ -329,11 +329,12 @@ def setup_school(
     show: bool = typer.Option(False, "--show", help="Show current configuration"),
 ) -> None:
     """Configure institutional access (WebVPN/EZproxy/CARSI)."""
-    from .config import load_config, save_config
+    from .config import load_config, mask_config_value, save_config
 
     config = load_config()
 
     if show:
+        proxy = config.get("network_proxy", "") or ""
         print(f"  School:           {config.get('vpnsci_school', '(not set)')}")
         print(f"  WebVPN base URL:  {config.get('vpnsci_base_url', '(not set)')}")
         print(f"  EZproxy URL:      {config.get('ezproxy_login_url', '(not set)')}")
@@ -341,7 +342,7 @@ def setup_school(
         print(f"  CARSI IdP:        {config.get('carsi_idp_name', '(not set)')}")
         print(f"  Elsevier API key: {'set' if config.get('elsevier_api_key') else '(not set)'}")
         print(f"  Elsevier inst:    {'set' if config.get('elsevier_insttoken') else '(not set)'}")
-        print(f"  Proxy:            {config.get('network_proxy', '(not set)')}")
+        print(f"  Proxy:            {mask_config_value('network_proxy', proxy) if proxy else '(not set)'}")
         return
 
     if not school:

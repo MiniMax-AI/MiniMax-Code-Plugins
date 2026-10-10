@@ -393,6 +393,45 @@ def test_per_user_install_is_reachable_only_with_a_pinned_digest(tmp_path, monke
     assert browser_provenance.verify_browser_executable(binary, pinned) == Path(os.path.abspath(binary))
 
 
+def test_program_files_chrome_does_not_require_a_digest(tmp_path, monkeypatch):
+    """A system install under Program Files is not a per-user writable root."""
+    if os.name != "nt":
+        assert browser_provenance._per_user_roots() == ()
+        return
+    root = tmp_path / "Program Files" / "Google" / "Chrome"
+    binary = root / "Application" / "chrome.exe"
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"system chrome")
+    monkeypatch.setenv("PROGRAMFILES", str(tmp_path / "Program Files"))
+    monkeypatch.setenv("PROGRAMFILES(X86)", str(tmp_path / "Program Files (x86)"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+    monkeypatch.setattr(browser_provenance, "_system_roots", lambda: (str(root),))
+    monkeypatch.setattr(browser_provenance, "_cache_root", lambda: None)
+
+    assert browser_provenance.verify_browser_executable(binary, {}) == Path(os.path.abspath(binary))
+    roots = browser_provenance._per_user_roots()
+    assert all("Program Files" not in root for root in roots)
+    assert any(str(root).endswith(os.path.join("Local", "Google", "Chrome")) for root in roots)
+
+
+def test_bundled_refusal_keeps_a_verified_local_browser(allowlisted_root, tmp_path, monkeypatch):
+    """A rejected bundled Chromium must not discard Chrome that already passed."""
+    local = _binary(allowlisted_root)
+    stray = tmp_path / "ms-playwright" / "chrome.exe"
+    stray.parent.mkdir()
+    stray.write_bytes(b"unprovenanced bundle")
+    monkeypatch.setattr(browser_provenance, "_cache_root", lambda: None)
+    monkeypatch.setattr(browser_provenance, "_channel_candidates", lambda channel: (str(local),))
+
+    class _FakeDriver:
+        chromium = type("C", (), {"executable_path": str(stray)})()
+
+    from scansci_pdf import browser_backend
+
+    attempts = browser_backend._patchright_launch_attempts({}, _FakeDriver())
+    assert attempts == [{"executable_path": str(Path(os.path.abspath(local)))}]
+
+
 def test_per_user_install_digest_mismatch_is_rejected(tmp_path, monkeypatch):
     monkeypatch.setattr(browser_provenance, "_system_roots", lambda: ())
     monkeypatch.setattr(browser_provenance, "_per_user_roots", lambda: (str(tmp_path),))

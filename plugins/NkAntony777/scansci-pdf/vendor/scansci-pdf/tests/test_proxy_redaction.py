@@ -209,6 +209,20 @@ def test_failure_tips_keep_copy_pasteable_hint_without_credentials(monkeypatch):
 # Gap B: config display (`config-cmd --show`) and its setter echoes.
 # ---------------------------------------------------------------------------
 
+def test_setup_show_masks_proxy_password(monkeypatch, capsys):
+    """`scansci-pdf setup --show` is a separate CLI path from config-cmd."""
+    from scansci_pdf import config, main
+
+    monkeypatch.setattr(config, "load_config", lambda: {
+        "network_proxy": f"http://alice:{SECRET}@proxy.corp:8080",
+        "vpnsci_school": "Demo",
+    })
+    main.setup_school(school="", show=True)
+    out = capsys.readouterr().out
+    assert SECRET not in out
+    assert "http://alice:***@proxy.corp:8080" in out
+
+
 def test_config_cmd_show_masks_proxy_passwords(monkeypatch):
     """`config-cmd --show` must not echo network_proxy/browser_static_proxy raw."""
     from rich.console import Console

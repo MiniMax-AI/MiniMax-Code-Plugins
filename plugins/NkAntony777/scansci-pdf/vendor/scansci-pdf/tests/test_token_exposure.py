@@ -82,7 +82,15 @@ def test_web_page_never_renders_the_token_and_sets_a_csp(monkeypatch):
     assert response.status_code == 200
     body = response.text
     assert "unit-test-token-value" not in body, "token must not be readable by page JS"
+    assert "cdn.tailwindcss.com" not in body
+    assert "cdn.jsdelivr.net" not in body
+    policy = response.headers["Content-Security-Policy"]
     assert "Content-Security-Policy" in response.headers
+    assert "cdn." not in policy
+    assert "https://" not in policy
+    assert "'unsafe-inline'" not in policy.split("script-src", 1)[-1].split(";", 1)[0]
+    nonce = policy.split("script-src 'nonce-", 1)[1].split("'", 1)[0]
+    assert f'nonce="{nonce}"' in body
     assert response.headers["Referrer-Policy"] == "no-referrer"
     # ...and it is handed over as an HttpOnly cookie instead.
     cookies = response.headers.get_list("set-cookie")
