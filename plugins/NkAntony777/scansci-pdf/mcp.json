@@ -1,0 +1,14 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "scansci-pdf": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["${PLUGIN_ROOT}/vendor/scansci-pdf/run_secure.py", "run", "--mode", "stdio"],
+      "env": {
+        "PYTHONUTF8": "1",
+        "PYTHONNOUSERSITE": "1"
+      }
+    }
+  }
+}

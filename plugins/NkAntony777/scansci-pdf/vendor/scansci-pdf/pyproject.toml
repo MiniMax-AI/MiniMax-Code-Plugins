@@ -1,0 +1,54 @@
+[project]
+name = "scansci-pdf"
+version = "1.18.0.post1"
+description = "MCP server for academic paper downloading with Sci-Hub, OA sources, multi-university WebVPN, and Tor support"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.31",
+    "requests[socks]>=2.31",
+    "urllib3>=2.7.0",
+    "beautifulsoup4>=4.12",
+    "mcp[cli]>=1.12,<3.0",
+    "typer>=0.15",
+    "uvicorn>=0.34",
+    "fastapi>=0.115",
+    "jinja2>=3.1",
+    "pymupdf>=1.24",
+    "openpyxl>=3.1",
+    "pymupdf4llm>=0.0.17",
+    "pycryptodome>=3.20",
+    "packaging>=24,<27",
+]
+
+[project.optional-dependencies]
+fast = ["lxml>=4.9"]
+# vpnsci is the canonical extra (v1.7.0+). instsci is kept as a legacy alias
+# so existing `pip install scansci-pdf[instsci]` commands keep working.
+vpnsci = ["pycryptodome>=3.20"]
+instsci = ["pycryptodome>=3.20"]
+cloakbrowser = ["cloakbrowser>=0.5.9"]
+camoufox = ["camoufox[geoip]>=0.4.11"]
+web = ["fastapi>=0.115", "jinja2>=3.1"]
+patchright = ["patchright>=1.61"]
+dev = ["pytest>=8.0"]
+compile = ["cython>=3.0"]
+
+[project.scripts]
+scansci-pdf = "scansci_pdf.main:main"
+
+[build-system]
+requires = ["setuptools>=68.0", "pycryptodome>=3.20"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+scansci_pdf = ["data/*.json", "data/*.dat", "_core/*.pyd", "_core/*.so", "templates/*.html"]
+
+[tool.pytest.ini_options]
+# Manual network/browser scripts in the repo root (e.g. test_download_pnas.py)
+# must not be collected as tests.
+testpaths = ["tests"]

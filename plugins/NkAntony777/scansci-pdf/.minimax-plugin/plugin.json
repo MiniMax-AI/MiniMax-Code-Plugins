@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "name": "scansci-pdf",
+  "displayName": "ScanSci PDF 学术文献检索 / Academic Paper Retrieval",
+  "version": "1.18.0-minimax.1",
+  "description": "按 DOI、arXiv ID 或关键词查找并下载学术论文 PDF：单篇秒回、批量清单自动路由，支持引文导出与 Elsevier/WebVPN/CARSI 机构授权访问。 / Find and download academic paper PDFs by DOI, arXiv ID, or keywords: instant single-paper retrieval, automatic routing for batch lists, citation export, and user-authorized institutional access (Elsevier/WebVPN/CARSI).",
+  "author": "NkAntony777",
+  "icon": "icon.png",
+  "category": "Science & Healthcare",
+  "exampleQueries": [
+    "下载这篇论文的 PDF：doi:10.1038/s41586-021-03819-2 / Download the PDF for this paper: doi:10.1038/s41586-021-03819-2",
+    "把这个 300 篇的文献清单分类摸底：哪些 OA 可直接下、哪些灰色源有、哪些需要机构权限 / Triage this 300-paper list: which are open access, grey-source, or need institutional access",
+    "配置并测试 Elsevier ScienceDirect API 机构访问 / Set up and test Elsevier ScienceDirect API institutional access"
+  ],
+  "apps": [],
+  "mcpServers": ["mcp.json"],
+  "skills": [
+    "skills/scansci-pdf/SKILL.md",
+    "skills/scansci-sort/SKILL.md"
+  ]
+}

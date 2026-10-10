@@ -1,0 +1,10 @@
+Upstream project: https://github.com/Rimagination/scansci-pdf
+Upstream tag: v1.18.0
+Upstream commit: ec812f085f392a9b67768fbcad7ddeb340e0245f
+Fork patch: MiniMax hosted-plugin security and performance hardening
+Local engine patch commit: 703fb9e (fix/minimax-plugin-security; not published upstream)
+Engine version: 1.18.0.post1
+Plugin version: 1.18.0-minimax.1
+
+The vendor directory is source-only. No precompiled Cython extensions or downloaded
+executables are included. The MCP entrypoint uses vendor/scansci-pdf/run_secure.py.
