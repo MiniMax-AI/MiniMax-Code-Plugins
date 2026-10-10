@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/store.mjs';
 import { Engine } from '../src/engine.mjs';
-import { createToolHandler } from '../src/tools.mjs';
+import { createToolHandler, TOOLS } from '../src/tools.mjs';
 
 async function temporary(fn) {
   const dir = await mkdtemp(join(tmpdir(), 'wf-durability-'));
@@ -152,5 +152,65 @@ test('outer durable transaction rollback restores a nested progress flush', asyn
       assert.deepEqual(store.events('r').map(e => e.type), ['run.created', 'step.progress', 'run.finished']);
       assert.equal(store.verifyIntegrity().events.verified, true);
     } finally { store.close(); }
+  });
+});
+
+// The write reached SQLite but the caller still saw a failure afterwards. The
+// outcome is only knowable from the table, so a thrown error must not restore
+// rows that are already durable — that is what produced duplicate sequences and
+// the later UNIQUE constraint failure during close().
+test('after-COMMIT failure does not duplicate rows that already reached SQLite', async () => {
+  await temporary(async dir => {
+    const store = new Store(dir);
+    try {
+      store.event('r', 'run.created');
+      store.event('r', 'step.progress');
+      const second = store.event('r', 'step.progress');
+      // Commit lands durably, then the failure is reported to the caller.
+      const exec = store.db.exec.bind(store.db);
+      let once = true;
+      store.db.exec = sql => {
+        const result = exec(sql);
+        if (sql === 'COMMIT' && once) { once = false; throw new Error('injected post-commit failure'); }
+        return result;
+      };
+      assert.throws(() => store.flushVolatile(), /injected post-commit failure/);
+      store.db.exec = exec;
+      const rows = store.db.prepare('SELECT seq FROM events ORDER BY seq').all().map(r => r.seq);
+      assert.deepEqual(rows, [1, 2, 3]);
+      assert.deepEqual(store.events('r').map(e => e.seq), [1, 2, 3]);
+      assert.equal(store.volatileBuffer.filter(item => rows.includes(item.body.seq)).length, 0);
+      // A later flush must not hit UNIQUE constraint failed: events.seq.
+      assert.doesNotThrow(() => store.flushVolatile());
+      assert.doesNotThrow(() => store.close());
+      const reopened = new Store(dir);
+      try {
+        assert.deepEqual(reopened.events('r').map(e => e.seq), [1, 2, 3]);
+        assert.equal(reopened.verifyIntegrity().events.verified, true);
+      } finally { reopened.close(); }
+    } finally { store.close(); }
+  });
+});
+
+test('workflow_wait rejects cursors that would skip every future event', async () => {
+  await temporary(async dir => {
+    const store = new Store(dir);
+    const engine = new Engine(store, { workspace: dir });
+    try {
+      store.save({ id: 'cursor-run', requestId: 'cursor-run', requestHash: 'h', status: 'running', phases: [], script: 'return 1;', input: {}, executor: 'demo', workspace: dir });
+      engine.emitEvent('cursor-run', 'run.created');
+      store.flushVolatile();
+      const call = createToolHandler(engine, () => '');
+      const wait = schema => TOOLS.find(t => t.name === 'workflow_wait').inputSchema.properties[schema];
+      assert.equal(wait('afterSequence').maximum, Number.MAX_SAFE_INTEGER);
+      for (const cursor of [1e100, Number.MAX_SAFE_INTEGER + 1, Infinity, -1]) {
+        await assert.rejects(call('workflow_wait', { runId: 'cursor-run', afterSequence: cursor, timeoutMs: 0 }), /等待参数无效/);
+      }
+      const accepted = await call('workflow_wait', { runId: 'cursor-run', afterSequence: Number.MAX_SAFE_INTEGER, timeoutMs: 0 });
+      assert.equal(accepted.nextSequence, Number.MAX_SAFE_INTEGER);
+      engine.emitEvent('cursor-run', 'run.finished');
+      const live = await call('workflow_wait', { runId: 'cursor-run', afterSequence: 1, timeoutMs: 0 });
+      assert.equal(live.events.at(-1).type, 'run.finished');
+    } finally { await engine.close(); store.close(); }
   });
 });

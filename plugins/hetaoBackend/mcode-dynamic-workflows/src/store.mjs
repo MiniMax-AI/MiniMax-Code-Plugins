@@ -51,8 +51,31 @@ export class Store {
   }
   transaction(fn) {if(this.txDepth)return fn();this.reserveEventSequences();this.db.exec('BEGIN IMMEDIATE');this.txDepth=1;this.txVolatile=[];
     try{const r=fn();this.db.exec('COMMIT');return r;}
-    catch(e){this.db.exec('ROLLBACK');const restored=new Map([...this.txVolatile,...this.volatileBuffer].map(item=>[item.body.seq,item]));this.volatileBuffer=[...restored.values()].sort((a,b)=>a.body.seq-b.body.seq);if(this.volatileBuffer.length)this.scheduleVolatileFlush();throw e;}
+    catch(e){
+      // A committed transaction cannot be rolled back, so a failing ROLLBACK is
+      // the signal that COMMIT may already have reached the table. Only then is
+      // the events table consulted before re-queueing anything.
+      let open=true;
+      try{this.db.exec('ROLLBACK');}catch{open=false;}
+      this.restoreVolatile([...this.txVolatile,...this.volatileBuffer],!open);
+      throw e;}
     finally{this.txDepth=0;this.txVolatile=null;}}
+  // A COMMIT can fail after SQLite has already made the rows durable, so a
+  // thrown error is not evidence that the batch is absent. The events table —
+  // not the control flow — decides what still needs retrying: re-emitting an
+  // already persisted row duplicates its sequence number and later fails the
+  // events.seq primary key during close(). Keyed merge keeps one row per seq.
+  // Inside an enclosing transaction the probe is skipped: those rows are only
+  // visible, not committed, and the outer ROLLBACK would silently drop them.
+  restoreVolatile(items,probe=!this.txDepth){
+    if(!items.length)return;
+    const exists=probe?this.db.prepare('SELECT 1 AS present FROM events WHERE seq=?'):null;
+    const restored=new Map([...items,...this.volatileBuffer]
+      .filter(item=>!exists?.get(item.body.seq))
+      .map(item=>[item.body.seq,item]));
+    this.volatileBuffer=[...restored.values()].sort((a,b)=>a.body.seq-b.body.seq);
+    if(this.volatileBuffer.length)this.scheduleVolatileFlush();
+  }
   reserveEventSequences() {
     const persisted=Number(this.db.prepare("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='events'),0) AS seq").get().seq);
     this.nextEventSequence=Math.max(this.nextEventSequence,persisted);
@@ -117,7 +140,12 @@ export class Store {
       this.transaction(()=>{const ins=this.db.prepare('INSERT INTO events(seq,runId,body) VALUES(?,?,?)');
         for(const {runId,body} of batch){ins.run(body.seq,runId,JSON.stringify(body));
           this.chainAdvance('event','events','SELECT seq AS pos,runId,body FROM events WHERE seq>? AND seq<=? ORDER BY seq',body.seq,r=>`${r.runId}:${r.pos}`);}});
-    }catch(error){this.volatileBuffer=[...batch,...this.volatileBuffer];this.scheduleVolatileFlush();throw error;}
+    }catch(error){
+      // transaction() already reconciled the ambiguous case; re-check the table
+      // here so a batch whose rows did reach SQLite is never re-emitted.
+      this.restoreVolatile(batch,this.txDepth?false:undefined);
+      this.scheduleVolatileFlush();
+      throw error;}
   }
   events(runId,after=0,limit=150) {
     const persisted=this.db.prepare('SELECT seq,body FROM events WHERE runId=? AND seq>? ORDER BY seq LIMIT ?').all(runId,after,limit).map(e=>({seq:e.seq,...JSON.parse(e.body)}));

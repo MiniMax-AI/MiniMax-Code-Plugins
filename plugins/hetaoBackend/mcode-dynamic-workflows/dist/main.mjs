@@ -7784,15 +7784,32 @@ var Store = class {
       this.db.exec("COMMIT");
       return r;
     } catch (e) {
-      this.db.exec("ROLLBACK");
-      const restored = new Map([...this.txVolatile, ...this.volatileBuffer].map((item) => [item.body.seq, item]));
-      this.volatileBuffer = [...restored.values()].sort((a, b2) => a.body.seq - b2.body.seq);
-      if (this.volatileBuffer.length) this.scheduleVolatileFlush();
+      let open4 = true;
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        open4 = false;
+      }
+      this.restoreVolatile([...this.txVolatile, ...this.volatileBuffer], !open4);
       throw e;
     } finally {
       this.txDepth = 0;
       this.txVolatile = null;
     }
+  }
+  // A COMMIT can fail after SQLite has already made the rows durable, so a
+  // thrown error is not evidence that the batch is absent. The events table —
+  // not the control flow — decides what still needs retrying: re-emitting an
+  // already persisted row duplicates its sequence number and later fails the
+  // events.seq primary key during close(). Keyed merge keeps one row per seq.
+  // Inside an enclosing transaction the probe is skipped: those rows are only
+  // visible, not committed, and the outer ROLLBACK would silently drop them.
+  restoreVolatile(items, probe = !this.txDepth) {
+    if (!items.length) return;
+    const exists = probe ? this.db.prepare("SELECT 1 AS present FROM events WHERE seq=?") : null;
+    const restored = new Map([...items, ...this.volatileBuffer].filter((item) => !exists?.get(item.body.seq)).map((item) => [item.body.seq, item]));
+    this.volatileBuffer = [...restored.values()].sort((a, b2) => a.body.seq - b2.body.seq);
+    if (this.volatileBuffer.length) this.scheduleVolatileFlush();
   }
   reserveEventSequences() {
     const persisted = Number(this.db.prepare("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='events'),0) AS seq").get().seq);
@@ -7926,7 +7943,7 @@ var Store = class {
         }
       });
     } catch (error2) {
-      this.volatileBuffer = [...batch, ...this.volatileBuffer];
+      this.restoreVolatile(batch, this.txDepth ? false : void 0);
       this.scheduleVolatileFlush();
       throw error2;
     }
@@ -26658,7 +26675,7 @@ var TOOLS = [
   { name: "workflow_repair", description: "\u57FA\u4E8E\u505C\u6B62\u540E\u7684\u8FD0\u884C\u521B\u5EFA\u4FEE\u590D\u8349\u7A3F\uFF0C\u4FDD\u7559\u6E90\u8FD0\u884C\uFF1B\u63D0\u4F9B\u5B8C\u6574\u4FEE\u590D\u811A\u672C\u3001\u5931\u8D25\u539F\u56E0\u4E0E sourceUpdatedAt\u3002\u663E\u5F0F reuseStepIds \u4EC5\u9009\u62E9\u786E\u8BA4\u4ECD\u9002\u7528\u7684\u6210\u529F\u8282\u70B9\uFF0C\u9ED8\u8BA4\u4E0D\u590D\u7528\u3002\u8FD0\u884C\u65F6\u91CD\u65B0\u6821\u9A8C\u8F93\u5165\u3001\u6587\u4EF6\u3001\u53C2\u6570\u4E0E\u4F9D\u8D56\uFF1B\u53D8\u66F4\u6216\u91CD\u8DD1\u7684\u4E0A\u6E38\u4F7F\u4E0B\u6E38\u5931\u6548\u3002\u5FC5\u987B\u6253\u5F00\u9762\u677F\u4EA4\u7528\u6237\u5BA1\u6838\u540E\u5F00\u59CB\uFF0C\u4E0D\u80FD\u81EA\u52A8\u6267\u884C\u3002", inputSchema: obj({ ...id, requestId: string3, sourceUpdatedAt: { type: "integer" }, script: string3, reason: { type: "string", maxLength: 2e3 }, reuseStepIds: { type: "array", items: string3, maxItems: 100, uniqueItems: true }, input: { type: "object" }, ...LIMIT_SCHEMAS, maxCalls: { type: "integer", minimum: 1, maximum: 100 } }, ["runId", "requestId", "sourceUpdatedAt", "script", "reason"]) },
   { name: "workflow_status", description: "\u8BFB\u53D6\u8FD0\u884C\u72B6\u6001\u3001\u9636\u6BB5\u548C\u8282\u70B9\uFF1B\u8F93\u51FA\u4E0D\u542B\u5B8C\u6574 prompt/result\u3002\u65E0 runId \u65F6\u5217\u51FA\u6700\u8FD1\u8FD0\u884C\uFF0C\u9ED8\u8BA4\u8FD4\u56DE\u6570\u7EC4\uFF08\u65E2\u6709\u5F62\u72B6\u4E0D\u53D8\uFF09\u3002verifyIntegrity:true \u65F6\u6539\u8FD4 {runs,integrityHeads,integrity} \u5BF9\u8C61\u5F62\u5E76\u5168\u91CF\u91CD\u7B97\u4E24\u6761\u5B8C\u6574\u6027\u94FE\uFF1B\u6821\u9A8C\u8986\u76D6\u5DF2\u951A\u5B9A\u524D\u7F00\uFF0C\u4EFB\u4F55\u672A\u951A\u5B9A\u884C fail-closed\uFF08unchained>0 \u5373 verified:false\uFF09\u3002\u5B8C\u6574\u6027\u662F\u5E93\u5185\u7BE1\u6539\u8BC1\u636E\u4FE1\u53F7\uFF0C\u4E0D\u662F\u5BF9\u6297\u80FD\u91CD\u5199\u6574\u5E93\u8005\u7684\u4FE1\u4EFB\u951A\u3002", inputSchema: obj({ ...id, verifyIntegrity: { type: "boolean", description: "\u5168\u91CF\u91CD\u7B97\u5B8C\u6574\u6027\u94FE\uFF0C\u8FD4\u56DE {runs,integrityHeads,integrity} \u5BF9\u8C61\u5F62\uFF08\u9ED8\u8BA4\u4E3A\u7EAF\u6570\u7EC4\uFF09" } }) },
   { name: "workflow_results", description: "\u5206\u9875\u8BFB\u53D6\u8282\u70B9\u7ED3\u679C\uFF1B\u7EC8\u6001\u62A5\u544A\u4E0E\u5931\u8D25\u660E\u786E\u5206\u5F00\u3002", inputSchema: obj({ ...id, includeDefinition: { type: "boolean" }, offset: { type: "integer", minimum: 0 }, limit: { type: "integer", minimum: 1, maximum: 20 } }, ["runId"]) },
-  { name: "workflow_wait", description: "\u6309\u4E8B\u4EF6\u6E38\u6807\u7B49\u5F85\u53D8\u5316\uFF0C\u6700\u957F25\u79D2\u3002\u9700\u8981\u7EE7\u7EED\u5173\u6CE8\u65F6\u4F7F\u7528\u8FD4\u56DE\u7684nextSequence\u3002", inputSchema: obj({ ...id, afterSequence: { type: "integer", minimum: 0 }, timeoutMs: { type: "integer", minimum: 0, maximum: 25e3 } }, ["runId"]) },
+  { name: "workflow_wait", description: "\u6309\u4E8B\u4EF6\u6E38\u6807\u7B49\u5F85\u53D8\u5316\uFF0C\u6700\u957F25\u79D2\u3002\u9700\u8981\u7EE7\u7EED\u5173\u6CE8\u65F6\u4F7F\u7528\u8FD4\u56DE\u7684nextSequence\u3002", inputSchema: obj({ ...id, afterSequence: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER }, timeoutMs: { type: "integer", minimum: 0, maximum: 25e3 } }, ["runId"]) },
   { name: "workflow_cancel", description: "\u53D6\u6D88\u672C\u63D2\u4EF6\u5DE5\u4F5C\u6D41\uFF0C\u7B49\u5F85\u5728\u9014 exec \u9000\u51FA\uFF1B\u4E0D\u53D6\u6D88\u5176\u4ED6 MCode \u4F1A\u8BDD\u3002", inputSchema: obj(id, ["runId"]) },
   { name: "workflow_pause", description: "\u505C\u6B62\u6D3E\u53D1\u5E76\u4E2D\u65AD\u5728\u9014\u8C03\u7528\uFF0C\u4FDD\u7559\u5DF2\u5B8C\u6210\u8282\u70B9\uFF0C\u53EF\u6062\u590D\u3002", inputSchema: obj(id, ["runId"]) },
   { name: "workflow_resume", description: "\u539F\u811A\u672C\u4E0E\u539F\u8F93\u5165\u6062\u590D\uFF0C\u590D\u7528\u5DF2\u6210\u529F\u8282\u70B9\u3002\u53EF\u8C03\u6574 maxSteps/stepTimeoutMs/runTimeoutMs/maxCalls \u540E\u91CD\u8BD5\uFF0C\u6210\u529F\u8282\u70B9\u590D\u7528\uFF0C\u5931\u8D25\u8282\u70B9\u4ECE\u5934\u6267\u884C\u3002\u5F02\u5E38\u9000\u51FA\u9700\u8981\u7528\u6237\u5148\u786E\u8BA4\u65E7 Agent \u5DF2\u505C\u6B62\u3002", inputSchema: obj({ ...id, confirmStopped: { type: "boolean" }, ...LIMIT_SCHEMAS, maxCalls: { type: "integer", minimum: 1, maximum: 100 } }, ["runId"]) },
@@ -26710,7 +26727,7 @@ function createToolHandler(engine, getURL) {
       }
       case "workflow_wait": {
         const t = args.timeoutMs ?? 25e3, a = args.afterSequence ?? 0;
-        check(Number.isInteger(t) && t >= 0 && t <= 25e3 && Number.isInteger(a) && a >= 0, "\u7B49\u5F85\u53C2\u6570\u65E0\u6548");
+        check(Number.isSafeInteger(t) && t >= 0 && t <= 25e3 && Number.isSafeInteger(a) && a >= 0, "\u7B49\u5F85\u53C2\u6570\u65E0\u6548");
         return waitEvents(engine, args.runId, a, t);
       }
       case "workflow_cancel":
