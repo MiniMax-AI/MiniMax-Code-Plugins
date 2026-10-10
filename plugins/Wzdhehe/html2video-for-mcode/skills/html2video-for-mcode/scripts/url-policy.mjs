@@ -207,7 +207,7 @@ export function policyGet(rawUrl, { headers = {}, timeoutMs = 30000, maxBytes = 
     // Node 直接连 IP, checkedLookup 对它是空转, 于是 "http://127.0.0.1:8080/" 这类目标
     // 没有任何否决点(生产 startVetoProxy 的绝对形式 HTTP 分支经本地 origin 实测拿到 200
     // 且 origin 实收请求)。这一层是所有 policyGet 调用方的**唯一**字面量入口。
-    try { assertFetchableUrl(u.href, { where: 'policy-get' }); }
+    try { assertFetchableUrl(u.href, { where: 'policyGet' }); }
     catch (e) { return reject(e); }
     const mod = u.protocol === 'https:' ? https : u.protocol === 'http:' ? http : null;
     if (!mod) return reject(new PolicyError('bad-scheme', String(u.protocol)));
@@ -270,7 +270,16 @@ export async function startVetoProxy({ lookup, connect = net.connect, maxBytes =
       });
   });
   server.on('connect', (req, clientSocket, head) => {
-    const fail = () => clientSocket.destroy();
+    // 可命名的拒绝: 隧道没建起来时回一个 502 + 原因, 而不是静默掐断 —— 客户端拿到的是
+    // "代理拒绝了并说明理由", 排查不必去猜。绝对形式 HTTP 分支同样带名字, 两个分支对齐。
+    const fail = (why) => {
+      const body = `veto-proxy: ${why ?? 'refused'}`;
+      try {
+        clientSocket.write('HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain; charset=utf-8\r\n' +
+          `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
+      } catch { /* 客户端已断 */ }
+      clientSocket.destroy();
+    };
     const m = /^(\[[^\]]+\]|[^:]+):(\d+)$/.exec(req.url || '');
     if (!m) return fail();
     const host = m[1], port = parseInt(m[2], 10);
@@ -289,11 +298,11 @@ export async function startVetoProxy({ lookup, connect = net.connect, maxBytes =
         up.pipe(clientSocket);
         clientSocket.pipe(up);
       }));
-      up.on('error', fail);
+      up.on('error', e => fail(`上游连接失败: ${e?.message ?? e}`));
       clientSocket.on('error', () => up.destroy());
       up.on('close', () => clientSocket.destroy());
       clientSocket.on('close', () => up.destroy());
-    })().catch(() => fail());
+    })().catch(e => fail(e?.message ?? e));
   });
   server.on('connection', track);
   await new Promise(r => server.listen(0, '127.0.0.1', r));

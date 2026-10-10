@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.9.17 — 2026-10-10
+
+**Self-review round on the round-7 head (two-axis `/code-review`): the security findings were re-derived and one residual hardening landed; two reported findings did not survive reproduction and are recorded as such**
+
+- **Both refusal layers are now separately load-bearing.** `policyGet` applies the host policy before connecting (`where:'policyGet'`), and the proxy's absolute-form HTTP branch pre-checks with `where:'代理 HTTP'`. Removing either one alone left the suite green, so neither was actually pinned; the new tests assert each layer's own label, which turns both into load-bearing checks (red-proofs A and B: each removal now turns exactly its own assertion red). The deliberate redundancy stays, and the reason is now stated where the code is: `policyGet` is the single entry point for every caller including the download paths, while the proxy pre-check keeps a refusal attributable without depending on `policyGet` internals.
+- **The CONNECT branch's refusals are attributable too.** It used to `destroy()` the client socket silently — the HTTP branch said "blocked-host", the CONNECT branch said nothing, and the comment in the HTTP branch claiming they were "the same shape" was simply wrong. CONNECT now answers `502 Bad Gateway` with the reason in the body (never a tunnel, never an upstream connect). Two existing tests asserted the old silent behaviour and were updated by contract; red-proof C (reverting to a bare `destroy()`) turns both red again.
+- **The browser-side invariant is pinned, because it was a library default doing the work.** Chromium has an implicit proxy bypass for loopback, so "every browser request goes through the veto proxy" was resting on Playwright's defaults. Measured with the real browser: loopback subresources do go through the proxy and come back `502`, with the origin receiving 0 requests — but that is now a test (`capture`-shaped launch + a slide whose image points at a counting origin) instead of an assumption. If a future Playwright/Chromium changes the default, CI reports it rather than the pipeline silently losing its choke point.
+- **Reported, reproduced, and refuted (kept here so the next reviewer does not re-litigate them):**
+  - *"Chromium bypasses the proxy for loopback, so `capture.mjs` has an egress hole"* — not reproducible in this configuration: with an explicit `proxy.server`, a slide's `http://127.0.0.1:…/` subresource goes through the veto proxy and is refused (`502`, origin hits 0), with or without `bypass:'<-loopback>'`. The new test above pins the observable outcome anyway.
+  - *"the new ancestor tolerance has no test, relaxing it leaves the suite green"* — refuted by mutation: relaxing that single gate makes `safe-paths` fail (the escape-shape test depends on it). The gate is pinned.
+  - Also checked and dismissed: the exotic IPv4 spellings (`127.1`, `0x7f.0.0.1`, `2130706433`, `0177.0.0.1`, `::ffff:127.0.0.1`) are all normalised by the URL parser to `127.0.0.1` and refused, while a public address still passes.
+- **Housekeeping from the same review:** the root-side canonicalisation was byte-identical in `safeRel` and `assertContained` (the reviewer's "duplicated code", and the reason the mutation anchors appeared twice). Both now call one exported `canonicalRoot(root, where)`, which is also where the rule and the fail-closed behaviour live. **Tests +4 → 295 in fifteen files.**
+
 ## 1.9.16 — 2026-10-10
 
 **Maintainer review round 7 (CHANGES_REQUESTED on head 51443138): two of the three blockers closed, each reproduced on our tree before fixing**

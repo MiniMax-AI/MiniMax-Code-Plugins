@@ -143,23 +143,8 @@ export function safeRel(root, rel, { where = 'path', mustExist = false } = {}) {
       if (up === probe) break;
       probe = up;
     }
-    // root 侧与 probe 侧必须用**同一套**规范化。七审 blocker 2: root 尚不存在时旧代码拿
-    // path.resolve(root) 的**未规范化字符串**去比 probe 的 realpath —— macOS 上 /var/… 与
-    // /private/var/… 是同一目录的两种写法, 于是项目内合法路径被判越界(官方 CI 的 macOS 实测
-    // 把 preview-page 的缩略图路径判成越界并 exit 1)。canonicalPath 取最深已存在祖先的 realpath
-    // 再拼回尾部, 与 probe 侧同规则。
-    // root 已存在却解不开 realpath 仍然 fail closed: 解不开就不能证明它不是指向外面的链接。
-    const rootExists = fs.existsSync(root);
-    let realRoot;
-    if (rootExists) {
-      try { realRoot = fs.realpathSync(path.resolve(root)); }
-      catch {
-        console.error(`✗ ${where} 无法解析项目目录真实路径: ${root}(realpath 失败)`);
-        process.exit(1);
-      }
-    } else {
-      realRoot = canonicalPath(root);
-    }
+    // root 侧与 probe 侧必须用**同一套**规范化(见 canonicalRoot: 七审 blocker 2 的修正)。
+    const { exists: rootExists, real: realRoot } = canonicalRoot(root, where);
     let real = null;
     try { real = fs.realpathSync(probe); }
     catch {
@@ -193,20 +178,8 @@ export function safeRel(root, rel, { where = 'path', mustExist = false } = {}) {
 // 规则: 从 root 到目标, **每一段已存在祖先**的 realpath 都必须仍在 root 的 realpath 之内;
 // 叶子自身是符号链接也要拦(否则 ffmpeg/fs 会从那个链接写出去)。
 export function assertContained(root, abs, { where = 'output' } = {}) {
-  // root 侧与 probe 侧同一套规范化(同 safeRel 的七审 blocker 2 修正): root 不存在时用
-  // canonicalPath 而不是未规范化的 path.resolve —— 否则 /var 与 /private/var 两种写法
-  // 会把项目内合法输出判成越界。root 已存在却解不开 realpath 仍然 fail closed。
-  const rootExists = fs.existsSync(root);
-  let realRoot;
-  if (rootExists) {
-    try { realRoot = fs.realpathSync(path.resolve(root)); }
-    catch {
-      console.error(`✗ ${where} 无法解析项目目录真实路径: ${root}(realpath 失败)`);
-      process.exit(1);
-    }
-  } else {
-    realRoot = canonicalPath(root);
-  }
+  // root 侧与 probe 侧同一套规范化(canonicalRoot, 见其注释里的七审 blocker 2 修正)。
+  const { exists: rootExists, real: realRoot } = canonicalRoot(root, where);
   let probe = path.resolve(abs);
   while (true) {
     let st = null;
@@ -351,6 +324,23 @@ export function canonicalPath(p) {
     const real = fs.realpathSync(probe);
     return probe === abs ? real : path.join(real, path.relative(probe, abs));
   } catch { return abs; }
+}
+
+// root 侧的规范化(safeRel / assertContained 共用一份 —— 逐字重复两份正是审查点名的地方):
+// 规则**只有一条**: 必须与 probe 侧同规则, 否则同名不同写法的同一目录会被比成"越界"。
+//   · root 已存在 → realpath(root); 解不开就 fail closed(解不开就不能证明它不是指向外面的链接)
+//   · root 尚不存在 → canonicalPath: 最深已存在祖先的 realpath + 未创建的尾部
+//     (macOS 上 /var/… 与 /private/var/… 是同一目录的两种写法, 拿未规范化字符串去比
+//      probe 的 realpath 会把项目内合法路径判成越界 —— 官方 CI 的 macOS 实测过)
+// 返回 { exists, real }; exists 让调用方决定"root 未建时容忍祖先 probe"这条兜底是否生效。
+export function canonicalRoot(root, where = 'path') {
+  if (!fs.existsSync(root)) return { exists: false, real: canonicalPath(root) };
+  try {
+    return { exists: true, real: fs.realpathSync(path.resolve(root)) };
+  } catch {
+    console.error(`✗ ${where} 无法解析项目目录真实路径: ${root}(realpath 失败)`);
+    process.exit(1);
+  }
 }
 
 // ── 位置参数(项目目录)的取法 ───────────────────────────────────────────

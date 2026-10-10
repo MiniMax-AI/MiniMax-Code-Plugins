@@ -144,35 +144,42 @@ describe('startVetoProxy: 浏览器全部出网的否决隧道', () => {
       connect: opts => { upstreamConnects++; return connectTo(echo.address().port)(opts); },
     });
     try {
-      const refused = await new Promise(resolve => {
+      const seen = await new Promise(resolve => {
+        let buf = '';
         const c = connectHandshake(proxy.port);
         c.on('connect', () => c.write('CONNECT rebind.example.com:443 HTTP/1.1\r\n\r\n'));
-        c.on('data', () => { c.destroy(); resolve('got-data'); });
-        c.on('error', () => resolve('closed'));   // destroy 可能以 ECONNRESET 形态到达
-        c.on('close', () => resolve('closed'));
-        setTimeout(() => { c.destroy(); resolve('timeout'); }, 5000);
+        c.on('data', d => { buf += d.toString(); c.destroy(); resolve(buf); });
+        c.on('error', () => resolve(buf));   // destroy 可能以 ECONNRESET 形态到达
+        c.on('close', () => resolve(buf));
+        setTimeout(() => { c.destroy(); resolve(buf); }, 5000);
       });
-      assert.equal(refused, 'closed', '必须被掐断, 不许出现 200/数据');
+      // 1.9.17: CONNECT 的拒绝从"静默掐断"改为可命名的 502 + 原因(不建隧道, 原因写明)
+      assert.match(seen, /^HTTP\/1\.\d 502/, `拒绝应是 502, 实得: ${seen.slice(0, 120)}`);
+      assert.match(seen, /dns-rebinding|连接期否决/, `拒绝要点名连接期否决: ${seen.slice(0, 200)}`);
+      assert.ok(!/200 Connection Established/.test(seen), '不许建立隧道');
       assert.equal(upstreamConnects, 0, '否决必须发生在上游建连之前');
     } finally { proxy.close(); echo.close(); }
   });
 
-  test('CONNECT 字面内网地址(字符串层) → 直接拒绝', async () => {
-    let upstreamConnects = 0;
-    const proxy = await startVetoProxy({ lookup: lookupByName({}), connect: opts => { upstreamConnects++; return net.connect(opts); } });
-    try {
-      const refused = await new Promise(resolve => {
-        const c = connectHandshake(proxy.port);
-        c.on('connect', () => c.write('CONNECT 169.254.169.254:80 HTTP/1.1\r\n\r\n'));
-        c.on('data', () => { c.destroy(); resolve('got-data'); });
-        c.on('error', () => resolve('closed'));
-        c.on('close', () => resolve('closed'));
-        setTimeout(() => { c.destroy(); resolve('timeout'); }, 5000);
-      });
-      assert.equal(refused, 'closed');
-      assert.equal(upstreamConnects, 0);
-    } finally { proxy.close(); }
-  });
+test('CONNECT 字面内网地址(字符串层) → 拒绝可命名(1.9.17: 从静默掐断改为 502 + 原因)', async () => {
+      let upstreamConnects = 0;
+      const proxy = await startVetoProxy({ lookup: lookupByName({}), connect: opts => { upstreamConnects++; return net.connect(opts); } });
+      try {
+        const seen = await new Promise(resolve => {
+          let buf = '';
+          const c = connectHandshake(proxy.port);
+          c.on('connect', () => c.write('CONNECT 169.254.169.254:80 HTTP/1.1\r\n\r\n'));
+          c.on('data', d => { buf += d.toString(); c.destroy(); resolve(buf); });
+          c.on('error', () => resolve(buf));
+          c.on('close', () => resolve(buf));
+          setTimeout(() => { c.destroy(); resolve(buf); }, 5000);
+        });
+        assert.match(seen, /^HTTP\/1\.\d 502/, `拒绝应是可读的 502, 实得: ${seen.slice(0, 120)}`);
+        assert.match(seen, /blocked-host/, `拒绝要点名原因: ${seen.slice(0, 200)}`);
+        assert.ok(!/200 Connection Established/.test(seen), '不许建立隧道');
+        assert.equal(upstreamConnects, 0, '否决必须发生在上游建连之前');
+      } finally { proxy.close(); }
+    });
 
   test('绝对形式 http: 连接期解析回环 → 502 且源站 0 请求(生产路径, 未注入建连)', async () => {
     let hits = 0;
@@ -312,5 +319,114 @@ describe('七审 blocker 1 · 生产否决代理: IP 字面量目标 0 请求', 
       assert.equal(r.status, 200, r.body.slice(0, 200));
       assert.match(r.body, /upstream-ok/);
     } finally { await proxy.close(); upstream.close(); }
+  });
+});
+
+// ── 自审轮(1.9.17): 把两层否决各自钉住 ──────────────────────────────────
+// policyGet 的 assertFetchableUrl(where:'policyGet') 与代理 HTTP 分支的预否决(where:'代理 HTTP')
+// 此前各自撤掉都测不出来(只撤一处, 另一处照样拦)。两处 where 标签不同 → 断言各自的名字,
+// 两层就都成了载荷: 少一层, 对应断言立刻红。
+describe('自审 1.9.17 · 两层否决各自有名字、各自被钉住', () => {
+  test('policyGet 直连字面量 → 拒, 理由带 policyGet 这一层的名字', async () => {
+    let hits = 0;
+    const srv = http.createServer((req, res) => { hits++; res.writeHead(200); res.end('SECRET'); });
+    await listen(srv);
+    const port = srv.address().port;
+    try {
+      await assert.rejects(
+        () => policyGet(`http://127.0.0.1:${port}/secret`),
+        e => {
+          assert.equal(e.reason, 'blocked-host', `应点名 blocked-host, 实得 ${e.reason}`);
+          assert.match(e.message, /policyGet/, `拒绝应带本层名字, 实得: ${e.message}`);
+          return true;
+        },
+      );
+      assert.equal(hits, 0, '被拒目标必须收到 0 个请求');
+    } finally { srv.close(); }
+  });
+
+  test('代理明文 HTTP 分支的拒绝带"代理 HTTP"这一层的名字(撤掉这层预否决则断言红)', async () => {
+    const proxy = await startVetoProxy({});
+    try {
+      const r = await new Promise(resolve => {
+        const req = http.request({
+          host: '127.0.0.1', port: proxy.port, path: 'http://127.0.0.1:9/x',
+          headers: { host: '127.0.0.1:9' },
+        }, res => {
+          const c = [];
+          res.on('data', d => c.push(d));
+          res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(c).toString() }));
+        });
+        req.on('error', e => resolve({ status: 'ERR', body: e.message }));
+        req.end();
+      });
+      assert.equal(r.status, 502, r.body);
+      assert.match(r.body, /代理 HTTP/, `应带代理层名字, 实得: ${r.body.slice(0, 160)}`);
+      assert.match(r.body, /blocked-host/);
+    } finally { await proxy.close(); }
+  });
+
+  test('CONNECT 分支的拒绝同样可命名(不是静默掐断)', async () => {
+    const proxy = await startVetoProxy({});
+    try {
+      // 用裸 socket: Node 的 http.request 对 method:'CONNECT' 走 connect 事件而非 response,
+      // 挂在 response 上会永远等不到(挂死过一次)。
+      const r = await new Promise(resolve => {
+        const sock = net.connect(proxy.port, '127.0.0.1', () => {
+          sock.write('CONNECT 169.254.169.254:80 HTTP/1.1\r\nHost: 169.254.169.254:80\r\n\r\n');
+        });
+        let buf = '';
+        const done = () => {
+          const head = buf.split('\r\n\r\n')[0] || '';
+          const status = Number(/HTTP\/1\.\d (\d{3})/.exec(head)?.[1] ?? 0);
+          const body = buf.slice(head.length + 4);
+          sock.destroy();
+          resolve({ status, body });
+        };
+        sock.setTimeout(4000, done);
+        sock.on('data', d => { buf += d.toString(); if (buf.includes('\r\n\r\n')) done(); });
+        sock.on('error', e => resolve({ status: 'ERR', body: e.message }));
+      });
+      assert.equal(r.status, 502, `CONNECT 拒绝应是 502, 实得 ${r.status} ${r.body.slice(0, 120)}`);
+      assert.match(r.body, /blocked-host/, `CONNECT 的拒绝也要点名原因: ${r.body.slice(0, 160)}`);
+    } finally { await proxy.close(); }
+  });
+});
+
+// 浏览器侧不变量: 幻灯片里的 http://127.0.0.1 子资源**必须**经过否决代理(Chromium 对 loopback
+// 有隐式代理绕过; 目前 Playwright + 显式 proxy 实测是走代理的, 但那是**依赖默认值**的行为 ——
+// 这里把它钉成契约, 默认值一变 CI 立刻报)。
+describe('自审 1.9.17 · 浏览器的 loopback 子资源必须经过否决代理(需 chromium)', () => {
+  test('capture 形态的浏览器: 页面里的 loopback 图片 → origin 收到 0 个请求', async t => {
+    const pw = await import('node:module').then(m => m.createRequire(import.meta.url));
+    let chromium;
+    for (const p of ['playwright', 'C:/Users/mjc39/.minimax/skills/node_modules/playwright']) {
+      try { ({ chromium } = pw(p)); break; } catch { /* 下一处 */ }
+    }
+    if (!chromium) return t.skip('无 playwright');
+    const dir = tmpdir();
+    let hits = 0;
+    const origin = http.createServer((req, res) => { hits++; res.writeHead(200, { 'content-type': 'image/png' }); res.end('x'); });
+    await listen(origin);
+    const port = origin.address().port;
+    const slide = path.join(dir, 'slide.html');
+    fs.writeFileSync(slide, `<!doctype html><html><body><img id="i" src="http://127.0.0.1:${port}/pixel.png" width="8" height="8"></body></html>`);
+    const veto = await startVetoProxy({});
+    let browser;
+    try {
+      browser = await chromium.launch({ headless: true, proxy: { server: `http://127.0.0.1:${veto.port}` } });
+      const ctx = await browser.newContext({ viewport: { width: 320, height: 240 } });
+      const p2 = await ctx.newPage();
+      await p2.goto('file:///' + slide.replace(/\\/g, '/'));
+      await p2.waitForTimeout(1200);
+      assert.equal(hits, 0, '浏览器必须把 loopback 子资源交给否决代理(而不是绕过它直连)');
+    } catch (e) {
+      if (/Executable doesn't exist|browserType.launch|Looks like Playwright/i.test(String(e?.message ?? e)))
+        return t.skip('chromium 未安装');
+      throw e;
+    } finally {
+      if (browser) await browser.close().catch(() => {});
+      await veto.close(); origin.close();
+    }
   });
 });
