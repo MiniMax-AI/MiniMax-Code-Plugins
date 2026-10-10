@@ -239,3 +239,78 @@ describe('浏览器模式接线(带否决代理启动; 需 playwright/chromium, 
     assert.match(out, /shot\.png/, '候选里应列出页面图片: ' + out.slice(0, 300));
   });
 });
+
+// 七审 blocker 1: 生产 startVetoProxy 的**绝对形式 HTTP** 分支此前不进 host 策略 —— 而
+// IP 字面量目标 Node 不调用 lookup, checkedLookup 对它是空转。本地 origin 实测拿到 200 且
+// 实收请求。判据钉两件事: ①被拒目标收到 **0 个请求**; ②502 正文点名 blocked-host ——
+// 否则"目标不可达"同样表现为 502, 会让断言假绿。
+describe('七审 blocker 1 · 生产否决代理: IP 字面量目标 0 请求', () => {
+  const viaProxy = (proxyPort, target) => new Promise(resolve => {
+    const req = http.request({
+      host: '127.0.0.1', port: proxyPort, path: target,      // 绝对形式 URL = 代理请求行
+      headers: { host: new URL(target).host },
+    }, r => {
+      const chunks = [];
+      r.on('data', c => chunks.push(c));
+      r.on('end', () => resolve({ status: r.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+    });
+    req.on('error', e => resolve({ status: 'ERR', body: e.message }));
+    req.end();
+  });
+  const countingOrigin = async () => {
+    const hits = { n: 0 };
+    const srv = http.createServer((req, res) => { hits.n++; res.writeHead(200); res.end('SECRET'); });
+    await listen(srv);
+    return { srv, hits, port: srv.address().port };
+  };
+
+  test('loopback 字面量 → 0 请求, 且拒绝来自策略(正文点名 blocked-host)', async () => {
+    const { srv, hits, port } = await countingOrigin();
+    const proxy = await startVetoProxy({});                  // 生产参数: 不注入 connect/lookup
+    try {
+      const r = await viaProxy(proxy.port, `http://127.0.0.1:${port}/secret`);
+      assert.equal(r.status, 502, r.body);
+      assert.match(r.body, /blocked-host/, `拒绝必须来自 host 策略, 实得: ${r.body.slice(0, 200)}`);
+      assert.equal(hits.n, 0, '被拒目标必须收到 0 个请求');
+    } finally { await proxy.close(); srv.close(); }
+  });
+
+  test('私网/元数据/IPv6/零/裸名 字面量 → 全部点名 blocked-host(不可达目标也要证明是策略拦的)', async () => {
+    const proxy = await startVetoProxy({});
+    try {
+      for (const u of ['http://192.168.1.1/admin', 'http://169.254.169.254/latest/meta-data/',
+        'http://[::1]:9/x', 'http://0.0.0.0:9/x', 'http://10.0.0.5/internal', 'http://localhost:9/x',
+        'http://100.64.0.1/x', 'http://198.18.0.1/x']) {
+        const r = await viaProxy(proxy.port, u);
+        assert.equal(r.status, 502, `${u} → ${r.status} ${r.body.slice(0, 120)}`);
+        assert.match(r.body, /blocked-host/, `${u} 的 502 必须点名 host 策略, 实得: ${r.body.slice(0, 160)}`);
+      }
+    } finally { await proxy.close(); }
+  });
+
+  test('主机名解析回环 → 仍由 checkedLookup 在建连期否决(0 请求, 正文点名 dns-rebinding)', async () => {
+    const { srv, hits, port } = await countingOrigin();
+    const proxy = await startVetoProxy({ lookup: async () => LOOPBACK });   // 真建连路径
+    try {
+      const r = await viaProxy(proxy.port, `http://rebind.example.test:${port}/secret`);
+      assert.equal(r.status, 502, r.body);
+      assert.match(r.body, /dns-rebinding|连接期否决/, r.body.slice(0, 200));
+      assert.equal(hits.n, 0, '被拒目标必须收到 0 个请求');
+    } finally { await proxy.close(); srv.close(); }
+  });
+
+  test('正向对照: 放行的主机名仍能走通绝对形式 HTTP 分支(别把管道焊死)', async () => {
+    const upstream = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('upstream-ok'); });
+    await listen(upstream);
+    const upPort = upstream.address().port;
+    const proxy = await startVetoProxy({
+      lookup: async () => PUB,
+      connect: () => net.connect({ host: '127.0.0.1', port: upPort }),   // 假上游: 只换传输
+    });
+    try {
+      const r = await viaProxy(proxy.port, 'http://cdn.example.com/a.png');
+      assert.equal(r.status, 200, r.body.slice(0, 200));
+      assert.match(r.body, /upstream-ok/);
+    } finally { await proxy.close(); upstream.close(); }
+  });
+});

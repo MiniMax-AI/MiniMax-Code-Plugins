@@ -284,3 +284,47 @@ describe('消费者脚本: 恶意 script.json 必须在干坏事之前退出', (
     assert.ok(!/可豁免/.test(r.stdout), '旧措辞"放进 .fx-stagger 容器可豁免"已不成立 —— stagger 规则带 :not([data-stage])');
   });
 });
+
+// 七审 blocker 2: root 侧用未规范化的 path.resolve、probe 侧用 realpath —— macOS 上
+// /var/… 与 /private/var/… 是同一目录的两种写法, root 尚不存在时合法路径被 exit 1
+// (官方 CI 的 macOS 实测: preview-page 拒绝了合法的缩略图/音频路径)。
+// macOS 跑不到, 这里用 junction 造同构别名: root = <alias>/proj/preview 未生成,
+// probe 停在 <alias>/proj(存在), 两侧指向同一目录却是两个字符串。
+describe('七审 blocker 2 · 别名形态的 root(root 尚未生成)不得误判越界', () => {
+  const linkDir = (target, linkPath) => {
+    try { fs.symlinkSync(target, linkPath, 'dir'); return true; } catch { /* 试 junction */ }
+    const r = spawnSync('cmd', ['/c', 'mklink', '/J', linkPath, target], { encoding: 'utf8', windowsHide: true });
+    return r.status === 0 && fs.existsSync(linkPath);
+  };
+  const slash = p => path.resolve(p).split(path.sep).join('/');
+
+  test('safeRel / assertContained: 项目内路径放行(junction 别名 + 未生成的 root)', (t) => {
+    const real = tmpdir();
+    const alias = path.join(tmpdir(), 'alias');
+    fs.mkdirSync(path.join(real, 'proj'), { recursive: true });
+    if (!linkDir(real, alias)) return t.skip('当前环境建不了符号链接/junction(别名形态无从构造)');
+    assert.notEqual(path.resolve(alias), fs.realpathSync(alias), '前置: alias 必须真的指向别处(否则两条分支相同)');
+    const root = path.join(alias, 'proj', 'preview');          // 尚不存在(= macOS 上未生成的目录)
+    assert.equal(fs.existsSync(root), false, '前置: root 必须真的不存在, 否则走的是另一条分支');
+    const rel = probeHelper('safeRel', `[${JSON.stringify(slash(root))}, "01.png", {}]`);
+    assert.equal(rel.status, 0, `safeRel 必须放行(root 就在项目内), 实得 stderr: ${rel.stderr.slice(0, 200)}`);
+    const out = probeHelper('assertContained',
+      `[${JSON.stringify(slash(root))}, ${JSON.stringify(slash(path.join(root, '01.png')))}, {}]`);
+    assert.equal(out.status, 0, `assertContained 必须放行, 实得 stderr: ${out.stderr.slice(0, 200)}`);
+  });
+
+  test('同形态下的真逃逸仍必须拒绝(规范化修复不得变成放行洞)', (t) => {
+    // root 是真目录(正常存在), 它**里面**有一段链接指向项目外 —— 这才是收监承诺拦的形状。
+    // (root 自身是链接不在威胁模型内: root 由调用方给定, 其 canonical 即基准。)
+    const proj = path.join(tmpdir(), 'proj');
+    const alias = path.join(tmpdir(), 'alias');
+    const outside = tmpdir();
+    fs.mkdirSync(proj, { recursive: true });          // junction 的目标必须先存在
+    if (!linkDir(proj, alias)) return t.skip('当前环境建不了符号链接/junction');
+    fs.writeFileSync(path.join(outside, 'secret.txt'), 'x');
+    if (!linkDir(outside, path.join(proj, 'preview'))) return t.skip('建不出第二层链接');
+    const r = probeHelper('assertContained',
+      `[${JSON.stringify(slash(alias))}, ${JSON.stringify(slash(path.join(alias, 'preview', 'secret.txt')))}, {}]`);
+    assert.notEqual(r.status, 0, 'root 内的一段链接指向项目外时必须拒绝');
+  });
+});

@@ -143,8 +143,23 @@ export function safeRel(root, rel, { where = 'path', mustExist = false } = {}) {
       if (up === probe) break;
       probe = up;
     }
+    // root 侧与 probe 侧必须用**同一套**规范化。七审 blocker 2: root 尚不存在时旧代码拿
+    // path.resolve(root) 的**未规范化字符串**去比 probe 的 realpath —— macOS 上 /var/… 与
+    // /private/var/… 是同一目录的两种写法, 于是项目内合法路径被判越界(官方 CI 的 macOS 实测
+    // 把 preview-page 的缩略图路径判成越界并 exit 1)。canonicalPath 取最深已存在祖先的 realpath
+    // 再拼回尾部, 与 probe 侧同规则。
+    // root 已存在却解不开 realpath 仍然 fail closed: 解不开就不能证明它不是指向外面的链接。
     const rootExists = fs.existsSync(root);
-    const realRoot = rootExists ? fs.realpathSync(path.resolve(root)) : path.resolve(root);
+    let realRoot;
+    if (rootExists) {
+      try { realRoot = fs.realpathSync(path.resolve(root)); }
+      catch {
+        console.error(`✗ ${where} 无法解析项目目录真实路径: ${root}(realpath 失败)`);
+        process.exit(1);
+      }
+    } else {
+      realRoot = canonicalPath(root);
+    }
     let real = null;
     try { real = fs.realpathSync(probe); }
     catch {
@@ -178,7 +193,20 @@ export function safeRel(root, rel, { where = 'path', mustExist = false } = {}) {
 // 规则: 从 root 到目标, **每一段已存在祖先**的 realpath 都必须仍在 root 的 realpath 之内;
 // 叶子自身是符号链接也要拦(否则 ffmpeg/fs 会从那个链接写出去)。
 export function assertContained(root, abs, { where = 'output' } = {}) {
-  const realRoot = fs.existsSync(root) ? fs.realpathSync(path.resolve(root)) : path.resolve(root);
+  // root 侧与 probe 侧同一套规范化(同 safeRel 的七审 blocker 2 修正): root 不存在时用
+  // canonicalPath 而不是未规范化的 path.resolve —— 否则 /var 与 /private/var 两种写法
+  // 会把项目内合法输出判成越界。root 已存在却解不开 realpath 仍然 fail closed。
+  const rootExists = fs.existsSync(root);
+  let realRoot;
+  if (rootExists) {
+    try { realRoot = fs.realpathSync(path.resolve(root)); }
+    catch {
+      console.error(`✗ ${where} 无法解析项目目录真实路径: ${root}(realpath 失败)`);
+      process.exit(1);
+    }
+  } else {
+    realRoot = canonicalPath(root);
+  }
   let probe = path.resolve(abs);
   while (true) {
     let st = null;
@@ -199,7 +227,10 @@ export function assertContained(root, abs, { where = 'output' } = {}) {
     console.error(`✗ ${where} 无法解析真实路径: ${probe}(realpath 失败)`);
     process.exit(1);
   }
-  if (real !== realRoot && !inside(realRoot, real)) {
+  // "probe 是 root 的祖先"只在 **root 尚不存在** 时合法(root 到目标之间的段都还没建,
+  // 落盘只会在 root 下新建); root 已存在时绝不放行 —— 那正是"项目内链接指向项目父目录"的
+  // 穿透形状(与 safeRel 的同一处收敛, 1.7.5 已把 safeRel 侧钉死)。
+  if (real !== realRoot && !inside(realRoot, real) && !(rootExists ? false : inside(real, realRoot))) {
     console.error(`✗ ${where} 经符号链接越出项目目录: ${path.relative(path.resolve(root), abs) || abs}\n   ${probe} → ${real}(项目根 ${realRoot}) — 检查项目内是否有指向外部的符号链接`);
     process.exit(1);
   }

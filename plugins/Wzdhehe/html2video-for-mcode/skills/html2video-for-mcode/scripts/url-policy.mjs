@@ -203,6 +203,12 @@ export function policyGet(rawUrl, { headers = {}, timeoutMs = 30000, maxBytes = 
   return new Promise((resolve, reject) => {
     let u;
     try { u = new URL(rawUrl); } catch { return reject(new PolicyError('bad-url', String(rawUrl))); }
+    // 建连**之前**的字符串层 host 策略(七审 blocker 1): IP 字面量目标根本不走 lookup ——
+    // Node 直接连 IP, checkedLookup 对它是空转, 于是 "http://127.0.0.1:8080/" 这类目标
+    // 没有任何否决点(生产 startVetoProxy 的绝对形式 HTTP 分支经本地 origin 实测拿到 200
+    // 且 origin 实收请求)。这一层是所有 policyGet 调用方的**唯一**字面量入口。
+    try { assertFetchableUrl(u.href, { where: 'policy-get' }); }
+    catch (e) { return reject(e); }
     const mod = u.protocol === 'https:' ? https : u.protocol === 'http:' ? http : null;
     if (!mod) return reject(new PolicyError('bad-scheme', String(u.protocol)));
     const req = mod.request(u, {
@@ -242,6 +248,10 @@ export async function startVetoProxy({ lookup, connect = net.connect, maxBytes =
   const track = s => { sockets.add(s); s.on('close', () => sockets.delete(s)); return s; };
   const server = http.createServer((req, res) => {
     if (!req.url || !/^https?:\/\//i.test(req.url)) { res.writeHead(400); return res.end('veto-proxy: 只收绝对形式 URL'); }
+    // 每个代理 HTTP 请求都先过 host 策略(与下面 CONNECT 分支同形的可命名预否决): 字面量
+    // 目标不触发 checkedLookup, 缺这道预否决时 policyGet 之前的绝对形式分支等于没有闸门。
+    try { assertFetchableUrl(req.url, { where: '代理 HTTP' }); }
+    catch (e) { res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' }); return res.end(`veto-proxy: ${e.message}`); }
     const fwd = {};
     for (const [k, v] of Object.entries(req.headers)) {
       if (k === 'host' || HOP_BY_HOP.includes(k)) continue;   // Host 由目标 URL 决定, 逐跳头不转发
