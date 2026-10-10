@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.9.19 — 2026-10-10
+
+**One regression, found by reviewing our own 1.9.18 fix — and a test that structurally could not have caught it.**
+
+- **`--open` stopped opening the browser on Windows.** The 1.9.18 fix for M1 added `windowsVerbatimArguments` so the target would be quoted explicitly instead of relying on Node's quote-only-when-it-contains-spaces rule. But verbatim mode also stops Node from quoting the **empty-string argument**, so `start`'s empty *title* vanished: `start "" "<path>"` became `start "<path>"`. START treats the first quoted token as the **window title**, so with no command left to run nothing opens — while the script still prints "已在浏览器打开(若没弹出…)". A security fix that broke the feature it was securing.
+  - The rule was measured, not assumed. With `mkdir` as a marker: `cmd /c start "T" cmd /c <cmd>` runs `<cmd>` (T became the title), while `cmd /c start T cmd /c <cmd>` does not (T became a command that does not exist). One quoted token and no command after it therefore opens nothing.
+  - Fix: the empty title is now a **literal** `'""'`, and the argv construction moved into an exported `openCmdArgv(target, platform)` so it can be asserted directly rather than inferred from a spawn.
+- **Why our own M1 test missed it, and what changed.** That test substituted `echo` for `start`. `echo` has no title semantics, so "the quoted path is consumed as a title" was outside anything the test could observe — the proxy proved quoting, not START's parser. The replacement asserts on `openCmdArgv`'s argv, **red-proves** that the pre-fix shape fails the same assertion, and then runs **`start` itself**: the quoted form must create the marker, the unquoted form must not.
+- **Housekeeping:** the new behavioural test runs `start /b`. Without `/b` every suite run flashes a console window on the machine running it (measured: 3639 ms and one new conhost with `/b` absent; 134 ms and none with it).
+
+**Tests +3 → 317 in sixteen files.** Suite re-run before pushing: **317 tests, 313 pass, 0 fail, 4 named capability skips** — all four the file-symlink canaries, skipped with the reason "当前环境建不了文件符号链接(Windows 需开发者模式; ubuntu CI 真跑)" because this Windows machine has Developer Mode off. The directory-junction equivalents of those guards (`safeRel` escape, `L1` image gate) run and pass here via the `mklink /J` fallback, and the render-smoke suite ran for real on this machine rather than skipping.
+
 ## 1.9.18 — 2026-10-10
 
 **Independent security audit of the "parse and generate" dimension — the one the hosted review rounds never covered.** The auditor was barred from reading the earlier review records so as not to anchor; it reported 2 HIGH / 4 MEDIUM / 6 LOW. Every finding was reproduced on our own tree before acting, three of its claims did not survive that, and what it confirmed is fixed here.

@@ -11,7 +11,7 @@ import path from 'node:path';
 import net from 'node:net';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { addNoFx, injectHtmlVars } from '../scripts/preview-page.mjs';
+import { addNoFx, injectHtmlVars, openCmdArgv } from '../scripts/preview-page.mjs';
 import { assertConcatPathSafe, buildSrt, sanitizeCaptionText, stripControlChars } from '../scripts/tools.mjs';
 import { isBlockedHost } from '../scripts/url-policy.mjs';
 import { mkproj, runSkill, tmpdir } from './helpers.mjs';
@@ -211,5 +211,52 @@ describe('LOW · L1/L5/L6 与控制字符', () => {
     assert.equal(stripControlChars('a\u0007\u001b[0m\u202Eb'), 'a[0mb');
     assert.equal(stripControlChars('正常 文本\r\n第二行'), '正常 文本\n第二行');
     assert.equal(stripControlChars('纯 ASCII'), '纯 ASCII');
+  });
+});
+
+// M1 返工: 上一版的用例拿 `echo` 当 `start` 的替身 —— echo 没有"标题"语义, 于是
+// start 首个带引号 token 会被吃掉这一条根本测不到。下面的用例直接测 start 本身。
+describe('M1 返工 · start 的空标题(Windows)', () => {
+  const isWin = process.platform === 'win32';
+
+  test('argv: 空标题必须是字面量 "" 且在路径之前; verbatim 下空串会消失', () => {
+    const { cmd, args, verbatim } = openCmdArgv('C:\\work&calc\\proj\\preview\\play\\index.html', 'win32');
+    assert.equal(cmd, 'cmd');
+    assert.equal(verbatim, true, 'Windows 必须 verbatim —— 否则 Node 只给含空格的参数加引号, & 会被执行');
+    assert.deepEqual(args.slice(0, 2), ['/c', 'start']);
+    assert.equal(args[2], '""', '空标题必须写成字面量; windowsVerbatimArguments 下 "" 不会消失');
+    assert.equal(args[3], '"C:\\work&calc\\proj\\preview\\play\\index.html"', '路径自带双引号');
+
+    // 红证明: 修复前那一份(空标题写成空串)必须过不了同一条判据, 否则本用例分辨不了
+    const preFix = ['/c', 'start', '', '"C:\\x\\index.html"'];
+    assert.notEqual(preFix[2], '""', '修复前的形状确实没有空标题');
+    assert.throws(() => assert.equal(preFix[2], '""', '空标题'),
+      '修复前的形状应当过不了这条判据 —— 少了它, 本用例就是永真');
+  });
+
+  test('非 Windows 分支不带 verbatim, 也不需要空标题', () => {
+    const m = openCmdArgv('/tmp/index.html', 'darwin');
+    assert.deepEqual(m, { cmd: 'open', args: ['/tmp/index.html'], verbatim: false });
+    const l = openCmdArgv('/tmp/index.html', 'linux');
+    assert.equal(l.cmd, 'xdg-open');
+    assert.equal(l.verbatim, false);
+  });
+
+  test('实测: start 的首个带引号 token 是标题 —— 空标题因此是承重的', { skip: !isWin && 'Windows 专属(cmd 语义)' }, () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'starttitle-'));
+    const mk = n => path.join(tmp, n);
+    // 必须带 /b: start 的本职是拉起新进程, 不加 /b 每次跑都会闪一个黑窗口出来骚扰使用者。
+    // /b 只影响"要不要开新窗口", 标题的解析规则完全不变 —— 这正是本用例要测的东西。
+    const run = line => {
+      spawnSync('cmd', ['/c', line], { encoding: 'utf8', windowsHide: true, timeout: 20000, windowsVerbatimArguments: true });
+      return fs.existsSync(mk(line.includes('"TITLE"') ? 'mQuoted' : 'mBare'));
+    };
+    // 带引号 → 标题, 后续命令真的执行 → 目录出现
+    const quotedRan = run(`start /b "TITLE" cmd /c mkdir "${mk('mQuoted')}"`);
+    // 不带引号 → 命令(找不到该程序) → 后续命令根本没跑
+    const bareRan = run(`start /b TITLE cmd /c mkdir "${mk('mBare')}"`);
+    assert.equal(quotedRan, true, '带引号的首 token 必须被 start 当作标题(后续命令被执行)');
+    assert.equal(bareRan, false, '对照组: 不带引号才当命令 —— 本用例确实在分辨 start 的语义, 不是永真');
+    fs.rmSync(tmp, { recursive: true, force: true });
   });
 });

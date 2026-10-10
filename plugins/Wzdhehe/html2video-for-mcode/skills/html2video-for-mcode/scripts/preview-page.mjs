@@ -698,15 +698,29 @@ function main() {
 
   if (OPEN) {
     const target = path.join(outDir, 'index.html');
-    // 自己引用, 不依赖 Node 的"含空格才加引号"(2026-10-10 独立安全审计 M1): Windows 路径
-    // 允许含 & 而不含空格, 未被引用的 & 会让 cmd 起第二条命令 —— 实测 `&rem` 真的执行了。
-    // 引号由我们显式补上, cmd 在引号内不再解析 & | < > ^ 等元字符。
-    const q = t => `"${String(t).replace(/"/g, '""')}"`;
-    const cmd = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', q(target)]]
-      : process.platform === 'darwin' ? ['open', [target]] : ['xdg-open', [target]];
-    spawn(cmd[0], cmd[1], { detached: true, stdio: 'ignore', windowsVerbatimArguments: process.platform === 'win32' }).unref();
+    const { cmd, args, verbatim } = openCmdArgv(target);
+    spawn(cmd, args, { detached: true, stdio: 'ignore', windowsVerbatimArguments: verbatim }).unref();
     console.log('  已在浏览器打开(若没弹出, 手动双击上面的 index.html)');
   }
+}
+
+// 打开浏览器的子进程参数。**导出来是为了可测**(单一来源, 同 buildSrt / assertConcatPathSafe 的做法)。
+//
+// 空标题 `""` 不是可选的, 两个原因各自独立:
+//   ① start 的**首个带引号 token 是窗口标题, 不是要打开的东西**。实测(2026-10-10):
+//      `cmd /c start "T" cmd /c <命令>`  → T 成了标题, 后面的命令真的执行了;
+//      `cmd /c start T  cmd /c <命令>`  → T 成了命令(找不到该程序), 后面的命令**根本没跑**。
+//      所以 `start "C:\...\index.html"`(只有一个带引号 token) = 路径被当标题吃掉, 一个都不打开。
+//   ② windowsVerbatimArguments 下 Node 不再替我们给参数加引号, `''` 就真的是空串、`""` 会消失。
+//      空标题必须写成**字面量** '""'。这一条是审计 M1 修复里的返工面: 当时保留了 `''` 作为空标题,
+//      以为 verbatim 只影响引用 —— 结果浏览器打不开了。
+// 引号由我们自己补(q), 不依赖 Node 的"含空格才加引号": Windows 路径允许含 & 而不含空格,
+// 未被引用的 & 会让 cmd 起第二条命令(实测 `&rem` 真的执行了)。
+export function openCmdArgv(target, platform = process.platform) {
+  const q = t => `"${String(t).replace(/"/g, '""')}"`;
+  if (platform === 'win32') return { cmd: 'cmd', args: ['/c', 'start', '""', q(target)], verbatim: true };
+  if (platform === 'darwin') return { cmd: 'open', args: [target], verbatim: false };
+  return { cmd: 'xdg-open', args: [target], verbatim: false };
 }
 
 // 被 tests/ import 时不要跑主流程(只有当脚本直接执行才跑)。判定走 tools.isMainModule:
