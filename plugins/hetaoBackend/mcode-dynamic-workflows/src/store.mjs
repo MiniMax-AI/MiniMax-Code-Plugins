@@ -13,13 +13,24 @@ export class Store {
       unlinkSync(this.lock); this.fd=openSync(this.lock,'wx',0o600);
     }
     this.owner=randomUUID();this.txDepth=0;
+    // PERF: volatile event types are broadcast to live listeners immediately but
+    // only flushed to the events table on flushVolatile()/close(). Measured cost
+    // of one persisted progress event was ~960us under synchronous=FULL; a run
+    // emits ~1100 of them, so persisting each one is ~1s of pure stall for data
+    // that carries no replayable state. Durable types (step.queued/started/
+    // finished, run.*) are still written synchronously so resume stays correct.
+    this.volatileTypes=new Set(['step.progress']);
+    this.volatileBuffer=[];
+    this.volatileTimer=null;
     try {
     writeFileSync(this.fd,JSON.stringify({pid:process.pid,owner:this.owner}));
     this.db=new DatabaseSync(join(dir,'workflows.sqlite'));
     // The kernel-held SQLite lock is authoritative if stale lockfile reclamation
     // races with another starter. Keep it for this service connection's lifetime.
     this.db.exec('PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT;');
-    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+    // Batching reduces commit count without weakening durable workflow writes.
+    // A hash chain cannot detect loss of a complete row/head transaction.
+    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS templates(id TEXT PRIMARY KEY,body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,requestId TEXT UNIQUE,requestHash TEXT NOT NULL,body TEXT NOT NULL);
@@ -28,6 +39,9 @@ export class Store {
       CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT,runId TEXT,body TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS run_events ON events(runId,seq);
       CREATE TABLE IF NOT EXISTS integrity_rows(surface TEXT NOT NULL,pos INTEGER NOT NULL,key TEXT NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(surface,pos));`);
+    const eventSeq=this.db.prepare("SELECT MAX(COALESCE((SELECT seq FROM sqlite_sequence WHERE name='events'),0),COALESCE((SELECT MAX(seq) FROM events),0)) AS seq").get().seq;
+    this.nextEventSequence=Math.max(Number(eventSeq??0),this.setting('event_sequence_lease')??0);
+    this.eventSequenceLimit=this.nextEventSequence;
     // Recovery must inspect every unfinished run, not just the dashboard page.
     const unfinished=this.db.prepare("SELECT body FROM runs WHERE json_extract(body,'$.status') IN ('running','queued','stopping','pausing')").all();
     for(const row of unfinished) {const run=JSON.parse(row.body);
@@ -35,7 +49,59 @@ export class Store {
     }
     }catch(error){this.db?.close();this.releaseLock();throw error;}
   }
-  transaction(fn) {if(this.txDepth)return fn();this.txDepth=1;this.db.exec('BEGIN IMMEDIATE');try{const r=fn();this.db.exec('COMMIT');return r;}catch(e){this.db.exec('ROLLBACK');throw e;}finally{this.txDepth=0;}}
+  transaction(fn) {if(this.txDepth)return fn();this.reserveEventSequences();this.db.exec('BEGIN IMMEDIATE');this.txDepth=1;this.txVolatile=[];
+    try{const r=fn();this.db.exec('COMMIT');return r;}
+    catch(e){
+      // Whether the batch is durable must be read from SQLite, never inferred
+      // from the fact that ROLLBACK threw: a rollback can fail for reasons other
+      // than "already committed" (busy/locked), leaving the transaction open.
+      // Probing such a transaction would read its own uncommitted rows as
+      // durable and silently drop them from the retry buffer. isTransaction
+      // answers the real question — only a genuinely ended transaction makes a
+      // row on this connection mean "committed".
+      let open=true;
+      try{this.db.exec('ROLLBACK');}catch{}
+      if(!this.db.isTransaction)open=false;
+      this.restoreVolatile([...this.txVolatile,...this.volatileBuffer],!open);
+      throw e;}
+    finally{this.txDepth=0;this.txVolatile=null;}}
+  // A COMMIT can fail after SQLite has already made the rows durable, so a
+  // thrown error is not evidence that the batch is absent. The events table —
+  // not the control flow — decides what still needs retrying: re-emitting an
+  // already persisted row duplicates its sequence number and later fails the
+  // events.seq primary key during close(). Keyed merge keeps one row per seq.
+  // The probe is skipped while a transaction is open on this connection: those
+  // rows are only visible, not committed, and treating them as durable would
+  // drop them from the buffer that still owes them a write.
+  restoreVolatile(items,probe=!this.db.isTransaction){
+    if(!items.length)return;
+    const exists=probe?this.db.prepare('SELECT 1 AS present FROM events WHERE seq=?'):null;
+    const restored=new Map([...items,...this.volatileBuffer]
+      .filter(item=>!exists?.get(item.body.seq))
+      .map(item=>[item.body.seq,item]));
+    this.volatileBuffer=[...restored.values()].sort((a,b)=>a.body.seq-b.body.seq);
+    if(this.volatileBuffer.length)this.scheduleVolatileFlush();
+  }
+  reserveEventSequences() {
+    // txDepth 0 with a SQLite transaction still open means an earlier COMMIT
+    // and ROLLBACK both failed. The queued batch is still in memory; roll the
+    // leftover transaction back so the next BEGIN can persist it. A rollback
+    // that itself fails propagates, and the caller keeps the batch queued.
+    if(!this.txDepth&&this.db.isTransaction)this.db.exec('ROLLBACK');
+    const persisted=Number(this.db.prepare("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='events'),0) AS seq").get().seq);
+    this.nextEventSequence=Math.max(this.nextEventSequence,persisted);
+    if(this.nextEventSequence<this.eventSequenceLimit)return;
+    // Commit the high watermark independently, before publishing any cursor.
+    // Restart discards unused numbers in this lease; sequence gaps are valid.
+    if(this.txDepth)throw new Error('Event sequence lease exhausted inside a transaction');
+    const limit=this.nextEventSequence+1024;
+    if(!Number.isSafeInteger(limit))throw new Error('Event sequence exhausted');
+    this.db.exec('BEGIN IMMEDIATE');
+    try{this.saveSetting('event_sequence_lease',limit);this.db.exec('COMMIT');}
+    catch(error){this.db.exec('ROLLBACK');throw error;}
+    this.eventSequenceLimit=limit;
+  }
+  allocateEventSequence() {this.reserveEventSequences();return ++this.nextEventSequence;}
   templates() {return this.db.prepare('SELECT body FROM templates ORDER BY rowid DESC').all().map(r=>JSON.parse(r.body));}
   template(id) {const r=this.db.prepare('SELECT body FROM templates WHERE id=?').get(id);return r?JSON.parse(r.body):null;}
   saveTemplate(value) {this.db.prepare('INSERT INTO templates VALUES(?,?)').run(value.id,JSON.stringify(value));}
@@ -56,8 +122,49 @@ export class Store {
   saveStep(runId,step) {this.db.prepare('INSERT INTO steps VALUES(?,?,?) ON CONFLICT(runId,id) DO UPDATE SET body=excluded.body').run(runId,step.id,JSON.stringify(step));}
   repairCandidate(runId,id) {const r=this.db.prepare('SELECT body FROM repair_cache WHERE runId=? AND id=?').get(runId,id);return r?JSON.parse(r.body):null;}
   saveRepairCandidate(runId,step) {this.transaction(()=>{const rowid=Number(this.db.prepare('INSERT INTO repair_cache VALUES(?,?,?)').run(runId,step.id,JSON.stringify(step)).lastInsertRowid);this.chainAdvance('repair','repair','SELECT rowid AS pos,runId,id,body FROM repair_cache WHERE rowid>? AND rowid<=? ORDER BY rowid',rowid,r=>`${r.runId}/${r.id}`);});}
-  event(runId,type,data={}) {const event={...data,type,time:Date.now()};return this.transaction(()=>{const seq=Number(this.db.prepare('INSERT INTO events(runId,body) VALUES(?,?)').run(runId,JSON.stringify(event)).lastInsertRowid);this.chainAdvance('event','events','SELECT seq AS pos,runId,body FROM events WHERE seq>? AND seq<=? ORDER BY seq',seq,r=>`${r.runId}:${r.pos}`);return {seq,...event};});}
-  events(runId,after=0,limit=150) {return this.db.prepare('SELECT seq,body FROM events WHERE runId=? AND seq>? ORDER BY seq LIMIT ?').all(runId,after,limit).map(e=>({seq:e.seq,...JSON.parse(e.body)}));}
+  event(runId,type,data={}) {const event={...data,type,time:Date.now()};
+    if(this.volatileTypes.has(type))return this.stageVolatile(runId,event);
+    // A durable event is the flush barrier: everything buffered before it must
+    // reach the table first, so seq order stays monotonic on replay.
+    this.flushVolatile();
+    return this.transaction(()=>{const seq=this.allocateEventSequence();this.db.prepare('INSERT INTO events(seq,runId,body) VALUES(?,?,?)').run(seq,runId,JSON.stringify(event));this.chainAdvance('event','events','SELECT seq AS pos,runId,body FROM events WHERE seq>? AND seq<=? ORDER BY seq',seq,r=>`${r.runId}:${r.pos}`);return {seq,...event};});}
+  stageVolatile(runId,event){
+    // Assign sequence at emission time so live notifications and long-poll reads
+    // refer to the same event even before its durable batch flush.
+    const staged={...event,seq:this.allocateEventSequence()};
+    this.volatileBuffer.push({runId,body:staged});
+    if(this.volatileBuffer.length>=64)this.flushVolatile();
+    else this.scheduleVolatileFlush();
+    return staged;
+  }
+  scheduleVolatileFlush(){
+    if(this.volatileTimer||this.closing)return;
+    this.volatileTimer=setTimeout(()=>{this.volatileTimer=null;try{this.flushVolatile();}catch{/* batch restored; a later event/close retries */}},1000);
+    this.volatileTimer.unref?.();
+  }
+  flushVolatile(){
+    if(this.volatileTimer){clearTimeout(this.volatileTimer);this.volatileTimer=null;}
+    if(!this.volatileBuffer.length)return;
+    const batch=this.volatileBuffer;this.volatileBuffer=[];
+    if(this.txDepth)this.txVolatile.push(...batch);
+    try{
+      this.transaction(()=>{const ins=this.db.prepare('INSERT INTO events(seq,runId,body) VALUES(?,?,?)');
+        for(const {runId,body} of batch){ins.run(body.seq,runId,JSON.stringify(body));
+          this.chainAdvance('event','events','SELECT seq AS pos,runId,body FROM events WHERE seq>? AND seq<=? ORDER BY seq',body.seq,r=>`${r.runId}:${r.pos}`);}});
+    }catch(error){
+      // The batch left volatileBuffer before transaction() ran, so transaction()
+      // cannot see it and cannot re-queue it. Reconciliation therefore happens
+      // here, against isTransaction: only once the transaction has genuinely
+      // ended does a row on this connection mean "committed" and may be dropped.
+      this.restoreVolatile(batch);
+      this.scheduleVolatileFlush();
+      throw error;}
+  }
+  events(runId,after=0,limit=150) {
+    const persisted=this.db.prepare('SELECT seq,body FROM events WHERE runId=? AND seq>? ORDER BY seq LIMIT ?').all(runId,after,limit).map(e=>({seq:e.seq,...JSON.parse(e.body)}));
+    const buffered=this.volatileBuffer.filter(e=>e.runId===runId&&e.body.seq>after).map(e=>e.body);
+    return [...persisted,...buffered].sort((a,b)=>a.seq-b.seq).slice(0,limit);
+  }
   rowHash(prev,kind,key,body) {return createHash('sha256').update(`${prev}:${kind}:${key}:${body}`).digest('hex');}
   // Bulk adoption of pre-existing rows is an initial-creation behavior only: it
   // anchors whatever the table held when the chain first appears. Once a head
@@ -95,6 +202,14 @@ export class Store {
     return {events:face('event','events','events','seq','SELECT runId,body FROM events WHERE seq=?',(row,pos)=>`${row.runId}:${pos}`),
       repair:face('repair','repair','repair_cache','rowid','SELECT runId,id,body FROM repair_cache WHERE rowid=?',row=>`${row.runId}/${row.id}`)};
   }
-  releaseLock() {closeSync(this.fd);try{if(JSON.parse(readFileSync(this.lock,'utf8')).owner===this.owner)unlinkSync(this.lock);}catch{}}
-  close() {this.db.close();this.releaseLock();}
+  releaseLock() {if(this.fd===undefined)return;try{closeSync(this.fd);}finally{this.fd=undefined;try{if(JSON.parse(readFileSync(this.lock,'utf8')).owner===this.owner)unlinkSync(this.lock);}catch{}}}
+  close() {
+    if(this.closing)return;this.closing=true;
+    const errors=[];
+    try{this.flushVolatile();}catch(error){errors.push(error);}
+    try{this.db.close();}catch(error){errors.push(error);}
+    try{this.releaseLock();}catch(error){errors.push(error);}
+    if(errors.length===1)throw errors[0];
+    if(errors.length)throw new AggregateError(errors,'Store shutdown failed');
+  }
 }

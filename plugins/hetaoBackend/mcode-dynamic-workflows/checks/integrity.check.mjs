@@ -24,6 +24,34 @@ const repaired=prefix+`return {a:a.output,b:b.output};`;
 const candidate=(id,body='x')=>({id,kind:'agent',body});
 const rawRepair=(store,runId,id,body)=>store.db.prepare('INSERT INTO repair_cache VALUES(?,?,?)').run(runId,id,body);
 
+test('volatile progress events are visible to long-poll reads before flush and keep sequence after flush',async()=>{
+ const f=await fixture(async()=>({output:null}));const runId=randomUUID();try{
+  f.store.event(runId,'run.created',{name:'buffered'});
+  const first=f.store.event(runId,'step.progress',{stepId:'a',turnId:'t1'});
+  assert.equal(first.seq,2);
+  assert.deepEqual(f.store.events(runId,1,10).map(e=>e.seq),[2]);
+  const second=f.store.event(runId,'step.progress',{stepId:'a',turnId:'t2'});
+  assert.equal(second.seq,3);
+  assert.deepEqual(f.store.events(runId,1,10).map(e=>e.seq),[2,3]);
+  f.store.flushVolatile();
+  assert.deepEqual(f.store.events(runId,1,10).map(e=>e.seq),[2,3]);
+  assert.equal(f.store.verifyIntegrity().events.verified,true);
+  f.store.save({id:runId,requestId:runId,requestHash:'h',status:'running',script:'return 1;',input:{},executor:'demo',workspace:f.dir,concurrency:1,maxCalls:1,attempts:0,phases:[]});f.engine.active.set(runId,{});
+  const pending=createToolHandler(f.engine,()=> 'http://127.0.0.1:1/')('workflow_wait',{runId,afterSequence:3,timeoutMs:1000});
+  setTimeout(()=>f.engine.emitEvent(runId,'step.progress',{stepId:'b',turnId:'t3'}),10);
+  const waited=await pending;assert.equal(waited.events.length,1);assert.equal(waited.events[0].seq,4);assert.equal(waited.events[0].turnId,'t3');
+ }finally{f.engine.active.delete(runId);await f.cleanup();}
+});
+
+test('event sequence resumes after buffered events are flushed and store is reopened',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'wf-event-seq-'));let store=new Store(dir);try{
+  store.event('r','run.created',{name:'first'});store.event('r','step.progress',{stepId:'a'});store.close();
+  store=new Store(dir);const next=store.event('r','run.finished',{status:'done'});
+  assert.ok(next.seq>2);assert.deepEqual(store.events('r',0,10).map(e=>e.seq),[1,2,next.seq]);
+  assert.equal(store.verifyIntegrity().events.verified,true);
+ }finally{store.close();await rm(dir,{recursive:true,force:true});}
+});
+
 test('fresh store reports null heads; first event and candidate anchor both chains verifiably from genesis',async()=>{
  const f=await fixture(async s=>({output:s.id}));try{
  const runId=randomUUID();
