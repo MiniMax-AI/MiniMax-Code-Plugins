@@ -7788,8 +7788,8 @@ var Store = class {
       try {
         this.db.exec("ROLLBACK");
       } catch {
-        open4 = false;
       }
+      if (!this.db.isTransaction) open4 = false;
       this.restoreVolatile([...this.txVolatile, ...this.volatileBuffer], !open4);
       throw e;
     } finally {
@@ -7802,9 +7802,10 @@ var Store = class {
   // not the control flow — decides what still needs retrying: re-emitting an
   // already persisted row duplicates its sequence number and later fails the
   // events.seq primary key during close(). Keyed merge keeps one row per seq.
-  // Inside an enclosing transaction the probe is skipped: those rows are only
-  // visible, not committed, and the outer ROLLBACK would silently drop them.
-  restoreVolatile(items, probe = !this.txDepth) {
+  // The probe is skipped while a transaction is open on this connection: those
+  // rows are only visible, not committed, and treating them as durable would
+  // drop them from the buffer that still owes them a write.
+  restoreVolatile(items, probe = !this.db.isTransaction) {
     if (!items.length) return;
     const exists = probe ? this.db.prepare("SELECT 1 AS present FROM events WHERE seq=?") : null;
     const restored = new Map([...items, ...this.volatileBuffer].filter((item) => !exists?.get(item.body.seq)).map((item) => [item.body.seq, item]));
@@ -7812,6 +7813,7 @@ var Store = class {
     if (this.volatileBuffer.length) this.scheduleVolatileFlush();
   }
   reserveEventSequences() {
+    if (!this.txDepth && this.db.isTransaction) this.db.exec("ROLLBACK");
     const persisted = Number(this.db.prepare("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='events'),0) AS seq").get().seq);
     this.nextEventSequence = Math.max(this.nextEventSequence, persisted);
     if (this.nextEventSequence < this.eventSequenceLimit) return;
@@ -7943,7 +7945,7 @@ var Store = class {
         }
       });
     } catch (error2) {
-      this.restoreVolatile(batch, this.txDepth ? false : void 0);
+      this.restoreVolatile(batch);
       this.scheduleVolatileFlush();
       throw error2;
     }

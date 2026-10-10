@@ -83,6 +83,11 @@ export class Store {
     if(this.volatileBuffer.length)this.scheduleVolatileFlush();
   }
   reserveEventSequences() {
+    // txDepth 0 with a SQLite transaction still open means an earlier COMMIT
+    // and ROLLBACK both failed. The queued batch is still in memory; roll the
+    // leftover transaction back so the next BEGIN can persist it. A rollback
+    // that itself fails propagates, and the caller keeps the batch queued.
+    if(!this.txDepth&&this.db.isTransaction)this.db.exec('ROLLBACK');
     const persisted=Number(this.db.prepare("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='events'),0) AS seq").get().seq);
     this.nextEventSequence=Math.max(this.nextEventSequence,persisted);
     if(this.nextEventSequence<this.eventSequenceLimit)return;

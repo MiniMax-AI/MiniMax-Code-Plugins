@@ -217,6 +217,29 @@ test('failed rollback inside a still-open transaction does not drop the batch', 
   });
 });
 
+test('a later flush commits the batch after rollback itself failed', async () => {
+  await temporary(async dir => {
+    const store = new Store(dir);
+    try {
+      store.event('r', 'run.created');
+      const first = store.event('r', 'step.progress');
+      const second = store.event('r', 'step.progress');
+      const exec = store.db.exec.bind(store.db);
+      store.db.exec = sql => {
+        if (sql === 'COMMIT' || sql === 'ROLLBACK') throw new Error('injected io failure');
+        return exec(sql);
+      };
+      assert.throws(() => store.flushVolatile(), /injected io failure/);
+      store.db.exec = exec;
+      assert.equal(store.db.isTransaction, true);
+      assert.doesNotThrow(() => store.flushVolatile());
+      assert.equal(store.db.isTransaction, false);
+      assert.deepEqual(store.db.prepare('SELECT seq FROM events ORDER BY seq').all().map(r => r.seq), [1, first.seq, second.seq]);
+      assert.equal(store.volatileBuffer.length, 0);
+    } finally { store.close(); }
+  });
+});
+
 test('workflow_wait rejects cursors that would skip every future event', async () => {
   await temporary(async dir => {
     const store = new Store(dir);
