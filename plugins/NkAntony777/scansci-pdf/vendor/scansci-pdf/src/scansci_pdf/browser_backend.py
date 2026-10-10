@@ -25,6 +25,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from .browser_provenance import verify_browser_executable
+
 logger = logging.getLogger(__name__)
 
 BACKEND_PATCHRIGHT = "patchright"
@@ -35,7 +37,6 @@ DEFAULT_BACKEND = BACKEND_PATCHRIGHT
 
 def _installed_cloakbrowser(config):
     """Hosted launches use an owner-installed binary, never implicit installers."""
-    from .security import no_symlinks
     candidate = (config or {}).get('browser_executable') or os.environ.get('CLOAKBROWSER_BINARY_PATH')
     if not candidate:
         from cloakbrowser.config import get_binary_path
@@ -46,7 +47,8 @@ def _installed_cloakbrowser(config):
         if not candidate:
             return False
         path = Path(candidate).absolute()
-    no_symlinks(path)
+    # Same allowlist + symlink + pinned-digest gate every other launch path uses.
+    path = verify_browser_executable(path, config)
     os.environ['CLOAKBROWSER_BINARY_PATH'] = str(path)
     os.environ['CLOAKBROWSER_AUTO_UPDATE'] = 'false'
     return True
@@ -261,8 +263,7 @@ def resolve_browser_binary(config: dict[str, Any] | None = None) -> str | None:
     explicit = str(cfg.get("browser_executable", "") or "").strip()
     if explicit:
         if Path(explicit).exists():
-            logger.info("browser_backend: using configured browser_executable: %s", explicit)
-            return explicit
+            return str(verify_browser_executable(explicit, cfg))
         logger.warning("browser_backend: browser_executable '%s' not found, falling back", explicit)
     env_path = os.environ.get("CLOAKBROWSER_BINARY_PATH", "").strip()
     if env_path and Path(env_path).exists():
@@ -286,7 +287,7 @@ def _patchright_browser_kwargs(config: dict[str, Any] | None) -> dict[str, Any]:
     explicit = str(cfg.get("browser_executable", "") or "").strip()
     if explicit:
         if Path(explicit).exists():
-            return {"executable_path": explicit}
+            return {"executable_path": str(verify_browser_executable(explicit, cfg))}
         logger.warning("browser_backend: browser_executable '%s' not found, using channel=chrome", explicit)
     return {"channel": "chrome"}
 

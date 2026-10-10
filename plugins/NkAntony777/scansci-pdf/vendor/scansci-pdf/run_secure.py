@@ -50,8 +50,19 @@ sys.meta_path.insert(0, SourceLoader())
 sys.dont_write_bytecode = True
 
 def verify_dependencies():
+    # `packaging` is a declared runtime dependency (see pyproject.toml); a
+    # clean/isolated environment that lacks it must get an actionable message
+    # instead of a raw ModuleNotFoundError traceback.
+    try:
+        from packaging.requirements import Requirement
+    except ImportError:
+        raise SystemExit(
+            "Missing runtime dependency 'packaging'.\n"
+            "Install it with: python -m pip install 'packaging>=24,<27'\n"
+            "or install the pinned set: "
+            "python -m pip install --require-hashes -r requirements.lock"
+        )
     from importlib.metadata import PackageNotFoundError, version
-    from packaging.requirements import Requirement
     lines = (engine/'requirements.lock').read_text(encoding='utf-8').splitlines()
     for line in lines:
         if not line or line[0].isspace() or line.startswith('#'):
@@ -104,7 +115,15 @@ enforce_workspace_writes()
 
 if '--verify' in sys.argv:
     from scansci_pdf import __version__
-    print(json.dumps({'engine_version': __version__, 'source': str(src), 'workspace': str(root)}))
+    # What this proves is narrow, and the output says so: the vendored files
+    # match the shipped SOURCE-HASHES.json manifest and the installed
+    # dependency versions match requirements.lock. It does NOT attest that the
+    # bytes came from the upstream tag/commit recorded in the manifest, nor
+    # that `__version__` identifies the executing distribution.
+    print(json.dumps({'engine_version': __version__, 'source': str(src), 'workspace': str(root),
+                      'source_manifest': 'verified', 'dependency_lock': 'verified',
+                      'verification_scope': 'local file hashes + installed dependency versions; '
+                                            'not an upstream provenance attestation'}))
 else:
     if len(sys.argv) > 2 and sys.argv[1] == '--module':
         import runpy

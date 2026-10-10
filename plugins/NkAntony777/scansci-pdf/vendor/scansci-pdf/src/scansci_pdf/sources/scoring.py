@@ -9,13 +9,32 @@ Tracks per-source success rate and latency. Uses EMA so:
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
 
-from ..config import DATA_DIR
+from ..config import DATA_DIR, mask_config_value
 
 _SCORES_FILE = DATA_DIR / "source_scores.json"
+
+# mask_config_value() masks ``user:pass@host``; a proxy may also carry an empty
+# username (``http://:pass@host``), which that pattern does not match.
+_PROXY_EMPTY_USER_RE = re.compile(r"(//[^/@\s:]*:)[^@\s]+@")
+
+
+def redact_proxy_url(value: str) -> str:
+    """Return ``value`` with proxy credentials replaced by ``***``.
+
+    Accepts a bare proxy URL or free text that embeds one (an exception
+    message, a recommendation). Host, port and username survive so the report
+    stays actionable; only the password is dropped. Proxies without
+    credentials are returned unchanged.
+    """
+    if not isinstance(value, str) or "@" not in value:
+        return value
+    masked = mask_config_value("network_proxy", value)
+    return _PROXY_EMPTY_USER_RE.sub(r"\1***@", masked)
 
 # EMA decay factor: higher = more weight on recent data (0.05-0.2 typical)
 _ALPHA = 0.1
@@ -155,14 +174,18 @@ def diagnose_network(config: dict[str, Any] | None = None) -> dict[str, Any]:
     active_proxy = env_proxy or cfg_proxy
 
     if active_proxy:
-        report["proxy"] = {"configured": True, "source": "env" if env_proxy else "config", "url": active_proxy}
+        report["proxy"] = {
+            "configured": True,
+            "source": "env" if env_proxy else "config",
+            "url": redact_proxy_url(active_proxy),
+        }
     else:
         # Check if system has proxy env vars that scansci-pdf ignores
         sys_proxy = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY") or ""
         if sys_proxy:
             report["recommendations"].append(
-                f"检测到系统代理 {sys_proxy}，但 scansci-pdf 未使用。"
-                f"运行: scansci-pdf config_set network_proxy \"{sys_proxy}\""
+                f"检测到系统代理 {redact_proxy_url(sys_proxy)}，但 scansci-pdf 未使用。"
+                f"运行: scansci-pdf config_set network_proxy \"{redact_proxy_url(sys_proxy)}\""
             )
         else:
             report["recommendations"].append(
@@ -194,7 +217,7 @@ def diagnose_network(config: dict[str, Any] | None = None) -> dict[str, Any]:
             sock.close()
             report["tests"].append({"target": label, "tcp": "ok"})
         except Exception as e:
-            report["tests"].append({"target": label, "tcp": "failed", "error": str(e)[:50]})
+            report["tests"].append({"target": label, "tcp": "failed", "error": redact_proxy_url(str(e))[:50]})
             if "timed out" in str(e).lower():
                 report["recommendations"].append(f"{label} 连接超时 → 网络被封锁，强烈建议配置代理")
 
@@ -209,8 +232,11 @@ def diagnose_network(config: dict[str, Any] | None = None) -> dict[str, Any]:
             if resp.status_code == 200:
                 report["recommendations"].append("代理访问 Sci-Hub 正常 ✓")
         except Exception as e:
-            report["tests"].append({"target": "Sci-Hub via proxy", "error": str(e)[:50]})
-            report["recommendations"].append(f"代理访问 Sci-Hub 失败 → 检查代理是否正确: {active_proxy}")
+            # requests embeds the proxy URL in ProxyError messages.
+            report["tests"].append({"target": "Sci-Hub via proxy", "error": redact_proxy_url(str(e))[:50]})
+            report["recommendations"].append(
+                f"代理访问 Sci-Hub 失败 → 检查代理是否正确: {redact_proxy_url(active_proxy)}"
+            )
 
     # Check Tor status
     try:

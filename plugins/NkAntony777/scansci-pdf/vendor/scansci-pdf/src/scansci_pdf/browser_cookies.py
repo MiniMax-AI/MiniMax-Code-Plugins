@@ -10,6 +10,7 @@ import json
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from .log import get_logger
 from .security import secure_write_text
@@ -89,9 +90,72 @@ def _save_cookies_netscape(cookies: list[dict[str, Any]], output_path: Path) -> 
 
 
 def _is_publisher_cookie(cookie: dict[str, Any]) -> bool:
-    """Check if a cookie belongs to a known publisher domain."""
-    domain = cookie.get("domain", "").lstrip(".")
-    return any(domain.endswith(d) for d in PUBLISHER_DOMAINS)
+    """Check if a cookie belongs to a known publisher domain.
+
+    Domain-anchored: ``evil-sciencedirect.com`` is not ScienceDirect.
+    """
+    return _host_in((cookie.get("domain") or "").lstrip(".").lower(), PUBLISHER_DOMAINS)
+
+
+# Hosts accepted as a *custom* login destination (CLI ``login --url`` / MCP
+# ``custom_url``). Institutional flows (WebVPN/EZProxy/CARSI) are exempt:
+# their origin comes from the operator's own config, not from a caller.
+CUSTOM_LOGIN_ALLOWED_DOMAINS = sorted(
+    (set(PUBLISHER_DOMAINS) | {"doi.org"}
+     | {urlparse(u).hostname or "" for u in PUBLISHER_LOGIN_URLS.values()}) - {""}
+)
+
+
+def _host_in(host: str, domains: Any) -> bool:
+    """True when ``host`` is one of ``domains`` or a subdomain of one."""
+    return any(host == d or host.endswith("." + d) for d in domains if d)
+
+
+def is_allowed_login_destination(url: str) -> tuple[bool, str]:
+    """Check a custom login destination against the publisher/IdP allowlist.
+
+    Returns ``(allowed, host)``. ``host`` is the parsed hostname (empty when
+    the URL is unparseable or non-HTTP), so callers can report it.
+    """
+    try:
+        parsed = urlparse(url or "")
+    except Exception:
+        return False, ""
+    if parsed.scheme not in ("http", "https"):
+        return False, ""
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False, ""
+    return _host_in(host, CUSTOM_LOGIN_ALLOWED_DOMAINS), host
+
+
+def minimal_cookies(cookies: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Reduce cookies to the four fields the loaders need: name/value/domain/path."""
+    return [
+        {
+            "name": c.get("name", ""),
+            "value": c.get("value", ""),
+            "domain": c.get("domain", ""),
+            "path": c.get("path") or "/",
+        }
+        for c in cookies or []
+    ]
+
+
+def scoped_cookies(cookies: list[dict[str, Any]], url: str) -> list[dict[str, Any]]:
+    """Keep only cookies belonging to the login target or a known publisher.
+
+    A browser context also holds the IdP/SSO cookies of whatever campus
+    portal the user passed through. Those are unrelated sessions: they are
+    dropped here instead of being persisted alongside the publisher cookies.
+    """
+    host = (urlparse(url or "").hostname or "").lower()
+    scoped = [
+        c for c in cookies or []
+        if _host_in((c.get("domain") or "").lstrip(".").lower(), [host] if host else [])
+        or _is_publisher_cookie(c)
+    ]
+    return minimal_cookies(scoped)
 
 
 def extract_via_browser(
@@ -104,12 +168,21 @@ def extract_via_browser(
 
     Args:
         config: scansci-pdf config dict.
-        url: URL to open (default: ScienceDirect).
+        url: Login URL. Must be a known publisher/IdP destination.
         max_wait: Max seconds to wait for login.
 
     Returns:
         Result dict with success, cookies_count, domains, etc.
     """
+    allowed, host = is_allowed_login_destination(url)
+    if not allowed:
+        log.info(f"   [cookies] Rejected non-allowlisted login destination: {url}")
+        return {
+            "success": False,
+            "error": f"Login destination not allowed: {url}",
+            "fix": "Use a known publisher URL, e.g. https://www.sciencedirect.com/",
+        }
+
     try:
         from .browser_backend import launch
         from .browser_backend import is_available as _browser_backend_available
@@ -168,19 +241,20 @@ def extract_via_browser(
         except Exception:
             pass
 
-        # Capture all cookies
+        # Capture cookies, then keep only the target/publisher ones: the
+        # context also holds the campus IdP/SSO cookies of whatever portal the
+        # user logged in through, and those must not be persisted. Falling
+        # back to the whole jar when the target has none is not an option.
         all_cookies = context.cookies()
+        save_cookies = scoped_cookies(all_cookies, url)
+        publisher_cookies = [c for c in save_cookies if _is_publisher_cookie(c)]
 
-        if not all_cookies:
+        if not save_cookies:
             browser.close()
             return {
                 "success": False,
-                "message": "未捕获到 cookies。请确保已登录机构账号。",
+                "message": f"未在 {host} 捕获到 cookies。请确保已登录机构账号。",
             }
-
-        # Filter publisher cookies + keep all for completeness
-        publisher_cookies = [c for c in all_cookies if _is_publisher_cookie(c)]
-        save_cookies = publisher_cookies if publisher_cookies else all_cookies
 
         # Save
         _save_cookies_json(save_cookies, cookie_file)
@@ -206,8 +280,8 @@ def extract_via_browser(
             "netscape_file": str(netscape_file),
             "domains": domains_found,
             "browser_imported": browser_imported,
-            "message": f"捕获 {len(all_cookies)} 个 cookies，其中 {len(publisher_cookies)} 个属于出版社。"
-                       f"已保存，后续下载自动使用。",
+            "message": f"捕获 {len(all_cookies)} 个 cookies，其中 {len(save_cookies)} 个属于 {host}"
+                       f"（{len(publisher_cookies)} 个属于出版社）。已保存，后续下载自动使用。",
         }
 
     except Exception as exc:
@@ -272,7 +346,9 @@ def merge_cookies(new_cookies: list[dict[str, Any]], config: dict[str, Any]) -> 
             continue
         merged[key(c)] = c
 
-    result = list(merged.values())
+    # Persist only the four fields the loaders need, not everything the
+    # browser handed us.
+    result = minimal_cookies(list(merged.values()))
 
     if result:
         _save_cookies_json(result, cookie_file)
@@ -321,6 +397,14 @@ def publisher_login(
         log.info(f"   [login] Publisher '{identifier}', opening: {url}")
     elif re.match(r"https?://", identifier):
         url = identifier
+        allowed, host = is_allowed_login_destination(url)
+        if not allowed:
+            log.info(f"   [login] Rejected non-allowlisted login destination: {url}")
+            return {
+                "success": False,
+                "error": f"Login destination not allowed: {identifier}",
+                "fix": "Use a DOI, a publisher name, or a known publisher URL.",
+            }
         log.info(f"   [login] URL detected: {url}")
     else:
         # Try fuzzy publisher name match

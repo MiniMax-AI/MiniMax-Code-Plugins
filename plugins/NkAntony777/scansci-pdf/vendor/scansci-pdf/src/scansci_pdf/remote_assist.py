@@ -4,9 +4,14 @@ When a browser session encounters SSO login or CAPTCHA that requires human
 intervention, this module starts a lightweight HTTP server so the user can
 monitor progress and signal completion from any device (phone, tablet, etc.).
 
+The server binds 127.0.0.1 by default and authenticates every request with a
+short-lived bearer token minted per start(). LAN exposure requires both
+``RemoteAssist(config, allow_lan=True)`` and ``remote_assist_lan`` in the config
+(optionally ``remote_assist_host`` to pick the interface).
+
 Usage pattern:
     assist = RemoteAssist(config, publisher="elsevier")
-    assist.start()
+    url = assist.start()  # authenticated URL, token included
     # ... browser navigates to SSO page ...
     assist.wait_for_user(timeout=300)  # blocks until user signals done
     assist.stop()
@@ -14,16 +19,24 @@ Usage pattern:
 
 from __future__ import annotations
 
+import hmac
+import html
 import json
+import secrets
 import socket
 import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 from .log import get_logger
 
 log = get_logger()
+
+# Default bind address; LAN requires the config opt-in plus an explicit allow_lan=True.
+_LOOPBACK_HOST = "127.0.0.1"
+_TOKEN_BYTES = 32
 
 # HTML template for the remote assist page
 _PAGE_TEMPLATE = """<!DOCTYPE html>
@@ -75,13 +88,21 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   <div class="timer" id="timer"></div>
 </div>
 <script>
+  // Token is minted per server start() and only reaches this page after the
+  // request itself was authenticated. Sending it as a header also forces a
+  // CORS preflight, so a cross-site form post cannot drive /api/done.
+  const AUTH_TOKEN = {token_js};
+  const AUTH_HEADERS = {
+    'Authorization': 'Bearer ' + AUTH_TOKEN,
+    'X-Requested-With': 'XMLHttpRequest'
+  };
   let done = false;
   async function signalDone() {
     if (done) return;
     done = true;
     document.getElementById('doneBtn').disabled = true;
     document.getElementById('doneBtn').textContent = '⏳ Continuing...';
-    await fetch('/api/done', {method: 'POST'});
+    await fetch('/api/done', {method: 'POST', headers: AUTH_HEADERS});
     document.getElementById('status').className = 'status done';
     document.getElementById('status').textContent = '✅ Done! Resuming...';
   }
@@ -89,7 +110,7 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   setInterval(async () => {
     if (done) return;
     try {
-      const r = await fetch('/api/status');
+      const r = await fetch('/api/status', {headers: AUTH_HEADERS});
       const j = await r.json();
       if (j.completed) signalDone();
       if (j.url) document.querySelector('.url-box').textContent = j.url;
@@ -99,6 +120,18 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
 </script>
 </body>
 </html>"""
+
+# Slots filled by _render_page. str.format() is unusable here: the inline CSS
+# and JS blocks contain literal braces it would treat as replacement fields.
+_PAGE_SLOTS = ("publisher", "status_class", "status_text", "browser_url", "token_js")
+
+
+def _render_page(values: dict[str, str]) -> str:
+    """Fill the page template slots, leaving the CSS/JS blocks untouched."""
+    page = _PAGE_TEMPLATE
+    for slot in _PAGE_SLOTS:
+        page = page.replace("{" + slot + "}", values[slot])
+    return page
 
 
 class _RequestHandler(BaseHTTPRequestHandler):
@@ -112,36 +145,81 @@ class _RequestHandler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        if self.path == "/" or self.path == "/index.html":
+        route = urlsplit(self.path).path
+        if route == "/" or route == "/index.html":
             self._serve_page()
-        elif self.path == "/api/status":
+        elif route == "/api/status":
             self._serve_status()
         else:
             self.send_error(404)
 
     def do_POST(self):
-        if self.path == "/api/done":
+        route = urlsplit(self.path).path
+        if route == "/api/done":
             self._handle_done()
         else:
             self.send_error(404)
 
+    def _query_token(self) -> str:
+        """Token passed in the printed access URL, for the initial page load."""
+        values = parse_qs(urlsplit(self.path).query).get("t", [])
+        return values[0].strip() if values else ""
+
+    def _request_token(self) -> str:
+        """Bearer token from the Authorization header, X-Remote-Assist-Token, or ?t=."""
+        authorization = self.headers.get("Authorization", "")
+        if authorization[:7].lower() == "bearer ":
+            return authorization[7:].strip()
+        return self.headers.get("X-Remote-Assist-Token", "").strip() or self._query_token()
+
+    def _authorized(self) -> bool:
+        """Constant-time token check.
+
+        Loopback binds require the token too: every process on the host can reach
+        127.0.0.1 (SSRF, other local users, stray crawlers), and a single code path
+        means authentication can never be skipped by accident. The operator reads
+        the token off the printed URL, so convenience is unchanged.
+        """
+        expected = str(self._state.get("token", ""))
+        return bool(expected) and hmac.compare_digest(self._request_token(), expected)
+
+    def _csrf_ok(self) -> bool:
+        """A cross-site form post cannot set X-Requested-With, so requiring it
+        alongside the token blocks CSRF on the state-changing endpoint."""
+        return self.headers.get("X-Requested-With", "") == "XMLHttpRequest"
+
+    def _deny(self, status: int, detail: str) -> None:
+        """Reject the request before reading or writing any state."""
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps({"error": detail}).encode())
+
     def _serve_page(self):
         state = self._state
+        if not self._authorized():
+            self._deny(401, "Unauthorized")
+            return
         status_class = "done" if state.get("completed") else "waiting"
         status_text = "✅ Verification complete!" if state.get("completed") else "⏳ Waiting for verification..."
-        html = _PAGE_TEMPLATE.format(
-            publisher=state.get("publisher", "Unknown"),
-            status_class=status_class,
-            status_text=status_text,
-            browser_url=state.get("browser_url", ""),
-        )
+        page = _render_page({
+            # The token is a urlsafe alphabet, so JSON encoding is byte-exact here.
+            "publisher": html.escape(str(state.get("publisher", "Unknown"))),
+            "status_class": html.escape(status_class),
+            "status_text": html.escape(status_text),
+            "browser_url": html.escape(str(state.get("browser_url", ""))),
+            "token_js": json.dumps(str(state.get("token", ""))),
+        })
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
-        self.wfile.write(html.encode())
+        self.wfile.write(page.encode("utf-8"))
 
     def _serve_status(self):
         state = self._state
+        if not self._authorized():
+            self._deny(401, "Unauthorized")
+            return
         elapsed = int(time.time() - state.get("started_at", time.time()))
         data = {
             "completed": state.get("completed", False),
@@ -155,6 +233,12 @@ class _RequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(data).encode())
 
     def _handle_done(self):
+        if not self._authorized():
+            self._deny(401, "Unauthorized")
+            return
+        if not self._csrf_ok():
+            self._deny(403, "Missing X-Requested-With header")
+            return
         self._state["completed"] = True
         event = self._state.get("done_event")
         if event:
@@ -172,6 +256,16 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
+def _local_ip() -> str:
+    """Best-effort LAN address, only used to print a URL for a wildcard bind."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception:
+        return _LOOPBACK_HOST
+
+
 class RemoteAssist:
     """Remote human-in-the-loop assist server.
 
@@ -179,9 +273,14 @@ class RemoteAssist:
     - See the current verification status
     - Signal that verification is complete
 
+    Security: binds 127.0.0.1 unless the caller passes ``allow_lan=True`` *and*
+    the config sets ``remote_assist_lan``. Every request must carry a per-start
+    bearer token; the POST that signals completion additionally requires the
+    ``X-Requested-With`` header (CSRF guard).
+
     Example:
         assist = RemoteAssist(config, publisher="elsevier")
-        assist.start()
+        url = assist.start()  # prints an authenticated URL, token included
         # ... browser navigates to SSO ...
         assist.update_url(page.url)
         if assist.wait_for_user(timeout=300):
@@ -189,10 +288,13 @@ class RemoteAssist:
         assist.stop()
     """
 
-    def __init__(self, config: dict[str, Any], publisher: str = ""):
+    def __init__(self, config: dict[str, Any], publisher: str = "", allow_lan: bool = False):
         self._config = config
         self._publisher = publisher
         self._port = int(config.get("remote_assist_port", 0)) or _find_free_port()
+        self._host = self._resolve_host(config, allow_lan)
+        self._bound_host = self._host
+        self._token = secrets.token_urlsafe(_TOKEN_BYTES)
         self._server: HTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._done_event = threading.Event()
@@ -204,37 +306,53 @@ class RemoteAssist:
             "started_at": self._started_at,
             "timeout": 300,
             "done_event": self._done_event,
+            "token": self._token,
         }
+
+    @staticmethod
+    def _resolve_host(config: dict[str, Any], allow_lan: bool) -> str:
+        """Loopback unless both the config opt-in and the caller's confirmation ask for LAN."""
+        if not (allow_lan and config.get("remote_assist_lan")):
+            return _LOOPBACK_HOST
+        return str(config.get("remote_assist_host") or "0.0.0.0").strip() or "0.0.0.0"
 
     @property
     def port(self) -> int:
         return self._port
 
     @property
+    def token(self) -> str:
+        """Short-lived bearer token minted per instance; a restart mints a new one."""
+        return self._token
+
+    @property
+    def bound_host(self) -> str:
+        """Host the HTTP server is actually bound to (127.0.0.1 unless LAN was opted into)."""
+        return self._bound_host
+
+    @property
     def url(self) -> str:
-        return f"http://localhost:{self._port}"
+        """Loopback access URL with the token, for convenience on the local console."""
+        return f"http://{_LOOPBACK_HOST}:{self._port}/?t={self._token}"
 
     @property
     def lan_url(self) -> str:
-        """Get the LAN-accessible URL (for phone/tablet access)."""
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
-            s.close()
-            return f"http://{ip}:{self._port}"
-        except Exception:
-            return self.url
+        """Access URL for the host actually bound (a wildcard bind reports the LAN IP)."""
+        host = self._bound_host
+        if host in ("", "0.0.0.0", "::"):
+            host = _local_ip()
+        return f"http://{host}:{self._port}/?t={self._token}"
 
     def start(self) -> str:
-        """Start the remote assist server. Returns the access URL."""
+        """Start the remote assist server. Returns the authenticated access URL."""
         _RequestHandler._state = self._state
-        self._server = HTTPServer(("0.0.0.0", self._port), _RequestHandler)
+        self._server = HTTPServer((self._host, self._port), _RequestHandler)
+        self._bound_host = self._server.server_address[0]
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
-        lan = self.lan_url
-        log.info(f"   [RemoteAssist] Server started: {lan}")
-        return lan
+        access = self.lan_url
+        log.info(f"   [RemoteAssist] Server started: {access}")
+        return access
 
     def update_url(self, browser_url: str) -> None:
         """Update the displayed browser URL."""

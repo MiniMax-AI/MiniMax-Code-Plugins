@@ -25,6 +25,10 @@ from .security import secure_write_text
 
 log = get_logger()
 
+# localStorage holds bearer tokens for every origin the browser touched, so
+# persisting it requires an explicit opt-in from the operator.
+LOCALSTORAGE_OPT_IN_KEY = "browser_persist_localstorage"
+
 
 class PersistentBrowser:
     """Keeps a stealth browser alive across multiple operations.
@@ -105,48 +109,39 @@ class PersistentBrowser:
 
         log.info("   [browser] Browser state restored")
 
-    def save_cookies(self, config: dict[str, Any]):
-        """Save current browser state (cookies + localStorage) to disk."""
+    def save_cookies(self, config: dict[str, Any], *, target_url: str = ""):
+        """Save target-domain cookies (and, only when opted in, localStorage).
+
+        localStorage holds bearer tokens for whatever origin the browser
+        visited, so it is off unless the operator sets
+        ``browser_persist_localstorage``; even then only the login target and
+        known publisher origins are kept.
+        """
         if not self._context:
             return
         try:
+            from .browser_cookies import minimal_cookies, scoped_cookies
             from .config import DATA_DIR
             cache_dir = Path(config.get("cache_dir", str(DATA_DIR / "cache")))
             cache_dir.mkdir(parents=True, exist_ok=True)
 
-            cookies = self._context.cookies()
+            target_url = target_url or config.get("browser_login_target_url", "") \
+                or "https://www.sciencedirect.com/"
+            cookies = scoped_cookies(self._context.cookies(), target_url)
 
-            localStorage = {}
-            for page in self._context.pages:
-                try:
-                    url = page.url
-                    if url.startswith("http"):
-                        from urllib.parse import urlparse
-                        origin = f"{urlparse(url).scheme}://{urlparse(url).hostname}"
-                        items = page.evaluate("""
-                            (() => {
-                                const items = {};
-                                for (let i = 0; i < localStorage.length; i++) {
-                                    const key = localStorage.key(i);
-                                    items[key] = localStorage.getItem(key);
-                                }
-                                return items;
-                            })()
-                        """)
-                        if items:
-                            localStorage[origin] = items
-                except Exception:
-                    pass
+            localStorage: dict[str, dict[str, Any]] = {}
+            if config.get(LOCALSTORAGE_OPT_IN_KEY, False):
+                localStorage = self._scoped_localstorage(target_url)
+            else:
+                log.info("   [browser] localStorage persistence disabled "
+                         f"(set {LOCALSTORAGE_OPT_IN_KEY}=true to opt in)")
 
             state = {"cookies": cookies, "localStorage": localStorage}
             state_file = cache_dir / "browser_state.json"
             secure_write_text(state_file, json.dumps(state, indent=2, ensure_ascii=False))
 
             cookie_file = cache_dir / "instsci-cookies.json"
-            cookie_data = [
-                {"name": c["name"], "value": c["value"], "domain": c.get("domain", ""), "path": c.get("path", "/")}
-                for c in cookies
-            ]
+            cookie_data = minimal_cookies(cookies)
             secure_write_text(cookie_file, json.dumps(cookie_data, indent=2, ensure_ascii=False))
 
             netscape_file = cache_dir / "instsci-cookies.txt"
@@ -157,6 +152,43 @@ class PersistentBrowser:
             log.info(f"   [browser] Saved {len(cookies)} cookies + {len(localStorage)} localStorage origins")
         except Exception as e:
             log.info(f"   [browser] Failed to save state: {e}")
+
+    def _scoped_localstorage(self, target_url: str) -> dict[str, dict[str, Any]]:
+        """Collect localStorage for the login target / publisher origins only."""
+        from .browser_cookies import CUSTOM_LOGIN_ALLOWED_DOMAINS
+        from urllib.parse import urlparse as _urlparse
+
+        allowed = set(CUSTOM_LOGIN_ALLOWED_DOMAINS)
+        host = (_urlparse(target_url or "").hostname or "").lower()
+        if host:
+            allowed.add(host)
+
+        storage: dict[str, dict[str, Any]] = {}
+        for page in self._context.pages:
+            try:
+                url = page.url
+                if not url.startswith("http"):
+                    continue
+                page_host = (_urlparse(url).hostname or "").lower()
+                if not any(page_host == d or page_host.endswith("." + d) for d in allowed):
+                    log.info(f"   [browser] Skipped localStorage for non-target origin: {page_host}")
+                    continue
+                origin = f"{_urlparse(url).scheme}://{page_host}"
+                items = page.evaluate("""
+                    (() => {
+                        const items = {};
+                        for (let i = 0; i < localStorage.length; i++) {
+                            const key = localStorage.key(i);
+                            items[key] = localStorage.getItem(key);
+                        }
+                        return items;
+                    })()
+                """)
+                if items:
+                    storage[origin] = items
+            except Exception:
+                pass
+        return storage
 
     def _cleanup(self):
         """Close browser gracefully."""
@@ -198,12 +230,9 @@ def close_browser():
 
 def _save_cookies_json(cookies: list[dict[str, Any]], cookie_file: Path) -> None:
     """Save cookies in JSON format (scansci-pdf compatible)."""
-    cookie_data = [
-        {"name": c["name"], "value": c["value"], "domain": c.get("domain", ""), "path": c.get("path", "/")}
-        for c in cookies
-    ]
+    from .browser_cookies import minimal_cookies
     cookie_file.parent.mkdir(parents=True, exist_ok=True)
-    secure_write_text(cookie_file, json.dumps(cookie_data, indent=2, ensure_ascii=False))
+    secure_write_text(cookie_file, json.dumps(minimal_cookies(cookies), indent=2, ensure_ascii=False))
 
 
 def _save_cookies_netscape(cookies: list[dict[str, Any]], cookie_file: Path) -> None:
@@ -237,6 +266,7 @@ def open_login_browser(
     auto_import: bool = True,
     keep_alive: bool = False,
     publisher: str = "",
+    allow_unlisted_domain: bool = False,
 ) -> bool | tuple[bool, Any, Any, Any]:
     """Open a visible stealth browser for interactive login.
 
@@ -249,10 +279,26 @@ def open_login_browser(
         auto_import: Whether to auto-import cookies into CloakBrowser.
         keep_alive: If True, return (True, context, page) without closing browser.
         publisher: Publisher name for remote assist display.
+        allow_unlisted_domain: Skip the publisher/IdP allowlist. Only the
+            institution-operated flows (WebVPN/EZProxy/CARSI) set this; their
+            origin comes from the operator's own config, not from a caller.
 
     Returns:
         True if login succeeded, or (True, context, page) if keep_alive.
     """
+    from .browser_cookies import is_allowed_login_destination, scoped_cookies
+
+    # A caller-supplied destination (CLI `login --url`, MCP `custom_url`) must
+    # be a known publisher/IdP host, otherwise the session we persist could
+    # belong to anything the user happened to visit.
+    if not allow_unlisted_domain:
+        allowed, host = is_allowed_login_destination(url)
+        if not allowed:
+            log.info(f"   [browser] Rejected non-allowlisted login destination: {url}")
+            print(f"  拒绝打开非白名单登录地址: {url}")
+            print("  请使用已知出版社地址，例如 https://www.sciencedirect.com/")
+            return (False, None, None, None) if keep_alive else False
+
     log.info(f"   [browser] Opening stealth browser: {url}")
     print(f"\n  请在浏览器中登录 ({url})")
     print("  程序会自动检测登录完成...\n")
@@ -307,7 +353,12 @@ def open_login_browser(
             # (cookie count > 3) as success for CARSI/EZProxy (#29, #62).
             if detect_login is not None:
                 if detect_login(context, page):
-                    cookies = context.cookies()
+                    # Only target-domain cookies are persisted; the context also
+                    # holds the campus IdP/SSO cookies of the login portal.
+                    cookies = scoped_cookies(context.cookies(), url)
+                    if not cookies:
+                        log.info("   [browser] Login detected, waiting for target-domain cookies")
+                        continue
                     _save_cookies_json(cookies, cookie_file)
                     netscape_path = cookie_file.with_suffix(".txt")
                     _save_cookies_netscape(cookies, netscape_path)
@@ -325,8 +376,11 @@ def open_login_browser(
 
             url_lower = current_url.lower()
             if "login" not in url_lower and "cas" not in url_lower and "sso" not in url_lower:
-                cookies = context.cookies()
-                if len(cookies) > 3:
+                if len(context.cookies()) > 3:
+                    cookies = scoped_cookies(context.cookies(), url)
+                    if not cookies:
+                        log.info("   [browser] Redirect detected, waiting for target-domain cookies")
+                        continue
                     _save_cookies_json(cookies, cookie_file)
                     netscape_path = cookie_file.with_suffix(".txt")
                     _save_cookies_netscape(cookies, netscape_path)
@@ -371,7 +425,8 @@ def webvpn_login(config: dict[str, Any]) -> bool:
     # loader also accepts the legacy underscore variant for migration.
     cookie_file = cache_dir / "instsci-cookies.json"
 
-    return open_login_browser(base, config, cookie_file=cookie_file, max_wait=600)
+    return open_login_browser(base, config, cookie_file=cookie_file, max_wait=600,
+                              allow_unlisted_domain=True)
 
 
 def carsi_login(publisher: str, config: dict[str, Any], *, login_url: str, domains: list[str]) -> bool:
@@ -409,6 +464,7 @@ def carsi_login(publisher: str, config: dict[str, Any], *, login_url: str, domai
         cookie_file=cookie_file,
         detect_login=_detect,
         max_wait=600,  # IdP + 2FA is human-paced; 180s wastes the run (#62)
+        allow_unlisted_domain=True,
     )
 
 
@@ -455,4 +511,5 @@ def ezproxy_login(config: dict[str, Any]) -> bool:
         cookie_file=cookie_file,
         detect_login=_detect,
         max_wait=600,  # SSO + 2FA is human-paced; 180s wastes the run (#62)
+        allow_unlisted_domain=True,
     )

@@ -42,3 +42,39 @@ def test_get_config_safe_masks_everything(monkeypatch):
     assert safe["network_proxy"] == "http://alice:***@proxy.corp:8080"
     assert safe["email"] == "me@example.com"
     assert safe["batch_workers"] == 8
+
+
+def test_proxy_pool_values_are_masked():
+    pool = ["http://alice:hunter2@a.example:8080", "socks5://bob:hunter2@b.example:1080"]
+    assert [mask_config_value("proxy_pool", p) for p in pool] == [
+        "http://alice:***@a.example:8080",
+        "socks5://bob:***@b.example:1080",
+    ]
+
+
+def test_empty_username_proxy_credential_is_masked():
+    """An empty username is still a credential: the password must not survive."""
+    assert mask_config_value("network_proxy", "http://:hunter2@host") == "http://:***@host"
+    assert "hunter2" not in mask_config_value("network_proxy", "http://:hunter2@host")
+    assert mask_config_value("proxy_pool", "socks5://:hunter2@host:1080") == "socks5://:***@host:1080"
+
+
+def test_proxy_without_credentials_is_untouched():
+    assert mask_config_value("network_proxy", "socks5://127.0.0.1:1080") == "socks5://127.0.0.1:1080"
+
+
+def test_ipv6_and_percent_encoded_proxy_credentials():
+    assert mask_config_value("network_proxy", "http://user:pass@[::1]:8080") == "http://user:***@[::1]:8080"
+    assert mask_config_value("network_proxy", "http://user%40corp:p%40ss@host") == "http://user%40corp:***@host"
+
+
+def test_shared_redaction_helper_is_used_by_diagnostics():
+    """The diagnostics boundary must go through the shared helper, not its own regex."""
+    from scansci_pdf.sources.scoring import redact_proxy_url
+
+    # Empty username is the shape config masking alone does not cover; the
+    # shared helper adds it so every boundary behaves the same way.
+    assert redact_proxy_url("http://:hunter2@host") == "http://:***@host"
+    assert "hunter2" not in redact_proxy_url("http://:hunter2@host")
+    # ...and it delegates to the config masking path for the common shapes.
+    assert redact_proxy_url("http://user:pass@host:8080") == mask_config_value("network_proxy", "http://user:pass@host:8080")

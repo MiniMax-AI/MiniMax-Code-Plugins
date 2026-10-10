@@ -63,18 +63,21 @@ def check_deps() -> None:
 
 @app.command("web")
 def web_server(
-    host: str = typer.Option("0.0.0.0", help="Web server host"),
+    host: str = typer.Option("127.0.0.1", help="Web server host (loopback unless you really need LAN)"),
     port: int = typer.Option(8080, help="Web server port"),
 ) -> None:
     """Start the ScanSci PDF web UI for browser-based paper downloading."""
     try:
         import uvicorn
         from .web import app as web_app
+        from .web import web_token
     except ModuleNotFoundError as e:
         typer.echo(f"  Missing dependency: {e.name}. Install with: pip install 'scansci-pdf[web]'")
         raise typer.Exit(1)
+    token = web_token()
     print(f"  Starting ScanSci PDF Web UI on http://{host}:{port}")
-    print(f"  Open http://localhost:{port} in your browser")
+    print(f"  Open http://{host}:{port}/?t={token} in your browser")
+    print("  Every API call needs this token; set SCANSCI_WEB_TOKEN to pin one.")
     uvicorn.run(web_app, host=host, port=port)
 
 

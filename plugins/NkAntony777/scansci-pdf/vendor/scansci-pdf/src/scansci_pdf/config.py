@@ -257,7 +257,8 @@ SENSITIVE_KEYS = [
     "instsci_cookie_file",
 ]
 
-_PROXY_URL_CREDS_RE = re.compile(r"(//[^/@\s]+:)[^@\s]+@")
+# ``*`` not ``+``: an empty username (``http://:pass@host``) is still a credential.
+_PROXY_URL_CREDS_RE = re.compile(r"(//[^/@\s]*:)[^@\s]+@")
 
 
 def mask_config_value(key: str, value: Any) -> Any:
