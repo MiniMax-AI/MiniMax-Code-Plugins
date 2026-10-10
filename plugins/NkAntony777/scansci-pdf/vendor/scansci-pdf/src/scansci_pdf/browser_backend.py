@@ -25,7 +25,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from .browser_provenance import verify_browser_executable
+from .browser_provenance import resolve_channel_executable, verify_browser_executable
 
 logger = logging.getLogger(__name__)
 
@@ -253,11 +253,13 @@ def resolve_browser_binary(config: dict[str, Any] | None = None) -> str | None:
     """Decide which browser binary CloakBrowser should launch.
 
     Priority: explicit config ``browser_executable`` > an externally pinned
-    ``CLOAKBROWSER_BINARY_PATH`` env var (left untouched) > auto-detected
-    local Chrome/Edge when ``browser_auto_upgrade`` is on (default).
+    ``CLOAKBROWSER_BINARY_PATH`` env var (validated, then left as-is) >
+    auto-detected local Chrome/Edge when ``browser_auto_upgrade`` is on
+    (default).
 
-    Returns a path to set as CLOAKBROWSER_BINARY_PATH, or None to keep the
-    bundled stealth Chromium.
+    Every returned path has passed the provenance gate. Returns a path to set
+    as CLOAKBROWSER_BINARY_PATH, or None to keep the bundled stealth Chromium
+    (which the launch path gates separately).
     """
     cfg = config or {}
     explicit = str(cfg.get("browser_executable", "") or "").strip()
@@ -267,9 +269,13 @@ def resolve_browser_binary(config: dict[str, Any] | None = None) -> str | None:
         logger.warning("browser_backend: browser_executable '%s' not found, falling back", explicit)
     env_path = os.environ.get("CLOAKBROWSER_BINARY_PATH", "").strip()
     if env_path and Path(env_path).exists():
-        return None  # externally pinned — leave as-is
+        # Externally pinned, but not thereby trusted: the env var is still an
+        # input, so it goes through the same allowlist + digest gate.
+        return str(verify_browser_executable(env_path, cfg))
     if cfg.get("browser_auto_upgrade", True):
-        return find_local_browser()
+        detected = find_local_browser()
+        if detected:
+            return str(verify_browser_executable(detected, cfg))
     return None
 
 
@@ -277,19 +283,69 @@ def resolve_browser_binary(config: dict[str, Any] | None = None) -> str | None:
 # patchright launch helpers
 # ---------------------------------------------------------------------------
 
-def _patchright_browser_kwargs(config: dict[str, Any] | None) -> dict[str, Any]:
+def _patchright_browser_kwargs(config: dict[str, Any] | None) -> dict[str, Any] | None:
     """Browser selection for the patchright backend.
 
-    Explicit ``browser_executable`` wins; otherwise channel="chrome" (local
-    Google Chrome, official best practice). Returns kwargs for launch().
+    Explicit ``browser_executable`` wins; otherwise the ``chrome`` channel is
+    resolved *by us* and passed as ``executable_path``. Handing patchright a
+    bare ``channel=`` would let it resolve and launch whatever Chrome it finds,
+    behind the provenance gate; doing the equivalent lookup here keeps the same
+    browser while making the launch auditable.
+
+    Returns the launch kwargs, or None when no acceptable local Chrome is
+    installed and the caller should use the bundled build instead.
     """
+    from .security import SecurityError
+
     cfg = config or {}
     explicit = str(cfg.get("browser_executable", "") or "").strip()
     if explicit:
         if Path(explicit).exists():
             return {"executable_path": str(verify_browser_executable(explicit, cfg))}
         logger.warning("browser_backend: browser_executable '%s' not found, using channel=chrome", explicit)
-    return {"channel": "chrome"}
+    try:
+        resolved = resolve_channel_executable("chrome", cfg)
+    except SecurityError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - defensive: never launch an unprobed binary
+        raise SecurityError(f"Could not resolve the chrome channel: {exc}") from exc
+    if resolved is None:
+        logger.info("browser_backend: no local chrome found, falling back to bundled Chromium")
+        return None
+    return {"executable_path": str(resolved)}
+
+
+def _bundled_chromium_kwargs(driver: Any, config: dict[str, Any] | None) -> dict[str, Any]:
+    """Gate the bundled stealth Chromium used as the launch fallback.
+
+    It lives in the user-writable Playwright cache, so it is the least
+    provenanced binary we could start; ``launch()`` used to reach it with no
+    arguments at all. Ask the driver where it is and put that path through the
+    same gate rather than letting the launcher pick it implicitly.
+    """
+    from .security import SecurityError
+
+    try:
+        executable = driver.chromium.executable_path
+    except Exception as exc:  # noqa: BLE001 - surfaces as "not installed"
+        raise SecurityError(
+            f"patchright's bundled Chromium could not be resolved: {exc}"
+        ) from exc
+    return {"executable_path": str(verify_browser_executable(executable, config))}
+
+
+def _patchright_launch_attempts(config: dict[str, Any] | None, driver: Any) -> list[dict[str, Any]]:
+    """Every launch attempt, each with a gate-verified ``executable_path``.
+
+    A resolution failure raises instead of falling through: refusing a binary
+    and silently starting a different one would hide the refusal.
+    """
+    attempts: list[dict[str, Any]] = []
+    local = _patchright_browser_kwargs(config)
+    if local:
+        attempts.append(local)
+    attempts.append(_bundled_chromium_kwargs(driver, config))
+    return attempts
 
 
 _DESKTOP_UA_TEMPLATE = (
@@ -326,16 +382,21 @@ def _launch_patchright(
 ) -> Any:
     """Launch via patchright (Playwright sync API, patched driver).
 
-    Tries channel=chrome / executable_path first; if the local Chrome is
-    missing, retries with the bundled chromium build (patchright install
-    chromium). ``humanize`` is a no-op here.
+    Tries the verified local Chrome first; if it is missing, retries with the
+    bundled chromium build (patchright install chromium). Every attempt names a
+    concrete ``executable_path`` that already passed the provenance gate.
+    ``humanize`` is a no-op here.
     """
     from patchright.sync_api import sync_playwright
 
-    browser_kwargs = _patchright_browser_kwargs(config)
     pw = sync_playwright().start()
+    try:
+        attempts = _patchright_launch_attempts(config, pw)
+    except Exception:
+        pw.stop()
+        raise
     last_error: Exception | None = None
-    for attempt in (browser_kwargs, {}):  # preferred → bundled chromium fallback
+    for attempt in attempts:  # preferred → bundled chromium fallback
         try:
             browser = pw.chromium.launch(
                 headless=headless,
@@ -393,13 +454,17 @@ def _launch_patchright_persistent(
     args: list[str] | None,
     **kwargs: Any,
 ) -> Any:
-    """Persistent context via patchright, with the same binary fallbacks."""
+    """Persistent context via patchright, with the same gated binary fallbacks."""
     from patchright.sync_api import sync_playwright
 
-    browser_kwargs = _patchright_browser_kwargs(config)
     pw = sync_playwright().start()
+    try:
+        attempts = _patchright_launch_attempts(config, pw)
+    except Exception:
+        pw.stop()
+        raise
     last_error: Exception | None = None
-    for attempt in (browser_kwargs, {}):
+    for attempt in attempts:
         try:
             context = pw.chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
@@ -750,13 +815,20 @@ def browser_info(config: dict[str, Any] | None = None) -> dict[str, Any]:
         if explicit and Path(explicit).exists():
             binary = explicit
         else:
-            versions = _probe_windows_versions() if os.name == "nt" else _probe_posix_versions()
-            for path, version in versions.items():
-                if "chrome" in path.lower():
-                    binary, info["version"] = path, version
-                    break
+            try:
+                resolved = resolve_channel_executable("chrome", cfg)
+            except Exception:
+                resolved = None
+            if resolved:
+                binary = str(resolved)
             else:
-                binary = "channel=chrome"
+                versions = _probe_windows_versions() if os.name == "nt" else _probe_posix_versions()
+                for path, version in versions.items():
+                    if "chrome" in path.lower():
+                        binary, info["version"] = path, version
+                        break
+                else:
+                    binary = "channel=chrome"
         info["binary"] = binary
         return info
     if backend == BACKEND_CAMOUFOX:

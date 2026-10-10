@@ -9,7 +9,6 @@ Tracks per-source success rate and latency. Uses EMA so:
 from __future__ import annotations
 
 import json
-import re
 import time
 from pathlib import Path
 from typing import Any
@@ -18,23 +17,21 @@ from ..config import DATA_DIR, mask_config_value
 
 _SCORES_FILE = DATA_DIR / "source_scores.json"
 
-# mask_config_value() masks ``user:pass@host``; a proxy may also carry an empty
-# username (``http://:pass@host``), which that pattern does not match.
-_PROXY_EMPTY_USER_RE = re.compile(r"(//[^/@\s:]*:)[^@\s]+@")
-
 
 def redact_proxy_url(value: str) -> str:
     """Return ``value`` with proxy credentials replaced by ``***``.
 
     Accepts a bare proxy URL or free text that embeds one (an exception
     message, a recommendation). Host, port and username survive so the report
-    stays actionable; only the password is dropped. Proxies without
-    credentials are returned unchanged.
+    stays actionable; only the password is dropped, with or without a scheme.
+    Proxies without credentials are returned unchanged.
+
+    Delegates to the shared config masker so this boundary cannot drift from
+    the config-display boundary.
     """
     if not isinstance(value, str) or "@" not in value:
         return value
-    masked = mask_config_value("network_proxy", value)
-    return _PROXY_EMPTY_USER_RE.sub(r"\1***@", masked)
+    return mask_config_value("network_proxy", value)
 
 # EMA decay factor: higher = more weight on recent data (0.05-0.2 typical)
 _ALPHA = 0.1
@@ -183,10 +180,22 @@ def diagnose_network(config: dict[str, Any] | None = None) -> dict[str, Any]:
         # Check if system has proxy env vars that scansci-pdf ignores
         sys_proxy = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY") or ""
         if sys_proxy:
+            safe_sys = redact_proxy_url(sys_proxy)
             report["recommendations"].append(
-                f"检测到系统代理 {redact_proxy_url(sys_proxy)}，但 scansci-pdf 未使用。"
-                f"运行: scansci-pdf config_set network_proxy \"{redact_proxy_url(sys_proxy)}\""
+                f"检测到系统代理 {safe_sys}，但 scansci-pdf 未使用。"
             )
+            # A copy-pasteable command would carry the password into the
+            # terminal history and the agent transcript, so only hand one out
+            # when there is no credential to leak.
+            if safe_sys == sys_proxy:
+                report["recommendations"].append(
+                    f"运行: scansci-pdf config_set network_proxy \"{sys_proxy}\""
+                )
+            else:
+                report["recommendations"].append(
+                    '运行: scansci-pdf config_set network_proxy "<代理地址>"'
+                    "（该地址含密码，请自行填写，此处不回显）"
+                )
         else:
             report["recommendations"].append(
                 "未配置代理。如需访问被封锁的网站，运行: scansci-pdf config_set network_proxy \"socks5://127.0.0.1:1080\""

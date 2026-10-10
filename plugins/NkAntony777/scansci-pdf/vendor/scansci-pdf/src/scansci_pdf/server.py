@@ -1530,8 +1530,8 @@ def scansci_pdf_config(key: str = "", value: str = "", confirmed: bool = False) 
     """Get the full masked config (no key) / one key's value (key only) / set key=value (key + value)."""
     if key and value:
         from .security import strict_mode
-        if strict_mode() and key in {'network_proxy', 'proxy_pool', 'tor_proxy', 'browser_executable', 'flaresolverr_url', 'camofox_url'} and not confirmed:
-            return json.dumps({'error': 'Explicit owner confirmation required for trusted network/executable configuration'})
+        if strict_mode() and key in {'network_proxy', 'proxy_pool', 'tor_proxy', 'browser_executable', 'flaresolverr_url', 'camofox_url', 'browser_persist_localstorage'} and not confirmed:
+            return json.dumps({'error': 'Explicit owner confirmation required for trusted network/executable/credential configuration'})
         return _config_set_impl(key=key, value=value)
     if key:
         cfg = json.loads(scansci_pdf_config_get())

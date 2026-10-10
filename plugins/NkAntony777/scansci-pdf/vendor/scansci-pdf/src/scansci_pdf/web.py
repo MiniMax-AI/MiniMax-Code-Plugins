@@ -10,7 +10,6 @@ same-origin fetch, which is also what blocks CSRF on the POST endpoints.
 from __future__ import annotations
 
 import hmac
-import json
 import os
 import re
 import secrets
@@ -35,7 +34,15 @@ _TEMPLATE_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(_TEMPLATE_DIR))
 templates.env.cache_size = 0
 
-app = FastAPI(title="ScanSci PDF", description="Academic paper downloader web UI")
+app = FastAPI(
+    title="ScanSci PDF",
+    description="Academic paper downloader web UI",
+    # Interactive docs would expose the whole route schema on an
+    # authenticated surface; they are not part of the hosted package.
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 
 
 # --- Auth ---
@@ -44,16 +51,36 @@ TOKEN_ENV = "SCANSCI_WEB_TOKEN"
 TOKEN_CONFIG_KEY = "web_token"
 _TOKEN_BYTES = 32
 _generated_token = ""
+# The token is handed over once, as an HttpOnly cookie, and never rendered into
+# the page. It must not travel in the query string: uvicorn's access log
+# records the full request target, and a URL also leaks through history and
+# Referer. It must not be readable by page JavaScript either, so the Tailwind
+# and Alpine scripts this template loads from a CDN cannot lift it and call
+# the local API on the user's behalf.
+_AUTH_COOKIE = "scansci_token"
+# Restrictive default: no framing, no cross-origin anything, no plugin
+# content. script-src additionally allows the two CDNs the shipped template
+# uses; scripts they inject are same-origin from the browser's perspective.
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' https://cdn.tailwindcss.com https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; "
+    "img-src 'self' data:; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+)
 _AUTH_SHIM = """<script>
 (function () {
-  const token = %(token)s;
+  // The bearer token lives in an HttpOnly cookie; JavaScript cannot read it.
+  // Requests are same-origin, so the cookie authenticates them; the custom
+  // header is what stops a cross-site form post from forging a write.
   const nativeFetch = window.fetch.bind(window);
   window.fetch = (input, init) => {
     const options = Object.assign({}, init);
     const headers = new Headers((init && init.headers) || {});
-    headers.set('Authorization', 'Bearer ' + token);
     headers.set('X-Requested-With', 'XMLHttpRequest');
     options.headers = headers;
+    options.credentials = 'same-origin';
     return nativeFetch(input, options);
   };
 })();
@@ -73,12 +100,15 @@ def web_token() -> str:
 
 
 def _request_token(request: Request) -> str:
-    """Token from the Authorization header, X-ScanSci-Token, or the ?t= link parameter."""
+    """Token from the Authorization header, X-ScanSci-Token, the session cookie, or ?t=."""
     authorization = request.headers.get("Authorization", "")
     if authorization[:7].lower() == "bearer ":
         return authorization[7:].strip()
     header = request.headers.get("X-ScanSci-Token", "").strip()
-    return header or request.query_params.get("t", "").strip()
+    if header:
+        return header
+    cookie = request.cookies.get(_AUTH_COOKIE, "").strip()
+    return cookie or request.query_params.get("t", "").strip()
 
 
 def require_auth(request: Request) -> None:
@@ -94,12 +124,25 @@ def require_csrf(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Missing X-Requested-With header")
 
 
-def _auth_page(html_text: str, token: str) -> str:
-    """Inject the fetch shim that attaches the token and the CSRF header."""
-    shim = _AUTH_SHIM % {"token": json.dumps(token)}
+def _auth_page(html_text: str) -> str:
+    """Inject the fetch shim. No token is rendered into the page."""
     if "</head>" in html_text:
-        return html_text.replace("</head>", shim + "</head>", 1)
-    return shim + html_text
+        return html_text.replace("</head>", _AUTH_SHIM + "</head>", 1)
+    return _AUTH_SHIM + html_text
+
+
+# --- Security headers ---
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    """Apply the CSP and referrer policy to every response, not just the page."""
+    response = await call_next(request)
+    response.headers.setdefault("Content-Security-Policy", _CSP)
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Cache-Control", "no-store")
+    return response
 
 
 # --- Request/Response models ---
@@ -190,9 +233,22 @@ def _check_sources(config: dict[str, Any]) -> dict[str, Any]:
 
 @app.get("/", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 async def index(request: Request):
-    token = _request_token(request)
     page = templates.get_template("index.html").render({"request": request})
-    return HTMLResponse(_auth_page(page, token))
+    response = HTMLResponse(_auth_page(page))
+    # A ?t= link is a one-time handover: hand the token to an HttpOnly cookie
+    # so later requests never repeat it in a URL that uvicorn logs.
+    if request.query_params.get("t", "").strip():
+        response.set_cookie(
+            _AUTH_COOKIE,
+            web_token(),
+            httponly=True,
+            samesite="strict",
+            path="/",
+        )
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Content-Security-Policy"] = _CSP
+    return response
 
 
 @app.post("/api/download", dependencies=[Depends(require_auth), Depends(require_csrf)])

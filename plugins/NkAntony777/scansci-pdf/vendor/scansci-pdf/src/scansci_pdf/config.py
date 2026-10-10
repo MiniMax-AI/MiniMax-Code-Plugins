@@ -257,22 +257,34 @@ SENSITIVE_KEYS = [
     "instsci_cookie_file",
 ]
 
-# ``*`` not ``+``: an empty username (``http://:pass@host``) is still a credential.
-_PROXY_URL_CREDS_RE = re.compile(r"(//[^/@\s]*:)[^@\s]+@")
+# Canonical proxy-credential redaction, shared by every display boundary.
+#
+# ``*`` not ``+`` for the username: an empty username (``http://:pass@host``)
+# is still a credential. ``:`` excluded so the FIRST colon splits user/pass,
+# and the password part is greedy (but ``/``-free) so a password containing a
+# colon is masked whole without swallowing a URL path.
+_PROXY_URL_CREDS_RE = re.compile(r"(//[^/@\s:]*:)[^@/\s]+@")
+# A scheme is optional in a user-typed proxy, so ``user:pass@host`` is a
+# credential too. The password is required, which keeps ``bob@proxy:3128``
+# (username only) and ``127.0.0.1:1080`` (no ``@``) untouched. ``(?<!/)``
+# keeps this from re-entering the ``//`` form handled above.
+_PROXY_BARE_CREDS_RE = re.compile(r"(?<!/)([^/@\s:]+:)[^@/\s]+@")
 
 
 def mask_config_value(key: str, value: Any) -> Any:
     """Return a display-safe copy of a config value.
 
     Secrets (API keys, tokens, cookie files) are fully masked; proxy URLs keep
-    host/port but hide the password (``http://user:***@host:port``).
+    host/port but hide the password (``http://user:***@host:port``). The
+    schemeless ``user:pass@host`` form is masked as well.
     """
     if value is None:
         return value
     if key in SENSITIVE_KEYS or re.search(r"key|token|secret|password|cookie|credential", key, re.I):
         return "***"
     if "proxy" in key.lower() and isinstance(value, str) and "@" in value:
-        return _PROXY_URL_CREDS_RE.sub(r"\1***@", value)
+        masked = _PROXY_URL_CREDS_RE.sub(r"\1***@", value)
+        return _PROXY_BARE_CREDS_RE.sub(r"\1***@", masked)
     return value
 
 

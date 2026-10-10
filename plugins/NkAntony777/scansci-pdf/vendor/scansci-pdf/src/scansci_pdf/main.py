@@ -78,7 +78,10 @@ def web_server(
     print(f"  Starting ScanSci PDF Web UI on http://{host}:{port}")
     print(f"  Open http://{host}:{port}/?t={token} in your browser")
     print("  Every API call needs this token; set SCANSCI_WEB_TOKEN to pin one.")
-    uvicorn.run(web_app, host=host, port=port)
+    # The access log records the full request target, so a ?t= link would be
+    # written to the log verbatim. The browser keeps the token after the first
+    # request via its HttpOnly cookie, so the query string never needs logging.
+    uvicorn.run(web_app, host=host, port=port, access_log=False)
 
 
 @app.command("login")

@@ -92,7 +92,8 @@ def _save_cookies_netscape(cookies: list[dict[str, Any]], output_path: Path) -> 
 def _is_publisher_cookie(cookie: dict[str, Any]) -> bool:
     """Check if a cookie belongs to a known publisher domain.
 
-    Domain-anchored: ``evil-sciencedirect.com`` is not ScienceDirect.
+    Dot-anchored via :func:`_host_in`: only the domain itself or a true
+    subdomain matches, so ``evil-sciencedirect.com`` is not ScienceDirect.
     """
     return _host_in((cookie.get("domain") or "").lstrip(".").lower(), PUBLISHER_DOMAINS)
 
@@ -142,19 +143,40 @@ def minimal_cookies(cookies: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
-def scoped_cookies(cookies: list[dict[str, Any]], url: str) -> list[dict[str, Any]]:
-    """Keep only cookies belonging to the login target or a known publisher.
+def _covers_host(cookie_domain: str, host: str) -> bool:
+    """True when a cookie's domain would actually be sent to ``host``.
 
-    A browser context also holds the IdP/SSO cookies of whatever campus
-    portal the user passed through. Those are unrelated sessions: they are
-    dropped here instead of being persisted alongside the publisher cookies.
+    Mirrors browser cookie scoping: the cookie's domain is the host itself or
+    a parent of it (``.sciencedirect.com`` covers ``www.sciencedirect.com``),
+    dot-anchored so ``evil-sciencedirect.com`` never matches. The reverse is
+    not a match — a cookie for ``link.springer.com`` is not sent to
+    ``www.sciencedirect.com``.
+    """
+    domain = (cookie_domain or "").lstrip(".").lower()
+    if not domain or not host:
+        return False
+    return host == domain or host.endswith("." + domain)
+
+
+def scoped_cookies(cookies: list[dict[str, Any]], url: str) -> list[dict[str, Any]]:
+    """Keep only cookies belonging to the login target's own domain.
+
+    The browser context holds every session the user touched while logging in:
+    the target's cookies, the campus IdP/SSO cookies of whatever portal issued
+    them, and any sibling publisher the flow passed through. Only cookies that
+    the target domain would itself receive are persisted, so logging into one
+    publisher no longer leaves a live session behind for every other publisher
+    on the list, and a captured jar cannot be replayed against a different site.
+
+    There is no cross-publisher carve-out: each login runs in its own context
+    against one target, so cookies for a second publisher are never needed to
+    complete the first. Cross-domain flows (WebVPN/EZProxy) proxy the publisher
+    under the *proxy* hostname, which is the target here, so they keep working.
     """
     host = (urlparse(url or "").hostname or "").lower()
-    scoped = [
-        c for c in cookies or []
-        if _host_in((c.get("domain") or "").lstrip(".").lower(), [host] if host else [])
-        or _is_publisher_cookie(c)
-    ]
+    if not host:
+        return []
+    scoped = [c for c in cookies or [] if _covers_host(c.get("domain", ""), host)]
     return minimal_cookies(scoped)
 
 

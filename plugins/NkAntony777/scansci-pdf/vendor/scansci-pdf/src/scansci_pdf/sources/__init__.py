@@ -1170,18 +1170,27 @@ def _build_failure_guidance(doi: str, config: dict[str, Any]) -> list[str]:
         tips.append("→ 运行: pip install cloakbrowser")
 
     # Check scansci-pdf proxy config
+    from .scoring import redact_proxy_url
+
     cfg_proxy = config.get("network_proxy", "")
     env_proxy = os.environ.get("SCANSCI_PDF_PROXY", "")
 
     if cfg_proxy or env_proxy:
         active = env_proxy or cfg_proxy
-        tips.append(f"当前代理: {active} — 如果 Sci-Hub 仍不通，尝试更换代理地址")
+        tips.append(f"当前代理: {redact_proxy_url(active)} — 如果 Sci-Hub 仍不通，尝试更换代理地址")
     else:
         # Check if system has proxy that scansci-pdf ignores
         sys_proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or ""
         if sys_proxy:
-            tips.append(f"检测到系统代理 {sys_proxy}，但 scansci-pdf 未使用")
-            tips.append(f"→ 运行: scansci-pdf config_set network_proxy \"{sys_proxy}\"")
+            safe_sys = redact_proxy_url(sys_proxy)
+            tips.append(f"检测到系统代理 {safe_sys}，但 scansci-pdf 未使用")
+            # Never emit a command that would put a password into the shell
+            # history and the agent transcript; tell the user to fill it in.
+            if safe_sys == sys_proxy:
+                tips.append(f"→ 运行: scansci-pdf config_set network_proxy \"{sys_proxy}\"")
+            else:
+                tips.append('→ 运行: scansci-pdf config_set network_proxy "<代理地址>"'
+                            "（该地址含密码，请自行填写，此处不回显）")
         else:
             tips.append("未配置代理 — 如果网络受限，运行: scansci-pdf config_set network_proxy \"socks5://127.0.0.1:1080\"")
 

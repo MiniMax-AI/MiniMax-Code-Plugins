@@ -22,7 +22,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from .config import load_config, save_config
+from .config import load_config, mask_config_value, save_config
 from .fetcher import PaperFetcher
 from .schools import get_school, list_schools, search_schools
 from .sources import semantic_scholar
@@ -1221,7 +1221,7 @@ def config_cmd(
     if connector_url:
         cfg["network_proxy"] = connector_url
         changed = True
-        console.print(f"[green]Connector URL set to: {connector_url}[/green]")
+        console.print(f"[green]Connector URL set to: {mask_config_value('network_proxy', connector_url)}[/green]")
 
     if set_elsevier_key:
         cfg["elsevier_api_key"] = set_elsevier_key
@@ -1260,14 +1260,15 @@ def config_cmd(
     if set_static_proxy:
         cfg["browser_static_proxy"] = set_static_proxy
         changed = True
-        console.print(f"[green]Browser static proxy set to: {set_static_proxy}[/green]")
+        console.print(f"[green]Browser static proxy set to: {mask_config_value('browser_static_proxy', set_static_proxy)}[/green]")
 
     if set_proxy_pool:
         cfg["proxy_pool"] = set_proxy_pool
         changed = True
         from scansci_pdf.config import parse_proxy_pool
         parsed = parse_proxy_pool(set_proxy_pool)
-        console.print(f"[green]Proxy rotation pool: {len(parsed)} proxies ({', '.join(parsed)})[/green]")
+        shown = ", ".join(mask_config_value("proxy_pool", p) for p in parsed)
+        console.print(f"[green]Proxy rotation pool: {len(parsed)} proxies ({shown})[/green]")
 
     if set_remote_port >= 0:
         cfg["remote_assist_port"] = set_remote_port
@@ -1300,7 +1301,7 @@ def config_cmd(
             school_type = "unknown"
 
         _school = cfg.get("instsci_school", "")
-        _conn = cfg.get("network_proxy", "") or "(not set)"
+        _conn = mask_config_value("network_proxy", cfg.get("network_proxy", "")) or "(not set)"
         _email = cfg.get("email", "")
         _eak = cfg.get("elsevier_api_key", "")
         _eit = cfg.get("elsevier_insttoken", "")
@@ -1323,7 +1324,7 @@ def config_cmd(
         console.print(f"  Output dir:        {_od}")
         console.print(f"  Cache dir:         {_cd}")
         console.print(f"  Cookie path:       {_cp}")
-        _sp = cfg.get("browser_static_proxy", "")
+        _sp = mask_config_value("browser_static_proxy", cfg.get("browser_static_proxy", ""))
         _rp = cfg.get("remote_assist_port", 0)
         _mw = cfg.get("max_browser_workers", 2)
         console.print(f"  Static proxy:      {_sp or '(not set)'}")

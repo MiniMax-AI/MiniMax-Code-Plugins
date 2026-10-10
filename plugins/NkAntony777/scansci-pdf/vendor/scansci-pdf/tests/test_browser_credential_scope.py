@@ -57,13 +57,20 @@ def test_scoped_cookies_keeps_only_minimum_fields():
 
 
 def test_scoped_cookies_keeps_target_host_and_publishers():
+    """Only the target domain survives.
+
+    Persisting a sibling publisher's cookie alongside the target's meant one
+    login left a live session behind for every other publisher on the list.
+    Cross-domain flows are unaffected because WebVPN/EZProxy proxy the
+    publisher under the proxy hostname, which is the target here.
+    """
     jar = [
         {"name": "vpn", "value": "vpn-token", "domain": ".webvpn.campus.edu.cn", "path": "/"},
         {"name": "sd", "value": "pub-token", "domain": ".sciencedirect.com", "path": "/"},
         {"name": "other", "value": "x", "domain": ".mail.example.com", "path": "/"},
     ]
     kept = scoped_cookies(jar, "https://webvpn.campus.edu.cn/remote/login")
-    assert {c["name"] for c in kept} == {"vpn", "sd"}
+    assert {c["name"] for c in kept} == {"vpn"}
 
 
 def test_scoped_cookies_rejects_lookalike_domains():

@@ -37,6 +37,9 @@ log = get_logger()
 # Default bind address; LAN requires the config opt-in plus an explicit allow_lan=True.
 _LOOPBACK_HOST = "127.0.0.1"
 _TOKEN_BYTES = 32
+# Short-lived by design: the token only needs to outlive one human-in-the-loop
+# wait, and an unbounded one turns a leaked console line into standing access.
+_TOKEN_TTL_SECONDS = 900
 
 # HTML template for the remote assist page
 _PAGE_TEMPLATE = """<!DOCTYPE html>
@@ -181,7 +184,14 @@ class _RequestHandler(BaseHTTPRequestHandler):
         the token off the printed URL, so convenience is unchanged.
         """
         expected = str(self._state.get("token", ""))
-        return bool(expected) and hmac.compare_digest(self._request_token(), expected)
+        if not expected:
+            return False
+        # An expired token is refused even though the constant-time comparison
+        # would still match, so a token captured from a console transcript or
+        # a log cannot drive a later verification flow.
+        if time.time() >= float(self._state.get("token_expires_at", 0) or 0):
+            return False
+        return hmac.compare_digest(self._request_token(), expected)
 
     def _csrf_ok(self) -> bool:
         """A cross-site form post cannot set X-Requested-With, so requiring it
@@ -212,6 +222,16 @@ class _RequestHandler(BaseHTTPRequestHandler):
         })
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        # This page carries the bearer token in its inline script, so no
+        # external script may be permitted to run alongside it. Everything the
+        # page needs is inline already.
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+            "connect-src 'self'; img-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        )
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
         self.wfile.write(page.encode("utf-8"))
 
@@ -295,6 +315,9 @@ class RemoteAssist:
         self._host = self._resolve_host(config, allow_lan)
         self._bound_host = self._host
         self._token = secrets.token_urlsafe(_TOKEN_BYTES)
+        # The token authorises a state change, so it stops working once the
+        # wait it was minted for is over — not merely when stop() is called.
+        self._token_expires_at = time.time() + _TOKEN_TTL_SECONDS
         self._server: HTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._done_event = threading.Event()
@@ -307,6 +330,7 @@ class RemoteAssist:
             "timeout": 300,
             "done_event": self._done_event,
             "token": self._token,
+            "token_expires_at": self._token_expires_at,
         }
 
     @staticmethod
@@ -351,7 +375,9 @@ class RemoteAssist:
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
         access = self.lan_url
-        log.info(f"   [RemoteAssist] Server started: {access}")
+        # Never log the authenticated URL: the token in it would otherwise be
+        # captured in any log file that keeps this line.
+        log.info(f"   [RemoteAssist] Server started on {self._bound_host}:{self._port} (token required)")
         return access
 
     def update_url(self, browser_url: str) -> None:
@@ -369,7 +395,9 @@ class RemoteAssist:
         """
         self._state["timeout"] = timeout
         lan = self.lan_url
-        log.info(f"   [RemoteAssist] Waiting for user at {lan} (timeout={timeout}s)")
+        # The operator must see the full URL, but the log must not keep the
+        # token: console output is what gets pasted into issues and transcripts.
+        log.info(f"   [RemoteAssist] Waiting for user on {self._bound_host}:{self._port} (timeout={timeout}s)")
         print(f"\n{'='*60}")
         print(f"  🔐 Remote Assist: Complete verification from any device")
         print(f"  📱 Open this URL: {lan}")
