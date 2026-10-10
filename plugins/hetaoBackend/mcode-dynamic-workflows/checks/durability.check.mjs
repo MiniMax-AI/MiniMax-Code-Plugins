@@ -192,6 +192,31 @@ test('after-COMMIT failure does not duplicate rows that already reached SQLite',
   });
 });
 
+test('failed rollback inside a still-open transaction does not drop the batch', async () => {
+  await temporary(async dir => {
+    const store = new Store(dir);
+    try {
+      store.event('r', 'run.created');
+      const first = store.event('r', 'step.progress');
+      const second = store.event('r', 'step.progress');
+      // COMMIT fails and ROLLBACK also fails, but the transaction is still open.
+      // The rows are visible on this connection and NOT durable. Treating the
+      // table as evidence of a commit would silently discard them from the
+      // retry buffer, so the outcome must be decided by isTransaction instead.
+      const exec = store.db.exec.bind(store.db);
+      store.db.exec = sql => {
+        if (sql === 'COMMIT' || sql === 'ROLLBACK') throw new Error('injected io failure');
+        return exec(sql);
+      };
+      assert.throws(() => store.flushVolatile(), /injected io failure/);
+      store.db.exec = exec;
+      assert.equal(store.db.isTransaction, true, 'precondition: transaction still open');
+      const buffered = store.volatileBuffer.map(item => item.body.seq).sort((a, b) => a - b);
+      assert.deepEqual(buffered, [first.seq, second.seq], 'uncommitted rows must stay queued for retry');
+    } finally { store.db.exec('ROLLBACK'); store.close(); }
+  });
+});
+
 test('workflow_wait rejects cursors that would skip every future event', async () => {
   await temporary(async dir => {
     const store = new Store(dir);

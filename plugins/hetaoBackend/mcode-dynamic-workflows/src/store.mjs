@@ -52,11 +52,16 @@ export class Store {
   transaction(fn) {if(this.txDepth)return fn();this.reserveEventSequences();this.db.exec('BEGIN IMMEDIATE');this.txDepth=1;this.txVolatile=[];
     try{const r=fn();this.db.exec('COMMIT');return r;}
     catch(e){
-      // A committed transaction cannot be rolled back, so a failing ROLLBACK is
-      // the signal that COMMIT may already have reached the table. Only then is
-      // the events table consulted before re-queueing anything.
+      // Whether the batch is durable must be read from SQLite, never inferred
+      // from the fact that ROLLBACK threw: a rollback can fail for reasons other
+      // than "already committed" (busy/locked), leaving the transaction open.
+      // Probing such a transaction would read its own uncommitted rows as
+      // durable and silently drop them from the retry buffer. isTransaction
+      // answers the real question — only a genuinely ended transaction makes a
+      // row on this connection mean "committed".
       let open=true;
-      try{this.db.exec('ROLLBACK');}catch{open=false;}
+      try{this.db.exec('ROLLBACK');}catch{}
+      if(!this.db.isTransaction)open=false;
       this.restoreVolatile([...this.txVolatile,...this.volatileBuffer],!open);
       throw e;}
     finally{this.txDepth=0;this.txVolatile=null;}}
@@ -65,9 +70,10 @@ export class Store {
   // not the control flow — decides what still needs retrying: re-emitting an
   // already persisted row duplicates its sequence number and later fails the
   // events.seq primary key during close(). Keyed merge keeps one row per seq.
-  // Inside an enclosing transaction the probe is skipped: those rows are only
-  // visible, not committed, and the outer ROLLBACK would silently drop them.
-  restoreVolatile(items,probe=!this.txDepth){
+  // The probe is skipped while a transaction is open on this connection: those
+  // rows are only visible, not committed, and treating them as durable would
+  // drop them from the buffer that still owes them a write.
+  restoreVolatile(items,probe=!this.db.isTransaction){
     if(!items.length)return;
     const exists=probe?this.db.prepare('SELECT 1 AS present FROM events WHERE seq=?'):null;
     const restored=new Map([...items,...this.volatileBuffer]
@@ -141,9 +147,11 @@ export class Store {
         for(const {runId,body} of batch){ins.run(body.seq,runId,JSON.stringify(body));
           this.chainAdvance('event','events','SELECT seq AS pos,runId,body FROM events WHERE seq>? AND seq<=? ORDER BY seq',body.seq,r=>`${r.runId}:${r.pos}`);}});
     }catch(error){
-      // transaction() already reconciled the ambiguous case; re-check the table
-      // here so a batch whose rows did reach SQLite is never re-emitted.
-      this.restoreVolatile(batch,this.txDepth?false:undefined);
+      // The batch left volatileBuffer before transaction() ran, so transaction()
+      // cannot see it and cannot re-queue it. Reconciliation therefore happens
+      // here, against isTransaction: only once the transaction has genuinely
+      // ended does a row on this connection mean "committed" and may be dropped.
+      this.restoreVolatile(batch);
       this.scheduleVolatileFlush();
       throw error;}
   }
