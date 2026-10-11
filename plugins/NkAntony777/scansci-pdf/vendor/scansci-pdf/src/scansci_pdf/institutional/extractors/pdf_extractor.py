@@ -1,12 +1,14 @@
 """PDF text extraction using pymupdf."""
 
 import logging
+
+from ...proxy_redaction import redacting_logger
 import re
 from pathlib import Path
 
 import pymupdf
 
-logger = logging.getLogger(__name__)
+logger = redacting_logger(__name__)
 
 # Patterns for figure captions
 FIGURE_PATTERN = re.compile(

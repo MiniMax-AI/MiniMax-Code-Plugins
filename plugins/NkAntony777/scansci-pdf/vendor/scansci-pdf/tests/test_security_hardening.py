@@ -184,7 +184,7 @@ def test_web_authenticated_search_and_status_succeed(monkeypatch):
     assert response.status_code == 200
     page = client.get("/", headers={"Authorization": "Bearer test-token-123"})
     assert page.status_code == 200
-    assert "X-Requested-With" in page.text and "test-token-123" in page.text
+    assert "X-Requested-With" in page.text and "test-token-123" not in page.text
     assert web_module.web_token() == "test-token-123"
 
 

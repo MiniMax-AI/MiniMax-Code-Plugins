@@ -18,6 +18,8 @@ accepted everywhere and ignored on patchright.
 from __future__ import annotations
 
 import logging
+
+from .proxy_redaction import redacting_logger
 import os
 import re
 import shutil
@@ -25,9 +27,14 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from .browser_provenance import resolve_channel_executable, verify_browser_executable
+from .browser_provenance import (
+    resolve_camoufox_executable,
+    resolve_channel_executable,
+    verified_or_none,
+    verify_browser_executable,
+)
 
-logger = logging.getLogger(__name__)
+logger = redacting_logger(__name__)
 
 BACKEND_PATCHRIGHT = "patchright"
 BACKEND_CLOAKBROWSER = "cloakbrowser"
@@ -43,7 +50,7 @@ def _installed_cloakbrowser(config):
         candidate = get_binary_path()
     path = Path(candidate).absolute()
     if not path.is_file():
-        candidate = find_local_browser()
+        candidate = find_local_browser(config)
         if not candidate:
             return False
         path = Path(candidate).absolute()
@@ -185,13 +192,28 @@ def _parse_version(v: str) -> tuple[int, ...]:
     return tuple(nums[:4]) if nums else (0,)
 
 
-def _probe_windows_versions() -> dict[str, str]:
-    """One PowerShell call: {path: version} for every existing system browser."""
-    paths = ",".join(f"'{p}'" for p in _SYSTEM_BROWSER_PATHS_WIN)
+def _probe_windows_versions(config: dict[str, Any] | None = None) -> dict[str, str]:
+    """One PowerShell call: {path: version} for every existing system browser.
+
+    The version is read from the file's version resource without executing the
+    binary, but each candidate is still put through the same provenance gate
+    the POSIX branch applies — Windows must not be the weaker platform.
+    """
+    allowed: list[str] = []
+    for path in _SYSTEM_BROWSER_PATHS_WIN:
+        path = os.path.expandvars(path)
+        if not Path(path).is_file():
+            continue
+        if verified_or_none(path, config) is None:
+            continue
+        allowed.append(path)
+    if not allowed:
+        return {}
+    paths = ",".join("'" + p.replace("'", "''") + "'" for p in allowed)
     script = (
         f"$paths = @({paths}); "
-        "foreach ($p in $paths) { if (Test-Path $p) { "
-        'Write-Output ("$p`t" + (Get-Item $p).VersionInfo.ProductVersion) } }'
+        "foreach ($p in $paths) { if (Test-Path -LiteralPath $p) { "
+        'Write-Output ("$p`t" + (Get-Item -LiteralPath $p).VersionInfo.ProductVersion) } }'
     )
     try:
         out = subprocess.run(
@@ -210,27 +232,41 @@ def _probe_windows_versions() -> dict[str, str]:
     return result
 
 
-def _probe_posix_versions() -> dict[str, str]:
+def _probe_posix_versions(config: dict[str, Any] | None = None) -> dict[str, str]:
+    """{path: version} for PATH-resolved browsers, gated before execution.
+
+    Every candidate must pass :func:`verified_or_none` *before* ``--version``
+    runs. A PATH lookup is attacker-influenceable, and ``--version`` is already
+    arbitrary code execution, so a rejected candidate is skipped rather than
+    probed. Never widen the check to obtain a version.
+    """
     result: dict[str, str] = {}
     for name in _SYSTEM_BROWSER_NAMES_POSIX:
-        path = shutil.which(name)
-        if not path:
+        found = shutil.which(name)
+        if not found:
+            continue
+        gated = verified_or_none(found, config)
+        if gated is None:
             continue
         try:
-            out = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=5).stdout or ""
+            out = subprocess.run([str(gated), "--version"], capture_output=True, text=True, timeout=5).stdout or ""
             m = re.search(r"\d+\.\d+\.\d+\.\d+", out)
-            result[path] = m.group(0) if m else "999.0.0.0"
+            result[str(gated)] = m.group(0) if m else "999.0.0.0"
         except Exception:
-            result[path] = "999.0.0.0"
+            result[str(gated)] = "999.0.0.0"
     return result
 
 
-def find_local_browser() -> str | None:
+def find_local_browser(config: dict[str, Any] | None = None) -> str | None:
     """Find a local Chrome/Edge newer than the bundled stealth Chromium 146.
 
     Returns the binary path, or None when the bundled Chromium should be kept.
+    Every path returned has already passed the provenance gate *before* any
+    version probe executed it, so the result is safe to launch.
     """
-    versions = _probe_windows_versions() if os.name == "nt" else _probe_posix_versions()
+    versions = (
+        _probe_windows_versions(config) if os.name == "nt" else _probe_posix_versions(config)
+    )
     best: str | None = None
     best_version = _BUILTIN_CHROMIUM_MIN
     for path, version in versions.items():
@@ -273,7 +309,10 @@ def resolve_browser_binary(config: dict[str, Any] | None = None) -> str | None:
         # input, so it goes through the same allowlist + digest gate.
         return str(verify_browser_executable(env_path, cfg))
     if cfg.get("browser_auto_upgrade", True):
-        detected = find_local_browser()
+        # find_local_browser gates each candidate before probing it, so a
+        # detected path here has already been executed exactly zero times
+        # unless it passed.
+        detected = find_local_browser(cfg)
         if detected:
             return str(verify_browser_executable(detected, cfg))
     return None
@@ -585,11 +624,30 @@ def _launch_cloakbrowser_persistent(
     )
 
 
+_CAMOUFOX_EXECUTABLE_NAMES = ("camoufox", "camoufox.exe", "firefox", "firefox.exe")
+
+
+def _verified_camoufox_executable(config: dict[str, Any] | None) -> str:
+    """Resolve Camoufox's real program and return it gate-verified.
+
+    Delegates to :func:`resolve_camoufox_executable`, which resolves the
+    directory *deterministically* (never by ``rglob`` order), excludes
+    directories, refuses symlinks/junctions, and applies the same
+    allowlist + pinned-digest policy every other browser gets.
+
+    Checking that the install directory exists is not enough: a replaced
+    executable inside that directory would still be launched. This never
+    downloads anything — a missing Camoufox raises.
+    """
+    return str(resolve_camoufox_executable(config))
+
+
 def _launch_camoufox(
     headless: bool,
     proxy: Any,
     args: list[str] | None,
     humanize: bool,
+    config: dict[str, Any] | None = None,
     **kwargs: Any,
 ) -> Any:
     """Launch via Camoufox (anti-detect Firefox, Playwright API).
@@ -602,9 +660,14 @@ def _launch_camoufox(
     Camoufox is a Firefox fork that configures its own anti-fingerprinting,
     so caller args are dropped rather than handed to the Firefox binary
     (unknown flags end up treated as open-URL arguments there).
+
+    The verified executable is resolved *before* ``NewBrowser`` is called, and
+    passed explicitly as ``executable_path`` so Camoufox's own launcher cannot
+    substitute a different program behind the gate.
     """
     if args:
         logger.debug("browser_backend: camoufox ignores %d caller arg(s) (Chromium flags)", len(args))
+    executable = _verified_camoufox_executable(config)
     from camoufox import DefaultAddons, NewBrowser
     from playwright.sync_api import sync_playwright
 
@@ -620,6 +683,7 @@ def _launch_camoufox(
             humanize=humanize,
             args=[],  # chromium flags dropped — see docstring
             proxy=proxy,
+            executable_path=executable,
             **opts,
         )
     except Exception:
@@ -647,14 +711,18 @@ def _launch_camoufox_persistent(
     proxy: Any,
     args: list[str] | None,
     humanize: bool,
+    config: dict[str, Any] | None = None,
     **kwargs: Any,
 ) -> Any:
     """Persistent context via Camoufox (returns a BrowserContext).
 
-    Caller args (Chromium flags) are dropped — see _launch_camoufox.
+    Caller args (Chromium flags) are dropped — see _launch_camoufox. The
+    verified executable is resolved before ``NewBrowser`` and passed explicitly,
+    exactly as on the non-persistent path.
     """
     if args:
         logger.debug("browser_backend: camoufox ignores %d caller arg(s) (Chromium flags)", len(args))
+    executable = _verified_camoufox_executable(config)
     from camoufox import DefaultAddons, NewBrowser
     from playwright.sync_api import sync_playwright
 
@@ -670,6 +738,7 @@ def _launch_camoufox_persistent(
             humanize=humanize,
             args=[],  # chromium flags dropped — see _launch_camoufox
             proxy=proxy,
+            executable_path=executable,
             **opts,
         )
     except Exception:
@@ -706,7 +775,20 @@ def _proxy_from_config(config: dict[str, Any] | None) -> Any:
     cfg = config or {}
     proxy = (str(cfg.get("browser_static_proxy", "") or "").strip()
              or str(cfg.get("network_proxy", "") or "").strip())
-    return {"server": proxy} if proxy else None
+    if not proxy:
+        return None
+    from .browser_engine import _proxy_server_without_credentials
+    from urllib.parse import urlsplit
+    parts = urlsplit(proxy if "://" in proxy else f"http://{proxy}")
+    server = _proxy_server_without_credentials(proxy)
+    if not server:
+        return None
+    payload: dict[str, str] = {"server": server}
+    if parts.username:
+        payload["username"] = parts.username
+    if parts.password:
+        payload["password"] = parts.password
+    return payload
 
 
 def launch(
@@ -735,10 +817,9 @@ def launch(
                 backend = BACKEND_PATCHRIGHT
         if backend == BACKEND_CAMOUFOX:
             # Camoufox must already be installed; never fetch executable code in
-            # response to a paper URL or a browser-fallback trigger.
-            from camoufox.pkgman import INSTALL_DIR
-            if not Path(INSTALL_DIR).exists():
-                raise RuntimeError('Install the Camoufox browser explicitly before using this backend')
+            # response to a paper URL or a browser-fallback trigger. The check
+            # is the real binary, not merely the install directory.
+            _verified_camoufox_executable(config)
             kwargs['firefox_user_prefs'] = {**kwargs.get('firefox_user_prefs', {}),
                 'network.proxy.no_proxies_on': '', 'network.proxy.allow_hijacking_localhost': True,
                 'media.peerconnection.enabled': False, 'network.http.http3.enable': False}
@@ -752,7 +833,7 @@ def launch(
         browser = _launch_patchright(config, headless=headless, proxy=proxy, args=args, **kwargs)
         return _guard_context_proxy(browser, proxy) if strict_mode() else browser
     if backend == BACKEND_CAMOUFOX:
-        browser = _launch_camoufox(headless=headless, proxy=proxy, args=args, humanize=humanize, **kwargs)
+        browser = _launch_camoufox(headless=headless, proxy=proxy, args=args, humanize=humanize, config=config, **kwargs)
     else:
         browser = _launch_cloakbrowser(headless=headless, proxy=proxy, args=args, humanize=humanize, **kwargs)
     return _guard_context_proxy(browser, proxy) if strict_mode() else browser
@@ -784,9 +865,7 @@ def launch_persistent_context(
                 backend = BACKEND_PATCHRIGHT
         user_data_dir = str(workspace_path(user_data_dir))
         if backend == BACKEND_CAMOUFOX:
-            from camoufox.pkgman import INSTALL_DIR
-            if not Path(INSTALL_DIR).exists():
-                raise RuntimeError('Install the Camoufox browser explicitly before using this backend')
+            _verified_camoufox_executable(config)
             kwargs['firefox_user_prefs'] = {**kwargs.get('firefox_user_prefs', {}),
                 'network.proxy.no_proxies_on': '', 'network.proxy.allow_hijacking_localhost': True,
                 'media.peerconnection.enabled': False, 'network.http.http3.enable': False}
@@ -802,7 +881,7 @@ def launch_persistent_context(
         )
     elif backend == BACKEND_CAMOUFOX:
         context = _launch_camoufox_persistent(
-            user_data_dir, headless=headless, proxy=proxy, args=args, humanize=humanize, **kwargs
+            user_data_dir, headless=headless, proxy=proxy, args=args, humanize=humanize, config=config, **kwargs
         )
     else:
         context = _launch_cloakbrowser_persistent(
@@ -821,7 +900,9 @@ def browser_info(config: dict[str, Any] | None = None) -> dict[str, Any]:
     if backend == BACKEND_PATCHRIGHT:
         binary = ""
         explicit = str(cfg.get("browser_executable", "") or "").strip()
-        if explicit and Path(explicit).exists():
+        # Report the verified program, or say plainly that it is not verified —
+        # never name an unprovenanced path as the browser in use.
+        if explicit and verified_or_none(explicit, cfg) is not None:
             binary = explicit
         else:
             try:
@@ -831,7 +912,9 @@ def browser_info(config: dict[str, Any] | None = None) -> dict[str, Any]:
             if resolved:
                 binary = str(resolved)
             else:
-                versions = _probe_windows_versions() if os.name == "nt" else _probe_posix_versions()
+                versions = (
+                    _probe_windows_versions(cfg) if os.name == "nt" else _probe_posix_versions(cfg)
+                )
                 for path, version in versions.items():
                     if "chrome" in path.lower():
                         binary, info["version"] = path, version
@@ -841,13 +924,19 @@ def browser_info(config: dict[str, Any] | None = None) -> dict[str, Any]:
         info["binary"] = binary
         return info
     if backend == BACKEND_CAMOUFOX:
+        # Report the program this engine would actually launch, gated — not a
+        # guessed INSTALL_DIR path that may not exist or may not be approved.
         try:
-            from camoufox.pkgman import INSTALL_DIR, Version
+            info["binary"] = _verified_camoufox_executable(cfg)
+        except Exception as exc:  # noqa: BLE001 - diagnostics never raise
+            info["binary"] = "camoufox (unverified)"
+            info["version"] = f"not launchable: {exc}"
+            return info
+        try:
+            from camoufox.pkgman import Version
             installed = Version.from_path()
-            info["binary"] = str(INSTALL_DIR / "camoufox.exe") if os.name == "nt" else str(INSTALL_DIR)
             info["version"] = installed.full_string if installed.is_supported() else "unsupported"
         except Exception:
-            info["binary"] = "camoufox"
             info["version"] = "?"
         return info
     # CloakBrowser backend

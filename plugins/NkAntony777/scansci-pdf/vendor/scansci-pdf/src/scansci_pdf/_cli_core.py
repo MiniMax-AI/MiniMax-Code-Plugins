@@ -19,10 +19,10 @@ if sys.platform == "win32":
         pass
 
 import typer
-from rich.console import Console
 from rich.table import Table
 
 from .config import load_config, mask_config_value, save_config
+from .credential_transport import confined_request
 from .fetcher import PaperFetcher
 from .schools import get_school, list_schools, search_schools
 from .sources import semantic_scholar
@@ -32,8 +32,9 @@ app = typer.Typer(
     help="Fetch academic papers via institutional access, Open Access, or arXiv.",
     no_args_is_help=True,
 )
-console = Console()
+from .proxy_redaction import redacting_console
 
+console = redacting_console()
 
 def _setup_logging(verbose: bool = False):
     level = logging.DEBUG if verbose else logging.INFO
@@ -1436,8 +1437,8 @@ def elsevier_setup(
         console.print("Validating Elsevier API key...")
         import requests
         try:
-            resp = requests.get(
-                "https://api.elsevier.com/content/serial/title",
+            resp = confined_request(
+                "GET", "https://api.elsevier.com/content/serial/title",
                 headers={"X-ELS-APIKey": key, "Accept": "application/json"},
                 params={"issn": "0043-1354"},  # Water Research
                 timeout=15,
@@ -1459,8 +1460,8 @@ def elsevier_setup(
         console.print()
         console.print("Testing Article Retrieval XML access...")
         try:
-            resp = requests.get(
-                "https://api.elsevier.com/content/article/doi/10.1016/j.nicl.2021.102600",
+            resp = confined_request(
+                "GET", "https://api.elsevier.com/content/article/doi/10.1016/j.nicl.2021.102600",
                 headers={"X-ELS-APIKey": key, "Accept": "application/xml"},
                 params={"view": "FULL"},
                 timeout=30,

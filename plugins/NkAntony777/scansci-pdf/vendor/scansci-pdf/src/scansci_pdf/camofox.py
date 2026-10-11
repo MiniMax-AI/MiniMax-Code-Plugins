@@ -213,14 +213,16 @@ def get_html(
     return result.get("solution", {}).get("response")
 
 
-def import_cookies(cookie_file: str | Path, config: dict[str, Any], *, domain_suffix: str | None = None) -> int:
+def import_cookies(cookie_file: str | Path, config: dict[str, Any], *, domain_suffix: str | None = None, target_url: str = "") -> int:
     """Import Netscape-format cookies into camofox-browser. Returns count imported."""
     cookie_path = Path(cookie_file)
     if not cookie_path.exists():
         raise FileNotFoundError(f"Cookie file not found: {cookie_path}")
 
     text = cookie_path.read_text(encoding="utf-8")
-    cookies = _parse_netscape_cookies(text)
+    from .browser_cookies import credentials_for_target
+    target = target_url or ("https://" + domain_suffix.lstrip(".") + "/" if domain_suffix else "")
+    cookies = credentials_for_target(_parse_netscape_cookies(text), config, target)
     if domain_suffix:
         cookies = [c for c in cookies if c.get("domain", "").endswith(domain_suffix)]
     if not cookies:
@@ -235,38 +237,7 @@ def import_cookies(cookie_file: str | Path, config: dict[str, Any], *, domain_su
     return len(cookies)
 
 
-def _parse_netscape_cookies(text: str) -> list[dict[str, Any]]:
-    """Parse Netscape-format cookie file into structured cookie objects."""
-    cookies: list[dict[str, Any]] = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or (line.startswith("#") and not line.startswith("#HttpOnly_")):
-            continue
-        http_only = False
-        if line.startswith("#HttpOnly_"):
-            http_only = True
-            line = line.removeprefix("#HttpOnly_")
-        parts = line.split("\t")
-        if len(parts) < 7:
-            continue
-        domain = parts[0]
-        cookie_path = parts[2]
-        secure = parts[3].upper() == "TRUE"
-        try:
-            expires = int(parts[4])
-        except (ValueError, IndexError):
-            expires = 0
-        name = parts[5]
-        value = "\t".join(parts[6:])
-        cookie: dict[str, Any] = {
-            "name": name, "value": value,
-            "domain": domain, "path": cookie_path,
-            "secure": secure, "expires": expires,
-        }
-        if http_only:
-            cookie["httpOnly"] = True
-        cookies.append(cookie)
-    return cookies
+from .browser_cookies import parse_netscape_cookies as _parse_netscape_cookies
 
 
 def evaluate_js(

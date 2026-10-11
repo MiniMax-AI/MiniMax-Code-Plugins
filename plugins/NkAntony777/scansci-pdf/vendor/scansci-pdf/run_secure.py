@@ -32,16 +32,31 @@ if provenance.exists():
 
 class SourceLoader(importlib.abc.MetaPathFinder, importlib.abc.Loader):
     """Load verified source directly, ignoring stale/untrusted bytecode caches."""
+    def _pinned_file(self, fullname):
+        base = engine/'src'/Path(*fullname.split('.'))
+        file = base/'__init__.py' if base.is_dir() else base.with_suffix('.py')
+        return file if file.exists() else None
     def find_spec(self, fullname, path=None, target=None):
         if not fullname.startswith('scansci_pdf'):
             return None
         base = engine/'src'/Path(*fullname.split('.'))
-        file = base/'__init__.py' if base.is_dir() else base.with_suffix('.py')
-        if not file.exists():
+        file = self._pinned_file(fullname)
+        if file is None:
             return None
         return importlib.util.spec_from_file_location(fullname, file, loader=self,
                     submodule_search_locations=[str(base)] if base.is_dir() else None)
     def create_module(self, spec): return None
+    def get_code(self, fullname):
+        # `runpy` — which drives `--module` — asks the loader for the CODE of a
+        # module before executing it, and only then discovers whether it is a
+        # package. Without this the loader can import a pinned module but not
+        # serve one to `runpy`: '--module' fails with
+        # "'SourceLoader' object has no attribute 'get_code'".
+        # The file is the same manifest-verified source `exec_module` reads.
+        file = self._pinned_file(fullname)
+        if file is None:
+            raise ImportError(f'No pinned engine source for {fullname}', name=fullname)
+        return compile(file.read_bytes(), str(file), 'exec')
     def exec_module(self, module):
         file = Path(module.__spec__.origin)
         exec(compile(file.read_bytes(), str(file), 'exec'), module.__dict__)
@@ -128,6 +143,10 @@ else:
     if len(sys.argv) > 2 and sys.argv[1] == '--module':
         import runpy
         module = sys.argv[2]
+        # Allowlist, not a prefix: only these two engine modules may be driven
+        # through the verified source loader. `scansci_pdf.cli` is a package and
+        # executes its `cli/__main__.py`, which calls the Typer app that
+        # registers `session-broker-run` and the rest of the commands.
         if module not in {'scansci_pdf.cli', 'scansci_pdf.progress_bar'}:
             raise SystemExit('Unknown engine child module')
         sys.argv = [module, *sys.argv[3:]]

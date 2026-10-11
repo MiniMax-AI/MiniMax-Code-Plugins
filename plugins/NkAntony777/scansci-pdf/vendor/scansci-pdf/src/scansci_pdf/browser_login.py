@@ -21,6 +21,7 @@ except ImportError:
     launch = None  # type: ignore[assignment]
     _HAS_CLOAKBROWSER = False
 from .log import get_logger
+from .browser_cookies import DEFAULT_LOGIN_TARGET_URL
 from .security import secure_write_text
 
 log = get_logger()
@@ -28,6 +29,28 @@ log = get_logger()
 # localStorage holds bearer tokens for every origin the browser touched, so
 # persisting it requires an explicit opt-in from the operator.
 LOCALSTORAGE_OPT_IN_KEY = "browser_persist_localstorage"
+
+
+def localstorage_opt_in(value: Any) -> bool:
+    """True only for a real opt-in. The string ``"false"`` must stay off.
+
+    Delegates to the shared config parser so this consumer, ``update_config``
+    and the config-file migration resolve a toggle the same way. An
+    unrecognized type or literal fails closed to OFF.
+    """
+    from .config import config_bool
+
+    return config_bool(LOCALSTORAGE_OPT_IN_KEY, value, False)
+
+
+def _default_login_target() -> str:
+    """Fallback login target when the operator configured none.
+
+    A code constant, not cache data: save and restore must agree on the same
+    target, and both resolve it from config or this constant, never from the
+    saved state file.
+    """
+    return DEFAULT_LOGIN_TARGET_URL
 
 
 class PersistentBrowser:
@@ -78,7 +101,14 @@ class PersistentBrowser:
         return self._context, self._page
 
     def _restore_state(self, config: dict[str, Any]):
-        """Restore saved cookies and localStorage into the browser."""
+        """Restore saved cookies and localStorage into the browser.
+
+        The scope comes from the operator's config only — never from the
+        ``target_url`` written inside the cache file. A cache file that names
+        its own target could otherwise have any origin's cookies re-injected
+        into this context, so ``state["target_url"]`` is used solely to check
+        that the file was written for the target we are already authorized for.
+        """
         from .config import DATA_DIR
         cache_dir = Path(config.get("cache_dir", str(DATA_DIR / "cache")))
         state_file = cache_dir / "browser_state.json"
@@ -89,17 +119,41 @@ class PersistentBrowser:
         except Exception:
             log.info("   [browser] browser_state.json corrupted, starting fresh")
             return
+        if not isinstance(state, dict):
+            log.info("   [browser] browser_state.json is not an object, starting fresh")
+            return
 
-        cookies = state.get("cookies", [])
+        from .browser_cookies import (
+            DEFAULT_LOGIN_TARGET_URL,
+            authorized_target_urls,
+            credentials_for_target,
+        )
+
+        targets = authorized_target_urls(config) or [_default_login_target()]
+        target_url = targets[0]
+
+        cached_target = str(state.get("target_url") or "")
+        if cached_target:
+            cached_host = (urlparse(cached_target).hostname or "").lower()
+            target_host = (urlparse(target_url).hostname or "").lower()
+            if cached_host != target_host:
+                log.info("   [browser] Saved state belongs to a different target "
+                         f"({cached_host}), not restoring into {target_host}")
+                return
+
+        cookies = credentials_for_target(state.get("cookies") or [], config, target_url)
         if cookies:
             try:
                 self._context.add_cookies(cookies)
-                log.info(f"   [browser] Restored {len(cookies)} cookies")
+                log.info(f"   [browser] Restored {len(cookies)} target-domain cookies")
             except Exception as e:
                 log.info(f"   [browser] Cookie restore warning: {e}")
 
-        storage = state.get("localStorage", {})
+        storage = state.get("localStorage", {}) if localstorage_opt_in(config.get(LOCALSTORAGE_OPT_IN_KEY, False)) else {}
         for origin, items in storage.items():
+            if not self._origin_matches_target(str(origin), target_url):
+                log.info(f"   [browser] Skipped restored localStorage outside the login target: {origin}")
+                continue
             try:
                 self._page.goto(origin, wait_until="commit", timeout=10000)
                 for key, value in items.items():
@@ -120,28 +174,33 @@ class PersistentBrowser:
         if not self._context:
             return
         try:
-            from .browser_cookies import minimal_cookies, scoped_cookies
+            from .browser_cookies import (
+                DEFAULT_LOGIN_TARGET_URL,
+                authorized_target_urls,
+                security_cookies,
+                scoped_cookies,
+            )
             from .config import DATA_DIR
             cache_dir = Path(config.get("cache_dir", str(DATA_DIR / "cache")))
             cache_dir.mkdir(parents=True, exist_ok=True)
 
-            target_url = target_url or config.get("browser_login_target_url", "") \
-                or "https://www.sciencedirect.com/"
+            targets = authorized_target_urls(config, target_url)
+            target_url = targets[0] if targets else _default_login_target()
             cookies = scoped_cookies(self._context.cookies(), target_url)
 
             localStorage: dict[str, dict[str, Any]] = {}
-            if config.get(LOCALSTORAGE_OPT_IN_KEY, False):
+            if localstorage_opt_in(config.get(LOCALSTORAGE_OPT_IN_KEY, False)):
                 localStorage = self._scoped_localstorage(target_url)
             else:
                 log.info("   [browser] localStorage persistence disabled "
                          f"(set {LOCALSTORAGE_OPT_IN_KEY}=true to opt in)")
 
-            state = {"cookies": cookies, "localStorage": localStorage}
+            state = {"cookies": cookies, "localStorage": localStorage, "target_url": target_url}
             state_file = cache_dir / "browser_state.json"
             secure_write_text(state_file, json.dumps(state, indent=2, ensure_ascii=False))
 
             cookie_file = cache_dir / "instsci-cookies.json"
-            cookie_data = minimal_cookies(cookies)
+            cookie_data = security_cookies(cookies)
             secure_write_text(cookie_file, json.dumps(cookie_data, indent=2, ensure_ascii=False))
 
             netscape_file = cache_dir / "instsci-cookies.txt"
@@ -153,15 +212,17 @@ class PersistentBrowser:
         except Exception as e:
             log.info(f"   [browser] Failed to save state: {e}")
 
-    def _scoped_localstorage(self, target_url: str) -> dict[str, dict[str, Any]]:
-        """Collect localStorage for the login target / publisher origins only."""
-        from .browser_cookies import CUSTOM_LOGIN_ALLOWED_DOMAINS
-        from urllib.parse import urlparse as _urlparse
+    @staticmethod
+    def _origin_matches_target(origin: str, target_url: str) -> bool:
+        from urllib.parse import urlparse
 
-        allowed = set(CUSTOM_LOGIN_ALLOWED_DOMAINS)
-        host = (_urlparse(target_url or "").hostname or "").lower()
-        if host:
-            allowed.add(host)
+        host = (urlparse(target_url or "").hostname or "").lower()
+        page_host = (urlparse(origin or "").hostname or "").lower()
+        return bool(host and page_host) and (page_host == host or page_host.endswith("." + host))
+
+    def _scoped_localstorage(self, target_url: str) -> dict[str, dict[str, Any]]:
+        """Collect localStorage for the login target origin only."""
+        from urllib.parse import urlparse as _urlparse
 
         storage: dict[str, dict[str, Any]] = {}
         for page in self._context.pages:
@@ -170,7 +231,7 @@ class PersistentBrowser:
                 if not url.startswith("http"):
                     continue
                 page_host = (_urlparse(url).hostname or "").lower()
-                if not any(page_host == d or page_host.endswith("." + d) for d in allowed):
+                if not self._origin_matches_target(url, target_url):
                     log.info(f"   [browser] Skipped localStorage for non-target origin: {page_host}")
                     continue
                 origin = f"{_urlparse(url).scheme}://{page_host}"
@@ -229,10 +290,14 @@ def close_browser():
 
 
 def _save_cookies_json(cookies: list[dict[str, Any]], cookie_file: Path) -> None:
-    """Save cookies in JSON format (scansci-pdf compatible)."""
-    from .browser_cookies import minimal_cookies
+    """Save cookies in JSON format (scansci-pdf compatible).
+
+    Keeps the security/lifecycle attributes so a session restored from this
+    file is not weaker than the one the browser held.
+    """
+    from .browser_cookies import security_cookies
     cookie_file.parent.mkdir(parents=True, exist_ok=True)
-    secure_write_text(cookie_file, json.dumps(minimal_cookies(cookies), indent=2, ensure_ascii=False))
+    secure_write_text(cookie_file, json.dumps(security_cookies(cookies), indent=2, ensure_ascii=False))
 
 
 def _save_cookies_netscape(cookies: list[dict[str, Any]], cookie_file: Path) -> None:
@@ -241,14 +306,14 @@ def _save_cookies_netscape(cookies: list[dict[str, Any]], cookie_file: Path) -> 
     secure_write_text(cookie_file, cookies_to_netscape(cookies))
 
 
-def _import_to_browser(cookie_file: Path, config: dict[str, Any]) -> int:
+def _import_to_browser(cookie_file: Path, config: dict[str, Any], target_url: str = "") -> int:
     """Import cookies into CloakBrowser. Returns count imported."""
     try:
         from .browser_engine import import_cookies, is_available
         if not is_available(config):
             log.info("   [browser] CloakBrowser not running, skipping auto-import")
             return 0
-        count = import_cookies(cookie_file, config)
+        count = import_cookies(cookie_file, config, target_url=target_url)
         log.info(f"   [browser] Imported {count} cookies into CloakBrowser")
         return count
     except Exception as exc:
@@ -365,7 +430,7 @@ def open_login_browser(
                     log.info(f"   [browser] Login successful! Saved {len(cookies)} cookies.")
                     print(f"  登录成功！Cookie 已保存至 {cookie_file}")
                     if auto_import:
-                        _import_to_browser(netscape_path, config)
+                        _import_to_browser(netscape_path, config, url)
                     if remote:
                         remote.stop()
                     if keep_alive:
@@ -387,7 +452,7 @@ def open_login_browser(
                     log.info(f"   [browser] Login successful! Saved {len(cookies)} cookies.")
                     print(f"  登录成功！Cookie 已保存至 {cookie_file}")
                     if auto_import:
-                        _import_to_browser(netscape_path, config)
+                        _import_to_browser(netscape_path, config, url)
                     if remote:
                         remote.stop()
                     if keep_alive:
@@ -407,7 +472,8 @@ def open_login_browser(
 
     except Exception as exc:
         log.info(f"   [browser] Login error: {exc}")
-        print(f"  登录出错: {exc}")
+        from .proxy_redaction import redact_proxy_text
+        print("  登录出错: " + redact_proxy_text(exc))
         return (False, None, None, None) if keep_alive else False
 
 

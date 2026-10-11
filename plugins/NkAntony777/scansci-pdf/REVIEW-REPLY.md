@@ -1,23 +1,13 @@
-Thanks for the detailed review. This revision vendors and patches the engine directly, based
-on the existing upstream v1.18.0 tag/commit, rather than relying on a nonexistent 1.17.2 release
-or waiting for an upstream fix.
+## October 11 follow-up — local worktree evidence, not exact-head CI
 
-The actual connection layer now validates DNS answers and uses numeric destination addresses,
-including redirects, configured HTTP/SOCKS proxies and a guarded local browser path. Tor uses
-pinned archive hashes and checked extraction; installation needs explicit confirmation. Secrets
-are masked, config/cookies have private atomic persistence, writes stay in the project with
-symlink/junction checks, and destructive workbook/cache actions require confirmation. The
-packaged helpers and root mcp.json are included in validation, and Skills declare the untrusted
-content boundary. The launcher verifies source hashes/dependency versions and loads source
-without trusting PATH engines or bytecode caches.
+The repair closes the follow-up paths rather than only the reported reproduction:
 
-Local Windows evidence: 429 engine tests passed, 3 skipped; actual stdio MCP integration and
-Chrome redirect/private-address checks passed; repository validation passed. A repeatable
-4-worker/40-file HTTPS fixture completes every file and reduces TLS connections from 40 to 4.
-Including write containment, median transport time was 385→340 ms locally and 1026→385 ms
-with 20 ms connection delay. This is not a claim about live publisher latency or Cython speed.
+- Batch identifiers and cached Zotero attachments are checked before any outside-workspace read. Zotero reports attachment/upload failures as partial failures with a retained parent key and retry guidance.
+- Cookie persistence, imports, merges, institutional sessions and browser restore share explicit-target scope and retain security/lifecycle attributes. Old four-field records require a new login; they are rejected before normalization, including incoming merge records. requests jars retain Secure, expiry, HttpOnly and SameSite. Plugin Netscape exports preserve SameSite in a private metadata comment.
+- localStorage is opt-in through a shared boolean parser; the string `"false"` is off. Browser trust-pin changes require explicit confirmation. Version probes, normal/persistent launch and Camoufox's concrete executable go through provenance checks before execution.
+- Unauthenticated streamable HTTP is loopback-only. Both Web entry points disable access logs, and login tokens are not rendered in initial HTML. Proxy credentials are redacted in logs, exceptions, structured results and Rich output, without a nesting-depth or dictionary-key escape.
+- All Elsevier API callers use origin-confined requests; cross-origin, port-change and HTTPS-downgrade redirects lose API keys/institutional tokens. Launcher child modules work without trusting bytecode caches, and the integration staging excludes environments and generated metadata.
 
-REVIEW-NOTES.md contains the details and limitations: remote browser daemons/private-intranet
-routes remain restricted, Firefox and other platforms need CI evidence, Tor extraction was
-tested but no working circuit is claimed, and path checks are not a native OS sandbox. A scoped
-Linux/Windows workflow is added; I do not count approval-pending GitHub jobs as passes.
+Real Windows Chrome cookie round-trip and actual stdio MCP/tool-call/tamper checks passed against the delivered source manifest and unchanged dependency locks. A separate short-path environment installs `requirements-browser.lock` with hash checks; no positive test rewrites pins or repairs a copied manifest. Full results and limitations are in REVIEW-NOTES.md and the local handoff evidence.
+
+CI records the checked-out SHA, verifies the delivered manifest/locks and opts into the real approved-browser cookie test on Linux/Windows. This revision is committed locally after the worktree checks, with post-commit independent review requested. No push or GitHub run is claimed: same-head CI remains an acceptance requirement, not a claimed pass. Real Firefox/Camoufox and live institutional/Elsevier/Zotero service behavior remain unverified.

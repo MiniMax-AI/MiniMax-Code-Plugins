@@ -18,6 +18,8 @@ from typing import Any
 
 import requests
 
+from .credential_transport import confined_request
+
 from .network import configured_proxy
 
 PREMIUM_DOI = "10.1016/S0140-6736(20)30183-5"        # Lancet 知名付费论文（2026-08 实测 200）
@@ -79,7 +81,7 @@ def _head_probe(doi: str, key: str, proxies: dict | None, *, http_accept: bool =
         if key:
             headers["X-ELS-APIKey"] = key
         params = {"httpAccept": "application/pdf"} if http_accept else None
-        r = requests.head(
+        r = confined_request("HEAD",
             f"https://api.elsevier.com/content/article/doi/{doi}",
             params=params,
             headers=headers, timeout=(8, 12), proxies=proxies, allow_redirects=True,
@@ -118,7 +120,7 @@ def _error_status_text_probe(doi: str, key: str, proxies: dict | None) -> str:
         headers: dict[str, str] = {"Accept": "application/xml", **UA_HEADERS}
         if key:
             headers["X-ELS-APIKey"] = key
-        r = requests.get(
+        r = confined_request("GET",
             f"https://api.elsevier.com/content/article/doi/{doi}",
             params={"view": "META"},
             headers=headers, timeout=(8, 12), proxies=proxies,
@@ -150,7 +152,7 @@ def _probe_key_valid(key: str, proxies: dict | None) -> tuple[int, str]:
     401/403/406 才是 key 无效；429 说明认证已通过、只是限流。
     """
     try:
-        r = requests.get(
+        r = confined_request("GET",
             "https://api.elsevier.com/content/serial/title",
             params={"count": 1},
             headers={"Accept": "application/json", "X-ELS-APIKey": key, **UA_HEADERS},

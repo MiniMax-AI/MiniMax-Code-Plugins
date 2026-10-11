@@ -49,6 +49,12 @@
 - 分类脚本通过 `run_secure.py --helper <脚本名>` 执行。原地回写 Excel 需明确同意并传入 `--confirm-writeback`，保存采用原子替换。
 - 性能数据、回归测试和验证边界见 `REVIEW-NOTES.md`。
 
+## 安全升级与凭据迁移
+
+- 浏览器和 requests 恢复 Cookie 时保留 `HttpOnly`、`Secure`、`SameSite`、过期时间及会话语义；保存、合并与恢复均需明确授权目标。升级前仅含四字段的 Cookie 记录会被拒绝，请重新登录一次，重新生成完整属性；本插件 Netscape 导出通过专有注释保留 SameSite，第三方工具不保证保留该注释。
+- `browser_persist_localstorage` 默认 `false`，仅在明确开启时保存/恢复授权来源的 localStorage，字符串 `"false"` 不会开启。修改浏览器二进制信任哈希需要用户明确确认，可写缓存内的程序必须匹配已批准的摘要。
+- 未认证的 streamable HTTP 仅允许 loopback 监听；Web 初始 HTML 不嵌入登录 token，两种 Web 启动入口均禁用访问日志，避免查询参数 token 被记录。Elsevier 凭据逐跳限制在签发来源，代理认证信息在结果、日志与控制台出口统一遮蔽。
+
 ## 上游、许可与维护
 
 - 上游项目：<https://github.com/Rimagination/scansci-pdf>（Apache-2.0，Copyright 2024-2026 scansci-pdf contributors）。本包内置上游 **v1.18.0** 源码及本次安全补丁，具体来源见 `vendor/scansci-pdf/SOURCE-COMMIT.txt`。

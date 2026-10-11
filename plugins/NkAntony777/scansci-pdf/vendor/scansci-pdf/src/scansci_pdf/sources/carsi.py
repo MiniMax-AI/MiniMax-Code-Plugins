@@ -179,11 +179,9 @@ class CARSIClient:
                     if cookie_file.exists():
                         try:
                             saved = json.loads(cookie_file.read_text(encoding="utf-8"))
-                            pw_cookies = []
-                            for c in saved:
-                                pw_c = {"name": c["name"], "value": c["value"], "domain": c.get("domain", ""), "path": c.get("path", "/")}
-                                if pw_c["domain"]:
-                                    pw_cookies.append(pw_c)
+                            from ..browser_cookies import PUBLISHER_LOGIN_URLS, credentials_for_target
+                            target = PUBLISHER_LOGIN_URLS.get((publisher or "").lower(), "")
+                            pw_cookies = credentials_for_target(saved, None, target) if target else []
                             if pw_cookies:
                                 context.add_cookies(pw_cookies)
                                 log.info(f"   [CARSI-Browser] Restored {len(pw_cookies)} cookies from file")
@@ -346,7 +344,7 @@ class CARSIClient:
                                     # Login success - save cookies in all formats + bridge to CloakBrowser
                                     try:
                                         cookies = context.cookies()
-                                        _save_all_cookie_formats(cookies, publisher, self.config)
+                                        _save_all_cookie_formats(cookies, publisher, self.config, target_url=url)
                                     except Exception:
                                         pass
                                     break
@@ -553,8 +551,9 @@ class CARSIClient:
                 cookies = []
                 for domain in cfg.domains:
                     cursor.execute(
-                        "SELECT name, value, host_key, path FROM cookies WHERE host_key LIKE ?",
-                        (f"%{domain}%",),
+                        "SELECT name, value, host_key, path FROM cookies "
+                        "WHERE host_key = ? OR host_key = ? OR host_key LIKE ?",
+                        (domain, f".{domain}", f"%.{domain}"),
                     )
                     cookies.extend(cursor.fetchall())
                 conn.close()

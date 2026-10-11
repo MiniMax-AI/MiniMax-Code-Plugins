@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+
+from .proxy_redaction import redacting_logger
 import sys
 
 _logger: logging.Logger | None = None
@@ -11,7 +13,7 @@ _logger: logging.Logger | None = None
 def get_logger() -> logging.Logger:
     global _logger
     if _logger is None:
-        _logger = logging.getLogger("scansci_pdf")
+        _logger = redacting_logger("scansci_pdf")
         if not _logger.handlers:
             handler = logging.StreamHandler(sys.stderr)
             handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))

@@ -2,16 +2,28 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import importlib.util
 import io
+import json
+import os
 import socket
+import subprocess
 import tarfile
 import threading
+import time
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from scansci_pdf import browser_guard, proxy_transport, security, embedded_tor
+
+# Loaded by path: the engine's own `tests` package is not importable by name
+# from every working directory the suite is started in.
+_spec = importlib.util.spec_from_file_location(
+    "_secure_stage", Path(__file__).resolve().with_name("_secure_stage.py"))
+_secure_stage = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_secure_stage)
 
 
 @pytest.mark.parametrize('name,kind', [('../escape', 'file'), ('/absolute', 'file'),
@@ -173,3 +185,291 @@ def test_real_chromium_guard_blocks_redirect_and_local_bypass(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(3)
+
+
+# ---------------------------------------------------------------------------
+# Source-only launcher: both `--module` entries must reach a real entry point.
+#
+# These run the launcher as a REAL subprocess from an isolated workspace OUTSIDE
+# the plugin package, because that is the only way the cwd gate, the manifest
+# gate and the dependency gate are all genuinely exercised.
+# ---------------------------------------------------------------------------
+
+HEADLESS_HARNESS = """\
+\"\"\"Headless harness: keep tkinter importable, forbid opening a window.\"\"\"
+import os
+
+import tkinter
+
+
+class _NoWindow(RuntimeError):
+    pass
+
+
+def _refuse(*_args, **_kwargs):
+    raise _NoWindow("windowed progress bar disabled by the test harness")
+
+
+tkinter.Tk = _refuse
+os.environ["SCANSCI_PROGRESS_BAR_HARNESS"] = "1"
+"""
+
+
+@pytest.fixture(scope="session")
+def staged_package(tmp_path_factory):
+    """A staged engine laid out as <pkg>/vendor/scansci-pdf.
+
+    The `vendor` layout matters: it is what makes the launcher resolve a
+    package root above the engine, which the cwd gate then enforces.
+    """
+    package = tmp_path_factory.mktemp("staged_package")
+    engine = package / "vendor" / "scansci-pdf"
+    engine.parent.mkdir(parents=True, exist_ok=True)
+    return _secure_stage.stage_engine(engine)
+
+
+@pytest.fixture(scope="session")
+def launcher(staged_package, tmp_path_factory):
+    """Runs run_secure.py in an isolated workspace outside the plugin package."""
+    workspace = tmp_path_factory.mktemp("isolated_workspace")
+
+    def _run(*args, cwd=None, env=None, timeout=300):
+        environment = dict(os.environ)
+        environment.pop("SCANSCI_PDF_SECURE_ENTRY", None)
+        environment.pop("SCANSCI_PDF_WORKSPACE", None)
+        environment.pop("PYTHONPATH", None)
+        if env:
+            environment.update(env)
+        return subprocess.run(
+            [_secure_stage.python_executable(), str(staged_package / "run_secure.py"), *args],
+            cwd=str(cwd or workspace), capture_output=True, text=True,
+            # The child writes box-drawing characters for Typer help; never let
+            # the console code page turn that into a decode error.
+            encoding="utf-8", errors="replace",
+            timeout=timeout, env=environment,
+        )
+
+    return _run
+
+
+def test_launcher_verify_passes_from_an_isolated_workspace(launcher):
+    result = launcher("--verify")
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(result.stdout)
+    assert report["source_manifest"] == "verified"
+    assert report["dependency_lock"] == "verified"
+
+
+def test_cli_module_entry_runs_the_real_command_surface(launcher):
+    """"scansci_pdf.cli" is a PACKAGE: without cli/__main__.py runpy aborts with
+    "No module named scansci_pdf.cli.__main__"."""
+    result = launcher("--module", "scansci_pdf.cli", "--help")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Usage: python -m scansci_pdf.cli" in result.stdout
+    assert "session-broker-status" in result.stdout
+    assert "No module named" not in result.stderr
+
+
+def test_cli_module_entry_reaches_the_real_broker_command(launcher):
+    """The allowlisted module must expose the target the broker actually spawns."""
+    result = launcher("--module", "scansci_pdf.cli", "session-broker-run", "--help")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Run the long-lived broker loop" in result.stdout
+    assert "--publisher" in result.stdout
+    assert "Traceback" not in result.stderr
+
+
+def test_progress_bar_module_entry_runs_a_real_entry_point(staged_package, tmp_path_factory):
+    """The bar is a GUI with an infinite console fallback, so it is driven by a
+    harness that forbids a window, observed for a bounded time, then killed."""
+    harness = tmp_path_factory.mktemp("headless_harness")
+    (harness / "sitecustomize.py").write_text(HEADLESS_HARNESS, encoding="utf-8")
+    # The cwd gate is legitimate: launch from outside the package, as in use.
+    workspace = tmp_path_factory.mktemp("bar_workspace")
+
+    command = [_secure_stage.python_executable(), "-u",
+               str(staged_package / "run_secure.py"),
+               "--module", "scansci_pdf.progress_bar"]
+    environment = dict(os.environ)
+    environment.pop("PYTHONPATH", None)
+    environment.pop("SCANSCI_PDF_SECURE_ENTRY", None)
+    environment.pop("SCANSCI_PDF_WORKSPACE", None)
+    environment["PYTHONPATH"] = str(harness)
+    environment["PYTHONUNBUFFERED"] = "1"
+
+    process = subprocess.Popen(
+        command, cwd=str(workspace), env=environment,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        encoding="utf-8", errors="replace",
+    )
+    # A blocking readline would hang the suite if the child never speaks, so the
+    # stream is drained on a thread and the wait is bounded by a deadline.
+    lines: list[str] = []
+    reader = threading.Thread(
+        target=lambda: [lines.append(line) for line in process.stdout], daemon=True)
+    reader.start()
+    try:
+        deadline = time.time() + 120
+        while time.time() < deadline and not any(
+                "progress bar unavailable" in line for line in lines):
+            if process.poll() is not None and reader.is_alive() is False:
+                break
+            time.sleep(0.2)
+        blob = "".join(lines)
+        assert "progress bar unavailable" in blob, (
+            "the module entry never reached progress_bar.main()\n" + blob)
+        # No ImportError/AttributeError from the loader itself.
+        assert "AttributeError" not in blob and "ImportError" not in blob
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=30)
+        process.stdout.close()
+    assert process.returncode is not None, "the child must be reaped, never leaked"
+
+
+def test_progress_bar_spawn_uses_the_verified_source_entry(monkeypatch):
+    """Automatic startup must not keep the unguarded `python -m` path."""
+    from scansci_pdf import progress_reporter
+
+    monkeypatch.setenv("SCANSCI_PDF_WORKSPACE", str(Path.cwd()))
+    monkeypatch.setenv("SCANSCI_PDF_SECURE_ENTRY", str(_secure_stage.ENGINE / "run_secure.py"))
+
+    command = progress_reporter.progress_bar_command()
+
+    # [python, <run_secure.py>, --module, scansci_pdf.progress_bar]
+    assert command[2:] == ["--module", "scansci_pdf.progress_bar"]
+    assert command[0] == _secure_stage.python_executable()
+    assert command[1] == str(_secure_stage.ENGINE / "run_secure.py")
+
+    # Outside the secure launcher there is no verified entry to use.
+    monkeypatch.delenv("SCANSCI_PDF_WORKSPACE")
+    assert progress_reporter.progress_bar_command()[1:] == ["-m", "scansci_pdf.progress_bar"]
+
+
+@pytest.mark.parametrize("module", ["os", "scansci_pdf.config", "scansci_pdf.main",
+                                    "scansci_pdf.cli.main_commands", ""])
+def test_unknown_modules_are_refused(launcher, module):
+    result = launcher("--module", module)
+    assert result.returncode != 0
+    assert "Unknown engine child module" in result.stdout + result.stderr
+
+
+def test_tampered_source_is_refused(launcher, staged_package):
+    target = staged_package / "src" / "scansci_pdf" / "cli" / "__main__.py"
+    original = target.read_bytes()
+    try:
+        target.write_bytes(original + b"\n# tampered\n")
+        result = launcher("--module", "scansci_pdf.cli", "--help")
+        assert result.returncode != 0
+        assert "Pinned engine source changed" in result.stdout + result.stderr
+    finally:
+        target.write_bytes(original)
+
+
+def test_malicious_pyc_is_ignored(launcher, staged_package):
+    """A stale .pyc beside a pinned module must never be executed.
+
+    The loader resolves pinned modules to their .py, so the bytecode cache is
+    not merely untrusted, it is unreachable.
+    """
+    cache = staged_package / "src" / "scansci_pdf" / "cli" / "__pycache__"
+    cache.mkdir(parents=True, exist_ok=True)
+    pyc = cache / "__main__.cpython-313.pyc"
+    marker = "SYNTHETIC-PYC-MARKER"
+    pyc.write_text(f"print({marker!r})\n", encoding="utf-8")
+    try:
+        result = launcher("--module", "scansci_pdf.cli", "--help")
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert marker not in result.stdout + result.stderr
+        # The verified .py ran, not the cache.
+        assert "Usage: python -m scansci_pdf.cli" in result.stdout
+    finally:
+        pyc.unlink()
+        if not any(cache.iterdir()):
+            cache.rmdir()
+
+
+def test_bad_dependency_pin_is_refused(launcher, staged_package):
+    """The dependency gate stays enforced.
+
+    The lock is re-hashed into the staged manifest first, so this cannot pass by
+    tripping the (also working) manifest gate instead.
+    """
+    lock = staged_package / "requirements.lock"
+    manifest_path = staged_package / "SOURCE-HASHES.json"
+    original = lock.read_text(encoding="utf-8")
+    original_manifest = manifest_path.read_text(encoding="utf-8")
+    try:
+        lock.write_text(original.replace("pycparser==", "pycparser==3.10", 1),
+                        encoding="utf-8")
+        manifest = json.loads(original_manifest)
+        manifest["files"]["requirements.lock"] = _secure_stage.digest(lock)
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+        result = launcher("--verify")
+        assert result.returncode != 0
+        combined = result.stdout + result.stderr
+        assert "Dependency version mismatch" in combined
+        assert "Pinned engine source changed" not in combined
+    finally:
+        lock.write_text(original, encoding="utf-8")
+        manifest_path.write_text(original_manifest, encoding="utf-8")
+
+
+def test_launch_from_inside_the_package_is_refused(staged_package):
+    """A legitimate cwd check, not a module defect: the same command that works
+    outside the package is refused inside it."""
+    package = staged_package.parent.parent
+    environment = dict(os.environ)
+    environment.pop("SCANSCI_PDF_SECURE_ENTRY", None)
+    environment.pop("SCANSCI_PDF_WORKSPACE", None)
+    result = subprocess.run(
+        [_secure_stage.python_executable(), str(staged_package / "run_secure.py"), "--verify"],
+        cwd=str(package), capture_output=True, text=True, timeout=300, env=environment,
+    )
+    assert result.returncode != 0
+    assert "Launch from the project workspace, outside the plugin package" in (
+        result.stdout + result.stderr)
+
+
+def test_stdio_handshake_still_passes(staged_package, tmp_path_factory):
+    """The MCP stdio entry still completes initialize + tools/list.
+
+    Exercised against the staged engine, so the loader change is covered too;
+    EOF must still shut the server down (see tests/test_mcp_lifecycle.py).
+    """
+    workspace = tmp_path_factory.mktemp("stdio_workspace")
+    environment = dict(os.environ)
+    for name in ("SCANSCI_PDF_SECURE_ENTRY", "SCANSCI_PDF_WORKSPACE", "PYTHONPATH"):
+        environment.pop(name, None)
+    environment["SCANSCI_PROGRESS_BAR"] = "0"
+
+    process = subprocess.Popen(
+        [_secure_stage.python_executable(), str(staged_package / "run_secure.py"), "run"],
+        cwd=str(workspace), env=environment,
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    try:
+        payload = "\n".join([
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                        "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                                   "clientInfo": {"name": "secure-launcher-test", "version": "0"}}}),
+            json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+            json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
+        ]) + "\n"
+        process.stdin.write(payload.encode("utf-8"))
+        process.stdin.flush()
+        process.stdin.close()
+        out, _err = process.communicate(timeout=300)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.communicate()
+
+    text = out.decode("utf-8", "replace")
+    messages = [json.loads(line) for line in text.splitlines() if line.strip().startswith("{")]
+    by_id = {message.get("id"): message for message in messages}
+    assert 1 in by_id and "result" in by_id[1], text[:800]
+    assert by_id[1]["result"].get("protocolVersion") == "2024-11-05"
+    assert 2 in by_id and by_id[2]["result"].get("tools"), text[:800]

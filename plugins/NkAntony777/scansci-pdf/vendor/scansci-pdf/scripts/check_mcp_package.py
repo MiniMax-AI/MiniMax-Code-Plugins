@@ -43,7 +43,7 @@ async def main():
         clean = subprocess.run([sys.executable, str(entry), '--verify'], cwd=folder, capture_output=True, text=True)
         assert clean.returncode == 0, clean.stderr
         copied = workspace/'tampered-engine'
-        shutil.copytree(entry.parent, copied, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+        shutil.copytree(entry.parent, copied, ignore=shutil.ignore_patterns('__pycache__', '*.pyc', '.venv', '.pytest_cache', '*.egg-info', 'uv.lock'))
         changed = copied/'src'/'scansci_pdf'/'security.py'
         changed.write_bytes(changed.read_bytes()+b'\n# tampered\n')
         tampered = subprocess.run([sys.executable, str(copied/'run_secure.py'), '--verify'], cwd=folder, capture_output=True, text=True)

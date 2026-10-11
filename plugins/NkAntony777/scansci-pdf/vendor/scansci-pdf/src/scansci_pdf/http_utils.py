@@ -1,13 +1,15 @@
 """Shared HTTP utilities with retry logic."""
 
 import logging
+
+from .proxy_redaction import redacting_logger
 import os
 import time
 import urllib3
 
 import requests
 
-logger = logging.getLogger(__name__)
+logger = redacting_logger(__name__)
 
 _SSL_VERIFY = True
 

@@ -61,7 +61,7 @@ class TestInstsciElsevierPreview:
             content = _make_pdf(1, min_size=150_000)
 
         out = tmp_path / "10.1016_j.fake.1.pdf"
-        with patch("requests.get", return_value=_Resp()):
+        with patch("scansci_pdf.credential_transport.confined_request", return_value=_Resp()):
             result = instsci_bridge._try_elsevier_api(
                 "10.1016/j.fake.1", out, {"elsevier_api_key": "k"}
             )
@@ -76,7 +76,7 @@ class TestInstsciElsevierPreview:
             content = _make_pdf(5, min_size=150_000)
 
         out = tmp_path / "10.1016_j.fake.2.pdf"
-        with patch("requests.get", return_value=_Resp()):
+        with patch("scansci_pdf.credential_transport.confined_request", return_value=_Resp()):
             result = instsci_bridge._try_elsevier_api(
                 "10.1016/j.fake.2", out, {"elsevier_api_key": "k"}
             )

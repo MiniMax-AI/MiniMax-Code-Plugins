@@ -71,18 +71,75 @@ def _save_cookies_json(cookies: list[dict[str, Any]], output_path: Path) -> None
 
 
 def cookies_to_netscape(cookies: list[dict[str, Any]]) -> str:
-    """Convert a list of cookie dicts to Netscape HTTP Cookie File format."""
+    """Convert a list of cookie dicts to Netscape HTTP Cookie File format.
+
+    HttpOnly cookies are written with the ``#HttpOnly_`` line prefix, which is
+    the only place the format carries that flag. Without it an export/import
+    round trip (CloakBrowser import, ``import-cookies``) turns an HttpOnly
+    session into a page-script-readable one.
+    """
     lines = ["# Netscape HTTP Cookie File\n"]
     for c in cookies:
         domain = c.get("domain", "")
         flag = "TRUE" if domain.startswith(".") else "FALSE"
         path = c.get("path", "/")
         secure = "TRUE" if c.get("secure") else "FALSE"
-        expires = str(int(c.get("expires", 0)) or 0)
+        expires = str(int(c.get("expires", 0) or 0))
         name = c.get("name", "")
         value = c.get("value", "")
-        lines.append(f"{domain}\t{flag}\t{path}\t{secure}\t{expires}\t{name}\t{value}\n")
+        prefix = "#HttpOnly_" if c.get("httpOnly") else ""
+        if "sameSite" in c:
+            metadata = {"name": name, "domain": domain, "path": path, "sameSite": c["sameSite"]}
+            lines.append("#ScanSci-Cookie-Attributes " + json.dumps(metadata, ensure_ascii=False) + "\n")
+        lines.append(f"{prefix}{domain}\t{flag}\t{path}\t{secure}\t{expires}\t{name}\t{value}\n")
     return "".join(lines)
+
+
+def parse_netscape_cookies(text: str) -> list[dict[str, Any]]:
+    """Parse Netscape-format cookie file into structured cookie objects."""
+    metadata = {}
+    prefix = "#ScanSci-Cookie-Attributes "
+    for line in text.splitlines():
+        if line.startswith(prefix):
+            try:
+                item = json.loads(line[len(prefix):])
+                if isinstance(item, dict):
+                    metadata[(item.get("name"), item.get("domain"), item.get("path"))] = item.get("sameSite")
+            except (ValueError, TypeError):
+                continue
+    cookies: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or (line.startswith("#") and not line.startswith("#HttpOnly_")):
+            continue
+        http_only = False
+        if line.startswith("#HttpOnly_"):
+            http_only = True
+            line = line.removeprefix("#HttpOnly_")
+        parts = line.split("\t")
+        if len(parts) < 7:
+            continue
+        domain = parts[0]
+        cookie_path = parts[2]
+        secure = parts[3].upper() == "TRUE"
+        try:
+            expires = int(parts[4])
+        except (ValueError, IndexError):
+            expires = 0
+        name = parts[5]
+        value = "\t".join(parts[6:])
+        cookie: dict[str, Any] = {
+            "name": name, "value": value,
+            "domain": domain, "path": cookie_path,
+            "secure": secure, "expires": expires,
+        }
+        if http_only:
+            cookie["httpOnly"] = True
+        same_site = metadata.get((name, domain, cookie_path))
+        if same_site in ("Strict", "Lax", "None"):
+            cookie["sameSite"] = same_site
+        cookies.append(cookie)
+    return cookies
 
 
 def _save_cookies_netscape(cookies: list[dict[str, Any]], output_path: Path) -> None:
@@ -112,6 +169,11 @@ def _host_in(host: str, domains: Any) -> bool:
     return any(host == d or host.endswith("." + d) for d in domains if d)
 
 
+# Target used when the operator configured none. A code constant shared by the
+# save and restore paths so both agree on which origin the jar belongs to.
+DEFAULT_LOGIN_TARGET_URL = "https://www.sciencedirect.com/"
+
+
 def is_allowed_login_destination(url: str) -> tuple[bool, str]:
     """Check a custom login destination against the publisher/IdP allowlist.
 
@@ -130,17 +192,147 @@ def is_allowed_login_destination(url: str) -> tuple[bool, str]:
     return _host_in(host, CUSTOM_LOGIN_ALLOWED_DOMAINS), host
 
 
+# Fields a persisted cookie may carry. The first four identify the cookie;
+# the rest are the SECURITY and LIFECYCLE attributes a browser needs to
+# restore it faithfully. Anything outside this set is dropped so a captured
+# jar cannot smuggle unrelated data (or Playwright-only internals such as
+# ``sid``/``partitionKey``) through the cache.
+COOKIE_IDENTITY_FIELDS = ("name", "value", "domain", "path")
+COOKIE_SECURITY_FIELDS = ("httpOnly", "secure", "sameSite", "expires")
+
+# A record written by the pre-D64-05 code path. It carries none of the
+# security attributes, so the HttpOnly/Secure/SameSite/expiry state of the
+# original cookie is simply not in the file and cannot be reconstructed.
+LEGACY_COOKIE_FIELDS = frozenset(COOKIE_IDENTITY_FIELDS)
+
+_VALID_SAME_SITE = {"strict": "Strict", "lax": "Lax", "none": "None", "no_restriction": "None"}
+
+# Cookie-name prefixes the browser itself refuses to set without their
+# required attributes, so a stripped record under one of these names must not
+# be restored as a weaker cookie.
+_HOST_PREFIX = "__Host-"
+_SECURE_PREFIX = "__Secure-"
+
+
+def _coerce_bool(value: Any) -> bool:
+    """Strict truthiness for a security attribute.
+
+    ``bool("false")`` is ``True``, which is precisely how a saved ``"false"``
+    ends up meaning ON. Only real booleans (and the canonical JSON literals)
+    are accepted; anything else is OFF.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes", "on"}
+    return False
+
+
+def _coerce_expires(value: Any, now: float) -> float:
+    """Normalize ``expires`` to a float epoch seconds; non-positive = session."""
+    try:
+        expires = float(value)
+    except (TypeError, ValueError):
+        return -1.0
+    if expires != expires or expires in (float("inf"), float("-inf")):  # NaN/inf
+        return -1.0
+    return expires
+
+
+def _normalize_cookie(cookie: dict[str, Any], now: float) -> dict[str, Any] | None:
+    """Project one cookie onto the persisted allowlist.
+
+    Returns ``None`` when the record is unusable (no name, no value, or already
+    expired), so callers can drop it instead of persisting a dead credential.
+    """
+    if not isinstance(cookie, dict):
+        return None
+    name = cookie.get("name")
+    if not isinstance(name, str) or not name:
+        return None
+    value = cookie.get("value")
+    if value is None:
+        return None
+
+    expires = _coerce_expires(cookie.get("expires"), now)
+    # An expired record must never be written or re-injected: it is a dead
+    # credential that only adds noise to the jar.
+    if expires > 0 and expires <= now:
+        return None
+
+    normalized: dict[str, Any] = {
+        "name": name,
+        "value": str(value),
+        "domain": str(cookie.get("domain") or ""),
+        "path": str(cookie.get("path") or "/"),
+        "httpOnly": _coerce_bool(cookie.get("httpOnly")),
+        "secure": _coerce_bool(cookie.get("secure")),
+        # Playwright's session-cookie sentinel. Persisting 0 instead makes the
+        # browser treat the cookie as expired on restore.
+        "expires": expires if expires > 0 else -1.0,
+    }
+
+    same_site = cookie.get("sameSite")
+    if isinstance(same_site, str):
+        mapped = _VALID_SAME_SITE.get(same_site.strip().lower().replace("-", "_"))
+        if mapped:
+            # SameSite=None is only honoured on a Secure cookie; persisting it
+            # on a non-secure one yields a record the browser rejects.
+            if mapped == "None" and not normalized["secure"]:
+                mapped = "Lax"
+            normalized["sameSite"] = mapped
+
+    return normalized
+
+
+def security_cookies(
+    cookies: list[dict[str, Any]],
+    *,
+    now: float | None = None,
+) -> list[dict[str, Any]]:
+    """Reduce a browser jar to the fields needed to restore it faithfully.
+
+    Keeps name/value/domain/path plus the security and lifecycle attributes
+    (``httpOnly``, ``secure``, ``sameSite``, ``expires``). Dropping those made
+    every saved session *weaker* than the live one: an HttpOnly cookie came
+    back page-script-readable and a session cookie came back with a real
+    expiry. Types are validated rather than trusted, and already-expired
+    records are filtered instead of being written out dead.
+    """
+    now = time.time() if now is None else now
+    result: list[dict[str, Any]] = []
+    for cookie in cookies or []:
+        normalized = _normalize_cookie(cookie, now)
+        if normalized is not None:
+            result.append(normalized)
+    return result
+
+
 def minimal_cookies(cookies: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Reduce cookies to the four fields the loaders need: name/value/domain/path."""
-    return [
-        {
-            "name": c.get("name", ""),
-            "value": c.get("value", ""),
-            "domain": c.get("domain", ""),
-            "path": c.get("path") or "/",
-        }
-        for c in cookies or []
-    ]
+    """Deprecated alias for :func:`security_cookies`.
+
+    Kept so existing callers keep working; "minimal" is no longer an accurate
+    description — see :func:`security_cookies`.
+    """
+    return security_cookies(cookies)
+
+
+def is_legacy_cookie_record(cookie: dict[str, Any]) -> bool:
+    """True for a pre-D64-05 record that carries no security attributes.
+
+    Such a file cannot restore the original cookie faithfully: the HttpOnly,
+    Secure, SameSite and expiry state were never written. We do NOT guess them
+    — the documented compat policy is that these records are dropped on
+    browser restore and the operator re-logs in once, after which the new
+    file carries real attributes.
+
+    Note on scope of persistence: this file is a *cookie* jar, not full
+    browser state. It cannot preserve WebVPN/EZProxy in-memory gateway state,
+    challenge state or TLS sessions; those survive only inside a live visible
+    browser context or a native persistent profile. See
+    ``data/institutional_identity_policy.json``.
+    """
+    return isinstance(cookie, dict) and not (set(cookie) & set(COOKIE_SECURITY_FIELDS))
 
 
 def _covers_host(cookie_domain: str, host: str) -> bool:
@@ -153,9 +345,100 @@ def _covers_host(cookie_domain: str, host: str) -> bool:
     ``www.sciencedirect.com``.
     """
     domain = (cookie_domain or "").lstrip(".").lower()
-    if not domain or not host:
+    # A single label such as ``com`` would match every host under that TLD.
+    if not domain or "." not in domain or not host:
         return False
     return host == domain or host.endswith("." + domain)
+
+
+def _target_hosts(target_urls: Any) -> list[str]:
+    """Hosts of the explicitly authorized targets, in order."""
+    hosts: list[str] = []
+    for url in target_urls or ():
+        host = (urlparse(url or "").hostname or "").lower()
+        if host and host not in hosts:
+            hosts.append(host)
+    return hosts
+
+
+def _prefix_violations(cookie: dict[str, Any]) -> bool:
+    """True when a record violates a cookie-name prefix requirement.
+
+    ``__Secure-`` requires Secure. ``__Host-`` additionally requires
+    ``Path="/"`` and a host-only cookie domain (no leading dot). Invalid
+    records are dropped before they can reach the browser.
+    """
+    name = cookie.get("name") or ""
+    if name.startswith(_SECURE_PREFIX) and not cookie.get("secure"):
+        return True
+    if name.startswith(_HOST_PREFIX):
+        return not (cookie.get("secure") and cookie.get("path") == "/" and not cookie.get("domain", "").startswith("."))
+    return False
+
+
+def authorized_target_urls(config: dict[str, Any] | None, target_url: str = "") -> list[str]:
+    """The EXPLICITLY authorized targets for credential persistence.
+
+    Only operator config and the caller's own argument count. A target read
+    back out of the cache file is *not* authorization — a cache an attacker
+    can rewrite would otherwise be able to name any origin and have its
+    cookies re-injected.
+    """
+    urls: list[str] = []
+    for candidate in ((target_url,) if target_url else ((config or {}).get("browser_login_target_url", ""),)):
+        url = str(candidate or "")
+        if url and url not in urls:
+            urls.append(url)
+    return urls
+
+def scope_to_authorized_targets(
+    cookies: list[dict[str, Any]],
+    targets: list[str],
+    *,
+    now: float | None = None,
+) -> list[dict[str, Any]]:
+    """The single credential-scope policy, applied on BOTH save and restore.
+
+    Keeps only cookies the explicitly authorized targets would themselves
+    receive, then normalizes them through :func:`security_cookies` and drops
+    prefix-invalid records. Passing through an IdP during login therefore
+    never persists that IdP's session, and a stale cache can never widen its
+    own scope.
+
+    Cross-domain institutional flows keep working because WebVPN/EZProxy
+    proxy the publisher under the *proxy* hostname, which is the authorized
+    target for those logins.
+    """
+    hosts = _target_hosts(targets)
+    if not hosts:
+        return []
+    scoped = [
+        c for c in cookies or []
+        if isinstance(c, dict) and any(_covers_host(c.get("domain", ""), h) for h in hosts)
+    ]
+    return [c for c in security_cookies(scoped, now=now) if not _prefix_violations(c)]
+
+
+def credentials_for_target(
+    cookies: list[dict[str, Any]],
+    config: dict[str, Any] | None = None,
+    target_url: str = "",
+    *,
+    now: float | None = None,
+) -> list[dict[str, Any]]:
+    """Shared save/restore entry point for every credential path.
+
+    Wraps :func:`scope_to_authorized_targets` with the authorized-target
+    resolution so no caller has to re-implement the policy.
+
+    The legacy test runs on the RAW records: normalization adds explicit
+    ``httpOnly``/``secure``/``expires`` keys, so a post-normalization check
+    could never tell a stripped record from a real one.
+    """
+    raw = [c for c in cookies or [] if not is_legacy_cookie_record(c)]
+    return scope_to_authorized_targets(
+        raw, authorized_target_urls(config, target_url), now=now
+    )
 
 
 def scoped_cookies(cookies: list[dict[str, Any]], url: str) -> list[dict[str, Any]]:
@@ -168,16 +451,17 @@ def scoped_cookies(cookies: list[dict[str, Any]], url: str) -> list[dict[str, An
     publisher no longer leaves a live session behind for every other publisher
     on the list, and a captured jar cannot be replayed against a different site.
 
+    Security and lifecycle attributes are preserved (see
+    :func:`security_cookies`), so an HttpOnly session does not come back
+    page-script-readable.
+
     There is no cross-publisher carve-out: each login runs in its own context
     against one target, so cookies for a second publisher are never needed to
     complete the first. Cross-domain flows (WebVPN/EZProxy) proxy the publisher
     under the *proxy* hostname, which is the target here, so they keep working.
     """
-    host = (urlparse(url or "").hostname or "").lower()
-    if not host:
-        return []
-    scoped = [c for c in cookies or [] if _covers_host(c.get("domain", ""), host)]
-    return minimal_cookies(scoped)
+    return credentials_for_target(cookies, None, url)
+
 
 
 def extract_via_browser(
@@ -287,7 +571,7 @@ def extract_via_browser(
         try:
             from .browser_engine import import_cookies, is_available
             if is_available(config):
-                browser_imported = import_cookies(netscape_file, config)
+                browser_imported = import_cookies(netscape_file, config, target_url=url)
         except Exception:
             pass
 
@@ -311,8 +595,12 @@ def extract_via_browser(
         return {"success": False, "error": str(exc)}
 
 
-def load_saved_cookies(config: dict[str, Any]) -> list[dict[str, Any]]:
-    """Load previously saved publisher cookies, filtering out expired ones."""
+def load_saved_cookies(config: dict[str, Any], target_url: str = "") -> list[dict[str, Any]]:
+    """Load previously saved cookies, filtering out expired ones.
+
+    The caller's target (or explicit configured login target) determines the
+    restore scope. Without one, no credentials are returned.
+    """
     from .config import DATA_DIR
     cookie_file = Path(config.get("cache_dir", str(DATA_DIR / "cache"))) / "publisher_cookies.json"
     if not cookie_file.exists():
@@ -321,61 +609,72 @@ def load_saved_cookies(config: dict[str, Any]) -> list[dict[str, Any]]:
         cookies = json.loads(cookie_file.read_text(encoding="utf-8"))
     except Exception:
         return []
+    if not isinstance(cookies, list):
+        return []
     now = time.time()
+    cookies = credentials_for_target(cookies, config, target_url, now=now)
     return [c for c in cookies if _is_cookie_valid(c, now)]
 
 
 def _is_cookie_valid(cookie: dict[str, Any], now: float | None = None) -> bool:
-    """Check if a cookie is not expired. expires=0 means session cookie (always valid)."""
+    """Check if a cookie is not expired. expires<=0 means session cookie (always valid)."""
     expires = cookie.get("expires", 0)
-    if not expires or expires == 0:
+    if not expires or expires <= 0:
         return True
     if now is None:
         now = time.time()
-    return expires > now
+    try:
+        return float(expires) > now
+    except (TypeError, ValueError):
+        return False
 
 
-def inject_cookies(session: Any, config: dict[str, Any]) -> None:
+def inject_cookies(session: Any, config: dict[str, Any], target_url: str = "") -> None:
     """Inject saved publisher cookies into a requests.Session."""
-    cookies = load_saved_cookies(config)
-    for c in cookies:
-        session.cookies.set(c["name"], c["value"], domain=c.get("domain", ""), path=c.get("path", "/"))
+    cookies = load_saved_cookies(config, target_url)
+    from .session_store import CookieStore
+    CookieStore.apply_to_session(session, cookies)
 
 
-def merge_cookies(new_cookies: list[dict[str, Any]], config: dict[str, Any]) -> list[dict[str, Any]]:
-    """Merge new cookies into saved publisher cookies, dedup by (name, domain, path).
+def merge_cookies(
+    new_cookies: list[dict[str, Any]],
+    config: dict[str, Any],
+    target_url: str = "",
+    *,
+    target_urls: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Merge cookies for the caller's explicitly authorized targets only.
 
-    Filters to publisher domains only. Updates existing cookies in-place
-    (new value overwrites old) and appends genuinely new ones. Saves both
-    JSON and Netscape formats.
-
-    Returns the merged cookie list.
+    A known publisher-domain list is not authorization for every publisher.
+    Multi-origin integrations must supply their complete scope explicitly.
     """
     from .config import DATA_DIR
 
+    targets = target_urls if target_urls is not None else authorized_target_urls(config, target_url)
+    if not targets:
+        return []
     cache_dir = Path(config.get("cache_dir", str(DATA_DIR / "cache")))
     cookie_file = cache_dir / "publisher_cookies.json"
     netscape_file = cache_dir / "publisher_cookies.txt"
-
-    existing = load_saved_cookies(config)
-
-    # Build index of existing cookies by (name, domain, path)
-    key = lambda c: (c.get("name", ""), c.get("domain", ""), c.get("path", "/"))
-    merged: dict[tuple, dict[str, Any]] = {key(c): c for c in existing}
-
-    for c in new_cookies:
-        if not _is_publisher_cookie(c):
-            continue
-        merged[key(c)] = c
-
-    # Persist only the four fields the loaders need, not everything the
-    # browser handed us.
-    result = minimal_cookies(list(merged.values()))
-
-    if result:
-        _save_cookies_json(result, cookie_file)
-        _save_cookies_netscape(result, netscape_file)
-
+    try:
+        existing = json.loads(cookie_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        existing = []
+    if not isinstance(existing, list):
+        existing = []
+    now = time.time()
+    existing = [c for c in existing if isinstance(c, dict) and not is_legacy_cookie_record(c)]
+    existing = scope_to_authorized_targets(existing, targets, now=now)
+    key = lambda c: (c["name"], c["domain"], c["path"])
+    merged = {key(c): c for c in existing}
+    incoming = [c for c in new_cookies or [] if isinstance(c, dict) and not is_legacy_cookie_record(c)]
+    for cookie in scope_to_authorized_targets(incoming, targets, now=now):
+        merged[key(cookie)] = cookie
+    result = list(merged.values())
+    # Persist empty results too: expired or unauthorized credentials must not
+    # survive a successful merge in an old cache file.
+    _save_cookies_json(result, cookie_file)
+    _save_cookies_netscape(result, netscape_file)
     return result
 
 

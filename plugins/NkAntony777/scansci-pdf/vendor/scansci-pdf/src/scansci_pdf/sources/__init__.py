@@ -15,8 +15,10 @@ from ..cache import cache_get, cache_set
 from ..config import load_config, DATA_DIR
 from ..identifiers import is_arxiv_identifier, normalize_doi, safe_filename
 from ..log import get_logger
+from ..path_guard import resolve_within, safe_identifier
 from ..pdf_utils import fail
 from ..rename import rename_pdf, generate_filename as rename_pdf_generate_filename
+from ..security import SecurityError
 
 # Import compiled core functions if available (Cython .pyd/.so)
 try:
@@ -1216,15 +1218,28 @@ def _build_failure_guidance(doi: str, config: dict[str, Any]) -> list[str]:
 
 
 def _get_progress_file(batch_id: str) -> Path:
-    """Get path to batch progress file."""
-    return DATA_DIR / "batch_progress" / f"{batch_id}.jsonl"
+    """Resolve the progress file for a batch.
+
+    ``batch_id`` is an identifier, never a path. The single resolver here
+    serves read, write and cleanup alike, so no caller can skip the check:
+    it rejects path-shaped ids (absolute, separators, drive/UNC/ADS,
+    traversal) and refuses a symlink or junction between ``batch_progress``
+    and the target. Callers that treat an unusable id as "no progress"
+    catch SecurityError instead of falling back to a raw path.
+    """
+    identifier = safe_identifier(batch_id, field="batch_id")
+    return resolve_within(DATA_DIR, "batch_progress", f"{identifier}.jsonl", field="batch_id progress file")
 
 
 _progress_lock = threading.Lock()
 
 
 def _save_progress(batch_id: str, identifier: str, result: dict[str, Any]) -> None:
-    """Append a single result to the progress file (thread-safe)."""
+    """Append a single result to the progress file (thread-safe).
+
+    A rejected ``batch_id`` writes nothing at all: the resolver runs first, so
+    no record can ever be appended to a file outside ``batch_progress``.
+    """
     progress_file = _get_progress_file(batch_id)
     progress_file.parent.mkdir(parents=True, exist_ok=True)
     entry = {
@@ -1241,9 +1256,18 @@ def _save_progress(batch_id: str, identifier: str, result: dict[str, Any]) -> No
 
 
 def _load_progress(batch_id: str) -> dict[str, dict[str, Any]]:
-    """Load completed results from progress file. Returns {identifier: result}."""
-    progress_file = _get_progress_file(batch_id)
+    """Load completed results from progress file. Returns {identifier: result}.
+
+    An unusable ``batch_id`` yields no records instead of reading whatever the
+    value happens to point at, so no outside file content is ever parsed into
+    results that are handed back to the caller.
+    """
     completed: dict[str, dict[str, Any]] = {}
+    try:
+        progress_file = _get_progress_file(batch_id)
+    except SecurityError as exc:
+        log.warning(f"Ignoring unusable batch_id for progress load: {exc}")
+        return completed
     if not progress_file.exists():
         return completed
     try:
@@ -1262,8 +1286,16 @@ def _load_progress(batch_id: str) -> dict[str, dict[str, Any]]:
 
 
 def _clear_progress(batch_id: str) -> None:
-    """Remove progress file after successful completion."""
-    progress_file = _get_progress_file(batch_id)
+    """Remove progress file after successful completion.
+
+    A rejected ``batch_id`` deletes nothing: the resolver runs before any
+    filesystem call, so cleanup can never reach an outside record.
+    """
+    try:
+        progress_file = _get_progress_file(batch_id)
+    except SecurityError as exc:
+        log.warning(f"Ignoring unusable batch_id for progress cleanup: {exc}")
+        return
     if progress_file.exists():
         try:
             progress_file.unlink()
@@ -1522,6 +1554,24 @@ def batch_download(
     if not batch_id:
         import hashlib as _hashlib
         batch_id = _hashlib.md5("|".join(sorted(unique_identifiers)).encode()).hexdigest()[:12]
+
+    # A caller-supplied batch_id is an identifier, not a path. Reject it here
+    # so the user gets a clear error instead of a silently dropped resume, and
+    # so no progress read/write/cleanup can ever target an outside file.
+    try:
+        batch_id = safe_identifier(batch_id, field="batch_id")
+    except SecurityError as exc:
+        return {
+            "success": False,
+            "error": f"Invalid batch_id: {exc}",
+            "total": len(identifiers),
+            "unique": len(unique_identifiers),
+            "skipped_duplicates": skipped_duplicates,
+            "succeeded": 0,
+            "failed": len(unique_identifiers),
+            "results": [],
+            "failed_dois": list(unique_identifiers),
+        }
 
     # Load previous progress for resume
     completed_map: dict[str, dict[str, Any]] = {}

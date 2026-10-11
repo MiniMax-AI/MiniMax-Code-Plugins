@@ -88,6 +88,12 @@ tells you which papers remain behind institutional auth.
   `--confirm-writeback`; it atomically replaces the workbook after successful serialization.
 - See `REVIEW-NOTES.md` for measured performance, regression checks, and remaining validation limits.
 
+## Security upgrade and credential migration
+
+- Saved cookies retain `HttpOnly`, `Secure`, `SameSite`, expiry and session semantics on browser and requests restore. Persistence and merges require an explicit authorized target, and pre-upgrade four-field cookie records are rejected: log in again once to recreate them with their original attributes. Our Netscape export includes private SameSite metadata; other cookie tools may not preserve that comment.
+- `browser_persist_localstorage` defaults to `false`; only an explicitly enabled boolean saves/restores localStorage, and only for authorized origins. The string `"false"` stays off. Changing browser binary trust pins requires explicit owner confirmation. An owner-approved binary in a writable cache must have a matching digest.
+- The unauthenticated streamable HTTP transport is loopback-only. Web login tokens are not embedded in initial HTML, and both Web startup paths disable access logs to keep query tokens out of them. Elsevier credentials stay at their issuing origin on every redirect; proxy authentication is masked at result/log/console boundaries.
+
 ## Upstream, license, and maintenance
 
 - Upstream project: <https://github.com/Rimagination/scansci-pdf> (Apache-2.0,

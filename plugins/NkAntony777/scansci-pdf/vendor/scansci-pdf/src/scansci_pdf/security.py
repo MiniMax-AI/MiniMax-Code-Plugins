@@ -340,4 +340,17 @@ def guarded_tool(function):
             pass
         return json.dumps({"trust": "untrusted_external_data", "result": result}, ensure_ascii=False)
 
-    return guarded
+    @functools.wraps(function)
+    def outward(*args, **kwargs):
+        from .proxy_redaction import redact_proxy_structure, redact_proxy_text
+        try:
+            result = guarded(*args, **kwargs)
+        except Exception as exc:
+            message = str(exc)
+            safe_message = redact_proxy_text(message)
+            if safe_message != message:
+                raise SecurityError(safe_message) from None
+            raise
+        return redact_proxy_structure(result)
+
+    return outward

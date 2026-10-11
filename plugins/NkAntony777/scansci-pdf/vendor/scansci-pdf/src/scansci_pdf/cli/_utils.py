@@ -16,7 +16,7 @@ if sys.platform == "win32":
         pass
 
 import typer
-from rich.console import Console
+from ..proxy_redaction import redacting_console
 from rich.table import Table
 
 from ..config import load_config, save_config
@@ -26,7 +26,7 @@ app = typer.Typer(
     help="Fetch academic papers via institutional access, Open Access, or arXiv.",
     no_args_is_help=True,
 )
-console = Console()
+console = redacting_console()
 
 
 def _setup_logging(verbose: bool = False):

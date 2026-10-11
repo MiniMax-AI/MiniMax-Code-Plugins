@@ -2,9 +2,11 @@
 
 import logging
 
+from ..proxy_redaction import redacting_logger
+
 import requests
 
-logger = logging.getLogger(__name__)
+logger = redacting_logger(__name__)
 
 DEFAULT_URL = "http://127.0.0.1:8191/v1"
 

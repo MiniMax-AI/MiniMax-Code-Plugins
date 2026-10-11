@@ -246,7 +246,8 @@ def try_ezproxy(doi: str, output_path: Path, config: dict[str, Any]) -> dict[str
         cookie_file = _ezproxy_cookie_path(config)
         if cookie_file.exists():
             import json
-            cookies = json.loads(cookie_file.read_text(encoding="utf-8"))
+            from ..browser_cookies import credentials_for_target
+            cookies = credentials_for_target(json.loads(cookie_file.read_text(encoding="utf-8")), None, ezproxy_url)
             if cookies:
                 context.add_cookies(cookies)
 

@@ -1,15 +1,21 @@
 """Elsevier RetrievalAPI integration for fetching full-text articles."""
 
 import logging
+
+from ..proxy_redaction import redacting_logger
 import os
 import xml.etree.ElementTree as ET
 from urllib.parse import quote
 
 import requests
 
-logger = logging.getLogger(__name__)
+from ..proxy_redaction import redact_proxy_text
+
+logger = redacting_logger(__name__)
 
 ELSEVIER_API = "https://api.elsevier.com/content"
+
+from ..credential_transport import CREDENTIAL_HEADERS, confined_session, origin_of
 
 
 def get_api_key(config_key: str = "") -> str:
@@ -342,9 +348,16 @@ def _api_request(
     params: dict[str, str] | None = None,
     proxies: dict[str, str] | None = None,
 ) -> requests.Response | None:
-    """Make an Elsevier API request with error handling."""
+    """Make an Elsevier API request with error handling.
+
+    Redirects are followed, but never blindly: the API key and institutional
+    token are confined to the API origin they were issued for, so a 302/303/307/
+    308 to any other scheme, host or port is followed WITHOUT them. Both the
+    first attempt and the SSL retry build the same confined session, so neither
+    path can be the one that leaks.
+    """
     try:
-        session = requests.Session()
+        session = confined_session(url)
         session.trust_env = False
         if proxies:
             session.proxies = proxies
@@ -357,7 +370,7 @@ def _api_request(
         )
     except requests.exceptions.SSLError:
         try:
-            session = requests.Session()
+            session = confined_session(url)
             session.trust_env = False
             if proxies:
                 session.proxies = proxies
@@ -370,10 +383,10 @@ def _api_request(
                 verify=True,
             )
         except requests.RequestException as e:
-            logger.warning("Elsevier API request failed: %s", e)
+            logger.warning("Elsevier API request failed: %s", redact_proxy_text(str(e)))
             return None
     except requests.RequestException as e:
-        logger.warning("Elsevier API request failed: %s", e)
+        logger.warning("Elsevier API request failed: %s", redact_proxy_text(str(e)))
         return None
 
     if resp.status_code in (401, 403):

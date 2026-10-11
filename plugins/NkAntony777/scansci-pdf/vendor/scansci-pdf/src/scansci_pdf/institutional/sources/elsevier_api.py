@@ -1,12 +1,16 @@
 """Elsevier RetrievalAPI integration for fetching full-text articles."""
 
 import logging
+
+from ...proxy_redaction import redacting_logger
 import os
 import xml.etree.ElementTree as ET
 
 import requests
 
-logger = logging.getLogger(__name__)
+from ...credential_transport import confined_session
+
+logger = redacting_logger(__name__)
 
 ELSEVIER_API = "https://api.elsevier.com/content"
 
@@ -42,7 +46,7 @@ def fetch_pdf(doi: str, api_key: str, inst_token: str = "", config: dict | None 
         headers["X-ELS-InstToken"] = inst_token
 
     try:
-        session = requests.Session()
+        session = confined_session(url)
         session.trust_env = False
         session.proxies = _resolve_proxies(config) or {}
         resp = session.get(url, headers=headers, timeout=30, allow_redirects=True)
@@ -105,7 +109,7 @@ def fetch_fulltext(doi: str, api_key: str, inst_token: str = "", config: dict | 
         headers["X-ELS-Insttoken"] = inst_token
 
     try:
-        session = requests.Session()
+        session = confined_session(url)
         session.trust_env = False
         session.proxies = _resolve_proxies(config) or {}
         resp = session.get(url, headers=headers, timeout=30, allow_redirects=True)

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+
+from ...proxy_redaction import redacting_logger
 import re
 from pathlib import Path
 from typing import Any
@@ -11,7 +13,7 @@ import requests
 
 from ...identifiers import normalize_arxiv_id
 
-logger = logging.getLogger(__name__)
+logger = redacting_logger(__name__)
 
 ARXIV_API = "http://export.arxiv.org/api/query"
 

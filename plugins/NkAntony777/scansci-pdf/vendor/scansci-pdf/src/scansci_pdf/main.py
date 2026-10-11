@@ -10,7 +10,31 @@ from typing import Annotated, Any
 
 import typer
 
+from builtins import print as _print
+from .proxy_redaction import redact_proxy_structure
+
+
+def print(*values, **kwargs):
+    return _print(*(redact_proxy_structure(value) for value in values), **kwargs)
+
+
 app = typer.Typer(help="ScanSci PDF server")
+
+
+def _require_loopback_host(host: str) -> None:
+    """streamable_http has no request authentication, so it stays on loopback."""
+    import ipaddress
+
+    bind = (host or "").strip().strip("[]")
+    loopback = bind.lower() == "localhost"
+    if not loopback:
+        try:
+            loopback = ipaddress.ip_address(bind).is_loopback
+        except ValueError:
+            loopback = False
+    if not loopback:
+        typer.echo(f"streamable_http refuses non-loopback host {host}; it has no request authentication")
+        raise typer.Exit(1)
 
 
 class ServerMode(str, Enum):
@@ -39,16 +63,18 @@ def run_server(
         log.info("Starting in stdio mode")
         mcp_app.run(transport="stdio")
     elif mode == ServerMode.WEB:
+        # Same secure startup as the standalone `web` command: the launch
+        # arguments, the token hand-off and the app's auth/CSRF/header policy
+        # all come from web.py, so neither path can end up the weaker one.
+        from .web import start_web_server
         try:
-            import uvicorn
-            from .web import app as web_app
+            start_web_server(host, port)
         except ModuleNotFoundError as e:
             typer.echo(f"  Missing dependency: {e.name}. Install with: pip install 'scansci-pdf[web]'")
             raise typer.Exit(1)
-        log.info(f"Starting web UI on http://{host}:{port}")
-        uvicorn.run(web_app, host=host, port=port)
     else:
         import uvicorn
+        _require_loopback_host(host)
         log.info(f"Starting HTTP server on {host}:{port}")
         asgi_app = mcp_app.streamable_http_app()
         uvicorn.run(asgi_app, host=host, port=port)
@@ -67,21 +93,12 @@ def web_server(
     port: int = typer.Option(8080, help="Web server port"),
 ) -> None:
     """Start the ScanSci PDF web UI for browser-based paper downloading."""
+    from .web import start_web_server
     try:
-        import uvicorn
-        from .web import app as web_app
-        from .web import web_token
+        start_web_server(host, port)
     except ModuleNotFoundError as e:
         typer.echo(f"  Missing dependency: {e.name}. Install with: pip install 'scansci-pdf[web]'")
         raise typer.Exit(1)
-    token = web_token()
-    print(f"  Starting ScanSci PDF Web UI on http://{host}:{port}")
-    print(f"  Open http://{host}:{port}/?t={token} in your browser")
-    print("  Every API call needs this token; set SCANSCI_WEB_TOKEN to pin one.")
-    # The access log records the full request target, so a ?t= link would be
-    # written to the log verbatim. The browser keeps the token after the first
-    # request via its HttpOnly cookie, so the query string never needs logging.
-    uvicorn.run(web_app, host=host, port=port, access_log=False)
 
 
 @app.command("login")
@@ -136,6 +153,7 @@ def get_paper(
     """Download a paper with zero configuration. Just give a DOI."""
     from .sources import download
     from .config import load_config, update_config
+    from .proxy_redaction import redact_proxy_structure
 
     result = download(
         identifier, output,
@@ -160,16 +178,21 @@ def get_paper(
             for f in si_files:
                 print(f"    {f}")
     else:
-        reason = (result.get("reason") or result.get("error")
-                  or result.get("error_type") or "unknown")
+        # Every string in the failure result is printed, and the tree is nested
+        # (reason, per-source reason, agent_hint). Filter the whole structure
+        # instead of a few known keys, so a credentialed proxy cannot reach the
+        # terminal through whichever field the source happened to use.
+        failure = redact_proxy_structure(result)
+        reason = (failure.get("reason") or failure.get("error")
+                  or failure.get("error_type") or "unknown")
         print(f"  FAILED: {reason}")
-        source_failures = result.get("source_failures") or []
+        source_failures = failure.get("source_failures") or []
         if source_failures:
             print(f"  渠道明细 ({len(source_failures)} 个渠道失败，部分可能只是临时不可用):")
             for f in source_failures:
                 note = f" — {f['reason']}" if f.get("reason") else ""
                 print(f"    {f.get('source', '?')}: {f.get('error_type') or 'failed'}{note}")
-        hint = result.get('agent_hint', '')
+        hint = failure.get('agent_hint', '')
         if hint:
             print(f"  Hint: {hint}")
         else:
@@ -213,7 +236,10 @@ def browser_doctor_cmd() -> None:
 
 
 @app.command("import-cookies")
-def import_cookies_cmd(cookie_file: str = typer.Argument(help="Netscape-format cookie file path")) -> None:
+def import_cookies_cmd(
+    cookie_file: str = typer.Argument(help="Netscape-format cookie file path"),
+    target_url: str = typer.Option("", "--target-url", help="Authorized site for cookie import"),
+) -> None:
     """Import Netscape cookies into browser context."""
     from .config import load_config
     from .browser_engine import import_cookies, is_available
@@ -223,7 +249,7 @@ def import_cookies_cmd(cookie_file: str = typer.Argument(help="Netscape-format c
         print("Error: CloakBrowser not available")
         raise typer.Exit(1)
     try:
-        count = import_cookies(cookie_file, config)
+        count = import_cookies(cookie_file, config, target_url=target_url)
         print(f"Imported {count} cookies from {cookie_file}")
     except Exception as exc:
         print(f"Error: {exc}")
@@ -659,10 +685,10 @@ def elsevier_check_cmd(
     json_out: bool = typer.Option(False, "--json", help="输出机读 JSON"),
 ) -> None:
     """Elsevier API key 权限自检与逐篇探测（纯查询，零下载）。"""
-    from rich.console import Console
+    from .proxy_redaction import redacting_console
     from rich.table import Table
 
-    console = Console()
+    console = redacting_console()
 
     from . import progress_reporter as _pr
     from .config import load_config

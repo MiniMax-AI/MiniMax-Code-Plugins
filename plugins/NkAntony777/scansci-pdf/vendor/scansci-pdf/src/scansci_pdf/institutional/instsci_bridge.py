@@ -464,7 +464,8 @@ def _try_elsevier_api(
         headers["X-ELS-Insttoken"] = inst_token
 
     try:
-        resp = requests.get(url, headers=headers, timeout=30)
+        from ..credential_transport import confined_request
+        resp = confined_request("GET", url, headers=headers, timeout=30)
         if resp.status_code == 200 and resp.content[:5] == b"%PDF-":
             # A valid API key without full-text entitlement still returns a
             # 1-page preview PDF (often >100KB). Accepting it poisons the

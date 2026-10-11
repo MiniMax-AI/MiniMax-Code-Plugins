@@ -1,6 +1,8 @@
 """MCP server exposing scansci-pdf tools for Claude Code."""
 
 import logging
+
+from .proxy_redaction import redacting_logger
 import sys
 
 try:
@@ -19,7 +21,7 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
     stream=sys.stderr,
 )
-logger = logging.getLogger(__name__)
+logger = redacting_logger(__name__)
 
 mcp = FastMCP("scansci-pdf")
 

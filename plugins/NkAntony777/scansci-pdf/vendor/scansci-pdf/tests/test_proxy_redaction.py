@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import os
 import socket
+from pathlib import Path
 
 import pytest
 
 from scansci_pdf.sources import scoring
 from scansci_pdf.sources.scoring import diagnose_network, redact_proxy_url
+
+_spec = importlib.util.spec_from_file_location(
+    "_secure_stage", Path(__file__).resolve().with_name("_secure_stage.py"))
+_secure_stage = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_secure_stage)
 
 SECRET = "hunter2"
 
@@ -315,3 +323,166 @@ def test_non_credential_proxy_forms_are_untouched():
     # The username must be kept, not replaced.
     assert "bob@" in mask_config_value("network_proxy", "bob@proxy.corp:3128")
     assert "bob@" in mask_config_value("network_proxy", "http://bob@proxy.corp:3128")
+
+# ---------------------------------------------------------------------------
+# D64-10: proxy credentials must not survive ANY egress boundary.
+#
+# The synthetic markers below appear only in a proxy URL, so a positive
+# assertion on the masked form proves the redaction ran rather than proving
+# the boundary was simply never reached.
+# ---------------------------------------------------------------------------
+
+# A percent-encoded password: the encoded form must not leak either.
+ENCODED_SECRET = "p%40ssw0rd"
+PLAIN_SECRET = "p@ssw0rd"
+CREDENTIALED_PROXY = f"http://alice:{ENCODED_SECRET}@proxy.corp:8080"
+MASKED_PROXY = "http://alice:***@proxy.corp:8080"
+
+
+def _assert_no_credential(blob, note=""):
+    for marker in (SECRET, ENCODED_SECRET, PLAIN_SECRET):
+        assert marker not in blob, f"{note}: {marker!r} leaked"
+    assert MASKED_PROXY in blob, f"{note}: expected the masked host to stay"
+
+
+def test_web_error_response_redacts_nested_proxy_credentials(monkeypatch):
+    """The download result is a tree; filtering a few known keys is not enough."""
+    from fastapi.testclient import TestClient
+
+    from scansci_pdf import web
+
+    monkeypatch.setenv(web.TOKEN_ENV, "unit-test-token-value")
+    monkeypatch.setattr(web, "_check_sources", lambda config: {})
+    nested = {
+        "success": False,
+        "reason": f"ProxyError: tunnel through {CREDENTIALED_PROXY} failed",
+        "source_failures": [
+            {"source": "elsevier", "error_type": "proxy",
+             "reason": {"chain": [f"urllib3 raised on {CREDENTIALED_PROXY}",
+                                  {"deeper": f"alice:{PLAIN_SECRET}@proxy.corp:8080"}]}},
+        ],
+        "agent_hint": f"check {CREDENTIALED_PROXY}",
+        "guidance": [f"config_set network_proxy \"{CREDENTIALED_PROXY}\""],
+    }
+    monkeypatch.setattr(web, "download", lambda identifier: nested)
+
+    client = TestClient(web.app)
+    response = client.post(
+        "/api/download",
+        json={"identifier": "10.1234/abcd"},
+        headers={"X-ScanSci-Token": "unit-test-token-value",
+                 "X-Requested-With": "XMLHttpRequest"},
+    )
+
+    assert response.status_code == 404
+    body = response.text
+    _assert_no_credential(body, "web error response")
+    # The tree shape survives; only the secret is gone.
+    payload = response.json()
+    assert payload["source_failures"][0]["error_type"] == "proxy"
+    assert payload["reason"].startswith("ProxyError")
+
+
+def test_cli_failure_output_redacts_proxy_credentials(monkeypatch, capsys):
+    """`scansci-pdf get` prints reason, per-source reasons and the agent hint."""
+    from scansci_pdf import main, sources
+
+    monkeypatch.setattr(sources, "download", lambda *a, **k: {
+        "success": False,
+        "reason": f"cannot reach publisher through {CREDENTIALED_PROXY}",
+        "source_failures": [
+            {"source": "springer", "error_type": "proxy",
+             "reason": f"ProxyError via {CREDENTIALED_PROXY}"},
+            {"source": "elsevier", "error_type": "http_403",
+             "reason": {"nested": [f"retry with alice:{PLAIN_SECRET}@proxy.corp:8080"]}},
+        ],
+        "agent_hint": f"set network_proxy={CREDENTIALED_PROXY}",
+    })
+
+    main.get_paper(identifier="10.1234/abcd", output=".", no_bibtex=True,
+                   strategy="", si=False, md=False)
+    out = capsys.readouterr().out
+
+    _assert_no_credential(out, "CLI failure output")
+
+
+def test_child_process_argv_never_carries_proxy_credentials(monkeypatch, tmp_path):
+    """Nothing a child process can be listed for may embed a password."""
+    from scansci_pdf import browser_engine, progress_reporter
+    from scansci_pdf.institutional import session_broker as broker
+
+    config = {"browser_static_proxy": f"socks5://bob:{PLAIN_SECRET}@static.corp:1080"}
+
+    args = browser_engine._build_browser_args(config)
+    joined = " ".join(args)
+    assert PLAIN_SECRET not in joined
+    assert "--proxy-server=socks5://static.corp:1080" in joined
+
+    # A legitimately authenticated proxy still authenticates: the credentials
+    # travel in the in-memory Playwright proxy dict, not in argv.
+    from scansci_pdf import browser_backend
+
+    payload = browser_backend._proxy_from_config(config)
+    assert payload["server"] == "socks5://static.corp:1080"
+    assert payload["username"] == "bob"
+    assert payload["password"] == PLAIN_SECRET
+
+    captured: list = []
+
+    class _Popen:
+        def __init__(self, args, **kwargs):
+            captured.append(list(args))
+
+    monkeypatch.setattr("subprocess.Popen", _Popen)
+    monkeypatch.delenv("SCANSCI_PROGRESS_BAR", raising=False)
+    monkeypatch.delenv("SCANSCI_PROGRESS_BAR_CHILD", raising=False)
+    monkeypatch.setenv("SCANSCI_PDF_DATA_DIR", str(tmp_path))
+    progress_reporter.ensure_progress_bar({"network_proxy": CREDENTIALED_PROXY})
+    assert captured and PLAIN_SECRET not in " ".join(captured[-1])
+
+    monkeypatch.setenv("SCANSCI_PDF_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("SCANSCI_PDF_SECURE_ENTRY",
+                       str(Path(_secure_stage.ENGINE) / "run_secure.py"))
+    monkeypatch.setattr(broker, "BROKER_ROOT", tmp_path / "brokers")
+    broker.start_broker_process(publisher="Elsevier", browser_profile="p",
+                                institution="Demo University", ttl_seconds=60,
+                                cwd=tmp_path)
+    assert captured, "the broker must still spawn"
+    broker_argv = captured[-1]
+    assert "session-broker-run" in broker_argv
+    assert "--module" in broker_argv
+    assert PLAIN_SECRET not in " ".join(broker_argv)
+
+
+def test_elsevier_request_failure_log_is_redacted(monkeypatch, caplog):
+    """An exception raised while egressing through a proxy embeds the URL."""
+    from scansci_pdf.sources import elsevier_api as ea
+
+    monkeypatch.setattr(ea, "confined_session", lambda url: (_ for _ in ()).throw(
+        __import__("requests").exceptions.ProxyError(
+            f"HTTP CONNECT tunnel failed for proxy {CREDENTIALED_PROXY}")))
+
+    with caplog.at_level("WARNING"):
+        assert ea._api_request("https://api.elsevier.com/content/x", {}) is None
+
+    _assert_no_credential(caplog.text, "elsevier warning log")
+
+
+def test_redact_proxy_structure_walks_every_container():
+    from scansci_pdf.proxy_redaction import redact_proxy_structure
+
+    payload = {
+        "list": [f"via {CREDENTIALED_PROXY}", ("nested", f"{CREDENTIALED_PROXY}")],
+        "set": {f"{CREDENTIALED_PROXY}"},
+        "number": 7,
+        "none": None,
+    }
+    cleaned = redact_proxy_structure(payload)
+
+    # Free text keeps its surroundings; only the password goes.
+    assert cleaned["list"][0] == f"via {MASKED_PROXY}"
+    assert cleaned["list"][1] == ("nested", MASKED_PROXY)
+    assert cleaned["set"] == {MASKED_PROXY}
+    assert cleaned["number"] == 7 and cleaned["none"] is None
+    assert isinstance(cleaned["list"][1], tuple)
+    assert isinstance(cleaned["set"], set)

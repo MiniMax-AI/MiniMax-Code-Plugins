@@ -2,9 +2,11 @@
 
 import logging
 
+from ...proxy_redaction import redacting_logger
+
 from .publisher_adapters import acs, elsevier, generic, nature, rsc, tandfonline, wiley
 
-logger = logging.getLogger(__name__)
+logger = redacting_logger(__name__)
 
 # Ordered list of publisher adapters (checked in order)
 _ADAPTERS = [nature, elsevier, wiley, acs, rsc, tandfonline]

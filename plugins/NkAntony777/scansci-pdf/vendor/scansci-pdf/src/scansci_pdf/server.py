@@ -15,12 +15,18 @@ except ModuleNotFoundError:  # mcp >= 2.0 renamed FastMCP to MCPServer
 from .cache import cache_clear, cache_get
 from .config import get_config_safe, load_config, mask_config_value, update_config
 from .network import fetch_json
+from .credential_transport import confined_session
 from .paperlist import parse_paper_list
 from .resolver import batch_resolve
 from .search import search_papers_v2 as search_papers
 from .sources import batch_download, download
 from .tor import check_tor_circuit, get_tor_proxy
 from .security import guarded_tool, strict_mode, SecurityError
+
+
+def _json_result(value, **kwargs):
+    from .proxy_redaction import redact_proxy_structure
+    return json.dumps(redact_proxy_structure(value), **kwargs)
 
 
 class GuardedMCP(FastMCP):
@@ -129,7 +135,7 @@ def scansci_pdf_download(
         except Exception as exc:
             result["markdown_error"] = str(exc)
 
-    return json.dumps(result, ensure_ascii=False)
+    return _json_result(result, ensure_ascii=False)
 
 
 def _batch_download_impl(
@@ -210,7 +216,7 @@ def _batch_download_impl(
             "mode": "lanes",
         }
         _write_download_results(raw, out_dir)
-        return json.dumps(summary, ensure_ascii=False)
+        return _json_result(summary, ensure_ascii=False)
 
     result = batch_download(
         identifiers, output_dir,
@@ -230,7 +236,7 @@ def _batch_download_impl(
             "登录后关闭浏览器，然后重新批量下载。"
         )
 
-    return json.dumps(result, ensure_ascii=False)
+    return _json_result(result, ensure_ascii=False)
 
 
 @mcp_app.tool()
@@ -267,11 +273,11 @@ def scansci_pdf_search(
             if r.get("doi") or r.get("arxiv_id")
         ]
         path = write_queue(qe, out_file)
-        return json.dumps(
+        return _json_result(
             {"results": results, "queue_file": str(path), "queued": len(qe)},
             ensure_ascii=False,
         )
-    return json.dumps({"results": results}, ensure_ascii=False)
+    return _json_result({"results": results}, ensure_ascii=False)
 
 
 def scansci_pdf_plan_search(
@@ -288,9 +294,9 @@ def scansci_pdf_plan_search(
     """
     from .discovery import plan
     try:
-        return json.dumps(plan(query, domain=domain, depth=depth), ensure_ascii=False)
+        return _json_result(plan(query, domain=domain, depth=depth), ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        return _json_result({"error": str(exc)}, ensure_ascii=False)
 
 
 def scansci_pdf_estimate_search(
@@ -307,9 +313,9 @@ def scansci_pdf_estimate_search(
     """
     from .discovery import estimate
     try:
-        return json.dumps(estimate(query, domain=domain, depth=depth), ensure_ascii=False)
+        return _json_result(estimate(query, domain=domain, depth=depth), ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        return _json_result({"error": str(exc)}, ensure_ascii=False)
 
 
 def scansci_pdf_smoke_search(
@@ -319,9 +325,9 @@ def scansci_pdf_smoke_search(
     """Fetch 4 records per source and validate the candidate contract before the real search."""
     from .discovery import smoke
     try:
-        return json.dumps(smoke(query, domain=domain), ensure_ascii=False)
+        return _json_result(smoke(query, domain=domain), ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        return _json_result({"error": str(exc)}, ensure_ascii=False)
 
 
 def scansci_pdf_calibrate_search(
@@ -340,10 +346,10 @@ def scansci_pdf_calibrate_search(
     """
     from .discovery import calibrate
     try:
-        return json.dumps(calibrate(query, domain=domain, depth=depth, sample_size=sample_size),
+        return _json_result(calibrate(query, domain=domain, depth=depth, sample_size=sample_size),
                           ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        return _json_result({"error": str(exc)}, ensure_ascii=False)
 
 
 @mcp_app.tool()
@@ -369,9 +375,9 @@ def scansci_pdf_expand_citations(
             "arxiv_ids": [c.get("arxiv_id") for c in candidates if c.get("arxiv_id")][:20],
             "saturated": bool(payload.get("citation_report", {}).get("saturated")),
         }
-        return json.dumps(summary, ensure_ascii=False)
+        return _json_result(summary, ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        return _json_result({"error": str(exc)}, ensure_ascii=False)
 
 
 def scansci_pdf_verify_identifiers(candidates_json: str) -> str:
@@ -382,11 +388,11 @@ def scansci_pdf_verify_identifiers(candidates_json: str) -> str:
     """
     from .discovery import DiscoveryTimeoutError, verify
     try:
-        return json.dumps(verify(candidates_json), ensure_ascii=False)
+        return _json_result(verify(candidates_json), ensure_ascii=False)
     except DiscoveryTimeoutError as exc:
-        return json.dumps(_discovery_timeout_payload(exc), ensure_ascii=False)
+        return _json_result(_discovery_timeout_payload(exc), ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        return _json_result({"error": str(exc)}, ensure_ascii=False)
 
 
 def scansci_pdf_resolve_oa(candidates_json: str) -> str:
@@ -397,11 +403,11 @@ def scansci_pdf_resolve_oa(candidates_json: str) -> str:
     """
     from .discovery import DiscoveryTimeoutError, resolve_oa
     try:
-        return json.dumps(resolve_oa(candidates_json), ensure_ascii=False)
+        return _json_result(resolve_oa(candidates_json), ensure_ascii=False)
     except DiscoveryTimeoutError as exc:
-        return json.dumps(_discovery_timeout_payload(exc), ensure_ascii=False)
+        return _json_result(_discovery_timeout_payload(exc), ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        return _json_result({"error": str(exc)}, ensure_ascii=False)
 
 
 def _discovery_timeout_payload(exc: Any) -> dict[str, Any]:
@@ -435,14 +441,14 @@ def scansci_pdf_build_download_queue(
         with _tempfile.TemporaryDirectory(prefix="scansci_find_") as tmp:
             payload = search(query, tmp, depth=depth, limit=min(limit * 2, 60))
             identifiers = build_download_queue(tmp)
-        return json.dumps({
+        return _json_result({
             "query": query,
             "total_found": payload.get("total", 0),
             "identifiers": identifiers[:limit],
             "hint": "Feed identifiers to scansci_pdf_batch_download",
         }, ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        return _json_result({"error": str(exc)}, ensure_ascii=False)
 
 
 def scansci_pdf_health_check(detailed: bool = False) -> str:
@@ -510,14 +516,14 @@ def scansci_pdf_health_check(detailed: bool = False) -> str:
         scihub_domains.sort(key=lambda d: d["rate"], reverse=True)
         result["scihub_domains"] = scihub_domains[:10]
 
-    return json.dumps(result, ensure_ascii=False, indent=2)
+    return _json_result(result, ensure_ascii=False, indent=2)
 
 
 def scansci_pdf_browser_doctor() -> str:
     """Report reusable shared browser runtime options before suggesting installs."""
     from .browser_discovery import doctor
 
-    return json.dumps(doctor(), ensure_ascii=False, indent=2)
+    return _json_result(doctor(), ensure_ascii=False, indent=2)
 
 
 def scansci_pdf_source_scores() -> str:
@@ -529,7 +535,7 @@ def scansci_pdf_source_scores() -> str:
     from .sources.scoring import get_all_scores
     scores = get_all_scores()
     if not scores:
-        return json.dumps({"message": "No download history yet. Scores will build after first downloads."})
+        return _json_result({"message": "No download history yet. Scores will build after first downloads."})
     # Sort by score descending
     sorted_scores = sorted(scores.items(), key=lambda x: x[1].get("success_ema", 0), reverse=True)
     result = []
@@ -541,7 +547,7 @@ def scansci_pdf_source_scores() -> str:
             "attempts": data.get("attempts", 0),
             "last_error": data.get("last_error", ""),
         })
-    return json.dumps({"sources": result}, ensure_ascii=False, indent=2)
+    return _json_result({"sources": result}, ensure_ascii=False, indent=2)
 
 
 def scansci_pdf_auto_setup() -> str:
@@ -613,7 +619,7 @@ def scansci_pdf_auto_setup() -> str:
         )
 
     report["summary"] = "Ready to download. Use scansci_pdf_download with a DOI."
-    return json.dumps(report, ensure_ascii=False, indent=2)
+    return _json_result(report, ensure_ascii=False, indent=2)
 
 
 @mcp_app.tool()
@@ -635,7 +641,7 @@ def scansci_pdf_elsevier_setup(test: bool = False) -> str:
             import requests
             from .network import USER_AGENT, configured_proxy
             try:
-                s = requests.Session()
+                s = confined_session("https://api.elsevier.com/content/serial/title")
                 s.trust_env = False
                 proxy = configured_proxy(config)
                 if proxy:
@@ -681,7 +687,7 @@ def scansci_pdf_elsevier_setup(test: bool = False) -> str:
             "insttoken 不需要（API key + 校园网出口即可；仅拿不到校园出口时找机构管理员申请）。"
         )
 
-    return json.dumps(result, ensure_ascii=False, indent=2)
+    return _json_result(result, ensure_ascii=False, indent=2)
 
 
 @mcp_app.tool()
@@ -737,7 +743,7 @@ def scansci_pdf_springer_setup(test: bool = False) -> str:
             "PDF 仍优先走 OA 直链/浏览器车道。无机构权限时该车道自动让位给 WebVPN/CARSI。"
         )
 
-    return json.dumps(result, ensure_ascii=False, indent=2)
+    return _json_result(result, ensure_ascii=False, indent=2)
 
 
 def scansci_pdf_network_diagnose() -> str:
@@ -749,36 +755,38 @@ def scansci_pdf_network_diagnose() -> str:
     from .sources.scoring import diagnose_network
     config = load_config()
     report = diagnose_network(config)
-    return json.dumps(report, ensure_ascii=False, indent=2)
+    return _json_result(report, ensure_ascii=False, indent=2)
 
 
 def scansci_pdf_config_get() -> str:
     """Get current scansci-pdf configuration (sensitive values masked)."""
-    return json.dumps(get_config_safe(), ensure_ascii=False, indent=2)
+    return _json_result(get_config_safe(), ensure_ascii=False, indent=2)
 
 
-def _config_set_impl(key: str, value: str) -> str:
+def _config_set_impl(key: str, value: str, confirmed: bool = False) -> str:
     """Update a scansci-pdf configuration setting.
 
     Args:
         key: Config key (e.g. "email", "scihub_enabled", "vpnsci_school", "vpnsci_enabled", "network_proxy", "batch_workers")
         value: New value (booleans as "true"/"false", numbers as strings)
+        confirmed: Owner confirmation for trust-affecting keys. It is re-checked
+            by ``update_config`` itself, which is the shared write boundary.
     """
     try:
-        update_config(key, value)
-        return json.dumps({"success": True, "key": key, "value": mask_config_value(key, value)})
+        update_config(key, value, confirmed=confirmed)
+        return _json_result({"success": True, "key": key, "value": mask_config_value(key, value)})
     except Exception as exc:
-        return json.dumps({"success": False, "key": key, "error": str(exc)})
+        return _json_result({"success": False, "key": key, "error": str(exc)})
 
 
 @mcp_app.tool()
 def scansci_pdf_cache_clear(identifier: str | None = None, confirmed: bool = False) -> str:
     """Clear the paper download cache (identifier optional — omit to clear all)."""
     if not confirmed:
-        return json.dumps({"error": "User confirmation is required before deleting cache entries"})
+        return _json_result({"error": "User confirmation is required before deleting cache entries"})
     config = load_config()
     cleared = cache_clear(identifier, config)
-    return json.dumps({"cleared": cleared})
+    return _json_result({"cleared": cleared})
 
 
 def scansci_pdf_import_bib(
@@ -801,7 +809,7 @@ def scansci_pdf_import_bib(
     _log = get_logger()
     entries = parse_bib_file(bib_file)
     if not entries:
-        return json.dumps({"success": False, "error": "No entries with DOI found in .bib file"})
+        return _json_result({"success": False, "error": "No entries with DOI found in .bib file"})
 
     identifiers = [e["doi"] for e in entries]
 
@@ -819,7 +827,7 @@ def scansci_pdf_import_bib(
     result = batch_download(identifiers, output_dir, scihub_enabled=scihub_enabled, use_tor=use_tor, progress_callback=_bib_progress)
     result["bib_entries"] = len(entries)
     result["bib_file"] = bib_file
-    return json.dumps(result, ensure_ascii=False)
+    return _json_result(result, ensure_ascii=False)
 
 
 def _citation_impl(identifier: str, format: str = "bibtex") -> str:
@@ -843,11 +851,11 @@ def _citation_impl(identifier: str, format: str = "bibtex") -> str:
         from .citation import to_endnote
         citation = to_endnote(doi, config)
     else:
-        return json.dumps({"success": False, "error": f"Unknown format: {format}. Use bibtex, ris, or endnote"})
+        return _json_result({"success": False, "error": f"Unknown format: {format}. Use bibtex, ris, or endnote"})
 
     if citation:
-        return json.dumps({"success": True, "doi": doi, "format": format, "citation": citation})
-    return json.dumps({"success": False, "doi": doi, "error": "Failed to fetch metadata"})
+        return _json_result({"success": True, "doi": doi, "format": format, "citation": citation})
+    return _json_result({"success": False, "doi": doi, "error": "Failed to fetch metadata"})
 
 
 def scansci_pdf_paper_metadata(doi: str) -> str:
@@ -863,9 +871,9 @@ def scansci_pdf_paper_metadata(doi: str) -> str:
 
     result = get_paper(f"DOI:{doi}")
     if result is None:
-        return json.dumps({"success": False, "doi": doi, "error": "Paper not found"})
+        return _json_result({"success": False, "doi": doi, "error": "Paper not found"})
 
-    return json.dumps({
+    return _json_result({
         "success": True,
         "doi": result.doi,
         "title": result.title,
@@ -893,7 +901,7 @@ def scansci_pdf_zotero_push(identifier: str) -> str:
     # Check if paper is in cache
     cached = cache_get(identifier, config)
     if not cached or not cached.get("success"):
-        return json.dumps({"success": False, "error": "Paper not found in cache. Download it first."})
+        return _json_result({"success": False, "error": "Paper not found in cache. Download it first."})
 
     doi = cached.get("doi", normalize_doi(identifier))
     pdf_path = Path(cached.get("file", "")) if cached.get("file") else None
@@ -903,7 +911,7 @@ def scansci_pdf_zotero_push(identifier: str) -> str:
     metadata = fetch_metadata(doi, config)
 
     result = push_to_zotero(doi, pdf_path, config, metadata)
-    return json.dumps(result, ensure_ascii=False)
+    return _json_result(result, ensure_ascii=False)
 
 
 def scansci_pdf_vpnsci_login() -> str:
@@ -914,20 +922,20 @@ def scansci_pdf_vpnsci_login() -> str:
     """
     config = load_config()
     if not config.get("vpnsci_enabled"):
-        return json.dumps({"success": False, "error": "WebVPN not enabled. Run: scansci_pdf_config key=vpnsci_enabled value=true"})
+        return _json_result({"success": False, "error": "WebVPN not enabled. Run: scansci_pdf_config key=vpnsci_enabled value=true"})
 
     from .sources.vpnsci import vpnsci_login, _validate_session, _get_webvpn_base
     if _validate_session(config):
-        return json.dumps({"success": True, "message": "Already logged in. Session is valid."})
+        return _json_result({"success": True, "message": "Already logged in. Session is valid."})
 
     base = _get_webvpn_base(config)
     if not base:
-        return json.dumps({"success": False, "error": "No WebVPN URL. Set vpnsci_school or vpnsci_base_url."})
+        return _json_result({"success": False, "error": "No WebVPN URL. Set vpnsci_school or vpnsci_base_url."})
 
     ok = vpnsci_login(config)
     if ok:
-        return json.dumps({"success": True, "message": "Login successful. Cookies saved."})
-    return json.dumps({"success": False, "error": "Login failed or timed out. Make sure Chrome is installed."})
+        return _json_result({"success": True, "message": "Login successful. Cookies saved."})
+    return _json_result({"success": False, "error": "Login failed or timed out. Make sure Chrome is installed."})
 
 
 def scansci_pdf_vpnsci_test(doi: str | None = None) -> str:
@@ -941,15 +949,15 @@ def scansci_pdf_vpnsci_test(doi: str | None = None) -> str:
     test_doi = doi or "10.1038/nature12373"
 
     if not vpnsci_is_configured(config):
-        return json.dumps({"success": False, "error": "WebVPN not configured. Set vpnsci_enabled=true and vpnsci_school."})
+        return _json_result({"success": False, "error": "WebVPN not configured. Set vpnsci_enabled=true and vpnsci_school."})
 
     if not _validate_session(config):
-        return json.dumps({"success": False, "error": "No valid session. Run scansci_pdf_login(kind='webvpn') first."})
+        return _json_result({"success": False, "error": "No valid session. Run scansci_pdf_login(kind='webvpn') first."})
 
     base = _get_webvpn_base(config)
     doi_url = f"https://doi.org/{test_doi}"
     proxy_url = convert_url(doi_url, base, config)
-    return json.dumps({
+    return _json_result({
         "success": True,
         "message": "Session is valid.",
         "test_url": proxy_url[:150] + "..." if len(proxy_url) > 150 else proxy_url,
@@ -968,7 +976,7 @@ def scansci_pdf_vpnsci_status() -> str:
     has_cookies = cookie_path.exists()
     session_valid = _validate_session(config) if enabled and has_cookies else False
 
-    return json.dumps({
+    return _json_result({
         "vpnsci_enabled": enabled,
         "vpnsci_school": school,
         "vpnsci_base_url": base_url,
@@ -991,7 +999,7 @@ def scansci_pdf_vpnsci_schools(query: str | None = None) -> str:
         results = list_schools()
 
     schools = [{"name": s.name, "province": s.province, "host": s.host} for s in results[:50]]
-    return json.dumps({"total": len(results), "showing": len(schools), "schools": schools}, ensure_ascii=False)
+    return _json_result({"total": len(results), "showing": len(schools), "schools": schools}, ensure_ascii=False)
 
 
 def scansci_pdf_carsi_login(publisher: str | None = None) -> str:
@@ -1008,22 +1016,22 @@ def scansci_pdf_carsi_login(publisher: str | None = None) -> str:
 
     config = load_config()
     if not config.get("carsi_enabled"):
-        return json.dumps({"success": False, "error": "CARSI not enabled. Run: scansci_pdf_config(key='carsi_enabled', value='true')"})
+        return _json_result({"success": False, "error": "CARSI not enabled. Run: scansci_pdf_config(key='carsi_enabled', value='true')"})
 
     idp_name = config.get("carsi_idp_name", "")
     if not idp_name:
-        return json.dumps({"success": False, "error": "No IdP set. Run: scansci_pdf_config key=carsi_idp_name value=你的学校名称（如 北京大学、浙江大学）"})
+        return _json_result({"success": False, "error": "No IdP set. Run: scansci_pdf_config key=carsi_idp_name value=你的学校名称（如 北京大学、浙江大学）"})
 
     target_publisher = publisher or "sciencedirect"
     client = CARSIClient(config)
     if target_publisher not in client._publisher_configs:
         available = list(client._publisher_configs.keys())
-        return json.dumps({"success": False, "error": f"Unknown publisher: {target_publisher}", "available": available})
+        return _json_result({"success": False, "error": f"Unknown publisher: {target_publisher}", "available": available})
 
     ok = client.login(target_publisher)
     if ok:
-        return json.dumps({"success": True, "message": f"CARSI login successful for {target_publisher}.", "idp": idp_name})
-    return json.dumps({"success": False, "error": "Login failed or timed out. Make sure Chrome is installed."})
+        return _json_result({"success": True, "message": f"CARSI login successful for {target_publisher}.", "idp": idp_name})
+    return _json_result({"success": False, "error": "Login failed or timed out. Make sure Chrome is installed."})
 
 
 def scansci_pdf_carsi_status() -> str:
@@ -1035,7 +1043,7 @@ def scansci_pdf_carsi_status() -> str:
     idp_name = config.get("carsi_idp_name", "")
 
     if not enabled:
-        return json.dumps({"carsi_enabled": False, "message": "CARSI not enabled."})
+        return _json_result({"carsi_enabled": False, "message": "CARSI not enabled."})
 
     client = CARSIClient(config)
     publishers = {}
@@ -1047,7 +1055,7 @@ def scansci_pdf_carsi_status() -> str:
             "cookie_file": str(cookie_file),
         }
 
-    return json.dumps({
+    return _json_result({
         "carsi_enabled": True,
         "carsi_idp_name": idp_name,
         "hint": f"当前学校: {idp_name}。如需更换，运行 scansci_pdf_config key=carsi_idp_name value=新学校名称" if idp_name else "未设置学校。运行 scansci_pdf_config key=carsi_idp_name value=你的学校名称",
@@ -1065,15 +1073,15 @@ def scansci_pdf_ezproxy_login() -> str:
 
     config = load_config()
     if not config.get("ezproxy_enabled"):
-        return json.dumps({"success": False, "error": "EZProxy not enabled. Run: scansci_pdf_config key=ezproxy_enabled value=true"})
+        return _json_result({"success": False, "error": "EZProxy not enabled. Run: scansci_pdf_config key=ezproxy_enabled value=true"})
 
     if _validate_ezproxy_session(config):
-        return json.dumps({"success": True, "message": "Already logged in. Session is valid."})
+        return _json_result({"success": True, "message": "Already logged in. Session is valid."})
 
     ok = ezproxy_login(config)
     if ok:
-        return json.dumps({"success": True, "message": "Login successful. Cookies saved."})
-    return json.dumps({"success": False, "error": "Login failed or timed out. Make sure Chrome is installed."})
+        return _json_result({"success": True, "message": "Login successful. Cookies saved."})
+    return _json_result({"success": False, "error": "Login failed or timed out. Make sure Chrome is installed."})
 
 
 def scansci_pdf_ezproxy_status() -> str:
@@ -1087,7 +1095,7 @@ def scansci_pdf_ezproxy_status() -> str:
     has_cookies = cookie_path.exists()
     session_valid = _validate_ezproxy_session(config) if enabled and has_cookies else False
 
-    return json.dumps({
+    return _json_result({
         "ezproxy_enabled": enabled,
         "ezproxy_login_url": base_url,
         "cookie_file": str(cookie_path),
@@ -1106,12 +1114,12 @@ def scansci_pdf_vpnsci_set_school(school: str) -> str:
     try:
         entry = get_school(school)
     except ValueError as e:
-        return json.dumps({"success": False, "error": str(e)})
+        return _json_result({"success": False, "error": str(e)})
 
     update_config("vpnsci_school", entry.name)
     update_config("vpnsci_base_url", entry.host)
     update_config("vpnsci_enabled", "true")
-    return json.dumps({
+    return _json_result({
         "success": True,
         "school": entry.name,
         "province": entry.province,
@@ -1125,9 +1133,9 @@ def scansci_pdf_parse_list(file_path: str) -> str:
     try:
         entries = parse_paper_list(file_path)
     except FileNotFoundError as e:
-        return json.dumps({"success": False, "error": str(e)})
+        return _json_result({"success": False, "error": str(e)})
     except Exception as e:
-        return json.dumps({"success": False, "error": f"Parse error: {e}"})
+        return _json_result({"success": False, "error": f"Parse error: {e}"})
 
     result = []
     for i, entry in enumerate(entries):
@@ -1141,7 +1149,7 @@ def scansci_pdf_parse_list(file_path: str) -> str:
         })
 
     dois_found = sum(1 for e in entries if e.doi)
-    return json.dumps({
+    return _json_result({
         "success": True,
         "total": len(entries),
         "with_doi": dois_found,
@@ -1175,12 +1183,12 @@ def scansci_pdf_resolve_and_download(
     try:
         entries = parse_paper_list(file_path)
     except FileNotFoundError as e:
-        return json.dumps({"success": False, "error": str(e)})
+        return _json_result({"success": False, "error": str(e)})
     except Exception as e:
-        return json.dumps({"success": False, "error": f"Parse error: {e}"})
+        return _json_result({"success": False, "error": f"Parse error: {e}"})
 
     if not entries:
-        return json.dumps({"success": False, "error": "No entries found in file"})
+        return _json_result({"success": False, "error": "No entries found in file"})
 
     config = load_config()
 
@@ -1194,7 +1202,7 @@ def scansci_pdf_resolve_and_download(
     # Collect DOIs for download
     dois = [e.doi for e in entries if e.doi]
     if not dois:
-        return json.dumps({
+        return _json_result({
             "success": False,
             "error": "No valid DOIs found after resolution",
             "resolve_stats": resolve_stats,
@@ -1237,7 +1245,7 @@ def scansci_pdf_resolve_and_download(
     }
     dl_result["resolve_stats"] = resolve_stats
 
-    return json.dumps(dl_result, ensure_ascii=False, indent=2)
+    return _json_result(dl_result, ensure_ascii=False, indent=2)
 
 
 def scansci_pdf_setup_check() -> str:
@@ -1248,7 +1256,7 @@ def scansci_pdf_setup_check() -> str:
     """
     from .setup import setup_check
     result = setup_check()
-    return json.dumps(result, ensure_ascii=False, indent=2)
+    return _json_result(result, ensure_ascii=False, indent=2)
 
 
 def scansci_pdf_tor_install() -> str:
@@ -1260,7 +1268,7 @@ def scansci_pdf_tor_install() -> str:
     config = load_config()
     from .tor import install_tor
     result = install_tor(config)
-    return json.dumps(result, ensure_ascii=False, indent=2)
+    return _json_result(result, ensure_ascii=False, indent=2)
 
 
 def scansci_pdf_tor_start(use_bridges: bool = False) -> str:
@@ -1279,14 +1287,14 @@ def scansci_pdf_tor_start(use_bridges: bool = False) -> str:
 
     from .tor import start_embedded_tor
     result = start_embedded_tor(config)
-    return json.dumps(result, ensure_ascii=False, indent=2)
+    return _json_result(result, ensure_ascii=False, indent=2)
 
 
 def scansci_pdf_tor_stop() -> str:
     """Stop the embedded Tor SOCKS5 proxy."""
     from .tor import stop_embedded_tor
     result = stop_embedded_tor()
-    return json.dumps(result, ensure_ascii=False, indent=2)
+    return _json_result(result, ensure_ascii=False, indent=2)
 
 
 def scansci_pdf_import_browser_cookies(
@@ -1307,7 +1315,7 @@ def scansci_pdf_import_browser_cookies(
     config = load_config()
     from .browser_cookies import extract_via_browser
     result = extract_via_browser(config, url=url, max_wait=max_wait)
-    return json.dumps(result, ensure_ascii=False, indent=2)
+    return _json_result(result, ensure_ascii=False, indent=2)
 
 
 def _publisher_login_impl(
@@ -1333,7 +1341,7 @@ def _publisher_login_impl(
     config = load_config()
     from .browser_cookies import publisher_login
     result = publisher_login(identifier, config, max_wait=max_wait)
-    return json.dumps(result, ensure_ascii=False, indent=2)
+    return _json_result(result, ensure_ascii=False, indent=2)
 
 
 def scansci_pdf_browser_status() -> str:
@@ -1341,7 +1349,7 @@ def scansci_pdf_browser_status() -> str:
     config = load_config()
     from .browser_engine import is_available
     available = is_available(config)
-    return json.dumps({
+    return _json_result({
         "available": available,
         "status": "ok" if available else "unreachable",
     }, ensure_ascii=False, indent=2)
@@ -1370,19 +1378,19 @@ def scansci_pdf_browser_login(
         success = ezproxy_login(config)
     elif login_type == "custom":
         if not custom_url:
-            return json.dumps({"error": "custom_url is required for login_type=custom"})
+            return _json_result({"error": "custom_url is required for login_type=custom"})
         cache_dir = Path(config.get("cache_dir", str(DATA_DIR / "cache")))
         cookie_file = cache_dir / "custom_cookies.json"
         success = open_login_browser(custom_url, config, cookie_file=cookie_file)
     elif login_type == "carsi":
-        return json.dumps({"error": "Use the CARSI publisher-specific login flow instead"})
+        return _json_result({"error": "Use the CARSI publisher-specific login flow instead"})
     else:
-        return json.dumps({"error": f"Unknown login_type: {login_type}. Use webvpn/ezproxy/custom"})
+        return _json_result({"error": f"Unknown login_type: {login_type}. Use webvpn/ezproxy/custom"})
 
-    return json.dumps({"login_type": login_type, "success": success}, ensure_ascii=False)
+    return _json_result({"login_type": login_type, "success": success}, ensure_ascii=False)
 
 
-def scansci_pdf_browser_import_cookies(cookie_file: str) -> str:
+def scansci_pdf_browser_import_cookies(cookie_file: str, target_url: str = "") -> str:
     """Import Netscape-format cookies into CloakBrowser.
 
     Args:
@@ -1391,12 +1399,12 @@ def scansci_pdf_browser_import_cookies(cookie_file: str) -> str:
     config = load_config()
     from .browser_engine import import_cookies, is_available
     if not is_available(config):
-        return json.dumps({"error": "CloakBrowser is not running"})
+        return _json_result({"error": "CloakBrowser is not running"})
     try:
-        count = import_cookies(cookie_file, config)
-        return json.dumps({"imported": count, "file": cookie_file}, ensure_ascii=False)
+        count = import_cookies(cookie_file, config, target_url=target_url)
+        return _json_result({"imported": count, "file": cookie_file}, ensure_ascii=False)
     except Exception as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        return _json_result({"error": str(exc)}, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
@@ -1420,7 +1428,7 @@ def scansci_pdf_find(
         return scansci_pdf_smoke_search(query=query, domain=domain)
     if action == "calibrate":
         return scansci_pdf_calibrate_search(query=query, domain=domain, depth=depth, sample_size=sample_size)
-    return json.dumps({"error": f"unknown action: {action}", "allowed": ["plan", "estimate", "smoke", "calibrate"]}, ensure_ascii=False)
+    return _json_result({"error": f"unknown action: {action}", "allowed": ["plan", "estimate", "smoke", "calibrate"]}, ensure_ascii=False)
 
 
 @mcp_app.tool()
@@ -1456,8 +1464,8 @@ def scansci_pdf_prepare_queue(
             with_oa = _discovery_timeout_payload(exc)
         except Exception as exc:
             with_oa = {"error": str(exc)}
-        return json.dumps({"verified": verified, "oa": with_oa}, ensure_ascii=False)
-    return json.dumps({"error": f"unknown action: {action}", "allowed": ["verify", "resolve_oa", "build", "full"]}, ensure_ascii=False)
+        return _json_result({"verified": verified, "oa": with_oa}, ensure_ascii=False)
+    return _json_result({"error": f"unknown action: {action}", "allowed": ["verify", "resolve_oa", "build", "full"]}, ensure_ascii=False)
 
 
 @mcp_app.tool()
@@ -1482,9 +1490,9 @@ def scansci_pdf_login(
         return scansci_pdf_browser_login(login_type="custom", custom_url=custom_url)
     if kind == "cookie_import":
         if cookie_file:
-            return scansci_pdf_browser_import_cookies(cookie_file=cookie_file)
+            return scansci_pdf_browser_import_cookies(cookie_file=cookie_file, target_url=url or "")
         return scansci_pdf_import_browser_cookies(max_wait=max_wait)
-    return json.dumps({"error": f"unknown kind: {kind}", "allowed": ["publisher", "webvpn", "carsi", "ezproxy", "custom", "cookie_import"]}, ensure_ascii=False)
+    return _json_result({"error": f"unknown kind: {kind}", "allowed": ["publisher", "webvpn", "carsi", "ezproxy", "custom", "cookie_import"]}, ensure_ascii=False)
 
 
 @mcp_app.tool()
@@ -1529,13 +1537,16 @@ def scansci_pdf_diagnostics(check: str = "health", detailed: bool = False) -> st
 def scansci_pdf_config(key: str = "", value: str = "", confirmed: bool = False) -> str:
     """Get the full masked config (no key) / one key's value (key only) / set key=value (key + value)."""
     if key and value:
+        from .config_trust import is_trust_sensitive
         from .security import strict_mode
-        if strict_mode() and key in {'network_proxy', 'proxy_pool', 'tor_proxy', 'browser_executable', 'flaresolverr_url', 'camofox_url', 'browser_persist_localstorage'} and not confirmed:
-            return json.dumps({'error': 'Explicit owner confirmation required for trusted network/executable/credential configuration'})
-        return _config_set_impl(key=key, value=value)
+        # Fast, friendly refusal here; the authoritative check runs in
+        # update_config, which also covers direct (non-tool) callers.
+        if strict_mode() and is_trust_sensitive(key) and not confirmed:
+            return _json_result({'error': 'Explicit owner confirmation required for trusted network/executable/credential configuration'})
+        return _config_set_impl(key=key, value=value, confirmed=confirmed)
     if key:
         cfg = json.loads(scansci_pdf_config_get())
-        return json.dumps({"key": key, "value": cfg.get(key, "(unset)")}, ensure_ascii=False)
+        return _json_result({"key": key, "value": cfg.get(key, "(unset)")}, ensure_ascii=False)
     return scansci_pdf_config_get()
 
 
@@ -1545,9 +1556,9 @@ def scansci_pdf_tor(action: str = "start", use_bridges: bool = False, confirmed:
     if action == "install":
         from .security import strict_mode
         if strict_mode() and not confirmed:
-            return json.dumps({'installed': False, 'error': 'Explicit owner confirmation required to download executable software'})
+            return _json_result({'installed': False, 'error': 'Explicit owner confirmation required to download executable software'})
         from .tor import install_tor
-        return json.dumps(install_tor({**load_config(), 'tor_install_confirmed': confirmed}))
+        return _json_result(install_tor({**load_config(), 'tor_install_confirmed': confirmed}))
     if action == "stop":
         return scansci_pdf_tor_stop()
     return scansci_pdf_tor_start(use_bridges=use_bridges)
@@ -1576,7 +1587,7 @@ def scansci_pdf_batch_download(
             use_tor=use_tor, use_vpnsci=use_vpnsci, resolve_titles=resolve_titles,
         )
     if not identifiers:
-        return json.dumps({"error": "provide identifiers[] or file"}, ensure_ascii=False)
+        return _json_result({"error": "provide identifiers[] or file"}, ensure_ascii=False)
     return _batch_download_impl(
         identifiers=identifiers, output_dir=output_dir, scihub_enabled=scihub_enabled,
         use_tor=use_tor, use_vpnsci=use_vpnsci, batch_id=batch_id, resume=resume,

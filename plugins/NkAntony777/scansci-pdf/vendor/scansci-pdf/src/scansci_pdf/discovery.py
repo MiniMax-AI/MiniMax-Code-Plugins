@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import json
 import logging
+
+from .proxy_redaction import redacting_logger
 import os
 import shutil
 import subprocess
@@ -28,7 +30,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
+logger = redacting_logger(__name__)
 
 CLI_NAME = "scansci-find"
 DEFAULT_TIMEOUT = 180  # seconds; citation chasing / systematic searches are slow

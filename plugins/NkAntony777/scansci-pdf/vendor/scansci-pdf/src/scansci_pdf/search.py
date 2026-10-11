@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+
+from .proxy_redaction import redacting_logger
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
@@ -11,7 +13,7 @@ import requests
 
 from .config import load_config
 
-logger = logging.getLogger(__name__)
+logger = redacting_logger(__name__)
 
 _SEARCH_TIMEOUT = 30  # seconds, longer than default because these are public APIs
 _USER_AGENT = "scansci-pdf/1.5 (https://github.com/Rimagination/scansci-pdf)"

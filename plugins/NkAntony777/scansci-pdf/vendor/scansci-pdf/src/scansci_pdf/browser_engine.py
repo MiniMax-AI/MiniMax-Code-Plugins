@@ -15,6 +15,8 @@ from __future__ import annotations
 import base64
 import json
 import logging
+
+from .proxy_redaction import redacting_logger
 import os
 import re
 import shutil
@@ -25,7 +27,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-logger = logging.getLogger(__name__)
+logger = redacting_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Browser backend (patchright default, CloakBrowser opt-in fallback)
@@ -181,13 +183,31 @@ import atexit as _atexit
 _atexit.register(_reap_browsers_at_exit)
 
 
+def _proxy_server_without_credentials(proxy: str) -> str:
+    """Host and port only. A password in --proxy-server is visible in the process list."""
+    from urllib.parse import urlsplit
+
+    raw = (proxy or "").strip()
+    if not raw:
+        return ""
+    parts = urlsplit(raw if "://" in raw else f"http://{raw}")
+    host = parts.hostname or ""
+    if not host:
+        return ""
+    if ":" in host:
+        host = f"[{host}]"
+    netloc = f"{host}:{parts.port}" if parts.port else host
+    return f"{parts.scheme or 'http'}://{netloc}"
+
+
 def _build_browser_args(config: dict[str, Any] | None = None) -> list[str]:
     """Build Chromium launch args from config (proxy, flags, etc.)."""
     args = ["--disable-features=CrossOriginOpenerPolicy"]
     if config:
         proxy = config.get("browser_static_proxy", "")
-        if proxy:
-            args.append(f"--proxy-server={proxy}")
+        server = _proxy_server_without_credentials(str(proxy))
+        if server:
+            args.append(f"--proxy-server={server}")
     return args
 
 
@@ -482,8 +502,8 @@ def solve_url(
         page = context.new_page()
         page.goto(url, wait_until="domcontentloaded", timeout=int(max_timeout))
 
-        raw_cookies = context.cookies()
-        cookies = [{"name": c["name"], "value": c.get("value", "")} for c in raw_cookies if c.get("name")]
+        from .browser_cookies import credentials_for_target
+        cookies = credentials_for_target(context.cookies(), None, url)
 
         html = ""
         try:
@@ -543,18 +563,24 @@ def get_html(
     return result.get("solution", {}).get("response")
 
 
-def import_cookies(cookie_file: str | Path, config: dict[str, Any], *, domain_suffix: str | None = None) -> int:
+def import_cookies(cookie_file: str | Path, config: dict[str, Any], *, domain_suffix: str | None = None, target_url: str = "") -> int:
     """Import Netscape-format cookies into the shared browser context. Returns count imported."""
     try:
         text = Path(cookie_file).read_text(encoding="utf-8")
     except Exception as e:
         logger.info(f"browser_engine: failed to read cookie file: {e}")
         return 0
-    cookies = _parse_netscape_cookies(text)
+    from .browser_cookies import credentials_for_target
+    target = target_url or ("https://" + domain_suffix.lstrip(".") + "/" if domain_suffix else "")
+    cookies = credentials_for_target(_parse_netscape_cookies(text), config, target)
     if not cookies:
         return 0
     if domain_suffix:
-        cookies = [c for c in cookies if domain_suffix in c.get("domain", "")]
+        suffix = domain_suffix.lstrip(".").lower()
+        cookies = [
+            c for c in cookies
+            if (host := str(c.get("domain", "")).lstrip(".").lower()) == suffix or host.endswith("." + suffix)
+        ]
     try:
         _, ctx = _get_shared_browser(config)
         ctx.add_cookies(cookies)
@@ -957,35 +983,4 @@ def close_all_tabs(config: dict[str, Any]) -> None:
 # Netscape cookie parser (shared utility)
 # ---------------------------------------------------------------------------
 
-def _parse_netscape_cookies(text: str) -> list[dict[str, Any]]:
-    """Parse Netscape-format cookie file into structured cookie objects."""
-    cookies: list[dict[str, Any]] = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or (line.startswith("#") and not line.startswith("#HttpOnly_")):
-            continue
-        http_only = False
-        if line.startswith("#HttpOnly_"):
-            http_only = True
-            line = line.removeprefix("#HttpOnly_")
-        parts = line.split("\t")
-        if len(parts) < 7:
-            continue
-        domain = parts[0]
-        cookie_path = parts[2]
-        secure = parts[3].upper() == "TRUE"
-        try:
-            expires = int(parts[4])
-        except (ValueError, IndexError):
-            expires = 0
-        name = parts[5]
-        value = "\t".join(parts[6:])
-        cookie: dict[str, Any] = {
-            "name": name, "value": value,
-            "domain": domain, "path": cookie_path,
-            "secure": secure, "expires": expires,
-        }
-        if http_only:
-            cookie["httpOnly"] = True
-        cookies.append(cookie)
-    return cookies
+from .browser_cookies import parse_netscape_cookies as _parse_netscape_cookies

@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from .config import load_config, mask_config_value
 from .identifiers import is_arxiv_identifier, normalize_doi
 from .log import get_logger
+from .proxy_redaction import redact_proxy_structure
 from .search import search_papers
 from .security import SecurityError, no_symlinks
 from .sources import download
@@ -234,6 +235,43 @@ def _check_sources(config: dict[str, Any]) -> dict[str, Any]:
     return sources
 
 
+# --- Startup (shared by every Web entry point) ---
+
+def web_startup_options(host: str, port: int) -> dict[str, Any]:
+    """The uvicorn settings both Web entry points MUST use.
+
+    This lives next to the app it serves, so `scansci-pdf web` and
+    `scansci-pdf run --mode web` cannot drift: a startup fix lands on both
+    paths at once instead of only on the one it was written next to.
+    """
+    return {
+        "host": host,
+        "port": port,
+        # The access log records the full request target, so the one-time
+        # ``?t=`` hand-off URL would be written to disk verbatim. The browser
+        # keeps the token in an HttpOnly cookie after that first request, so
+        # the query string never needs logging. Error/exception logging is
+        # untouched, so a failed startup or request stays diagnosable.
+        "access_log": False,
+    }
+
+
+def start_web_server(host: str, port: int) -> None:
+    """Announce the first-access link and serve the Web UI.
+
+    Single entry point for both CLI commands: token hand-off, access-log
+    policy, authentication, CSRF and response headers all come from the app
+    above, and the launch arguments come from ``web_startup_options``.
+    """
+    import uvicorn
+
+    token = web_token()
+    print(f"  Starting ScanSci PDF Web UI on http://{host}:{port}")
+    print(f"  Open http://{host}:{port}/?t={token} in your browser")
+    print("  Every API call needs this token; set SCANSCI_WEB_TOKEN to pin one.")
+    uvicorn.run(app, **web_startup_options(host, port))
+
+
 # --- Routes ---
 
 @app.get("/", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
@@ -311,8 +349,12 @@ async def api_download(req: DownloadRequest):
             status_code=500,
         )
 
-    # Enhance error response with actionable guidance
-    error_response = dict(result)
+    # Enhance error response with actionable guidance. The download result is
+    # a NESTED structure (source_failures, guidance, agent_hint, per-source
+    # reasons) and any of those strings can embed a configured proxy URL with
+    # its password. Filtering the whole tree — not a few known fields — is what
+    # keeps a credentialed proxy out of an authenticated HTTP response.
+    error_response = redact_proxy_structure(dict(result))
     config = load_config()
     sources = _check_sources(config)
     error_response["sources"] = sources

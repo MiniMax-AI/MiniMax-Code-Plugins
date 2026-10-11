@@ -23,11 +23,13 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import json
 import logging
+
+from .proxy_redaction import redacting_logger
 import threading
 import time
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+logger = redacting_logger(__name__)
 from typing import Any
 
 from .identifiers import normalize_doi, normalize_arxiv_id

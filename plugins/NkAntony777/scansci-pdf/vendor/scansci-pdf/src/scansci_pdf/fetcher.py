@@ -4,6 +4,8 @@ from contextvars import ContextVar
 import hashlib
 import json
 import logging
+
+from .proxy_redaction import redacting_logger
 import random
 import re
 import time
@@ -25,7 +27,7 @@ try:
 except ImportError:
     _HAS_CLOAKBROWSER = False
 
-logger = logging.getLogger(__name__)
+logger = redacting_logger(__name__)
 
 DOI_PATTERN = re.compile(r"^10\.\d{4,9}/[^\s]+$")
 

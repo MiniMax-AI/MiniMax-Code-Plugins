@@ -30,6 +30,18 @@ entire plugin by someone who can also replace the launcher and manifest.
 - Paper text, links and metadata are marked untrusted external data in tool responses and Skills.
 - Root `mcp.json` participates in repository schema validation; packaged helpers are present.
 
+## Follow-up repair, October 11, 2026
+
+This section supersedes the October 9 functional/security counts below; those older numbers and performance measurements are historical. The counts below were measured on the worktree before committing this revision. Post-commit rechecks are recorded separately; no same-head GitHub CI result is claimed.
+
+Cookie save/restore now preserves security and lifecycle attributes across browser JSON, the plugin's Netscape format, requests and institutional paths. Legacy four-field records are rejected before defaults can launder them; re-login once after upgrading. Target authorization is required on both sides, including merge/handoff/import. localStorage has a shared fail-closed boolean parser and remains off by default.
+
+All Elsevier exits use origin-confined transport, and shared proxy redaction covers exceptions, mapping keys/deep structures, logs, result JSON and Rich consoles. Batch/Zotero paths are constrained before opening; Zotero attachment failures remain visible as partial failures. Browser version probes and all launch routes check the actual executable; changing trust pins needs explicit confirmation. Both Web entries disable token-bearing access logs; unauthenticated streamable HTTP cannot bind publicly. Secure module launch, real stdio MCP and source tamper rejection are covered using an unchanged delivered manifest and lockfiles.
+
+A fresh short-path Windows environment is installed with hash-locked `requirements-browser.lock`, avoiding both the previous pycparser drift and Windows environment-install path limits without changing any delivery pins. Chrome 154.0.8037.98 passed a real production save/restore round-trip with intercepted local responses (no real account login or publisher fetch). HttpOnly/Secure/SameSite, persistent expiry, session expiry and expired-cookie removal were observed in the real browser. Final full-suite run with that real-browser test enabled: **767 passed, 5 skipped, 0 failed** (772), 137.05 seconds. The five skips are three unavailable symlink-privilege cases, one absent second-checkout comparison and one Generic-strategy optional-prefix case. Manifest independent rehash: **172 entries, 0 mismatches, 0 omissions**. Actual stdio MCP lists 18 tools and checks DOI parsing, path escape, Tor confirmation, secret masking, write-back confirmation, clean verification and tamper rejection.
+
+Linux/Windows CI now records its checkout SHA, runs launcher verification and opts into this real-browser round trip. GitHub execution is not claimed here. Camoufox/Firefox validation is still stub/kwargs coverage, not a real browser launch. Live institutional/Elsevier/Zotero services, Linux/macOS runtime behavior, physical power-loss, and resistance to concurrent filesystem ancestor replacement are not established by these tests.
+
 ## Local evidence, October 9, 2026
 
 Windows, Python 3.13; optional browser dependencies installed from the lock:

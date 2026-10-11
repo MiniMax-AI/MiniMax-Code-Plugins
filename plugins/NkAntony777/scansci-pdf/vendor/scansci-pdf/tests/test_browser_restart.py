@@ -19,7 +19,13 @@ from scansci_pdf.publisher_batch import (
 
 
 class _FakeContext:
-    """Records add_cookies/close calls; serves canned cookies()."""
+    """Records add_cookies/close calls; serves canned cookies().
+
+    The cookies carry the publisher's domain and HttpOnly/Secure attributes
+    because the hand-off is scope-filtered: a context that returned a
+    domain-less cookie would be one the real browser never produces, and the
+    filter would (correctly) drop it.
+    """
 
     def __init__(self, name: str):
         self.name = name
@@ -27,7 +33,9 @@ class _FakeContext:
         self.closed = False
 
     def cookies(self):
-        return [{"name": f"cookie-from-{self.name}", "value": "1"}]
+        return [{"name": f"cookie-from-{self.name}", "value": "1",
+                 "domain": ".sciencedirect.com", "path": "/",
+                 "httpOnly": True, "secure": True, "expires": -1}]
 
     def add_cookies(self, cookies):
         self.added.append(list(cookies))
@@ -38,6 +46,7 @@ class _FakeContext:
 
 class _FakeProfile:
     name = "TEST"
+    login_url = "https://www.sciencedirect.com/"
 
 
 def _make_downloader(config: dict | None = None) -> PublisherBatchDownloader:
@@ -89,16 +98,21 @@ class BrowserRestartTests(unittest.TestCase):
     def test_cookies_handed_over_between_contexts(self):
         self._run(5, restart_every=2)
         # Contexts 2 and 3 must receive the previous context's cookies; the
-        # first context starts clean.
+        # first context starts clean. The hand-off keeps the security
+        # attributes, so the recycled context stays logged in with an HttpOnly
+        # session rather than a downgraded one.
         self.assertEqual(self.contexts[0].added, [])
         self.assertEqual(
-            self.contexts[1].added,
-            [[{"name": "cookie-from-ctx0", "value": "1"}]],
+            [c["name"] for c in self.contexts[1].added[0]],
+            ["cookie-from-ctx0"],
         )
         self.assertEqual(
-            self.contexts[2].added,
-            [[{"name": "cookie-from-ctx1", "value": "1"}]],
+            [c["name"] for c in self.contexts[2].added[0]],
+            ["cookie-from-ctx1"],
         )
+        for batch in (self.contexts[1].added[0], self.contexts[2].added[0]):
+            self.assertTrue(all(c["httpOnly"] for c in batch))
+            self.assertTrue(all(c["secure"] for c in batch))
 
     def test_restart_disabled_keeps_single_context(self):
         self._run(4, restart_every=0)

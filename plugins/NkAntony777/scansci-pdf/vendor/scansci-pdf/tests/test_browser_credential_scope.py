@@ -12,8 +12,8 @@ from scansci_pdf import browser_cookies as bc
 from scansci_pdf import browser_login as bl
 from scansci_pdf.browser_cookies import (
     is_allowed_login_destination,
-    minimal_cookies,
     scoped_cookies,
+    security_cookies,
 )
 
 # browser_login registers a module-level singleton close with atexit, which
@@ -48,12 +48,36 @@ def test_scoped_cookies_drops_unrelated_domains():
     assert "mail" not in names
 
 
-def test_scoped_cookies_keeps_only_minimum_fields():
+def test_scoped_cookies_preserves_security_attributes():
+    """The security attributes must survive the save/restore projection.
+
+    Keeping only name/value/domain/path silently downgraded every session: an
+    HttpOnly cookie came back page-script-readable, Secure/SameSite were lost
+    and an expiry became a session cookie. Those four fields plus the
+    security/lifecycle allowlist are what a faithful restore needs.
+    """
     kept = scoped_cookies(JAR, TARGET)
-    assert kept == [{"name": "SD_session", "value": "pub-token",
-                     "domain": ".sciencedirect.com", "path": "/"}]
-    for cookie in kept:
-        assert set(cookie) == {"name", "value", "domain", "path"}
+    assert [c["name"] for c in kept] == ["SD_session"]
+    cookie = kept[0]
+    assert cookie["domain"] == ".sciencedirect.com"
+    assert cookie["path"] == "/"
+    assert cookie["httpOnly"] is True
+    assert cookie["secure"] is True
+    assert cookie["sameSite"] == "Lax"
+    assert cookie["expires"] == 9999999999
+
+
+def test_scoped_cookies_drops_unrelated_but_keeps_allowlisted_fields():
+    """Attributes are preserved; everything else is dropped."""
+    jar = [dict(JAR[0], sid="playwright-internal", partitionKey="evil",
+                sameSite="Strict", sourcePort=443)]
+    (cookie,) = scoped_cookies(jar, TARGET)
+    assert set(cookie) == {
+        "name", "value", "domain", "path", "httpOnly", "secure", "sameSite", "expires",
+    }
+    assert cookie["sameSite"] == "Strict"
+    for leaked in ("sid", "partitionKey", "sourcePort"):
+        assert leaked not in cookie
 
 
 def test_scoped_cookies_keeps_target_host_and_publishers():
@@ -69,6 +93,7 @@ def test_scoped_cookies_keeps_target_host_and_publishers():
         {"name": "sd", "value": "pub-token", "domain": ".sciencedirect.com", "path": "/"},
         {"name": "other", "value": "x", "domain": ".mail.example.com", "path": "/"},
     ]
+    jar = [dict(cookie, httpOnly=True, secure=True, expires=-1, sameSite="Lax") for cookie in jar]
     kept = scoped_cookies(jar, "https://webvpn.campus.edu.cn/remote/login")
     assert {c["name"] for c in kept} == {"vpn"}
 
@@ -80,15 +105,38 @@ def test_scoped_cookies_rejects_lookalike_domains():
         {"name": "real", "value": "y", "domain": ".sciencedirect.com", "path": "/"},
         {"name": "sub", "value": "z", "domain": "www.sciencedirect.com", "path": "/"},
     ]
+    jar = [dict(cookie, httpOnly=True, secure=True, expires=-1, sameSite="Lax") for cookie in jar]
     kept = {c["name"] for c in scoped_cookies(jar, TARGET)}
     assert kept == {"real", "sub"}
     assert bc._is_publisher_cookie({"domain": "evil-sciencedirect.com"}) is False
 
 
-def test_minimal_cookies_defaults_missing_path():
-    assert minimal_cookies([{"name": "a", "value": "b", "domain": "x.com"}]) == [
-        {"name": "a", "value": "b", "domain": "x.com", "path": "/"}
+def test_security_cookies_defaults_missing_path_and_absent_attributes():
+    """A four-field record normalizes to explicit, falsy-off attributes.
+
+    The missing attributes become False/-1 (a session cookie) rather than
+    staying absent, so a restore never has to guess and a string ``"false"``
+    can never be read as ON.
+    """
+    assert security_cookies([{"name": "a", "value": "b", "domain": "x.com"}]) == [
+        {"name": "a", "value": "b", "domain": "x.com", "path": "/",
+         "httpOnly": False, "secure": False, "expires": -1.0}
     ]
+
+
+def test_security_cookies_never_reads_a_string_false_as_true():
+    """``bool("false")`` is True in Python; a security flag must not be."""
+    (cookie,) = security_cookies([
+        {"name": "a", "value": "b", "domain": "x.com", "httpOnly": "false", "secure": "false"},
+    ])
+    assert cookie["httpOnly"] is False
+    assert cookie["secure"] is False
+
+    (on,) = security_cookies([
+        {"name": "a", "value": "b", "domain": "x.com", "httpOnly": "true", "secure": True},
+    ])
+    assert on["httpOnly"] is True
+    assert on["secure"] is True
 
 
 @pytest.mark.parametrize("url", [
@@ -175,17 +223,32 @@ def test_publisher_login_rejects_non_allowlisted_url():
     assert "not allowed" in result["error"]
 
 
-def test_merge_cookies_persists_minimum_fields(tmp_path):
+def test_merge_cookies_preserves_security_attributes(tmp_path):
     config = {"cache_dir": str(tmp_path)}
     raw = [{"name": "SD", "value": "t", "domain": ".sciencedirect.com",
-            "path": "/", "secure": True, "httpOnly": True, "expires": 1,
+            "path": "/", "secure": True, "httpOnly": True, "expires": 9999999999,
             "sameSite": "Lax", "session": True}]
-    result = bc.merge_cookies(raw, config)
+    result = bc.merge_cookies(raw, config, "https://www.sciencedirect.com/")
 
-    assert result == [{"name": "SD", "value": "t",
-                       "domain": ".sciencedirect.com", "path": "/"}]
+    assert [c["name"] for c in result] == ["SD"]
+    cookie = result[0]
+    assert cookie["httpOnly"] is True
+    assert cookie["secure"] is True
+    assert cookie["sameSite"] == "Lax"
+    assert cookie["expires"] == 9999999999
+    assert "session" not in cookie
     saved = json.loads((tmp_path / "publisher_cookies.json").read_text(encoding="utf-8"))
     assert saved == result
+
+
+def test_merge_cookies_drops_expired_records(tmp_path):
+    config = {"cache_dir": str(tmp_path)}
+    raw = [{"name": "dead", "value": "t", "domain": ".sciencedirect.com",
+            "path": "/", "expires": 1},
+           {"name": "live", "value": "t", "domain": ".sciencedirect.com",
+            "path": "/", "expires": 9999999999}]
+    result = bc.merge_cookies(raw, config, "https://www.sciencedirect.com/")
+    assert [c["name"] for c in result] == ["live"]
 
 
 # --- localStorage is opt-in only -------------------------------------------
@@ -260,5 +323,7 @@ def test_saved_cookies_scoped_to_target_domain(tmp_path):
 
     saved = json.loads((tmp_path / "instsci-cookies.json").read_text(encoding="utf-8"))
     assert {c["domain"] for c in saved} == {".sciencedirect.com"}
-    assert all(set(c) == {"name", "value", "domain", "path"} for c in saved)
+    assert all(set(c) == {"name", "value", "domain", "path",
+                          "httpOnly", "secure", "sameSite", "expires"} for c in saved)
+    assert saved[0]["httpOnly"] is True
     assert "idp-token" not in json.dumps(saved)

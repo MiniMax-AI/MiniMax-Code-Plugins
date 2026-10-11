@@ -8,6 +8,12 @@ import re
 from pathlib import Path
 from typing import Any
 from .security import secure_write_text, strict_mode, workspace_path, no_symlinks
+from .config_trust import (
+    TRUST_SENSITIVE_KEYS,
+    enforce_trust_write,
+    is_trust_sensitive,
+    normalize_trust_value,
+)
 
 DATA_DIR = Path(os.environ.get("SCANSCI_PDF_DATA_DIR", str(Path.home() / ".scansci-pdf")))
 CONFIG_FILE = DATA_DIR / "config.json"
@@ -108,6 +114,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     #   browser_auto_upgrade: True 时自动探测本机 Chrome/Edge（版本 > 146 优先于内置 stealth Chromium）
     "browser_executable": "",
     "browser_auto_upgrade": True,
+    # 浏览器二进制指纹钉死表：{"<绝对路径或启动器名>": "<64 位 sha256>"}。
+    # 它决定「哪些字节可以被执行」，因此属于信任设置：改动它必须经所有者
+    # 显式确认，且只有规范的 SHA-256 十六进制值会被接受。
+    # Provenance digest pins: which bytes may be executed. Trust setting —
+    # changing it needs explicit owner confirmation (see TRUST_SENSITIVE_KEYS).
+    "browser_binary_sha256": {},
     "is_campus_network": False,
     "tor_proxy": os.environ.get("TOR_PROXY", ""),
     "tor_use_bridges": False,
@@ -124,7 +136,57 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "cookie_path": "",
     "chrome_profile_dir": "",
     "carsi_cookie_dir": "",
+    # Persist browser localStorage (bearer tokens per origin) in
+    # browser_state.json. SECURITY toggle: off by default, and the string
+    # "false" must stay off — never resolved through bool(value).
+    "browser_persist_localstorage": False,
+    # The publisher/institution origin a browser login is authorized to
+    # persist credentials for. Cookies outside this target are neither saved
+    # nor restored.
+    "browser_login_target_url": "",
 }
+
+# Config keys that are security toggles rather than preferences. They share
+# one parser across load, write and migration, and any value that is not
+# unambiguously a boolean resolves OFF (fail closed).
+SECURITY_BOOL_KEYS = frozenset({"browser_persist_localstorage"})
+
+_BOOL_TRUE_LITERALS = frozenset({"true", "1", "yes", "on"})
+_BOOL_FALSE_LITERALS = frozenset({"false", "0", "no", "off", ""})
+
+
+def parse_config_bool(value: Any) -> bool | None:
+    """Parse a config boolean, or ``None`` when the value is not one.
+
+    The single parser for reads, writes and migrations. ``bool("false")`` is
+    ``True`` in Python, which is how a security toggle silently turns itself
+    on; here a string is true only when it is one of the canonical literals
+    (case- and whitespace-insensitive) and false only when it likewise is.
+    Anything else is ``None`` — meaning "not a boolean".
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in _BOOL_TRUE_LITERALS:
+            return True
+        if text in _BOOL_FALSE_LITERALS:
+            return False
+        return None
+    return None
+
+
+def config_bool(key: str, value: Any, default: bool = False) -> bool:
+    """Fail-closed boolean read for a config key.
+
+    An unknown type or an unrecognized literal yields ``default``, which is
+    ``False`` for every toggle in :data:`SECURITY_BOOL_KEYS`.
+    """
+    parsed = parse_config_bool(value)
+    if parsed is None:
+        return default
+    return parsed
+
 
 
 def load_config() -> dict[str, Any]:
@@ -140,6 +202,12 @@ def load_config() -> dict[str, Any]:
             pass
     for key, value in DEFAULT_CONFIG.items():
         config.setdefault(key, value)
+    # Migration: a security toggle written before the schema declared its type
+    # may sit in config.json as a STRING (and, worse, as the string "false",
+    # which a naive truthiness test reads as ON). Normalize every toggle here
+    # with the same parser the write path uses, so read/write/migration agree.
+    for key in SECURITY_BOOL_KEYS:
+        config[key] = config_bool(key, config.get(key), bool(DEFAULT_CONFIG.get(key, False)))
     if strict_mode():
         for key in ("cache_dir", "output_dir"):
             config[key] = str(workspace_path(config[key]))
@@ -153,7 +221,20 @@ def load_config() -> dict[str, Any]:
     return config
 
 
+def _validate_trust_values(config: dict[str, Any]) -> None:
+    """Reject a malformed trust value on any save path, not just ``update_config``.
+
+    Only the *shape* is checked here. Confirmation is a property of a single
+    key write and lives in :func:`update_config`, which is where the owner
+    decision is made.
+    """
+    for key in TRUST_SENSITIVE_KEYS:
+        if key in config:
+            normalize_trust_value(key, config[key])
+
+
 def save_config(config: dict[str, Any]) -> None:
+    _validate_trust_values(config)
     secure_write_text(CONFIG_FILE, json.dumps(config, indent=2, ensure_ascii=False))
 
 
@@ -174,7 +255,7 @@ _VALIDATION_RULES: dict[str, tuple[type, Any, Any]] = {
 _VALID_STRATEGIES = frozenset({"fastest", "scihub_first", "scihub_only", "grey_only", "oa_first", "legal_only"})
 
 
-def update_config(key: str, value: str) -> dict[str, Any]:
+def update_config(key: str, value: str, confirmed: bool = False) -> dict[str, Any]:
     import warnings as _warnings
 
     config = load_config()
@@ -186,6 +267,16 @@ def update_config(key: str, value: str) -> dict[str, Any]:
         from .proxy_transport import authorize_proxy
         for proxy in parse_proxy_pool(value):
             authorize_proxy(proxy)
+
+    # Central trust policy, applied at the boundary every caller shares. A tool
+    # wrapper can be bypassed by a direct ``update_config`` call; this cannot.
+    # Raises before ``save_config``, so a refused write leaves both the config
+    # file and the effective trust outcome untouched.
+    trust_key = is_trust_sensitive(key)
+    if trust_key:
+        value = enforce_trust_write(
+            key, value, confirmed=confirmed, current=config.get(key)
+        )
 
     # Validate: warn on unknown keys
     if key not in DEFAULT_CONFIG:
@@ -207,33 +298,39 @@ def update_config(key: str, value: str) -> dict[str, Any]:
         return config
 
     if key in config:
-        old_type = type(config[key])
-        if old_type == bool:
-            config[key] = value.lower() in ("true", "1", "yes")
-        elif old_type == int:
-            try:
-                config[key] = int(value)
-            except ValueError:
-                raise ValueError(f"Invalid integer value for '{key}': '{value}'")
-        elif old_type == float:
-            try:
-                config[key] = float(value)
-            except ValueError:
-                raise ValueError(f"Invalid float value for '{key}': '{value}'")
-        elif old_type == list:
-            # Try JSON parse for list values (e.g. scihub_domains)
-            try:
-                parsed = json.loads(value)
-                if isinstance(parsed, list):
-                    config[key] = parsed
-                else:
-                    raise ValueError(f"Expected a JSON list for '{key}', got {type(parsed).__name__}")
-            except json.JSONDecodeError:
-                raise ValueError(
-                    f"Invalid list value for '{key}'. Use JSON format, e.g.: '[\"https://sci-hub.vg\",\"https://sci-hub.al\"]'"
-                )
+        if key in SECURITY_BOOL_KEYS:
+            # Security toggles go through the shared parser, never through
+            # the old `value.lower() in (...)` branch that also handled the
+            # non-bool "false" string.
+            config[key] = config_bool(key, value, bool(DEFAULT_CONFIG.get(key, False)))
         else:
-            config[key] = value
+            old_type = type(config[key])
+            if old_type == bool:
+                config[key] = parse_config_bool(value) is True
+            elif old_type == int:
+                try:
+                    config[key] = int(value)
+                except ValueError:
+                    raise ValueError(f"Invalid integer value for '{key}': '{value}'")
+            elif old_type == float:
+                try:
+                    config[key] = float(value)
+                except ValueError:
+                    raise ValueError(f"Invalid float value for '{key}': '{value}'")
+            elif old_type == list:
+                # Try JSON parse for list values (e.g. scihub_domains)
+                try:
+                    parsed = json.loads(value)
+                    if isinstance(parsed, list):
+                        config[key] = parsed
+                    else:
+                        raise ValueError(f"Expected a JSON list for '{key}', got {type(parsed).__name__}")
+                except json.JSONDecodeError:
+                    raise ValueError(
+                        f"Invalid list value for '{key}'. Use JSON format, e.g.: '[\"https://sci-hub.vg\",\"https://sci-hub.al\"]'"
+                    )
+            else:
+                config[key] = value
     else:
         config[key] = value
 
@@ -268,7 +365,7 @@ _PROXY_URL_CREDS_RE = re.compile(r"(//[^/@\s:]*:)[^@/\s]+@")
 # credential too. The password is required, which keeps ``bob@proxy:3128``
 # (username only) and ``127.0.0.1:1080`` (no ``@``) untouched. ``(?<!/)``
 # keeps this from re-entering the ``//`` form handled above.
-_PROXY_BARE_CREDS_RE = re.compile(r"(?<!/)([^/@\s:]+:)[^@/\s]+@")
+_PROXY_BARE_CREDS_RE = re.compile(r"(?<![/\w])([^/@\s:]*:)[^@/\s]+@")
 
 
 def mask_config_value(key: str, value: Any) -> Any:
@@ -290,7 +387,8 @@ def mask_config_value(key: str, value: Any) -> Any:
 
 def get_config_safe() -> dict[str, Any]:
     config = load_config()
-    return {key: mask_config_value(key, value) for key, value in config.items()}
+    from .proxy_redaction import redact_proxy_structure
+    return redact_proxy_structure({key: mask_config_value(key, value) for key, value in config.items()})
 
 
 def parse_proxy_pool(value: str | None) -> list[str]:

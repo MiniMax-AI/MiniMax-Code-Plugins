@@ -7,6 +7,8 @@ import csv
 import inspect
 import json
 import logging
+
+from .proxy_redaction import redacting_logger
 import os
 import re
 import shutil
@@ -36,7 +38,7 @@ MIN_PDF_BYTES = 5_000
 MAX_BROWSER_CONCURRENCY = 4
 PDF_URL_RE = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
 
-logger = logging.getLogger(__name__)
+logger = redacting_logger(__name__)
 
 
 def _resolve_profile_dir(config: dict[str, Any], explicit: str | Path | None = None) -> Path:
@@ -445,8 +447,9 @@ class PublisherBatchDownloader:
         summary["stop_reason"] = "ip_blocked" if retry_skipped_ip_block else ""
         summary["ip_blocked_count"] = ip_blocked_total
         # Proxy rotation fields (empty when proxy_pool is not configured).
-        summary["proxy_pool"] = parse_proxy_pool(self.config.get("proxy_pool", ""))
-        summary["proxy_blocked"] = list(dict.fromkeys(self._proxy_blocked))  # deduplicate
+        from .config import mask_config_value
+        summary["proxy_pool"] = [mask_config_value("proxy_pool", item) for item in parse_proxy_pool(self.config.get("proxy_pool", ""))]
+        summary["proxy_blocked"] = [mask_config_value("proxy_pool", item) for item in dict.fromkeys(self._proxy_blocked)]
         (run_path / "summary.json").write_text(
             json.dumps(summary, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -751,6 +754,7 @@ class PublisherBatchDownloader:
         if not source.exists():
             target.mkdir(parents=True, exist_ok=True)
             return target
+        from .browser_login import localstorage_opt_in
         ignored_names = {
             "SingletonCookie",
             "SingletonLock",
@@ -764,6 +768,8 @@ class PublisherBatchDownloader:
             "GrShaderCache",
             "ShaderCache",
         }
+        if not localstorage_opt_in(self.config.get("browser_persist_localstorage", False)):
+            ignored_names.update({"Local Storage", "Session Storage"})
 
         def ignore(_directory: str, names: list[str]) -> set[str]:
             return {name for name in names if name in ignored_names}
@@ -788,7 +794,10 @@ class PublisherBatchDownloader:
         if cookie_cache.exists():
             try:
                 cookies = json.loads(cookie_cache.read_text(encoding="utf-8"))
-                if cookies and isinstance(cookies, list):
+                login_url = self._get_login_url() or ""
+                from .browser_cookies import credentials_for_target
+                cookies = credentials_for_target(cookies, None, login_url) if isinstance(cookies, list) and login_url else []
+                if cookies:
                     self._event(None, "shared_cookies_loaded", f"{len(cookies)} cookies from cache")
                     return cookies
             except Exception:
@@ -825,7 +834,8 @@ class PublisherBatchDownloader:
                         break
 
                 # Export cookies
-                cookies = context.cookies()
+                from .browser_cookies import scoped_cookies
+                cookies = scoped_cookies(context.cookies(), login_url)
                 if cookies:
                     cookie_cache.write_text(
                         json.dumps(cookies, ensure_ascii=False, indent=2),
@@ -856,7 +866,11 @@ class PublisherBatchDownloader:
         if not cookies:
             return
         try:
-            context.add_cookies(cookies)
+            from .browser_cookies import credentials_for_target
+            login_url = self._get_login_url() or ""
+            scoped = credentials_for_target(cookies, None, login_url) if login_url else []
+            if scoped:
+                context.add_cookies(scoped)
         except Exception as exc:
             self._event(None, "cookie_inject_failed", f"{type(exc).__name__}: {exc}")
 
@@ -922,8 +936,13 @@ class PublisherBatchDownloader:
         if not cookies:
             return
         try:
-            context.add_cookies(cookies)
-            logger.info("Restored %d cookies from previous browser context", len(cookies))
+            from .browser_cookies import credentials_for_target
+            login_url = self._get_login_url() or ""
+            scoped = credentials_for_target(cookies, None, login_url) if login_url else []
+            if not scoped:
+                return
+            context.add_cookies(scoped)
+            logger.info("Restored %d cookies from previous browser context", len(scoped))
         except Exception as exc:
             logger.warning("Cookie hand-off injection failed: %s", exc)
         finally:
@@ -932,7 +951,9 @@ class PublisherBatchDownloader:
     def _export_handoff_cookies(self, context: Any) -> None:
         """Snapshot cookies before a context closes so the next one stays logged in."""
         try:
-            self._handoff_cookies = context.cookies()
+            from .browser_cookies import credentials_for_target
+            login_url = self._get_login_url() or ""
+            self._handoff_cookies = credentials_for_target(context.cookies(), None, login_url) if login_url else []
         except Exception:
             self._handoff_cookies = None
 

@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import logging
+
+from .proxy_redaction import redacting_logger
 import time
 from difflib import SequenceMatcher
 from typing import Any
 
 from .paperlist import PaperEntry
 
-log = logging.getLogger(__name__)
+log = redacting_logger(__name__)
 
 TITLE_SIMILARITY_THRESHOLD = 0.75
 

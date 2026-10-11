@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+
+from ..proxy_redaction import redacting_logger
 import time
 import urllib.parse
 from dataclasses import dataclass, field
@@ -14,7 +16,7 @@ import requests
 from ..network import fetch_json, polite_delay
 from ..pdf_utils import download_pdf, is_plausible_pdf_url
 
-logger = logging.getLogger(__name__)
+logger = redacting_logger(__name__)
 
 S2_API = "https://api.semanticscholar.org/graph/v1"
 S2_FIELDS = "title,authors,year,abstract,externalIds,journal,citationCount,url"

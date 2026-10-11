@@ -101,7 +101,7 @@ def start_broker_process(
     args = [
         sys.executable,
         "-m",
-        "instsci.cli",  # TODO: port session-broker-run to scansci_pdf CLI
+        "scansci_pdf.cli",
         "session-broker-run",
         "--publisher",
         publisher,
@@ -115,6 +115,8 @@ def start_broker_process(
     from ..security import strict_mode, workspace_path
     if strict_mode():
         cwd = workspace_path(cwd)
+        # Same manifest-verified `--module` entry as the manual call, and the
+        # module that actually registers `session-broker-run`.
         args = [sys.executable, os.environ['SCANSCI_PDF_SECURE_ENTRY'], '--module', 'scansci_pdf.cli', *args[3:]]
     return subprocess.Popen(
         args,

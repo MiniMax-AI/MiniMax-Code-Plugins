@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+
+from ...proxy_redaction import redacting_logger
 from dataclasses import dataclass, field
 from typing import Any
 
 import requests
 
-logger = logging.getLogger(__name__)
+logger = redacting_logger(__name__)
 
 UNPAYWALL_API = "https://api.unpaywall.org/v2"
 

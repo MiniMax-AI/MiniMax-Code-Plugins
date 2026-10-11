@@ -74,6 +74,27 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def progress_bar_command() -> list[str]:
+    """argv that starts the bar through the verified source entry.
+
+    Under the secure launcher ``python -m`` would resolve
+    ``scansci_pdf.progress_bar`` from whatever happens to be importable in the
+    vendored environment, bypassing SOURCE-HASHES.json. Routing through
+    ``run_secure.py --module`` gives the automatically spawned bar exactly the
+    manifest verification, package-source boundary and dependency checks the
+    manual ``--module`` call gets, so automatic startup cannot be the weaker
+    path.
+    """
+    import sys
+
+    from .security import strict_mode
+
+    entry = os.environ.get("SCANSCI_PDF_SECURE_ENTRY", "")
+    if strict_mode() and entry and Path(entry).is_file():
+        return [sys.executable, entry, "--module", "scansci_pdf.progress_bar"]
+    return [sys.executable, "-m", "scansci_pdf.progress_bar"]
+
+
 def ensure_progress_bar(config: dict[str, Any] | None = None) -> None:
     """Spawn the floating progress bar once (no-op when one is already up).
 
@@ -99,12 +120,11 @@ def ensure_progress_bar(config: dict[str, Any] | None = None) -> None:
         return
     try:
         import subprocess
-        import sys
 
         kwargs = {"creationflags": 0x08000000} if os.name == "nt" else {}
         env = {**os.environ, "SCANSCI_PROGRESS_BAR_CHILD": "1"}
         subprocess.Popen(
-            [sys.executable, "-m", "scansci_pdf.progress_bar"],
+            progress_bar_command(),
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             env=env, **kwargs,
         )

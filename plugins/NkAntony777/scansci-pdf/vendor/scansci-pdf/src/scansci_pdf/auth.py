@@ -2,6 +2,8 @@
 
 import binascii
 import logging
+
+from .proxy_redaction import redacting_logger
 import os
 import time
 from pathlib import Path
@@ -25,7 +27,7 @@ except ImportError:
     launch = None  # type: ignore[assignment]
     _HAS_CLOAKBROWSER = False
 
-logger = logging.getLogger(__name__)
+logger = redacting_logger(__name__)
 
 TEST_URL = "https://www.nature.com"
 WEBVPN_DEFAULT_KEY = b"wrdvpnisthebest!"
@@ -49,7 +51,7 @@ def _get_profile_dir(config: dict) -> Path:
     return data_dir / "browser_profiles" / "webvpn"
 
 
-def _seed_saved_cookies(cookie_path: Path, context: Any) -> int:
+def _seed_saved_cookies(cookie_path: Path, context: Any, target_url: str = "") -> int:
     """Restore cookies saved to disk into the freshly launched browser.
 
     Gateway session cookies (no Expires) never survive a browser close
@@ -58,7 +60,7 @@ def _seed_saved_cookies(cookie_path: Path, context: Any) -> int:
     them as valid on disk; inject them before navigation so the gateway
     accepts the restored session instead of forcing a manual re-login.
     """
-    cookies = CookieStore(cookie_path).load()
+    cookies = CookieStore(cookie_path).load(target_url=target_url)
     if not cookies:
         return 0
     for cookie in cookies:
@@ -152,7 +154,8 @@ class WebVPNAuth:
                     "http": proxy,
                     "https": proxy,
                 }
-                logger.info("Using connector: %s", proxy)
+                from .config import mask_config_value
+                logger.info("Using connector: %s", mask_config_value("network_proxy", proxy))
         return self._session
 
     def convert_url(self, url: str) -> str:
@@ -216,7 +219,7 @@ class WebVPNAuth:
 
     def _try_load_cookies(self) -> bool:
         cookie_path = _get_cookie_path(self.config)
-        if not CookieStore(cookie_path).load_into(self.session):
+        if not CookieStore(cookie_path).load_into(self.session, target_url=self._webvpn_base):
             logger.info("All saved cookies have expired.")
             return False
         return self._validate_session()
@@ -271,7 +274,7 @@ class WebVPNAuth:
             self._close_browser_quietly()
             return False
 
-        _seed_saved_cookies(_get_cookie_path(self.config), self._context)
+        _seed_saved_cookies(_get_cookie_path(self.config), self._context, self._webvpn_base)
 
         self._page.goto(self._webvpn_base, wait_until="networkidle", timeout=30000)
         current_url = self._page.url
@@ -377,7 +380,7 @@ class WebVPNAuth:
             return
         cookie_path = _get_cookie_path(self.config)
         store = CookieStore(cookie_path)
-        cookies = store.save(self._context.cookies())
+        cookies = store.save(self._context.cookies(), target_url=self._webvpn_base)
         logger.info("Saved %d cookies to %s", len(cookies), store.path)
         store.apply_to_session(self.session, cookies)
 
@@ -460,7 +463,7 @@ class EZProxyAuth:
 
     def _try_load_cookies(self) -> bool:
         cookie_path = _get_cookie_path(self.config)
-        if not CookieStore(cookie_path).load_into(self.session):
+        if not CookieStore(cookie_path).load_into(self.session, target_url=self._proxy_base):
             return False
         return self._validate_session()
 
@@ -489,7 +492,7 @@ class EZProxyAuth:
             logger.error("Failed to start CloakBrowser: %s", e)
             return False
 
-        _seed_saved_cookies(_get_cookie_path(self.config), self._context)
+        _seed_saved_cookies(_get_cookie_path(self.config), self._context, self._proxy_base)
 
         self._page.goto(self._proxy_base + TEST_URL, wait_until="domcontentloaded")
 
@@ -544,7 +547,7 @@ class EZProxyAuth:
             return
         cookie_path = _get_cookie_path(self.config)
         store = CookieStore(cookie_path)
-        cookies = store.save(self._context.cookies())
+        cookies = store.save(self._context.cookies(), target_url=self._proxy_base)
         logger.info("Saved %d cookies to %s", len(cookies), store.path)
         store.apply_to_session(self.session, cookies)
 

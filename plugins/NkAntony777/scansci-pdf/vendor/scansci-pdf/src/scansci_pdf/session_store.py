@@ -4,12 +4,25 @@ from __future__ import annotations
 
 import json
 import logging
+
+from .proxy_redaction import redacting_logger
 import time
 from pathlib import Path
 from typing import Any
 from .security import secure_write_text, no_symlinks
 
-logger = logging.getLogger(__name__)
+logger = redacting_logger(__name__)
+
+
+def credentials_for_target(*args, **kwargs):
+    """Lazy re-export of the shared credential policy.
+
+    Imported lazily to keep ``session_store`` free of an import cycle with
+    ``browser_cookies`` (which imports nothing from here at module level).
+    """
+    from .browser_cookies import credentials_for_target as _impl
+
+    return _impl(*args, **kwargs)
 
 
 class CookieStore:
@@ -18,8 +31,13 @@ class CookieStore:
     def __init__(self, path: str | Path):
         self.path = Path(path)
 
-    def load(self, *, now: float | None = None) -> list[dict[str, Any]]:
-        """Load valid cookies from disk."""
+    def load(self, *, now: float | None = None, target_url: str = "") -> list[dict[str, Any]]:
+        """Load valid cookies from disk, scoped to ``target_url``.
+
+        The same policy that governs save governs restore: without an explicit
+        target nothing is returned, so a jar can never be replayed against a
+        gateway it was not captured for.
+        """
         no_symlinks(self.path)
         if not self.path.exists():
             return []
@@ -35,26 +53,28 @@ class CookieStore:
             return []
 
         now = time.time() if now is None else now
-        cookies = [self._normalize_cookie(c) for c in raw if isinstance(c, dict)]
+        # Missing security attributes cannot be reconstructed. Both browser
+        # and HTTP consumers must re-authenticate rather than weaken a cookie.
+        cookies = credentials_for_target(raw, None, target_url, now=now)
         return [c for c in cookies if self._is_valid(c, now)]
 
-    def save(self, cookies: list[dict[str, Any]], *, now: float | None = None) -> list[dict[str, Any]]:
-        """Save valid cookies to disk and return the persisted list."""
+    def save(self, cookies: list[dict[str, Any]], *, now: float | None = None, target_url: str = "") -> list[dict[str, Any]]:
+        """Save target-domain cookies and return the persisted list.
+
+        Without ``target_url`` nothing is written: a full browser jar includes
+        IdP and other-publisher sessions that must not be stored. Security and
+        lifecycle attributes are preserved so an HttpOnly session does not come
+        back page-script-readable.
+        """
         now = time.time() if now is None else now
-        valid = [
-            normalized
-            for cookie in cookies
-            if isinstance(cookie, dict)
-            for normalized in [self._normalize_cookie(cookie)]
-            if self._is_valid(normalized, now)
-        ]
+        valid = credentials_for_target(cookies, None, target_url, now=now)
 
         secure_write_text(self.path, json.dumps(valid, indent=2, ensure_ascii=False))
         return valid
 
-    def load_into(self, session: Any, *, now: float | None = None) -> bool:
+    def load_into(self, session: Any, *, now: float | None = None, target_url: str = "") -> bool:
         """Load valid cookies into a requests-like session."""
-        cookies = self.load(now=now)
+        cookies = self.load(now=now, target_url=target_url)
         self.apply_to_session(session, cookies)
         return bool(cookies)
 
@@ -71,14 +91,22 @@ class CookieStore:
                 value,
                 domain=cookie.get("domain", ""),
                 path=cookie.get("path", "/"),
+                secure=bool(cookie.get("secure", False)),
+                expires=(cookie["expires"] if cookie.get("expires", -1) > 0 else None),
+                rest={key: cookie[field] for key, field in
+                      (("HttpOnly", "httpOnly"), ("SameSite", "sameSite")) if field in cookie},
             )
 
     @staticmethod
-    def _normalize_cookie(cookie: dict[str, Any]) -> dict[str, Any]:
-        normalized = dict(cookie)
-        if normalized.get("expires", 0) < 0:
-            normalized["expires"] = 0
-        return normalized
+    def _limit_to_target(cookies: list[dict[str, Any]], target_url: str) -> list[dict[str, Any]]:
+        from urllib.parse import urlparse
+
+        from .browser_cookies import _covers_host
+
+        host = (urlparse(target_url or "").hostname or "").lower()
+        if not host:
+            return []
+        return [cookie for cookie in cookies if _covers_host(cookie.get("domain", ""), host)]
 
     @staticmethod
     def _is_valid(cookie: dict[str, Any], now: float) -> bool:
@@ -86,6 +114,9 @@ class CookieStore:
             return False
 
         expires = cookie.get("expires", 0)
-        if not expires or expires == 0:
+        if not expires or expires <= 0:
             return True
-        return expires > now
+        try:
+            return float(expires) > now
+        except (TypeError, ValueError):
+            return False

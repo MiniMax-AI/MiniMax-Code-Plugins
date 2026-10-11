@@ -62,19 +62,23 @@ def _get_profile_dir(config: dict[str, Any], publisher: str = "shared") -> Path:
     return profile_dir
 
 
-def _restore_cookies_to_context(context: Any, config: dict[str, Any]) -> None:
+def _restore_cookies_to_context(context: Any, config: dict[str, Any], publisher: str = "") -> None:
+    """Inject this publisher's saved cookies into a context.
+
+    Scoped to the publisher's own login origin and passed through the shared
+    credential policy, so an HttpOnly session stays HttpOnly and a sibling
+    publisher's jar is never injected here.
+    """
     try:
-        from .browser_cookies import load_saved_cookies
-        saved = load_saved_cookies(config)
+        from .browser_cookies import (
+            PUBLISHER_LOGIN_URLS,
+            credentials_for_target,
+            load_saved_cookies,
+        )
+        target = PUBLISHER_LOGIN_URLS.get((publisher or "").lower(), "")
+        saved = credentials_for_target(load_saved_cookies(config, target), None, target) if target else []
         if saved:
-            pw_cookies = []
-            for c in saved:
-                pw_c = {"name": c.get("name", ""), "value": c.get("value", ""),
-                         "domain": c.get("domain", ""), "path": c.get("path", "/")}
-                if pw_c["domain"]:
-                    pw_cookies.append(pw_c)
-            if pw_cookies:
-                context.add_cookies(pw_cookies)
+            context.add_cookies(saved)
     except Exception:
         pass
 
@@ -106,7 +110,7 @@ def _visible_browser(config: dict[str, Any], publisher: str, *, viewport: dict |
         page = ctx.new_page()
         log.info(f"   [{publisher}] persistent browser profile: {profile_dir}")
         # Ensure cookies are loaded from saved file
-        _restore_cookies_to_context(ctx, config)
+        _restore_cookies_to_context(ctx, config, publisher)
     except Exception as _e:
         log.info(f"   [{publisher}] persistent context unavailable ({_e}), using ephemeral")
         _vp = viewport or {"width": 1440, "height": 900}
@@ -114,7 +118,7 @@ def _visible_browser(config: dict[str, Any], publisher: str, *, viewport: dict |
                          args=["--disable-features=CrossOriginOpenerPolicy"],
                          config=config)
         ctx = browser.new_context(viewport=_vp)
-        _restore_cookies_to_context(ctx, config)
+        _restore_cookies_to_context(ctx, config, publisher)
         page = ctx.new_page()
 
     try:
@@ -133,23 +137,20 @@ def _save_all_cookie_formats(
     cookies: list[dict[str, Any]],
     publisher: str,
     config: dict[str, Any],
+    target_url: str = "",
 ) -> None:
     """Save cookies in all formats: JSON, Netscape, publisher subset, + bridge to browser-engine."""
     from .config import DATA_DIR
-    from .browser_cookies import cookies_to_netscape, _save_cookies_json
+    from .browser_cookies import PUBLISHER_LOGIN_URLS, cookies_to_netscape, scoped_cookies, _save_cookies_json
 
+    url = PUBLISHER_LOGIN_URLS.get((publisher or "").lower(), "") or target_url
+    cookies = scoped_cookies(cookies, url) if url else []
     cache_dir = Path(config.get("cache_dir", str(DATA_DIR / "cache")))
 
     # 1. Save full cookies to carsi_cookies/{publisher}.json
     carsi_dir = cache_dir / "carsi_cookies"
     carsi_dir.mkdir(parents=True, exist_ok=True)
-    cookie_data = [
-        {"name": c.get("name", ""), "value": c.get("value", ""),
-         "domain": c.get("domain", ""), "path": c.get("path", "/"),
-         "secure": c.get("secure", False), "expires": c.get("expires", 0),
-         "httpOnly": c.get("httpOnly", False)}
-        for c in cookies
-    ]
+    cookie_data = cookies
     from .security import secure_write_text
     secure_write_text(carsi_dir / f"{publisher.lower()}.json",
         json.dumps(cookie_data, indent=2, ensure_ascii=False))
@@ -181,7 +182,7 @@ def _save_all_cookie_formats(
     try:
         from .browser_engine import import_cookies, is_available
         if is_available(config):
-            imported = import_cookies(str(netscape_file), config)
+            imported = import_cookies(str(netscape_file), config, target_url=url)
             log.info(f"   [{publisher}] bridged {imported} cookies to browser-engine service")
     except Exception as _e:
         log.info(f"   [{publisher}] browser-engine bridge note: {_e}")
@@ -230,32 +231,49 @@ def _has_publisher_cookies(config: dict[str, Any]) -> bool:
 
 
 def _inject_cookies_to_tab(tab_id: str, config: dict[str, Any], publisher: str) -> None:
-    """Inject saved publisher + CARSI cookies into browser-engine session."""
+    """Inject saved publisher + CARSI cookies into browser-engine session.
+
+    Scoped to this publisher's own origin: the shared browser context would
+    otherwise accumulate every publisher's session from ``publisher_cookies.txt``
+    and let one publisher's jar ride along into another's tab.
+    """
+    from urllib.parse import urlparse as _urlparse
+
     from .browser_engine import import_cookies
+    from .browser_cookies import PUBLISHER_LOGIN_URLS
     from .config import DATA_DIR
     cache_dir = Path(config.get("cache_dir", str(DATA_DIR / "cache")))
     total = 0
+
+    target = PUBLISHER_LOGIN_URLS.get((publisher or "").lower(), "")
+    host = (_urlparse(target).hostname or "").lower() if target else ""
+    if not host:
+        log.info(f"   [{publisher}] no known login origin, skipping cookie import")
+        return
 
     # Import publisher cookies (Netscape format if exists)
     netscape_file = cache_dir / "publisher_cookies.txt"
     if netscape_file.exists():
         try:
-            total += import_cookies(str(netscape_file), config)
+            total += import_cookies(str(netscape_file), config, domain_suffix=host)
         except Exception:
             pass
 
-    # Import CARSI cookies
+    # Import CARSI cookies (one file per publisher, scoped to the same origin)
     carsi_dir = cache_dir / "carsi_cookies"
     if carsi_dir.is_dir():
         for cf in carsi_dir.glob("*.json"):
             try:
                 # Convert JSON → Netscape format
-                from .browser_cookies import cookies_to_netscape
+                from .browser_cookies import cookies_to_netscape, scoped_cookies
                 cookies = json.loads(cf.read_text(encoding="utf-8"))
+                cookies = scoped_cookies(cookies, target)
+                if not cookies:
+                    continue
                 tmp = cache_dir / f"_tmp_{cf.stem}.txt"
                 from .security import secure_write_text
                 secure_write_text(tmp, cookies_to_netscape(cookies))
-                total += import_cookies(str(tmp), config)
+                total += import_cookies(str(tmp), config, domain_suffix=host)
                 tmp.unlink(missing_ok=True)
             except Exception:
                 pass
@@ -463,7 +481,7 @@ def _visible_institutional_login(
                 log.info(f"   [{publisher}] login successful in visible browser!")
                 try:
                     cookies = context.cookies()
-                    _save_all_cookie_formats(cookies, publisher, config)
+                    _save_all_cookie_formats(cookies, publisher, config, target_url=page.url)
                 except Exception as e:
                     log.info(f"   [{publisher}] cookie save error: {e}")
                 return True
@@ -661,7 +679,7 @@ def _visible_browser_download(
         # Save cookies for future use (all formats + bridge to browser-engine)
         try:
             cookies = context.cookies()
-            _save_all_cookie_formats(cookies, publisher, config)
+            _save_all_cookie_formats(cookies, publisher, config, target_url=page.url)
         except Exception as e:
             log.info(f"   [{publisher}] cookie save note: {e}")
 
@@ -1483,7 +1501,7 @@ def _browser_download_visible(
                     # Save cookies
                     try:
                         cookies = context.cookies()
-                        _save_all_cookie_formats(cookies, publisher, config)
+                        _save_all_cookie_formats(cookies, publisher, config, target_url=page.url)
                     except Exception:
                         pass
                     break
@@ -2102,7 +2120,11 @@ def _persist_api_cookies(session: Any, config: dict[str, Any]) -> int:
             "path": c.path,
             "secure": c.secure,
             "expires": c.expires or 0,
+            "httpOnly": c.has_nonstandard_attr("HttpOnly"),
         }
+        same_site = c.get_nonstandard_attr("SameSite")
+        if same_site is not None:
+            cookie["sameSite"] = same_site
         raw.append(cookie)
         if c.name not in _CLOUDFLARE_COOKIE_NAMES:
             meaningful += 1
@@ -2114,10 +2136,13 @@ def _persist_api_cookies(session: Any, config: dict[str, Any]) -> int:
         log.info(f"   [ElsevierAPI] {len(raw)} cookies are Cloudflare-only, skipping persist")
         return 0
 
-    merged = merge_cookies(raw, config)
+    merged = merge_cookies(raw, config, target_urls=[
+        "https://api.elsevier.com/", "https://linkinghub.elsevier.com/",
+        "https://www.sciencedirect.com/",
+    ])
     log.info(f"   [ElsevierAPI] persisted {meaningful} meaningful cookies "
              f"({len(raw)} total, merged: {len(merged)})")
-    return meaningful
+    return sum(c["name"] not in _CLOUDFLARE_COOKIE_NAMES for c in merged)
 
 
 def _elsevier_header(headers: Any, name: str) -> str:
@@ -2550,7 +2575,8 @@ def try_elsevier_api(
     import requests
 
     for route_name, proxies in route_options:
-        session = requests.Session()
+        from .credential_transport import confined_session
+        session = confined_session(url)
         session.trust_env = False
         if proxies:
             session.proxies = proxies

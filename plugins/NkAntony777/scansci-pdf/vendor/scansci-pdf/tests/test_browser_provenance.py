@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+import types
 from pathlib import Path
 
 import pytest
@@ -319,6 +321,7 @@ def test_scoped_cookies_keeps_target_domain_only():
         {"name": "wiley", "value": "t", "domain": "onlinelibrary.wiley.com", "path": "/"},
         {"name": "shibsession", "value": "t", "domain": ".tsinghua.edu.cn", "path": "/"},
     ]
+    jar = [dict(cookie, httpOnly=True, secure=True, expires=-1, sameSite="Lax") for cookie in jar]
     kept = bc.scoped_cookies(jar, "https://www.sciencedirect.com/")
     assert {c["name"] for c in kept} == {"SD_session"}
 
@@ -334,6 +337,7 @@ def test_scoped_cookies_match_is_parent_domain_anchored():
         {"name": "lookalike", "value": "t", "domain": "evil-sciencedirect.com", "path": "/"},
         {"name": "other_publisher", "value": "t", "domain": ".springer.com", "path": "/"},
     ]
+    jar = [dict(cookie, httpOnly=True, secure=True, expires=-1, sameSite="Lax") for cookie in jar]
     kept = {c["name"] for c in bc.scoped_cookies(jar, "https://www.sciencedirect.com/")}
     assert kept == {"parent", "exact"}
 
@@ -441,3 +445,322 @@ def test_per_user_install_digest_mismatch_is_rejected(tmp_path, monkeypatch):
     pinned = {"browser_binary_sha256": {"chrome.exe": "00" * 32}}
     with pytest.raises(SecurityError, match="digest"):
         browser_provenance.verify_browser_executable(binary, pinned)
+
+
+# ---------------------------------------------------------------------------
+# D64-03: changing a browser digest is a trust change.
+#
+# Positive regression for the reviewer's reproduction: a synthetic cached
+# chrome.exe is refused by the gate; an unconfirmed attempt to record its
+# digest must leave the gate still refusing it. Only an explicit, confirmed,
+# well-formed write may change the trust outcome.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def trusted_config(tmp_path, monkeypatch):
+    """An isolated config file plus a cached candidate the gate refuses."""
+    monkeypatch.setenv("SCANSCI_PDF_WORKSPACE", str(tmp_path))
+    from scansci_pdf import config as config_mod
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    # DEFAULT_CONFIG is built at import time, so strict mode would otherwise
+    # resolve cache_dir/output_dir under the real home and reject the workspace.
+    monkeypatch.setitem(config_mod.DEFAULT_CONFIG, "cache_dir", str(data_dir / "cache"))
+    monkeypatch.setitem(config_mod.DEFAULT_CONFIG, "output_dir", str(data_dir / "papers"))
+    monkeypatch.setattr(config_mod, "DATA_DIR", data_dir)
+    monkeypatch.setattr(config_mod, "CONFIG_FILE", data_dir / "config.json")
+
+    monkeypatch.setattr(browser_provenance, "_system_roots", lambda: ())
+    monkeypatch.setattr(browser_provenance, "_per_user_roots", lambda: ())
+    cache = data_dir / "cache" / "browser"
+    cache.mkdir(parents=True)
+    monkeypatch.setattr(browser_provenance, "_cache_root", lambda: cache)
+    binary = cache / "chrome.exe"
+    binary.write_bytes(b"synthetic non-executing chrome")  # never executed here
+
+    return {
+        "binary": binary,
+        "digest": browser_provenance.file_digest(binary),
+        "config": config_mod,
+        "tmp": tmp_path,
+    }
+
+
+def _refused(binary, cfg):
+    with pytest.raises(SecurityError):
+        browser_provenance.verify_browser_executable(binary, cfg)
+
+
+def test_unconfirmed_digest_write_does_not_change_trust(trusted_config):
+    """The core regression: unconfirmed write -> config AND gate unchanged."""
+    binary, cfg_mod = trusted_config["binary"], trusted_config["config"]
+
+    with pytest.raises(ValueError, match="confirmation required"):
+        cfg_mod.update_config(
+            "browser_binary_sha256", json.dumps({str(binary): trusted_config["digest"]})
+        )
+    # Nothing was persisted...
+    assert not cfg_mod.CONFIG_FILE.exists()
+    # ...and the effective trust outcome is unchanged: still refused.
+    _refused(binary, cfg_mod.load_config())
+
+
+def test_unconfirmed_replace_and_clear_do_not_change_trust(trusted_config):
+    """Once a pin exists, replacing or clearing it is equally a trust change."""
+    binary, cfg_mod = trusted_config["binary"], trusted_config["config"]
+    pinned = {str(binary): trusted_config["digest"]}
+    cfg_mod.update_config("browser_binary_sha256", json.dumps(pinned), confirmed=True)
+    assert browser_provenance.verify_browser_executable(binary, cfg_mod.load_config()) == Path(os.path.abspath(binary))
+
+    # Replacing the pin, unconfirmed.
+    other = {str(binary): "cd" * 32}
+    with pytest.raises(ValueError, match="confirmation required"):
+        cfg_mod.update_config("browser_binary_sha256", json.dumps(other))
+    assert cfg_mod.load_config()["browser_binary_sha256"] == pinned
+    assert browser_provenance.verify_browser_executable(binary, cfg_mod.load_config()) == Path(os.path.abspath(binary))
+
+    # Clearing the pin, unconfirmed.
+    with pytest.raises(ValueError, match="confirmation required"):
+        cfg_mod.update_config("browser_binary_sha256", "{}")
+    assert cfg_mod.load_config()["browser_binary_sha256"] == pinned
+    assert browser_provenance.verify_browser_executable(binary, cfg_mod.load_config()) == Path(os.path.abspath(binary))
+
+
+def test_direct_update_config_cannot_bypass_confirmation(trusted_config):
+    """The MCP tool is one caller; the write boundary covers the rest."""
+    from scansci_pdf import server
+
+    binary, cfg_mod = trusted_config["binary"], trusted_config["config"]
+    with pytest.raises(ValueError, match="confirmation required"):
+        cfg_mod.update_config(
+            "browser_binary_sha256", json.dumps({str(binary): trusted_config["digest"]})
+        )
+    assert not cfg_mod.CONFIG_FILE.exists()
+    _refused(binary, cfg_mod.load_config())
+
+    # The tool path returns the same refusal rather than silently succeeding.
+    out = server.scansci_pdf_config(
+        key="browser_binary_sha256",
+        value=json.dumps({str(binary): trusted_config["digest"]}),
+        confirmed=False,
+    )
+    # The MCP tool wraps output in a trust envelope; unwrap to the payload.
+    payload = json.loads(out)
+    payload = payload.get("result", payload)
+    assert "confirmation required" in payload["error"]
+    _refused(binary, cfg_mod.load_config())
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "deadbeef",                                  # too short
+        "z" * 64,                                    # not hex
+        json.dumps({"chrome.exe": "abc"}),           # short digest inside a table
+        json.dumps({"chrome.exe": 12345}),           # wrong type inside a table
+        json.dumps([1, 2, 3]),                       # wrong shape entirely
+    ],
+)
+def test_illegal_digest_format_is_rejected_and_changes_nothing(trusted_config, value):
+    """An illegal pin must never reach disk, confirmed or not."""
+    binary, cfg_mod = trusted_config["binary"], trusted_config["config"]
+    with pytest.raises(ValueError):
+        cfg_mod.update_config("browser_binary_sha256", value, confirmed=True)
+    assert not cfg_mod.CONFIG_FILE.exists()
+    _refused(binary, cfg_mod.load_config())
+
+
+def test_legitimate_confirmed_set_changes_trust(trusted_config):
+    """The positive control: confirmed + well-formed -> the gate accepts."""
+    binary, cfg_mod = trusted_config["binary"], trusted_config["config"]
+    cfg_mod.update_config(
+        "browser_binary_sha256",
+        json.dumps({str(binary): trusted_config["digest"]}),
+        confirmed=True,
+    )
+    stored = cfg_mod.load_config()["browser_binary_sha256"]
+    assert stored == {str(binary): trusted_config["digest"]}
+    assert browser_provenance.verify_browser_executable(binary, cfg_mod.load_config()) == Path(os.path.abspath(binary))
+
+
+def test_malformed_pin_is_refused_on_both_the_write_and_the_read_path(trusted_config):
+    """A hand-edited config must not degrade 'malformed pin' to 'no pin'."""
+    binary, cfg_mod = trusted_config["binary"], trusted_config["config"]
+
+    # Write path: refused outright, so it cannot be created through the API.
+    with pytest.raises(ValueError, match="SHA-256 hex digest"):
+        cfg_mod.save_config({"browser_binary_sha256": {"chrome.exe": "not-a-digest"}})
+
+    # Read path: a file edited behind our back (or corrupted) still refuses,
+    # rather than counting as "no pin recorded" and leaving the binary trusted.
+    cfg_mod.CONFIG_FILE.write_text(
+        json.dumps({"browser_binary_sha256": {"chrome.exe": "not-a-digest"}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(SecurityError, match="malformed"):
+        browser_provenance.verify_browser_executable(binary, cfg_mod.load_config())
+
+
+def test_trust_policy_is_central_and_covers_the_digest():
+    """Callers consult one list, so a new trust key cannot escape it."""
+    from scansci_pdf import config_trust
+
+    assert config_trust.is_trust_sensitive("browser_binary_sha256")
+    assert config_trust.is_trust_sensitive("browser_executable")
+    assert config_trust.is_trust_sensitive("network_proxy")
+    assert not config_trust.is_trust_sensitive("email")
+
+
+# ---------------------------------------------------------------------------
+# D64-04: validate every candidate BEFORE executing it.
+#
+# Positive regression: a candidate the gate refuses is never handed to
+# subprocess. The stub is a real interpreter-free file, and the assertion is on
+# the attempted call, not on a side effect.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def probe_recorder(monkeypatch):
+    """Record every subprocess.run argv instead of running anything."""
+    from scansci_pdf import browser_backend
+
+    seen: list = []
+
+    def _fake_run(argv, *a, **kw):
+        seen.append(list(argv))
+        # The Windows branch reads a version resource through PowerShell and
+        # parses "<path>\t<version>" lines; POSIX parses --version stdout.
+        stdout = "C:\\fake\\chrome.exe\t150.0.7871.187" if argv[0] == "powershell" \
+            else "Google Chrome 150.0.7871.187"
+        return types.SimpleNamespace(stdout=stdout, stderr="", returncode=0)
+
+    monkeypatch.setattr(browser_backend.subprocess, "run", _fake_run)
+    monkeypatch.setenv("SCANSCI_PDF_TRUST_BROWSER_PATH", "0")
+    return seen
+
+
+def test_path_controlled_candidate_is_never_executed(tmp_path, monkeypatch, probe_recorder):
+    """A PATH entry outside every allowlist must not be probed at all."""
+    from scansci_pdf import browser_backend
+
+    monkeypatch.setattr(browser_provenance, "_system_roots", lambda: ())
+    monkeypatch.setattr(browser_provenance, "_cache_root", lambda: None)
+    monkeypatch.setattr(browser_provenance, "_per_user_roots", lambda: ())
+    impostor = tmp_path / "bin" / "google-chrome"
+    impostor.parent.mkdir(parents=True)
+    impostor.write_bytes(b"#!/bin/sh\necho 150.0.0.0\n")  # harmless stub, never run
+
+    monkeypatch.setattr(browser_backend.shutil, "which", lambda name: str(impostor))
+    monkeypatch.setattr(browser_backend, "_SYSTEM_BROWSER_NAMES_POSIX", ["google-chrome"])
+
+    assert browser_backend._probe_posix_versions({}) == {}
+    assert browser_backend.find_local_browser({}) is None
+    assert probe_recorder == [], "an unprovenanced PATH candidate was executed"
+
+
+def test_invalid_pin_candidate_is_never_executed(allowlisted_root, monkeypatch, probe_recorder):
+    """Allowlisted location but a wrong pinned digest -> skip, never probe."""
+    from scansci_pdf import browser_backend
+
+    binary = _binary(allowlisted_root)
+    monkeypatch.setattr(browser_provenance, "_cache_root", lambda: None)
+    monkeypatch.setattr(browser_backend.shutil, "which", lambda name: str(binary))
+    monkeypatch.setattr(browser_backend, "_SYSTEM_BROWSER_NAMES_POSIX", ["google-chrome"])
+
+    config = {"browser_binary_sha256": {"chrome.exe": "00" * 32}}
+    assert browser_backend._probe_posix_versions(config) == {}
+    assert probe_recorder == []
+
+
+def test_symlinked_candidate_is_never_executed(allowlisted_root, monkeypatch, probe_recorder):
+    """A symlinked candidate is refused by the gate, so it is never probed."""
+    from scansci_pdf import browser_backend
+
+    binary = _binary(allowlisted_root)
+    monkeypatch.setattr(browser_provenance, "_cache_root", lambda: None)
+    link = allowlisted_root / "chrome-link"
+    # Simulate the OS reporting a symlink: no_symlinks is the shared gate, and
+    # the point under test is that a refusal stops execution, not that the
+    # platform can create the link.
+    real_no_symlinks = browser_provenance.no_symlinks
+
+    def _refuse_linked(path):
+        if Path(os.path.abspath(path)).name == "chrome-link":
+            raise SecurityError("Symlinks and junctions are not permitted")
+        real_no_symlinks(path)
+
+    monkeypatch.setattr(browser_provenance, "no_symlinks", _refuse_linked)
+    link.write_bytes(b"link placeholder")
+    monkeypatch.setattr(browser_backend.shutil, "which", lambda name: str(link))
+    monkeypatch.setattr(browser_backend, "_SYSTEM_BROWSER_NAMES_POSIX", ["google-chrome"])
+
+    assert browser_backend._probe_posix_versions({}) == {}
+    assert probe_recorder == []
+
+
+def test_approved_candidate_is_still_probed(allowlisted_root, monkeypatch, probe_recorder):
+    """Normal operation must survive: an approved candidate is probed."""
+    from scansci_pdf import browser_backend
+
+    binary = _binary(allowlisted_root)
+    monkeypatch.setattr(browser_provenance, "_cache_root", lambda: None)
+    monkeypatch.setattr(browser_backend.shutil, "which", lambda name: str(binary))
+    monkeypatch.setattr(browser_backend, "_SYSTEM_BROWSER_NAMES_POSIX", ["google-chrome"])
+
+    versions = browser_backend._probe_posix_versions({})
+    assert versions == {str(Path(os.path.abspath(binary))): "150.0.7871.187"}
+    assert probe_recorder == [[str(Path(os.path.abspath(binary))), "--version"]]
+
+
+def test_approved_candidate_is_selected_by_find_local_browser(allowlisted_root, monkeypatch, probe_recorder):
+    """Normal discovery still works end to end on the host platform."""
+    from scansci_pdf import browser_backend
+
+    binary = _binary(allowlisted_root)
+    monkeypatch.setattr(browser_provenance, "_cache_root", lambda: None)
+    expected = str(Path(os.path.abspath(binary)))
+    # Route the platform dispatch to the gated POSIX probe so the assertion is
+    # meaningful on Windows and POSIX alike.
+    monkeypatch.setattr(
+        browser_backend, "_probe_windows_versions",
+        lambda config=None: {expected: "150.0.7871.187"} if os.name == "nt" else {})
+    monkeypatch.setattr(
+        browser_backend, "_probe_posix_versions",
+        lambda config=None: {expected: "150.0.7871.187"} if os.name != "nt" else {})
+
+    assert browser_backend.find_local_browser({}) == expected
+
+
+def test_windows_probe_applies_the_same_gate(monkeypatch, tmp_path, probe_recorder):
+    """Windows must not be the weaker branch: same allowlist, same refusal."""
+    from scansci_pdf import browser_backend
+
+    monkeypatch.setattr(browser_provenance, "_system_roots", lambda: ())
+    monkeypatch.setattr(browser_provenance, "_cache_root", lambda: None)
+    monkeypatch.setattr(browser_provenance, "_per_user_roots", lambda: ())
+    impostor = tmp_path / "chrome.exe"
+    impostor.write_bytes(b"not a browser")
+    monkeypatch.setattr(browser_backend, "_SYSTEM_BROWSER_PATHS_WIN", [str(impostor)])
+
+    # Refused before the PowerShell call, so not even metadata is read.
+    assert browser_backend._probe_windows_versions({}) == {}
+    assert probe_recorder == []
+
+    monkeypatch.setattr(browser_provenance, "_system_roots", lambda: (str(tmp_path),))
+    assert browser_backend._probe_windows_versions({}) != {}
+    assert len(probe_recorder) == 1 and probe_recorder[0][0] == "powershell"
+
+def test_no_browser_installed_diagnostic_still_reports_absence(monkeypatch, probe_recorder):
+    """The 'nothing found' path must stay informative and stay silent on exec."""
+    from scansci_pdf import browser_backend
+
+    monkeypatch.setattr(browser_provenance, "_system_roots", lambda: ())
+    monkeypatch.setattr(browser_provenance, "_cache_root", lambda: None)
+    monkeypatch.setattr(browser_backend.shutil, "which", lambda name: None)
+
+    assert browser_backend._probe_posix_versions({}) == {}
+    assert browser_backend.find_local_browser({}) is None
+    assert probe_recorder == []

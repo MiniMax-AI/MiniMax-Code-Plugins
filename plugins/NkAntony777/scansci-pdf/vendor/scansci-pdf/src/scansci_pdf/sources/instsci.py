@@ -175,28 +175,22 @@ def _load_cookies(config: dict[str, Any]) -> requests.cookies.RequestsCookieJar:
         else:
             return jar
     try:
-        cookies = json.loads(path.read_text(encoding="utf-8"))
-        for c in cookies:
-            name = c.get("name")
-            value = c.get("value")
-            if name and value is not None:
-                kwargs: dict[str, Any] = {}
-                if c.get("domain"):
-                    kwargs["domain"] = c["domain"]
-                if c.get("path"):
-                    kwargs["path"] = c["path"]
-                jar.set(name, value, **kwargs)
+        from ..session_store import CookieStore
+        target = config.get("instsci_base_url") or config.get("vpnsci_base_url") or ""
+        with requests.Session() as session:
+            CookieStore(path).load_into(session, target_url=target)
+            jar.update(session.cookies)
     except Exception:
         pass
     return jar
 
 
-def _save_cookies(cookies: list[dict], config: dict[str, Any]) -> None:
+def _save_cookies(cookies: list[dict], config: dict[str, Any], target_url: str = "") -> None:
     path = instsci_cookie_path(config)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    from ..security import secure_write_text
-    secure_write_text(path, json.dumps(cookies, indent=2, ensure_ascii=False))
-    log.info(f"   [WebVPN] Saved {len(cookies)} cookies")
+    from ..session_store import CookieStore
+    target = target_url or config.get("instsci_base_url") or config.get("vpnsci_base_url") or ""
+    scoped = CookieStore(path).save(cookies, target_url=target)
+    log.info(f"   [WebVPN] Saved {len(scoped)} cookies")
 
 
 def session_status(config: dict[str, Any]) -> str:
@@ -609,7 +603,8 @@ def _try_instsci_socks5(doi: str, output_path: Path, config: dict[str, Any]) -> 
     """
     _instsci_rate_limit()
     socks5 = _get_socks5_proxy(config)
-    log.info(f"   [CampusConnector] Trying {doi} via {socks5}")
+    from ..config import mask_config_value
+    log.info("   [CampusConnector] Trying %s via %s", doi, mask_config_value("network_proxy", socks5))
 
     # Step 1: Resolve DOI to publisher URL
     resolved_url = _resolve_doi_url(doi)
@@ -753,21 +748,13 @@ def _try_instsci_browser(doi: str, output_path: Path, config: dict[str, Any]) ->
             try:
                 saved_cookies = json.loads(cookie_path.read_text(encoding="utf-8"))
                 if saved_cookies:
-                    # Convert to Playwright cookie format
-                    pw_cookies = []
-                    for c in saved_cookies:
-                        pw_c = {
-                            "name": c["name"],
-                            "value": c["value"],
-                            "domain": c.get("domain", ""),
-                            "path": c.get("path", "/"),
-                        }
-                        if c.get("secure"):
-                            pw_c["secure"] = True
-                        if c.get("httpOnly"):
-                            pw_c["httpOnly"] = True
-                        if pw_c["domain"]:
-                            pw_cookies.append(pw_c)
+                    # Shared credential policy: scope to the configured WebVPN
+                    # base and normalize the security attributes. A pre-D64-05
+                    # four-field record is dropped here (re-login once) rather
+                    # than restored as a weaker cookie.
+                    from ..browser_cookies import credentials_for_target
+                    target = config.get("instsci_base_url") or config.get("vpnsci_base_url") or ""
+                    pw_cookies = credentials_for_target(saved_cookies, config, target) if target else []
                     if pw_cookies:
                         context.add_cookies(pw_cookies)
                         log.info(f"   [WebVPN-Browser] Restored {len(pw_cookies)} cookies")
@@ -833,25 +820,17 @@ def _try_instsci_browser(doi: str, output_path: Path, config: dict[str, Any]) ->
                     # Save cookies immediately after login
                     try:
                         cookies = context.cookies()
+                        from ..browser_cookies import cookies_to_netscape, scoped_cookies
                         from ..config import DATA_DIR
                         cache_dir = Path(config.get("cache_dir", str(DATA_DIR / "cache")))
                         cache_dir.mkdir(parents=True, exist_ok=True)
-                        cookie_data = [
-                            {"name": c["name"], "value": c["value"], "domain": c.get("domain", ""), "path": c.get("path", "/")}
-                            for c in cookies
-                        ]
+                        # Scoped to the gateway the user actually authenticated
+                        # against, with security attributes intact.
+                        cookies = scoped_cookies(cookies, url_now)
                         from ..security import secure_write_text
                         secure_write_text(cache_dir / 'instsci-cookies.json',
-                            json.dumps(cookie_data, indent=2, ensure_ascii=False))
-                        lines = ["# Netscape HTTP Cookie File\n"]
-                        for c in cookies:
-                            d = c.get("domain", "")
-                            flag = "TRUE" if d.startswith(".") else "FALSE"
-                            p = c.get("path", "/")
-                            sec = "TRUE" if c.get("secure") else "FALSE"
-                            exp = str(int(c.get("expires", 0)))
-                            lines.append(f"{d}\t{flag}\t{p}\t{sec}\t{exp}\t{c['name']}\t{c['value']}\n")
-                        secure_write_text(cache_dir / 'instsci-cookies.txt', ''.join(lines))
+                            json.dumps(cookies, indent=2, ensure_ascii=False))
+                        secure_write_text(cache_dir / 'instsci-cookies.txt', cookies_to_netscape(cookies))
                         log.info(f"   [WebVPN-Browser] Saved {len(cookies)} cookies")
                     except Exception as e:
                         log.info(f"   [WebVPN-Browser] Cookie save warning: {e}")

@@ -49,25 +49,25 @@ class CombineTests(unittest.TestCase):
 
 class KeyValidProbeTests(unittest.TestCase):
     def test_valid_key(self):
-        with patch.object(ec.requests, "get") as get:
+        with patch.object(ec, "confined_request") as get:
             get.return_value.status_code = 200
             code, verdict = ec._probe_key_valid("K", None)
         self.assertEqual(verdict, ec.KEY_VALID)
 
     def test_quota_means_authenticated(self):
-        with patch.object(ec.requests, "get") as get:
+        with patch.object(ec, "confined_request") as get:
             get.return_value.status_code = 429
             code, verdict = ec._probe_key_valid("K", None)
         self.assertEqual(verdict, ec.KEY_VALID)
 
     def test_invalid_key(self):
-        with patch.object(ec.requests, "get") as get:
+        with patch.object(ec, "confined_request") as get:
             get.return_value.status_code = 401
             code, verdict = ec._probe_key_valid("BAD", None)
         self.assertEqual(verdict, ec.KEY_INVALID)
 
     def test_network_error(self):
-        with patch.object(ec.requests, "get", side_effect=TimeoutError):
+        with patch.object(ec, "confined_request", side_effect=TimeoutError):
             code, verdict = ec._probe_key_valid("K", None)
         self.assertEqual(verdict, f"{ec.NETWORK}(TimeoutError)")
         self.assertEqual(code, 0)
