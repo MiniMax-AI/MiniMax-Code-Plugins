@@ -15,7 +15,7 @@ jobs:
         python: ['3.11', '3.13']
         include:
           - os: ubuntu-latest
-            browser: /opt/google/chrome/chrome
+            browser: /usr/bin/google-chrome
           - os: windows-latest
             browser: 'C:\Program Files\Google\Chrome\Application\chrome.exe'
     runs-on: ${{ matrix.os }}

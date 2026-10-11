@@ -33,7 +33,12 @@ class TreeKillTests(unittest.TestCase):
         proc = Mock()
         proc.poll.return_value = None
         proc.pid = 4242
-        with patch("scansci_pdf.browser_engine.subprocess.run") as run:
+        # The branch must be chosen by the patched os.name, never by the host
+        # platform: on a Linux runner the real os.name is "posix" and the
+        # taskkill path (and this assertion) would never run.
+        with patch("scansci_pdf.browser_engine.os") as mock_os, \
+             patch("scansci_pdf.browser_engine.subprocess.run") as run:
+            mock_os.name = "nt"
             be._tree_kill(proc)
         args = run.call_args[0][0]
         self.assertEqual(args[:3], ["taskkill", "/F", "/T"])

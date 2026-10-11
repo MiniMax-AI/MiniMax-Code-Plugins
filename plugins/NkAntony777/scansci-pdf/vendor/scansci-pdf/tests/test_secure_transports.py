@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import socket
 import subprocess
 import tarfile
@@ -121,7 +122,10 @@ def test_browser_proxy_auth_and_private_destinations():
 
 def test_real_chromium_guard_blocks_redirect_and_local_bypass(tmp_path):
     playwright = pytest.importorskip('playwright.sync_api')
-    chrome = Path('C:/Program Files/Google/Chrome/Application/chrome.exe')
+    # SCANSCI_AUDIT_BROWSER is how CI points at its installed browser; the
+    # Windows default keeps the pre-CI behaviour on developer machines.
+    chrome = Path(os.environ.get('SCANSCI_AUDIT_BROWSER')
+                  or 'C:/Program Files/Google/Chrome/Application/chrome.exe')
     if not chrome.is_file():
         pytest.skip('local Chrome unavailable; run separately with installed Chromium')
     import ssl
@@ -252,6 +256,19 @@ def launcher(staged_package, tmp_path_factory):
     return _run
 
 
+_ANSI_CSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def _plain(text: str) -> str:
+    """Assertion view of console output: no ANSI styling, no line wrapping.
+
+    CI runners render the Typer help at 80 columns, so any expectation about
+    a command's help text must be checked against the wrapped-and-styled
+    output normalized back to one space-separated line, not the raw bytes.
+    """
+    return " ".join(_ANSI_CSI.sub("", text).split())
+
+
 def test_launcher_verify_passes_from_an_isolated_workspace(launcher):
     result = launcher("--verify")
     assert result.returncode == 0, result.stdout + result.stderr
@@ -265,8 +282,9 @@ def test_cli_module_entry_runs_the_real_command_surface(launcher):
     "No module named scansci_pdf.cli.__main__"."""
     result = launcher("--module", "scansci_pdf.cli", "--help")
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "Usage: python -m scansci_pdf.cli" in result.stdout
-    assert "session-broker-status" in result.stdout
+    plain = _plain(result.stdout)
+    assert "Usage: python -m scansci_pdf.cli" in plain
+    assert "session-broker-status" in plain
     assert "No module named" not in result.stderr
 
 
@@ -274,8 +292,9 @@ def test_cli_module_entry_reaches_the_real_broker_command(launcher):
     """The allowlisted module must expose the target the broker actually spawns."""
     result = launcher("--module", "scansci_pdf.cli", "session-broker-run", "--help")
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "Run the long-lived broker loop" in result.stdout
-    assert "--publisher" in result.stdout
+    plain = _plain(result.stdout)
+    assert "Run the long-lived broker loop" in plain
+    assert "--publisher" in plain
     assert "Traceback" not in result.stderr
 
 
@@ -383,7 +402,7 @@ def test_malicious_pyc_is_ignored(launcher, staged_package):
         assert result.returncode == 0, result.stdout + result.stderr
         assert marker not in result.stdout + result.stderr
         # The verified .py ran, not the cache.
-        assert "Usage: python -m scansci_pdf.cli" in result.stdout
+        assert "Usage: python -m scansci_pdf.cli" in _plain(result.stdout)
     finally:
         pyc.unlink()
         if not any(cache.iterdir()):
@@ -458,10 +477,10 @@ def test_stdio_handshake_still_passes(staged_package, tmp_path_factory):
             json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}),
             json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
         ]) + "\n"
-        process.stdin.write(payload.encode("utf-8"))
-        process.stdin.flush()
-        process.stdin.close()
-        out, _err = process.communicate(timeout=300)
+        # communicate(input=...) writes the payload, flushes and closes stdin
+        # itself. Closing stdin by hand first makes POSIX communicate() flush
+        # an already-closed file and raise ValueError.
+        out, _err = process.communicate(input=payload.encode("utf-8"), timeout=300)
     finally:
         if process.poll() is None:
             process.kill()
