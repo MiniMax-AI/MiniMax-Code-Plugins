@@ -477,16 +477,37 @@ def test_stdio_handshake_still_passes(staged_package, tmp_path_factory):
             json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}),
             json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
         ]) + "\n"
-        # communicate(input=...) writes the payload, flushes and closes stdin
-        # itself. Closing stdin by hand first makes POSIX communicate() flush
-        # an already-closed file and raise ValueError.
-        out, _err = process.communicate(input=payload.encode("utf-8"), timeout=300)
+        # A real client waits for responses before closing stdin: closing it
+        # right after the write races the server's EOF shutdown against the
+        # tools/list answer on fast hosts (the initialize response arrives,
+        # the tools response is lost). EOF-exit is covered separately by
+        # tests/test_mcp_lifecycle.py.
+        process.stdin.write(payload.encode("utf-8"))
+        process.stdin.flush()
+        collected: list[bytes] = []
+
+        def _drain() -> None:
+            for line in iter(process.stdout.readline, b""):
+                collected.append(line)
+
+        reader = threading.Thread(target=_drain, daemon=True)
+        reader.start()
+        deadline = time.monotonic() + 240
+        while time.monotonic() < deadline:
+            if any(b'"id":2,' in line or b'"id": 2,' in line for line in collected):
+                break
+            if process.poll() is not None:
+                break
+            time.sleep(0.05)
+        process.stdin.close()
+        out, _err = process.communicate(timeout=120)
+        reader.join(5)
     finally:
         if process.poll() is None:
             process.kill()
             process.communicate()
 
-    text = out.decode("utf-8", "replace")
+    text = b"".join(collected).decode("utf-8", "replace") + (out or b"").decode("utf-8", "replace")
     messages = [json.loads(line) for line in text.splitlines() if line.strip().startswith("{")]
     by_id = {message.get("id"): message for message in messages}
     assert 1 in by_id and "result" in by_id[1], text[:800]

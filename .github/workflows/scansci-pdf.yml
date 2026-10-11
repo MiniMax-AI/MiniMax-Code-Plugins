@@ -15,7 +15,9 @@ jobs:
         python: ['3.11', '3.13']
         include:
           - os: ubuntu-latest
-            browser: /usr/bin/google-chrome
+            # The real binary, not the /usr/bin/google-chrome symlink: the
+            # provenance gate refuses symlinks by design.
+            browser: /opt/google/chrome/chrome
           - os: windows-latest
             browser: 'C:\Program Files\Google\Chrome\Application\chrome.exe'
     runs-on: ${{ matrix.os }}
