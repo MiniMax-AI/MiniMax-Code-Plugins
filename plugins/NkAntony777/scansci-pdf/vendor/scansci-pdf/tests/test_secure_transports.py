@@ -479,19 +479,24 @@ def test_stdio_handshake_still_passes(staged_package, tmp_path_factory):
         ]) + "\n"
         # A real client waits for responses before closing stdin: closing it
         # right after the write races the server's EOF shutdown against the
-        # tools/list answer on fast hosts (the initialize response arrives,
-        # the tools response is lost). EOF-exit is covered separately by
-        # tests/test_mcp_lifecycle.py.
+        # tools/list answer on fast hosts. EOF-exit is covered separately by
+        # tests/test_mcp_lifecycle.py. Both pipes are drained by threads and
+        # the process is awaited with wait(): on POSIX, communicate() flushes
+        # self.stdin unconditionally, which raises "flush of closed file"
+        # once stdin has been closed here.
         process.stdin.write(payload.encode("utf-8"))
         process.stdin.flush()
         collected: list[bytes] = []
 
-        def _drain() -> None:
-            for line in iter(process.stdout.readline, b""):
-                collected.append(line)
+        def _drain(stream, sink: list) -> None:
+            for line in iter(stream.readline, b""):
+                sink.append(line)
 
-        reader = threading.Thread(target=_drain, daemon=True)
-        reader.start()
+        out_thread = threading.Thread(target=_drain, args=(process.stdout, collected), daemon=True)
+        err_lines: list[bytes] = []
+        err_thread = threading.Thread(target=_drain, args=(process.stderr, err_lines), daemon=True)
+        out_thread.start()
+        err_thread.start()
         deadline = time.monotonic() + 240
         while time.monotonic() < deadline:
             if any(b'"id":2,' in line or b'"id": 2,' in line for line in collected):
@@ -500,14 +505,15 @@ def test_stdio_handshake_still_passes(staged_package, tmp_path_factory):
                 break
             time.sleep(0.05)
         process.stdin.close()
-        out, _err = process.communicate(timeout=120)
-        reader.join(5)
+        process.wait(timeout=120)
+        out_thread.join(5)
+        err_thread.join(5)
     finally:
         if process.poll() is None:
             process.kill()
-            process.communicate()
+            process.wait(timeout=30)
 
-    text = b"".join(collected).decode("utf-8", "replace") + (out or b"").decode("utf-8", "replace")
+    text = b"".join(collected).decode("utf-8", "replace")
     messages = [json.loads(line) for line in text.splitlines() if line.strip().startswith("{")]
     by_id = {message.get("id"): message for message in messages}
     assert 1 in by_id and "result" in by_id[1], text[:800]
