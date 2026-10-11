@@ -49,7 +49,7 @@ export class Store {
     }
     }catch(error){this.db?.close();this.releaseLock();throw error;}
   }
-  transaction(fn) {if(this.txDepth)return fn();this.reserveEventSequences();this.db.exec('BEGIN IMMEDIATE');this.txDepth=1;this.txVolatile=[];
+  transaction(fn) {if(this.txDepth)return fn();this.recover('事务');this.reserveEventSequences();this.db.exec('BEGIN IMMEDIATE');this.txDepth=1;this.txVolatile=[];
     try{const r=fn();this.db.exec('COMMIT');return r;}
     catch(e){
       // Whether the batch is durable must be read from SQLite, never inferred
@@ -82,12 +82,22 @@ export class Store {
     this.volatileBuffer=[...restored.values()].sort((a,b)=>a.body.seq-b.body.seq);
     if(this.volatileBuffer.length)this.scheduleVolatileFlush();
   }
+  // Single connection-recovery gate for every read and write path. When both
+  // COMMIT and ROLLBACK fail, the SQLite transaction stays open but the finally
+  // block has already cleared txDepth, so the connection looks idle while
+  // holding uncommitted rows. The next plain write would join that transaction
+  // and return success for rows a later ROLLBACK discards, and a read would
+  // publish them as durable. recover() is therefore called before every normal
+  // path: it rolls a leftover transaction back, and if even that fails it
+  // rejects the operation loudly instead of acknowledging a write it cannot
+  // guarantee. txDepth>0 means the open transaction is the current one.
+  recover(op='操作'){if(!this.db||this.txDepth||!this.db.isTransaction)return;
+    try{this.db.exec('ROLLBACK');}
+    catch(error){throw new Error(`状态库残留事务无法回滚，本次${op}已拒绝以免丢失已确认的数据，请重启服务后重试：${error.message}`);}}
   reserveEventSequences() {
-    // txDepth 0 with a SQLite transaction still open means an earlier COMMIT
-    // and ROLLBACK both failed. The queued batch is still in memory; roll the
-    // leftover transaction back so the next BEGIN can persist it. A rollback
-    // that itself fails propagates, and the caller keeps the batch queued.
-    if(!this.txDepth&&this.db.isTransaction)this.db.exec('ROLLBACK');
+    // A residual open transaction must end before a new BEGIN or the next
+    // sequence read would run inside it; recover() rolls it back or rejects.
+    this.recover('事件序号预留');
     const persisted=Number(this.db.prepare("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='events'),0) AS seq").get().seq);
     this.nextEventSequence=Math.max(this.nextEventSequence,persisted);
     if(this.nextEventSequence<this.eventSequenceLimit)return;
@@ -96,31 +106,34 @@ export class Store {
     if(this.txDepth)throw new Error('Event sequence lease exhausted inside a transaction');
     const limit=this.nextEventSequence+1024;
     if(!Number.isSafeInteger(limit))throw new Error('Event sequence exhausted');
-    this.db.exec('BEGIN IMMEDIATE');
+    // This lease write is itself a transaction: txDepth marks it so recover()
+    // inside saveSetting() treats it as the current one and never rolls it back.
+    this.db.exec('BEGIN IMMEDIATE');this.txDepth=1;
     try{this.saveSetting('event_sequence_lease',limit);this.db.exec('COMMIT');}
-    catch(error){this.db.exec('ROLLBACK');throw error;}
+    catch(error){try{this.db.exec('ROLLBACK');}catch{}throw error;}
+    finally{this.txDepth=0;}
     this.eventSequenceLimit=limit;
   }
   allocateEventSequence() {this.reserveEventSequences();return ++this.nextEventSequence;}
-  templates() {return this.db.prepare('SELECT body FROM templates ORDER BY rowid DESC').all().map(r=>JSON.parse(r.body));}
-  template(id) {const r=this.db.prepare('SELECT body FROM templates WHERE id=?').get(id);return r?JSON.parse(r.body):null;}
-  saveTemplate(value) {this.db.prepare('INSERT INTO templates VALUES(?,?)').run(value.id,JSON.stringify(value));}
-  deleteTemplate(id) {return this.db.prepare('DELETE FROM templates WHERE id=?').run(id).changes>0;}
-  setting(key) {const row=this.db.prepare('SELECT body FROM settings WHERE key=?').get(key);return row?JSON.parse(row.body):undefined;}
-  saveSetting(key,value) {this.db.prepare('INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET body=excluded.body').run(key,JSON.stringify(value));}
-  save(run) {this.db.prepare('INSERT INTO runs VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body').run(run.id,run.requestId,run.requestHash,JSON.stringify(run));}
-  get(id) {const r=this.db.prepare('SELECT body FROM runs WHERE id=?').get(id);return r ? JSON.parse(r.body):null;}
-  byRequest(id) {const r=this.db.prepare('SELECT body FROM runs WHERE requestId=?').get(id);return r ? JSON.parse(r.body):null;}
-  list() {return this.db.prepare("SELECT body FROM runs ORDER BY CASE WHEN json_extract(body,'$.status') IN ('running','queued','stopping','pausing') THEN 0 WHEN json_extract(body,'$.status')='needs_attention' THEN 1 ELSE 2 END, rowid DESC LIMIT 100").all().map(r=>JSON.parse(r.body));}
-  step(runId,id) {const r=this.db.prepare('SELECT body FROM steps WHERE runId=? AND id=?').get(runId,id);return r?JSON.parse(r.body):null;}
-  steps(runId) {return this.db.prepare('SELECT body FROM steps WHERE runId=? ORDER BY rowid').all(runId).map(r=>JSON.parse(r.body));}
+  templates() {this.recover('模板读取');return this.db.prepare('SELECT body FROM templates ORDER BY rowid DESC').all().map(r=>JSON.parse(r.body));}
+  template(id) {this.recover('模板读取');const r=this.db.prepare('SELECT body FROM templates WHERE id=?').get(id);return r?JSON.parse(r.body):null;}
+  saveTemplate(value) {this.recover('模板写入');this.db.prepare('INSERT INTO templates VALUES(?,?)').run(value.id,JSON.stringify(value));}
+  deleteTemplate(id) {this.recover('模板删除');return this.db.prepare('DELETE FROM templates WHERE id=?').run(id).changes>0;}
+  setting(key) {this.recover('设置读取');const row=this.db.prepare('SELECT body FROM settings WHERE key=?').get(key);return row?JSON.parse(row.body):undefined;}
+  saveSetting(key,value) {this.recover('设置写入');this.db.prepare('INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET body=excluded.body').run(key,JSON.stringify(value));}
+  save(run) {this.recover('运行状态写入');this.db.prepare('INSERT INTO runs VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body').run(run.id,run.requestId,run.requestHash,JSON.stringify(run));}
+  get(id) {this.recover('运行状态读取');const r=this.db.prepare('SELECT body FROM runs WHERE id=?').get(id);return r ? JSON.parse(r.body):null;}
+  byRequest(id) {this.recover('运行状态读取');const r=this.db.prepare('SELECT body FROM runs WHERE requestId=?').get(id);return r ? JSON.parse(r.body):null;}
+  list() {this.recover('运行列表读取');return this.db.prepare("SELECT body FROM runs ORDER BY CASE WHEN json_extract(body,'$.status') IN ('running','queued','stopping','pausing') THEN 0 WHEN json_extract(body,'$.status')='needs_attention' THEN 1 ELSE 2 END, rowid DESC LIMIT 100").all().map(r=>JSON.parse(r.body));}
+  step(runId,id) {this.recover('步骤读取');const r=this.db.prepare('SELECT body FROM steps WHERE runId=? AND id=?').get(runId,id);return r?JSON.parse(r.body):null;}
+  steps(runId) {this.recover('步骤读取');return this.db.prepare('SELECT body FROM steps WHERE runId=? ORDER BY rowid').all(runId).map(r=>JSON.parse(r.body));}
   // All match keys (contextHash, lineageHash) are stamped on the step body at
   // creation, so filtering happens in SQL and LIMIT applies after the full match.
   // Rows without the stamped hashes (legacy runs) never match: cross-run reuse is
   // an opt-in feature and older steps are not candidates.
-  findCrossRunReuse({contextHash,requestHash,lineageHash,excludeRunId,limit=20}) {return this.db.prepare("SELECT runId,body AS stepBody FROM steps WHERE runId<>? AND json_extract(body,'$.kind')='agent' AND json_extract(body,'$.status')='succeeded' AND json_extract(body,'$.requestHash')=? AND json_extract(body,'$.contextHash')=? AND json_extract(body,'$.lineageHash')=? ORDER BY rowid DESC LIMIT ?").all(excludeRunId,requestHash,contextHash,lineageHash,limit).map(r=>{const step=JSON.parse(r.stepBody);return {runId:r.runId,stepId:step.id,step};});}
-  saveStep(runId,step) {this.db.prepare('INSERT INTO steps VALUES(?,?,?) ON CONFLICT(runId,id) DO UPDATE SET body=excluded.body').run(runId,step.id,JSON.stringify(step));}
-  repairCandidate(runId,id) {const r=this.db.prepare('SELECT body FROM repair_cache WHERE runId=? AND id=?').get(runId,id);return r?JSON.parse(r.body):null;}
+  findCrossRunReuse({contextHash,requestHash,lineageHash,excludeRunId,limit=20}) {this.recover('复用候选读取');return this.db.prepare("SELECT runId,body AS stepBody FROM steps WHERE runId<>? AND json_extract(body,'$.kind')='agent' AND json_extract(body,'$.status')='succeeded' AND json_extract(body,'$.requestHash')=? AND json_extract(body,'$.contextHash')=? AND json_extract(body,'$.lineageHash')=? ORDER BY rowid DESC LIMIT ?").all(excludeRunId,requestHash,contextHash,lineageHash,limit).map(r=>{const step=JSON.parse(r.stepBody);return {runId:r.runId,stepId:step.id,step};});}
+  saveStep(runId,step) {this.recover('步骤写入');this.db.prepare('INSERT INTO steps VALUES(?,?,?) ON CONFLICT(runId,id) DO UPDATE SET body=excluded.body').run(runId,step.id,JSON.stringify(step));}
+  repairCandidate(runId,id) {this.recover('修复候选读取');const r=this.db.prepare('SELECT body FROM repair_cache WHERE runId=? AND id=?').get(runId,id);return r?JSON.parse(r.body):null;}
   saveRepairCandidate(runId,step) {this.transaction(()=>{const rowid=Number(this.db.prepare('INSERT INTO repair_cache VALUES(?,?,?)').run(runId,step.id,JSON.stringify(step)).lastInsertRowid);this.chainAdvance('repair','repair','SELECT rowid AS pos,runId,id,body FROM repair_cache WHERE rowid>? AND rowid<=? ORDER BY rowid',rowid,r=>`${r.runId}/${r.id}`);});}
   event(runId,type,data={}) {const event={...data,type,time:Date.now()};
     if(this.volatileTypes.has(type))return this.stageVolatile(runId,event);
@@ -161,9 +174,14 @@ export class Store {
       throw error;}
   }
   events(runId,after=0,limit=150) {
+    // A leftover transaction would make the table read return its uncommitted
+    // rows, duplicating a seq the buffer still owes a write ([1,2,2] views).
+    // recover() ends it first, so the table only holds committed rows and the
+    // merge below stays a true union of durable and not-yet-flushed events.
+    this.recover('事件读取');
     const persisted=this.db.prepare('SELECT seq,body FROM events WHERE runId=? AND seq>? ORDER BY seq LIMIT ?').all(runId,after,limit).map(e=>({seq:e.seq,...JSON.parse(e.body)}));
     const buffered=this.volatileBuffer.filter(e=>e.runId===runId&&e.body.seq>after).map(e=>e.body);
-    return [...persisted,...buffered].sort((a,b)=>a.seq-b.seq).slice(0,limit);
+    return [...new Map([...persisted,...buffered].map(e=>[e.seq,e])).values()].sort((a,b)=>a.seq-b.seq).slice(0,limit);
   }
   rowHash(prev,kind,key,body) {return createHash('sha256').update(`${prev}:${kind}:${key}:${body}`).digest('hex');}
   // Bulk adoption of pre-existing rows is an initial-creation behavior only: it
@@ -174,8 +192,11 @@ export class Store {
   chainAdvance(kind,surface,sql,newUpto,keyOf) {const tail=this.setting(`integrity_${surface}`);let prev=tail?.head??'0'.repeat(64);
    const range=tail?`SELECT * FROM (${sql}) WHERE pos=${newUpto}`:sql;
    for(const r of this.db.prepare(range).all(tail?.upto??0,newUpto)){const k=keyOf(r);prev=this.rowHash(prev,kind,k,r.body);this.db.prepare('INSERT OR REPLACE INTO integrity_rows VALUES(?,?,?,?)').run(surface,r.pos,k,prev);}this.saveSetting(`integrity_${surface}`,{head:prev,upto:newUpto});}
-  integrityHeads() {return {events:this.setting('integrity_events')??null,repair:this.setting('integrity_repair')??null};}
+  integrityHeads() {this.recover('完整性读取');return {events:this.setting('integrity_events')??null,repair:this.setting('integrity_repair')??null};}
   verifyIntegrity() {
+    // Verification is a durability verdict, so it must not run against the
+    // uncommitted view a leftover transaction would expose as real state.
+    this.recover('完整性校验');
     // Each ledger link is re-checked against the live row's own identity columns:
     // the key is re-derived from the row and must equal the recorded key before that
     // recorded key may take part in any digest recomputation, so re-attributing a
@@ -207,6 +228,10 @@ export class Store {
     if(this.closing)return;this.closing=true;
     const errors=[];
     try{this.flushVolatile();}catch(error){errors.push(error);}
+    // db.close() silently discards an open transaction, so a residual one must
+    // end first: closing here would drop acknowledged-but-uncommitted rows
+    // without ever reporting an error to the caller.
+    try{this.recover('关闭');}catch(error){errors.push(error);}
     try{this.db.close();}catch(error){errors.push(error);}
     try{this.releaseLock();}catch(error){errors.push(error);}
     if(errors.length===1)throw errors[0];

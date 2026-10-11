@@ -21,6 +21,13 @@ export const TOOLS=[
  {name:'workflow_resume',description:'原脚本与原输入恢复，复用已成功节点。可调整 maxSteps/stepTimeoutMs/runTimeoutMs/maxCalls 后重试，成功节点复用，失败节点从头执行。异常退出需要用户先确认旧 Agent 已停止。',inputSchema:obj({...id,confirmStopped:{type:'boolean'},...LIMIT_SCHEMAS,maxCalls:{type:'integer',minimum:1,maximum:100}},['runId'])},
  {name:'workflow_dashboard',description:'返回可收藏的本机可视化面板地址，无需 token。服务独立于聊天会话，重启后复用端口。',inputSchema:obj({})}
 ];
+export function parseEventCursor(value){
+ if(value===undefined||value===null||value==='')return 0;
+ check(typeof value==='number'||typeof value==='string','等待参数无效');
+ const numeric=typeof value==='number'?value:Number(value);
+ check(Number.isSafeInteger(numeric)&&numeric>=0,'等待参数无效');
+ return numeric;
+}
 export function summary(snapshot){return {...snapshot,script:undefined,input:undefined,fingerprints:undefined,requestHash:undefined,steps:snapshot.steps?.map(({prompt,input,output,rawOutput,requestHash,...s})=>s),result:undefined};}
 export async function waitEvents(engine,runId,after=0,timeout=25000){engine.snapshot(runId);const get=()=>engine.store.events(runId,after,100);let events=get();if(!events.length&&engine.active.has(runId)&&timeout>0)await new Promise(resolve=>{const done=()=>{clearTimeout(timer);engine.off('change',listener);resolve();};const listener=e=>{if(e.runId===runId)done();};const timer=setTimeout(done,timeout);engine.on('change',listener);if(get().length)done();});events=get();return {events,nextSequence:events.at(-1)?.seq??after,status:engine.store.get(runId).status};}
 export function createToolHandler(engine,getURL){return async(name,args={})=>{
@@ -31,7 +38,7 @@ export function createToolHandler(engine,getURL){return async(name,args={})=>{
  case 'workflow_repair':return summary(await engine.repair(args.runId,args));
  case 'workflow_status':if(args.runId)return summary(engine.snapshot(args.runId));if(args.verifyIntegrity===true)return {runs:engine.store.list().map(r=>summary(r)),integrityHeads:engine.store.integrityHeads(),integrity:engine.store.verifyIntegrity()};return engine.store.list().map(r=>summary(r));
  case 'workflow_results':{const r=engine.snapshot(args.runId);const offset=args.offset??0,limit=args.limit??10;check(Number.isInteger(offset)&&offset>=0&&Number.isInteger(limit)&&limit>=1&&limit<=20,'分页参数无效');return {status:r.status,updatedAt:r.updatedAt,...(args.includeDefinition?{definition:templateDefinition(r)}:{}),result:r.result,steps:r.steps.slice(offset,offset+limit).map(({prompt,input,...s})=>s),nextOffset:offset+limit<r.steps.length?offset+limit:null};}
- case 'workflow_wait':{const t=args.timeoutMs??25000,a=args.afterSequence??0;check(Number.isSafeInteger(t)&&t>=0&&t<=25000&&Number.isSafeInteger(a)&&a>=0,'等待参数无效');return waitEvents(engine,args.runId,a,t);}
+ case 'workflow_wait':{const t=args.timeoutMs??25000,a=parseEventCursor(args.afterSequence);check(Number.isSafeInteger(t)&&t>=0&&t<=25000,'等待参数无效');return waitEvents(engine,args.runId,a,t);}
  case 'workflow_cancel':return summary(await engine.stop(args.runId));
  case 'workflow_pause':return summary(await engine.stop(args.runId,'paused'));
  case 'workflow_resume':return summary(await engine.resume(args.runId,args));

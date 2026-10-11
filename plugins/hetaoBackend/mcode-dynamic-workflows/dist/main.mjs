@@ -7775,6 +7775,7 @@ var Store = class {
   }
   transaction(fn) {
     if (this.txDepth) return fn();
+    this.recover("\u4E8B\u52A1");
     this.reserveEventSequences();
     this.db.exec("BEGIN IMMEDIATE");
     this.txDepth = 1;
@@ -7812,8 +7813,25 @@ var Store = class {
     this.volatileBuffer = [...restored.values()].sort((a, b2) => a.body.seq - b2.body.seq);
     if (this.volatileBuffer.length) this.scheduleVolatileFlush();
   }
+  // Single connection-recovery gate for every read and write path. When both
+  // COMMIT and ROLLBACK fail, the SQLite transaction stays open but the finally
+  // block has already cleared txDepth, so the connection looks idle while
+  // holding uncommitted rows. The next plain write would join that transaction
+  // and return success for rows a later ROLLBACK discards, and a read would
+  // publish them as durable. recover() is therefore called before every normal
+  // path: it rolls a leftover transaction back, and if even that fails it
+  // rejects the operation loudly instead of acknowledging a write it cannot
+  // guarantee. txDepth>0 means the open transaction is the current one.
+  recover(op = "\u64CD\u4F5C") {
+    if (!this.db || this.txDepth || !this.db.isTransaction) return;
+    try {
+      this.db.exec("ROLLBACK");
+    } catch (error2) {
+      throw new Error(`\u72B6\u6001\u5E93\u6B8B\u7559\u4E8B\u52A1\u65E0\u6CD5\u56DE\u6EDA\uFF0C\u672C\u6B21${op}\u5DF2\u62D2\u7EDD\u4EE5\u514D\u4E22\u5931\u5DF2\u786E\u8BA4\u7684\u6570\u636E\uFF0C\u8BF7\u91CD\u542F\u670D\u52A1\u540E\u91CD\u8BD5\uFF1A${error2.message}`);
+    }
+  }
   reserveEventSequences() {
-    if (!this.txDepth && this.db.isTransaction) this.db.exec("ROLLBACK");
+    this.recover("\u4E8B\u4EF6\u5E8F\u53F7\u9884\u7559");
     const persisted = Number(this.db.prepare("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='events'),0) AS seq").get().seq);
     this.nextEventSequence = Math.max(this.nextEventSequence, persisted);
     if (this.nextEventSequence < this.eventSequenceLimit) return;
@@ -7821,12 +7839,18 @@ var Store = class {
     const limit = this.nextEventSequence + 1024;
     if (!Number.isSafeInteger(limit)) throw new Error("Event sequence exhausted");
     this.db.exec("BEGIN IMMEDIATE");
+    this.txDepth = 1;
     try {
       this.saveSetting("event_sequence_lease", limit);
       this.db.exec("COMMIT");
     } catch (error2) {
-      this.db.exec("ROLLBACK");
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+      }
       throw error2;
+    } finally {
+      this.txDepth = 0;
     }
     this.eventSequenceLimit = limit;
   }
@@ -7835,44 +7859,56 @@ var Store = class {
     return ++this.nextEventSequence;
   }
   templates() {
+    this.recover("\u6A21\u677F\u8BFB\u53D6");
     return this.db.prepare("SELECT body FROM templates ORDER BY rowid DESC").all().map((r) => JSON.parse(r.body));
   }
   template(id2) {
+    this.recover("\u6A21\u677F\u8BFB\u53D6");
     const r = this.db.prepare("SELECT body FROM templates WHERE id=?").get(id2);
     return r ? JSON.parse(r.body) : null;
   }
   saveTemplate(value) {
+    this.recover("\u6A21\u677F\u5199\u5165");
     this.db.prepare("INSERT INTO templates VALUES(?,?)").run(value.id, JSON.stringify(value));
   }
   deleteTemplate(id2) {
+    this.recover("\u6A21\u677F\u5220\u9664");
     return this.db.prepare("DELETE FROM templates WHERE id=?").run(id2).changes > 0;
   }
   setting(key) {
+    this.recover("\u8BBE\u7F6E\u8BFB\u53D6");
     const row = this.db.prepare("SELECT body FROM settings WHERE key=?").get(key);
     return row ? JSON.parse(row.body) : void 0;
   }
   saveSetting(key, value) {
+    this.recover("\u8BBE\u7F6E\u5199\u5165");
     this.db.prepare("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET body=excluded.body").run(key, JSON.stringify(value));
   }
   save(run) {
+    this.recover("\u8FD0\u884C\u72B6\u6001\u5199\u5165");
     this.db.prepare("INSERT INTO runs VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body").run(run.id, run.requestId, run.requestHash, JSON.stringify(run));
   }
   get(id2) {
+    this.recover("\u8FD0\u884C\u72B6\u6001\u8BFB\u53D6");
     const r = this.db.prepare("SELECT body FROM runs WHERE id=?").get(id2);
     return r ? JSON.parse(r.body) : null;
   }
   byRequest(id2) {
+    this.recover("\u8FD0\u884C\u72B6\u6001\u8BFB\u53D6");
     const r = this.db.prepare("SELECT body FROM runs WHERE requestId=?").get(id2);
     return r ? JSON.parse(r.body) : null;
   }
   list() {
+    this.recover("\u8FD0\u884C\u5217\u8868\u8BFB\u53D6");
     return this.db.prepare("SELECT body FROM runs ORDER BY CASE WHEN json_extract(body,'$.status') IN ('running','queued','stopping','pausing') THEN 0 WHEN json_extract(body,'$.status')='needs_attention' THEN 1 ELSE 2 END, rowid DESC LIMIT 100").all().map((r) => JSON.parse(r.body));
   }
   step(runId, id2) {
+    this.recover("\u6B65\u9AA4\u8BFB\u53D6");
     const r = this.db.prepare("SELECT body FROM steps WHERE runId=? AND id=?").get(runId, id2);
     return r ? JSON.parse(r.body) : null;
   }
   steps(runId) {
+    this.recover("\u6B65\u9AA4\u8BFB\u53D6");
     return this.db.prepare("SELECT body FROM steps WHERE runId=? ORDER BY rowid").all(runId).map((r) => JSON.parse(r.body));
   }
   // All match keys (contextHash, lineageHash) are stamped on the step body at
@@ -7880,15 +7916,18 @@ var Store = class {
   // Rows without the stamped hashes (legacy runs) never match: cross-run reuse is
   // an opt-in feature and older steps are not candidates.
   findCrossRunReuse({ contextHash, requestHash, lineageHash, excludeRunId, limit = 20 }) {
+    this.recover("\u590D\u7528\u5019\u9009\u8BFB\u53D6");
     return this.db.prepare("SELECT runId,body AS stepBody FROM steps WHERE runId<>? AND json_extract(body,'$.kind')='agent' AND json_extract(body,'$.status')='succeeded' AND json_extract(body,'$.requestHash')=? AND json_extract(body,'$.contextHash')=? AND json_extract(body,'$.lineageHash')=? ORDER BY rowid DESC LIMIT ?").all(excludeRunId, requestHash, contextHash, lineageHash, limit).map((r) => {
       const step = JSON.parse(r.stepBody);
       return { runId: r.runId, stepId: step.id, step };
     });
   }
   saveStep(runId, step) {
+    this.recover("\u6B65\u9AA4\u5199\u5165");
     this.db.prepare("INSERT INTO steps VALUES(?,?,?) ON CONFLICT(runId,id) DO UPDATE SET body=excluded.body").run(runId, step.id, JSON.stringify(step));
   }
   repairCandidate(runId, id2) {
+    this.recover("\u4FEE\u590D\u5019\u9009\u8BFB\u53D6");
     const r = this.db.prepare("SELECT body FROM repair_cache WHERE runId=? AND id=?").get(runId, id2);
     return r ? JSON.parse(r.body) : null;
   }
@@ -7951,9 +7990,10 @@ var Store = class {
     }
   }
   events(runId, after = 0, limit = 150) {
+    this.recover("\u4E8B\u4EF6\u8BFB\u53D6");
     const persisted = this.db.prepare("SELECT seq,body FROM events WHERE runId=? AND seq>? ORDER BY seq LIMIT ?").all(runId, after, limit).map((e) => ({ seq: e.seq, ...JSON.parse(e.body) }));
     const buffered = this.volatileBuffer.filter((e) => e.runId === runId && e.body.seq > after).map((e) => e.body);
-    return [...persisted, ...buffered].sort((a, b2) => a.seq - b2.seq).slice(0, limit);
+    return [...new Map([...persisted, ...buffered].map((e) => [e.seq, e])).values()].sort((a, b2) => a.seq - b2.seq).slice(0, limit);
   }
   rowHash(prev, kind, key, body) {
     return createHash("sha256").update(`${prev}:${kind}:${key}:${body}`).digest("hex");
@@ -7975,9 +8015,11 @@ var Store = class {
     this.saveSetting(`integrity_${surface}`, { head: prev, upto: newUpto });
   }
   integrityHeads() {
+    this.recover("\u5B8C\u6574\u6027\u8BFB\u53D6");
     return { events: this.setting("integrity_events") ?? null, repair: this.setting("integrity_repair") ?? null };
   }
   verifyIntegrity() {
+    this.recover("\u5B8C\u6574\u6027\u6821\u9A8C");
     const genesis = "0".repeat(64);
     const face = (kind, surface, table, posCol, rowSql, keyOf) => {
       const skey = `integrity_${surface}`;
@@ -8025,6 +8067,11 @@ var Store = class {
     const errors = [];
     try {
       this.flushVolatile();
+    } catch (error2) {
+      errors.push(error2);
+    }
+    try {
+      this.recover("\u5173\u95ED");
     } catch (error2) {
       errors.push(error2);
     }
@@ -26683,6 +26730,13 @@ var TOOLS = [
   { name: "workflow_resume", description: "\u539F\u811A\u672C\u4E0E\u539F\u8F93\u5165\u6062\u590D\uFF0C\u590D\u7528\u5DF2\u6210\u529F\u8282\u70B9\u3002\u53EF\u8C03\u6574 maxSteps/stepTimeoutMs/runTimeoutMs/maxCalls \u540E\u91CD\u8BD5\uFF0C\u6210\u529F\u8282\u70B9\u590D\u7528\uFF0C\u5931\u8D25\u8282\u70B9\u4ECE\u5934\u6267\u884C\u3002\u5F02\u5E38\u9000\u51FA\u9700\u8981\u7528\u6237\u5148\u786E\u8BA4\u65E7 Agent \u5DF2\u505C\u6B62\u3002", inputSchema: obj({ ...id, confirmStopped: { type: "boolean" }, ...LIMIT_SCHEMAS, maxCalls: { type: "integer", minimum: 1, maximum: 100 } }, ["runId"]) },
   { name: "workflow_dashboard", description: "\u8FD4\u56DE\u53EF\u6536\u85CF\u7684\u672C\u673A\u53EF\u89C6\u5316\u9762\u677F\u5730\u5740\uFF0C\u65E0\u9700 token\u3002\u670D\u52A1\u72EC\u7ACB\u4E8E\u804A\u5929\u4F1A\u8BDD\uFF0C\u91CD\u542F\u540E\u590D\u7528\u7AEF\u53E3\u3002", inputSchema: obj({}) }
 ];
+function parseEventCursor(value) {
+  if (value === void 0 || value === null || value === "") return 0;
+  check(typeof value === "number" || typeof value === "string", "\u7B49\u5F85\u53C2\u6570\u65E0\u6548");
+  const numeric = typeof value === "number" ? value : Number(value);
+  check(Number.isSafeInteger(numeric) && numeric >= 0, "\u7B49\u5F85\u53C2\u6570\u65E0\u6548");
+  return numeric;
+}
 function summary(snapshot) {
   return { ...snapshot, script: void 0, input: void 0, fingerprints: void 0, requestHash: void 0, steps: snapshot.steps?.map(({ prompt, input, output, rawOutput, requestHash, ...s }) => s), result: void 0 };
 }
@@ -26728,8 +26782,8 @@ function createToolHandler(engine, getURL) {
         return { status: r.status, updatedAt: r.updatedAt, ...args.includeDefinition ? { definition: templateDefinition(r) } : {}, result: r.result, steps: r.steps.slice(offset2, offset2 + limit).map(({ prompt, input, ...s }) => s), nextOffset: offset2 + limit < r.steps.length ? offset2 + limit : null };
       }
       case "workflow_wait": {
-        const t = args.timeoutMs ?? 25e3, a = args.afterSequence ?? 0;
-        check(Number.isSafeInteger(t) && t >= 0 && t <= 25e3 && Number.isSafeInteger(a) && a >= 0, "\u7B49\u5F85\u53C2\u6570\u65E0\u6548");
+        const t = args.timeoutMs ?? 25e3, a = parseEventCursor(args.afterSequence);
+        check(Number.isSafeInteger(t) && t >= 0 && t <= 25e3, "\u7B49\u5F85\u53C2\u6570\u65E0\u6548");
         return waitEvents(engine, args.runId, a, t);
       }
       case "workflow_cancel":
@@ -26794,7 +26848,7 @@ async function startHTTP(engine, { port = 0, webRoot = new URL("../web/", import
         if (req.method === "GET" && url.pathname === "/api/runs") return json(engine.store.list().map(({ script, input, result, fingerprints, ...r }) => r));
         const match = url.pathname.match(/^\/api\/runs\/([a-f0-9-]+)(?:\/(wait|pause|cancel|resume|edit|approve|repair))?$/);
         if (match && req.method === "GET") {
-          if (match[2] === "wait") return json(await waitEvents(engine, match[1], Math.max(0, Number(url.searchParams.get("after")) || 0), 2e4));
+          if (match[2] === "wait") return json(await waitEvents(engine, match[1], parseEventCursor(url.searchParams.get("after")), 2e4));
           return json(engine.snapshot(match[1]));
         }
         if (req.method === "POST") {

@@ -80,6 +80,10 @@ The dev-only source checks use the pinned dependencies. They live in `checks/*.c
 
 Verification covers isolated demo execution, approval gating, selective reuse and invalidation, project routing, persistence, parsing, local HTTP protections and UI behavior. Controlled executors are not evidence of live model correctness, account authorization or provider availability. No paid model calls or user research reruns were used for this contribution.
 
+When upgrading, stop each existing project service before starting the updated `dist/main.mjs`; a connected chat may otherwise keep using an older background process. Use the existing service's workspace and data directory with `node dist/main.mjs --stop-service --workspace <absolute-project-path> --data-dir <active-data-directory>`, then reconnect through the updated package and confirm the dashboard address belongs to the new instance.
+
+The store rolls back residual failed transactions before subsequent reads or writes. If recovery still fails, the operation reports an error rather than acknowledging a state that could later disappear. HTTP `after` and MCP `afterSequence` share the same nonnegative safe-integer cursor policy; invalid HTTP cursors return a client error before waiting.
+
 ## MCP tools
 
 `workflow_validate`, `workflow_start`, `workflow_update`, `workflow_repair`, `workflow_status`, `workflow_results`, `workflow_wait`, `workflow_pause`, `workflow_cancel`, `workflow_resume`, `workflow_dashboard`.

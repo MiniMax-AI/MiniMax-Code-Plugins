@@ -7,3 +7,30 @@ test('second MCP connection proxies the existing owner, child workers expose no 
 });
 
 async function stopService(dir){const {execFile}=await import('node:child_process');const {promisify}=await import('node:util');await promisify(execFile)(process.execPath,[resolve('dist/main.mjs'),'--stop-service','--data-dir',dir,'--workspace',dir]);}
+
+// The packaged bundle must reject cursors that would skip every future event,
+// not just the source parser: the shipped dist/main.mjs is what users run.
+test('packaged MCP rejects illegal workflow_wait cursors and accepts valid ones',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'wf-pkg-cursor-'));await writeFile(join(dir,'settings.json'),JSON.stringify({workspace:dir,dataDir:dir}));
+ const client=new Client({name:'cursor-test',version:'1'});
+ const transport=new StdioClientTransport({command:process.execPath,args:[resolve('dist/main.mjs'),'--stdio','--settings',join(dir,'settings.json')],stderr:'pipe'});
+ let stderr='';transport.stderr?.on('data',c=>stderr+=c);
+ try{
+  await client.connect(transport);
+  const start=await client.callTool({name:'workflow_start',arguments:{requestId:'pkg-cursor',name:'Cursor',executor:'demo',script:'return {ok:true};'}});
+  assert.ok(!start.isError,start.content?.[0]?.text);
+  const id=JSON.parse(start.content[0].text).id;
+  // NaN/Infinity are not JSON-encodable: over stdio they decode as null, which
+  // the parser treats as the default cursor 0 (never a skip). Their rejection is
+  // asserted at the parser level and as string forms over HTTP instead.
+  for(const cursor of[true,false,[],[1],{},-1,1.5,1e100,Number.MAX_SAFE_INTEGER+1,'abc']){
+   const r=await client.callTool({name:'workflow_wait',arguments:{runId:id,afterSequence:cursor,timeoutMs:0}});
+   assert.match(JSON.stringify(r),/等待参数无效/,`cursor ${cursor} must be rejected`);
+  }
+  for(const cursor of[0,1,Number.MAX_SAFE_INTEGER]){
+   const r=await client.callTool({name:'workflow_wait',arguments:{runId:id,afterSequence:cursor,timeoutMs:0}});
+   assert.ok(!r.isError,`cursor ${cursor} accepted: ${r.content?.[0]?.text}`);
+   assert.ok(Number.isSafeInteger(JSON.parse(r.content[0].text).nextSequence));
+  }
+ }finally{await client.close();await transport.close();await stopService(dir);await rm(dir,{recursive:true,force:true});}
+});

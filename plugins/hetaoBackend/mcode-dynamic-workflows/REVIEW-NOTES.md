@@ -15,6 +15,18 @@ being reused after a process crash. SQLite stays in WAL mode with `synchronous=F
 - The public MCP test now stops its detached service before removing the temporary directory,
   fixing its Windows `EBUSY` cleanup failure without changing service lifetime behavior.
 
+## Follow-up repair and local verification, October 11, 2026
+
+These counts were measured on the `codex/pr67-durable-batching` worktree based on `3712fbcbc4102528cd1ed1f9a073be95d81753e3` before committing this revision. Post-commit rechecks are recorded separately; no same-head GitHub CI result is claimed.
+
+- Residual failed transactions are rolled back before subsequent Store reads/writes, reservation, maintenance and close. Recovery failures are reported, not acknowledged as durable writes. Six dedicated residual-transaction checks cover acknowledged saves, duplicate/uncommitted events, saveStep/saveSetting, engine finish state, flush failure and leasing/FULL semantics.
+- HTTP/dashboard `after` and MCP `afterSequence` share `parseEventCursor`. Defaults remain zero; negative, fractional, nonfinite and unsafe integers are rejected before wait/query. Boolean/array/object coercion is rejected too. Actual HTTP and bundled stdio MCP are exercised, including maximum safe integer and legal cursors.
+- Web bundle generation normalizes the embedded example's CRLF to LF, so rebuilding on Windows does not drift from Linux committed output. `dist/main.mjs` and `web/app.js` are regenerated; the rebuilt artifacts were stable in a second build.
+- Final Windows/Node 24.12.0 checks: **136 passed, 2 skipped, 0 failed** (138); public package check: **1 passed, 0 skipped**. The two existing skips require POSIX signal/process-group behavior. No paid model calls or live account operations were used.
+- Local root validation with development `node_modules` present scans third-party README text and fails on a third-party placeholder. The separately staged delivery check excludes development environments/dependencies, matching shipped files; its result is recorded in the handoff evidence. The unrelated root validator is not weakened.
+
+CI records the checked-out revision and has a manual dispatch entry; the existing source/package and Windows process jobs remain enabled. Exact-head CI remains pending until these repairs are committed and checked on that SHA. Stop old workspace services before reconnecting to the new package; an existing owner process does not reload itself just because dist changed.
+
 ## Local verification, October 9, 2026
 
 Windows, Node 24.12.0:

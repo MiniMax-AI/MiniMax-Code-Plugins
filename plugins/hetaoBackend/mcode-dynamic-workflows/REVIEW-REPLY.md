@@ -1,3 +1,13 @@
+## October 11 follow-up — local worktree evidence only
+
+Residual failed transactions now recover before subsequent Store entry points can acknowledge state. Six regression checks verify save/saveStep/saveSetting durability, event visibility, consistent engine finish state, failed flush/close reporting and unchanged FULL/sequence leasing behavior.
+
+HTTP/dashboard and MCP now use the same safe-integer event cursor parser, before querying or waiting. Actual HTTP and bundled MCP reject negative/fractional/nonfinite/oversized values and boolean/array/object coercion; valid/default cursors still work. Runtime assets are rebuilt and embedded-example line endings are normalized for reproducible Windows/Linux output.
+
+Windows Node 24.12.0: 136 checks passed, 2 POSIX-only checks skipped; public package check passed separately. CI records the checked-out SHA and supports manual dispatch. This revision is committed locally after the worktree checks, with post-commit independent review requested. It remains unpushed; no new GitHub run or same-head approval is claimed. Existing services must be stopped/reconnected before the updated package takes effect. REVIEW-NOTES.md contains limitations and the older historical performance evidence below.
+
+---
+
 Thanks for identifying the durability issues. SQLite WAL is restored to synchronous=FULL.
 Progress batching remains, but sequences are now leased through an independently committed
 high watermark before publishing a cursor. After a crash, unused lease values are skipped,
