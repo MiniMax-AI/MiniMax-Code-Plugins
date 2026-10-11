@@ -4,8 +4,8 @@
   "commit": "ec812f085f392a9b67768fbcad7ddeb340e0245f",
   "files": {
     "pyproject.toml": "3ce2206134bc49347d801f09b6404c47ef429bfc722293b1faa5c63f10c64a9b",
-    "requirements-browser.lock": "8eea34358b89c300c2fc25404733065b7cc4e2e6506608eaf23f99d0f4670ae1",
-    "requirements.lock": "018b3aa1be1e6ef09b4ab66ff5580753a1ec13dc02f4866e0c8f3a5f47dd8e42",
+    "requirements-browser.lock": "663580c18ca9b89cad5e6427d0fe98d04b2fb8563473cc5909a099f149647fb7",
+    "requirements.lock": "b2ebf44069b17f129800f8b69631a0541e2233b451cc4d83f4019ec1ac2e7077",
     "run_secure.py": "8f263563849b0f5285d842067223b86fe2fbbc2d3ce332a98323370ff6bd15fd",
     "scripts/sort_finalize_writeback.py": "3495ee4b11625a8b547a8036d1e78f76d0ba3c6ed0cb94114489c3a75cf089c3",
     "scripts/sort_mdpi_res_batch.py": "f18c41cf77b33340d6969ac023e05372345f5b66b0ab58fac5ca7817a156cd6c",
