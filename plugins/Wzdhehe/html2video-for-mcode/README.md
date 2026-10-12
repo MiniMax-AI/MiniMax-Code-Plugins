@@ -231,7 +231,7 @@ node --test "plugins/Wzdhehe/html2video-for-mcode/skills/html2video-for-mcode/te
 node --test "tests/*.test.mjs"
 ```
 
-285 tests in fifteen files: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
+The suite covers: `safe-paths` (malicious slide ids / paths, canary intactness, symlink
 escapes including a **dangling** link that must be caught rather than skipped), `no-clobber` (refusing to overwrite), `endpoint-allowlist` (key never leaves the official
 hosts — plus a local server that proves the gate sits before the request, and provider selection:
 `mmx speech transcribe` default vs `--provider api` fallback, with an mmx-shim integration pair
@@ -260,8 +260,17 @@ with its stated reason** (a tool is absent, or the filesystem forbids creating a
 pretends to pass, and the pipeline scripts themselves exit with `找不到 ffmpeg` instead of running
 half a pipeline. The scoped workflow
 `.github/workflows/html2video-for-mcode-smoke.yml` — which lives in the **MiniMax-Code-Plugins
-monorepo**) and runs on the plugin PR and on main —
-installs them and runs everything for real.
+monorepo**) and runs on plugin pull requests and relevant branch pushes —
+installs them and runs everything for real. It also runs repository validation and CodeQL.
+Fork push results are exact-commit evidence; the upstream pull-request workflow still requires
+its own maintainer approval where GitHub applies that gate.
+
+`build-inputs` covers canonical containment of derived preview images, cover images, every
+numbered frame, subtitle manifests and still images before reading or encoding, with contained
+directory aliases as positive controls. `review-html-open` covers quoted and unquoted inline
+styles, genuine attributes versus raw-text examples, and Windows `%VAR%` refusal before opening
+the generated preview. File-symlink tests name their capability skip when Windows cannot create
+them; directory-junction canaries run where that separate capability exists.
 
 ## Troubleshooting
 

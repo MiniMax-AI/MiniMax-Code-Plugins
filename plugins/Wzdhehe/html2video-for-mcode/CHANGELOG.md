@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.9.20 — 2026-10-12
+
+**Close the three source blockers from the review of `241be8f2`, with regression tests.**
+
+- `build-video` validates derived inputs against the canonical project root before reading,
+  enumerating or constructing an encode plan: preview/cover PNGs, subtitle manifests and stills,
+  the frame directory and every numbered frame (including frames after `f00000.png`). Script,
+  timings, CSS and the audio directory also use this boundary. In-project directory aliases
+  remain supported. A junction-backed timings canary contains deliberately invalid external
+  JSON, proving the boundary rejects it before parsing rather than failing after reading it.
+- `check-slides` collects genuine quoted and unquoted `style` attributes. Attribute values and
+  raw-text examples cannot masquerade as tags; raw-text elements' own opening-tag attributes
+  are still checked. Closed comments and comment literals inside raw-text elements cannot
+  hide following attributes. The original unquoted loopback URL is rejected with exit code 1.
+- Windows `preview-page --open` refuses `%` in the target path before spawning `cmd`, with
+  manual-open guidance. Normal `start` quoting and its literal empty title remain intact;
+  macOS/Linux paths are unaffected. A real Windows subprocess proves quoted `%VAR%` expands.
+- The scoped workflow runs on relevant branch pushes as well as pull requests, installs the
+  rendering tools on Linux and Windows, and includes repository validation and CodeQL.
+  Fork push checks provide evidence for the exact commit; they do not approve or replace the
+  upstream GitHub workflow gate, which remains a maintainer action.
+
+**Verification:** the pre-fix directory-link reproductions failed at their intended boundaries;
+the CSS/Windows tests also demonstrated failures before their fixes. The complete Windows
+plugin suite ran with ffmpeg, ffprobe and Chromium: **346 tests, 336 pass, 0 fail, 10 named
+file-symlink capability skips**. Directory-junction and rendering tests ran. Hosted-plugin
+validation passed. Exact-commit Linux/Windows/CodeQL results must be taken from the matching
+GitHub run rather than inferred from this local result.
+
 ## 1.9.19 — 2026-10-10
 
 **One regression, found by reviewing our own 1.9.18 fix — and a test that structurally could not have caught it.**

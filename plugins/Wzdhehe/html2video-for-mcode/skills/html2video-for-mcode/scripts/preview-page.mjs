@@ -698,9 +698,16 @@ function main() {
 
   if (OPEN) {
     const target = path.join(outDir, 'index.html');
-    const { cmd, args, verbatim } = openCmdArgv(target);
-    spawn(cmd, args, { detached: true, stdio: 'ignore', windowsVerbatimArguments: verbatim }).unref();
-    console.log('  已在浏览器打开(若没弹出, 手动双击上面的 index.html)');
+    // openCmdArgv 在 spawn **之前** 就拒绝危险路径(Windows 的 %VAR% 展开); 这里只负责把错误
+    // 变成一句人话 + 非零退出, 别让调用方看到裸栈。
+    try {
+      const { cmd, args, verbatim } = openCmdArgv(target);
+      spawn(cmd, args, { detached: true, stdio: 'ignore', windowsVerbatimArguments: verbatim }).unref();
+      console.log('  已在浏览器打开(若没弹出, 手动双击上面的 index.html)');
+    } catch (e) {
+      console.error(`✗ ${e.message}`);
+      process.exit(1);
+    }
   }
 }
 
@@ -716,7 +723,18 @@ function main() {
 //      以为 verbatim 只影响引用 —— 结果浏览器打不开了。
 // 引号由我们自己补(q), 不依赖 Node 的"含空格才加引号": Windows 路径允许含 & 而不含空格,
 // 未被引用的 & 会让 cmd 起第二条命令(实测 `&rem` 真的执行了)。
+//
+// **双引号拦不住 cmd 的 %VAR% 展开** —— 引号内的 %NAME% 照样展开, 变量值里若带 " 还能把整条
+// 命令拆开。命令行层面没有可用的转义手段(asr.mjs 对同一边界已 fail closed, 见那里的注释),
+// 所以这里采取同一条策略: **在 spawn 之前**明确拒绝, 而不是"打开以后再报错"。
+// 错误要能落地成下一步动作: 手动双击 index.html, 或换到不含 % 的目录。
 export function openCmdArgv(target, platform = process.platform) {
+  const p = String(target);
+  if (platform === 'win32' && /%/.test(p)) {
+    throw new Error(
+      `--open 的路径里不能有 %(cmd.exe 在双引号内也会展开 %VAR%, 无法安全转义): ${p}\n`
+      + `   放映页已经生成好了, 手动双击打开即可; 或把项目/输出目录挪到不含 % 的路径后重跑 --open`);
+  }
   const q = t => `"${String(t).replace(/"/g, '""')}"`;
   if (platform === 'win32') return { cmd: 'cmd', args: ['/c', 'start', '""', q(target)], verbatim: true };
   if (platform === 'darwin') return { cmd: 'open', args: [target], verbatim: false };

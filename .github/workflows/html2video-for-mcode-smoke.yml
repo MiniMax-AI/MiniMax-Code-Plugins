@@ -27,7 +27,6 @@ on:
       - 'plugins/Wzdhehe/html2video-for-mcode/**'
       - '.github/workflows/html2video-for-mcode-smoke.yml'
   push:
-    branches: [main]
     paths:
       - 'plugins/Wzdhehe/html2video-for-mcode/**'
       - '.github/workflows/html2video-for-mcode-smoke.yml'
@@ -37,6 +36,41 @@ permissions:
   contents: read
 
 jobs:
+  # Branch pushes let the author retain exact-commit evidence on their fork while
+  # the upstream pull_request run awaits a maintainer's approval. The runs remain
+  # distinct: passing fork jobs never imply the upstream gate was approved.
+  validate:
+    name: repository validation (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: '3.13'
+      - run: python -m pip install Pillow==12.3.0
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+      - run: npm ci
+      - run: npm run check
+
+  codeql:
+    name: CodeQL (javascript-typescript)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        with:
+          languages: javascript-typescript
+      - uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+
   smoke-linux:
     name: smoke (ubuntu-latest · ffmpeg + chromium)
     runs-on: ubuntu-latest

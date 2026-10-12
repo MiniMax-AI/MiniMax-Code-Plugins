@@ -10,8 +10,10 @@ const argv = process.argv.slice(2);
 const dir = positionalDir(argv);
 const DRY = argv.includes('--dry-run');
 const WANT_ASR = argv.includes('--asr');
+const input = (...segs) => safeRel(dir, path.join(...segs), { where: `输入 ${segs.join('/')}` });
 
 // 入口闸门(与 capture 同一道): 受管块落后即停 —— 否则成片用的是旧 CSS, 全程没有任何报错
+input('slides', 'tokens.css');
 requireFreshCss(dir, { who: 'build-video', allowStale: argv.includes('--allow-stale-css') });
 
 process.env.KIT_PROJECT_DIR = dir;
@@ -26,9 +28,9 @@ const run = (cmd, args, label) => {
   return r.stdout ?? '';
 };
 
-const script = JSON.parse(fs.readFileSync(path.join(dir, 'script.json'), 'utf8'));
+const script = JSON.parse(fs.readFileSync(input('script.json'), 'utf8'));
 validateScriptPaths(script, dir); // script.json 是 agent 可编辑文件: id/audio/bgm 派生路径先收监
-const timings = JSON.parse(fs.readFileSync(path.join(dir, 'build', 'timings.json'), 'utf8'));
+const timings = JSON.parse(fs.readFileSync(input('build', 'timings.json'), 'utf8'));
 validateTimingsIds(timings);
 // W/H 会拼进 ffmpeg filter 字符串(scale=...), 强转整数并限范围, 防字符串注入
 const W = clampDim(script.width, 1920, 'width'), H = clampDim(script.height, 1080, 'height');
@@ -59,6 +61,31 @@ const bgmNum = bgmCfgRaw ? {
   fi: clampNum(bgmCfgRaw.fadeIn, 1.5, 'fadeIn', 0, 30, 'bgm.fadeIn'),
   fo: clampNum(bgmCfgRaw.fadeOut, 2.5, 'fadeOut', 0, 30, 'bgm.fadeOut'),
 } : null;
+
+// 固定位置的素材仍可能经目录 junction 或叶子 symlink 指向项目外。
+// 在读清单、枚举帧、探测尺寸或创建输出之前统一复核; 帧序列每个叶子都要查,
+// 不能只查 f00000.png(后续帧同样会被 ffmpeg 的 f%05d.png 消费)。
+const coverPath = input('preview', 'cover.png');
+const audioDir = input('audio');
+const derived = new Map();
+for (const t of timings.slides) {
+  const tid = safeId(t.id);
+  const fdir = input('build', 'frames', tid);
+  const firstFrame = input('build', 'frames', tid, 'f00000.png');
+  const png = input('preview', `${tid}.png`);
+  const manPath = input('build', 'substills', `${tid}.json`);
+  const stillDir = input('build', 'substills', tid);
+  const frames = fs.existsSync(fdir) ? fs.readdirSync(fdir).filter(f => /^f\d+\.png$/.test(f)) : [];
+  for (const f of frames) input('build', 'frames', tid, f);
+  if (fs.existsSync(stillDir)) {
+    for (const f of fs.readdirSync(stillDir).filter(f => /^s\d+\.png$/.test(f))) {
+      input('build', 'substills', tid, f);
+    }
+  }
+  const audioRel = script.slides.find(s => s.id === tid)?.audio ?? `${tid}.mp3`;
+  const audio = safeRel(audioDir, audioRel, { where: `slides[${tid}].audio` });
+  derived.set(tid, { firstFrame, png, manPath, nFrames: frames.length, audio });
+}
 
 // 工具发现放在全部配置校验之后: 配置写错就是配置写错, 与这台机器上有没有 ffmpeg 无关。
 // 反过来的话, 少装了 ffmpeg 的人拿到的是"找不到 ffmpeg"(退出 2), 真正要报的 width/bgm/fps 非法被吞掉。
@@ -95,7 +122,6 @@ const TRANSITION = (() => {
     process.exit(1);
   }
 })();
-const coverPath = path.join(dir, 'preview', 'cover.png');
 const hasCover = fs.existsSync(coverPath);
 if (TRANSITION.type === 'xfade') console.log(`  转场: 交叉溶解 ${TRANSITION.dur}s(段尾各多留 ${TRANSITION.dur}s, 叠化后总时长不变)`);
 else console.log('  转场: 硬切(段间不淡出到黑;首段封面溶解、末段淡出收尾)');
@@ -112,12 +138,10 @@ for (const [segIdx, t] of timings.slides.entries()) {
   const fadeOut = Math.max(0, D - 0.35);
   // 淡出只留给末段收尾;淡入一律不用(首段走封面溶解,其余硬切)
   const fades = isLast ? `fade=t=out:st=${fadeOut.toFixed(3)}:d=0.3` : '';
-  const fdir = path.join(dir, 'build', 'frames', tid);
-  const firstFrame = path.join(fdir, 'f00000.png');
-  const png = path.join(dir, 'preview', `${tid}.png`);
+  const { firstFrame, png, manPath, nFrames } = derived.get(tid);
   const seg = safeOut(dir, 'out', `slide-${tid}.mp4`);
   const common = ['-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'medium', '-crf', '20', '-movflags', '+faststart'];
-  const stillPng = k => path.join(dir, 'build', 'substills', tid, `s${k}.png`);
+  const stillPng = k => input('build', 'substills', tid, `s${k}.png`);
   // 首段的"封面溶解": 封面淡出叠在画面上 → 帧 0 = 完整封面, 0.25s 内溶解进入入场动画(不加时长)。
   // (2026-09-18 复查 E5: 这里原本是个带 input/chain 两个字段的结构体, 两个字段都是死代码 ——
   //  真正管用的判断在 encode() 里, 改成布尔, 少一处"看起来会用"的误导。)
@@ -128,7 +152,6 @@ for (const [segIdx, t] of timings.slides.entries()) {
   // 复查补(1.7.0): 清单必须与当前这张对齐才用 —— 否则删掉 clauses/改过时长之后, 陈旧清单会把
   // 早已不存在的字幕拼回成片(capture 已按张清理, 这里再做一次防御性核对, 因为清单是磁盘文件)
   let subStills = [];
-  const manPath = path.join(dir, 'build', 'substills', `${tid}.json`);
   if (fs.existsSync(manPath)) {
     let man = null;
     try { man = JSON.parse(fs.readFileSync(manPath, 'utf8')); } catch { /* 坏清单按无处理 */ }
@@ -136,8 +159,7 @@ for (const [segIdx, t] of timings.slides.entries()) {
     const durOk = man && Number.isFinite(man.duration) && Math.abs(man.duration - D) <= 0.05;
     // 清单的 framesCover 必须等于"当前帧序列的实际时长"(无帧序列 = 0)。时长与句序都对、
     // 但动画窗重截过(帧数变了)的清单, 会把字幕静帧从错误的时刻拼进成片 —— B2 点名的第三项。
-    const nFramesNow = fs.existsSync(fdir) ? fs.readdirSync(fdir).filter(f => /^f\d+\.png$/.test(f)).length : 0;
-    const coverNow = nFramesNow / fps;
+    const coverNow = nFrames / fps;
     const coverOk = man && Number.isFinite(man.framesCover) && Math.abs(man.framesCover - coverNow) <= 0.05;
     if (man && !durOk) console.warn(`⚠ ${tid}: 字幕清单时长 ${man.duration}s ≠ 当前 ${D}s — 忽略该清单(重跑 capture 生成)`);
     if (man && durOk && !coverOk) console.warn(`⚠ ${tid}: 字幕清单帧覆盖 ${man.framesCover}s ≠ 当前 ${coverNow}s — 忽略该清单(重跑 capture 生成)`);
@@ -185,12 +207,11 @@ for (const [segIdx, t] of timings.slides.entries()) {
   };
 
   if (fs.existsSync(firstFrame)) {
-    const nFrames = fs.readdirSync(fdir).filter(f => /^f\d+\.png$/.test(f)).length;
     const framesDur = nFrames / fps;
     if (subStills.length) {
       // [帧序列段] + [每句字幕段]: 段长由字幕窗口决定, 末段补齐到整张时长(吃掉取整误差)
       const parts = [
-        { kind: 'frames', src: path.join(fdir, 'f%05d.png'), dur: framesDur },
+        { kind: 'frames', src: input('build', 'frames', tid, 'f%05d.png'), dur: framesDur },
         ...subStills.map(s2 => ({ kind: 'still', src: stillPng(s2.k), dur: s2.end - s2.start })),
       ];
       // 帧序列与字幕静帧可能尺寸不同(dsf 超采样), 所以逐段各自探尺寸
@@ -200,7 +221,7 @@ for (const [segIdx, t] of timings.slides.entries()) {
       const sz = probeSize(firstFrame);
       const pre = [`tpad=stop_mode=clone:stop_duration=${(DUR + 1).toFixed(3)}`];
       if (sz && (sz[0] !== W || sz[1] !== H)) pre.push(`scale=${W}:${H}:flags=lanczos`); // dsf 2 超采样降采
-      encode([{ args: ['-framerate', String(fps), '-i', path.join(fdir, 'f%05d.png')] }],
+      encode([{ args: ['-framerate', String(fps), '-i', input('build', 'frames', tid, 'f%05d.png')] }],
         `[0:v]${pre.join(',')},setsar=1,${'fps=' + fps}[base]`, 'base', `编码 ${tid} (帧序列)`);
     }
   } else if (fs.existsSync(png)) {
@@ -291,8 +312,7 @@ const audioInputs = [];
 const chains = [];
 timings.slides.forEach((t, i) => {
   const tid = safeId(t.id);
-  const audioRel = script.slides.find(s => s.id === tid)?.audio ?? `${tid}.mp3`;
-  const a = safeRel(path.join(dir, 'audio'), audioRel, { where: `slides[${tid}].audio` });
+  const a = derived.get(tid).audio;
   if (!fs.existsSync(a)) { console.error(`✗ 缺音频 ${a}`); process.exit(1); }
   audioInputs.push(a);
   chains.push(`[${i}:a]aresample=44100,aformat=channel_layouts=mono,apad=whole_dur=${t.duration.toFixed(4)}[s${i}]`);

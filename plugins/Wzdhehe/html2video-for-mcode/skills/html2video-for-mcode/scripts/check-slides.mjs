@@ -55,6 +55,43 @@ function fxClassKeyframes(css) {
   return map;
 }
 
+// 真标签上的行内 style 属性(2026-10-12 PR #41 评审)。旧实现是一条正则, 只认双引号/单引号两种写法,
+//    于是 <div class=stage style=background:url(http://127.0.0.1/x)> 这种**合法**的无引号属性
+//    整个漏过 CSS 外链扫描(维护者原始复现); 而直接给正则补一个无引号分支又会把
+//    title="style=…"、data-style=… 里的字面量误认成真属性(误报)。
+//    所以这里用小型 tokenizer: 跳过注释与 <script>/<style> 等原文区, 只在**真标签**上按引号边界解析属性。
+const RAW_TEXT_TAGS = new Set(['script', 'style', 'textarea', 'title']);
+function attrValues(body, want) {
+  const out = [];
+  // 属性名 / = / 值(双引号、单引号、无引号)。带引号的分支会整段吃掉引号内的内容,
+  // 于是 title="style=…" 的值不会在下一轮被当成 style 属性再扫一遍。
+  for (const a of body.matchAll(/([^\s=/>"']+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g)) {
+    if (String(a[1]).toLowerCase() !== want) continue;
+    out.push(a[2] ?? a[3] ?? a[4] ?? '');
+  }
+  return out;
+}
+function inlineStyleValues(html) {
+  const out = [];
+  // 注释和标签按文档顺序消费, 闭合注释不能把余下整页屏蔽。
+  const tokens = /<!--(?:[\s\S]*?-->|[\s\S]*$)|<(\/?)([a-zA-Z][\w:-]*)((?:"[^"]*"|'[^']*'|[^>"'])*)>/g;
+  let m;
+  while ((m = tokens.exec(html))) {
+    if (m[0].startsWith('<!--')) continue;
+    const name = m[2].toLowerCase();
+    if (m[1] === '/') continue;
+    out.push(...attrValues(m[3], 'style'));           // 开标签上的真属性仍要扫描
+    if (RAW_TEXT_TAGS.has(name)) {
+      // 原文区直接跳到其结束标签; 正文中的 <!-- 也只是文字。
+      const end = new RegExp(`</${name}(?=[\\s/>])(?:"[^"]*"|'[^']*'|[^>"'])*>`, 'gi');
+      end.lastIndex = tokens.lastIndex;
+      if (!end.exec(html)) break;
+      tokens.lastIndex = end.lastIndex;
+    }
+  }
+  return out;
+}
+
 const argv = process.argv.slice(2);
 const dir = positionalDir(argv);
 const QUIET = argv.includes('--quiet');
@@ -115,9 +152,11 @@ for (const s of slides) {
   deckText.push({ id: s.id, text: html.replace(/<[^>]*>/g, ' ') });
 
   // 本张的 CSS 区域(<style> 块 + style 属性), 供 fx 类与外链两处检查共用
+  // style 属性走 inlineStyleValues(带引号与不带引号都收), 不能只认双引号/单引号 ——
+  // 见上面 PR #41 的复现与"title/data-style 不算真属性"的对照组。
   const cssRegions = [
     ...[...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)].map(m => m[1]),
-    ...[...html.matchAll(/(?<![-\w])style\s*=\s*(?:"([^"]*)"|'([^']*)')/gi)].map(m => m[1] ?? m[2] ?? ''),
+    ...inlineStyleValues(html),
   ].join('\n');
   const localFx = fxClassKeyframes(cssRegions);
   const localKfOpacity = opacityAwareKeyframes(cssRegions);
