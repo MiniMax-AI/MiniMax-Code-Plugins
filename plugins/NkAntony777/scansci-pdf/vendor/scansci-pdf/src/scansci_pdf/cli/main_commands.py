@@ -43,6 +43,7 @@ def setup(
     federated: bool = typer.Option(True, "--federated/--no-federated", help="Enable browser federated institutional login."),
     federated_school: str = typer.Option("", "--federated-school", help="Override the school name shown in publisher login pages."),
     check: bool = typer.Option(False, "--check", help="Check environment without changing configuration."),
+    confirm_trust: bool = typer.Option(False, "--confirm-trust", help="Approve institutional trust changes."),
 ):
     """One-step environment setup for institutional paper downloads."""
     from pathlib import Path
@@ -88,7 +89,7 @@ def setup(
         if d:
             Path(d).mkdir(parents=True, exist_ok=True)
     if changed:
-        save_config(cfg)
+        save_config(cfg, confirmed=confirm_trust)
 
     ready = bool(cfg.get("instsci_school", "") and _access_url(cfg) and ((not cfg.get("carsi_enabled", False)) or cfg.get("carsi_idp_name", "")))
     if ready:

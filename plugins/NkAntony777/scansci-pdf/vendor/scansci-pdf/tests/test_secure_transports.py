@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import os
+import py_compile
 import re
 import socket
 import subprocess
@@ -245,7 +246,7 @@ def launcher(staged_package, tmp_path_factory):
         if env:
             environment.update(env)
         return subprocess.run(
-            [_secure_stage.python_executable(), str(staged_package / "run_secure.py"), *args],
+            [_secure_stage.python_executable(), "-I", str(staged_package / "run_secure.py"), *args],
             cwd=str(cwd or workspace), capture_output=True, text=True,
             # The child writes box-drawing characters for Typer help; never let
             # the console code page turn that into a decode error.
@@ -306,7 +307,7 @@ def test_progress_bar_module_entry_runs_a_real_entry_point(staged_package, tmp_p
     # The cwd gate is legitimate: launch from outside the package, as in use.
     workspace = tmp_path_factory.mktemp("bar_workspace")
 
-    command = [_secure_stage.python_executable(), "-u",
+    command = [_secure_stage.python_executable(), "-I", "-u",
                str(staged_package / "run_secure.py"),
                "--module", "scansci_pdf.progress_bar"]
     environment = dict(os.environ)
@@ -315,6 +316,7 @@ def test_progress_bar_module_entry_runs_a_real_entry_point(staged_package, tmp_p
     environment.pop("SCANSCI_PDF_WORKSPACE", None)
     environment["PYTHONPATH"] = str(harness)
     environment["PYTHONUNBUFFERED"] = "1"
+    environment["SCANSCI_PROGRESS_BAR"] = "0"
 
     process = subprocess.Popen(
         command, cwd=str(workspace), env=environment,
@@ -328,14 +330,14 @@ def test_progress_bar_module_entry_runs_a_real_entry_point(staged_package, tmp_p
         target=lambda: [lines.append(line) for line in process.stdout], daemon=True)
     reader.start()
     try:
-        deadline = time.time() + 120
+        deadline = time.time() + 15
         while time.time() < deadline and not any(
-                "progress bar unavailable" in line for line in lines):
+                "progress bar disabled" in line for line in lines):
             if process.poll() is not None and reader.is_alive() is False:
                 break
             time.sleep(0.2)
         blob = "".join(lines)
-        assert "progress bar unavailable" in blob, (
+        assert "progress bar disabled" in blob, (
             "the module entry never reached progress_bar.main()\n" + blob)
         # No ImportError/AttributeError from the loader itself.
         assert "AttributeError" not in blob and "ImportError" not in blob
@@ -357,9 +359,10 @@ def test_progress_bar_spawn_uses_the_verified_source_entry(monkeypatch):
     command = progress_reporter.progress_bar_command()
 
     # [python, <run_secure.py>, --module, scansci_pdf.progress_bar]
-    assert command[2:] == ["--module", "scansci_pdf.progress_bar"]
+    assert command[3:] == ["--module", "scansci_pdf.progress_bar"]
     assert command[0] == _secure_stage.python_executable()
-    assert command[1] == str(_secure_stage.ENGINE / "run_secure.py")
+    assert command[1] == "-I"
+    assert command[2] == str(_secure_stage.ENGINE / "run_secure.py")
 
     # Outside the secure launcher there is no verified entry to use.
     monkeypatch.delenv("SCANSCI_PDF_WORKSPACE")
@@ -386,17 +389,23 @@ def test_tampered_source_is_refused(launcher, staged_package):
         target.write_bytes(original)
 
 
-def test_malicious_pyc_is_ignored(launcher, staged_package):
-    """A stale .pyc beside a pinned module must never be executed.
+@pytest.mark.parametrize("layout", ["cache", "adjacent"])
+def test_valid_legacy_pyc_is_ignored(launcher, staged_package, tmp_path, layout):
+    """Valid old bytecode beside a pinned module must never be executed.
 
     The loader resolves pinned modules to their .py, so the bytecode cache is
     not merely untrusted, it is unreachable.
     """
-    cache = staged_package / "src" / "scansci_pdf" / "cli" / "__pycache__"
-    cache.mkdir(parents=True, exist_ok=True)
-    pyc = cache / "__main__.cpython-313.pyc"
+    source = staged_package / "src" / "scansci_pdf" / "cli" / "__main__.py"
+    pyc = (Path(importlib.util.cache_from_source(str(source))) if layout == "cache"
+           else source.with_suffix(".pyc"))
+    pyc.parent.mkdir(parents=True, exist_ok=True)
     marker = "SYNTHETIC-PYC-MARKER"
-    pyc.write_text(f"print({marker!r})\n", encoding="utf-8")
+    canary = tmp_path / "legacy_source.py"
+    canary.write_text(f"print({marker!r})\n", encoding="ascii")
+    # Unchecked-hash caches are valid even when the pinned source has changed.
+    py_compile.compile(str(canary), cfile=str(pyc), doraise=True,
+                       invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH)
     try:
         result = launcher("--module", "scansci_pdf.cli", "--help")
         assert result.returncode == 0, result.stdout + result.stderr
@@ -405,8 +414,8 @@ def test_malicious_pyc_is_ignored(launcher, staged_package):
         assert "Usage: python -m scansci_pdf.cli" in _plain(result.stdout)
     finally:
         pyc.unlink()
-        if not any(cache.iterdir()):
-            cache.rmdir()
+        if layout == "cache" and not any(pyc.parent.iterdir()):
+            pyc.parent.rmdir()
 
 
 def test_bad_dependency_pin_is_refused(launcher, staged_package):
@@ -444,7 +453,7 @@ def test_launch_from_inside_the_package_is_refused(staged_package):
     environment.pop("SCANSCI_PDF_SECURE_ENTRY", None)
     environment.pop("SCANSCI_PDF_WORKSPACE", None)
     result = subprocess.run(
-        [_secure_stage.python_executable(), str(staged_package / "run_secure.py"), "--verify"],
+        [_secure_stage.python_executable(), "-I", str(staged_package / "run_secure.py"), "--verify"],
         cwd=str(package), capture_output=True, text=True, timeout=300, env=environment,
     )
     assert result.returncode != 0
@@ -465,7 +474,7 @@ def test_stdio_handshake_still_passes(staged_package, tmp_path_factory):
     environment["SCANSCI_PROGRESS_BAR"] = "0"
 
     process = subprocess.Popen(
-        [_secure_stage.python_executable(), str(staged_package / "run_secure.py"), "run"],
+        [_secure_stage.python_executable(), "-I", str(staged_package / "run_secure.py"), "run"],
         cwd=str(workspace), env=environment,
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )

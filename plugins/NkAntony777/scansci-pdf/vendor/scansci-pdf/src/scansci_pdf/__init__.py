@@ -1,6 +1,6 @@
 """Source-only ScanSci PDF fork with no import-time environment mutation."""
 
-__version__ = "1.18.0.post1"
+__version__ = "1.18.0.post2"
 
 __all__ = ["__version__", "download", "batch_download", "search_papers", "load_config", "update_config", "get_config_safe"]
 

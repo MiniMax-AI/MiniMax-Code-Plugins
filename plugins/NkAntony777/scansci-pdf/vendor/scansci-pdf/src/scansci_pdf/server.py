@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 try:
     from mcp.server.fastmcp import FastMCP  # mcp 1.x
@@ -13,7 +15,7 @@ except ModuleNotFoundError:  # mcp >= 2.0 renamed FastMCP to MCPServer
     from mcp.server.mcpserver import MCPServer as FastMCP
 
 from .cache import cache_clear, cache_get
-from .config import get_config_safe, load_config, mask_config_value, update_config
+from .config import get_config_safe, load_config, mask_config_value, save_config, update_config
 from .network import fetch_json
 from .credential_transport import confined_session
 from .paperlist import parse_paper_list
@@ -1104,21 +1106,26 @@ def scansci_pdf_ezproxy_status() -> str:
     }, ensure_ascii=False)
 
 
-def scansci_pdf_vpnsci_set_school(school: str) -> str:
+def scansci_pdf_vpnsci_set_school(school: str, confirmed: bool = False) -> str:
     """Set the university for WebVPN access.
 
     Args:
         school: University name (e.g. "北京大学", "浙江大学", "复旦大学")
+        confirmed: Explicit owner approval for changing the gateway.
     """
     from .schools import get_school
     try:
         entry = get_school(school)
+        config = load_config()
+        config.update({
+            "vpnsci_school": entry.name,
+            "vpnsci_base_url": entry.host,
+            "vpnsci_enabled": True,
+        })
+        save_config(config, confirmed=confirmed)
     except ValueError as e:
         return _json_result({"success": False, "error": str(e)})
 
-    update_config("vpnsci_school", entry.name)
-    update_config("vpnsci_base_url", entry.host)
-    update_config("vpnsci_enabled", "true")
     return _json_result({
         "success": True,
         "school": entry.name,
@@ -1512,10 +1519,13 @@ def scansci_pdf_channel_status(kind: str = "webvpn", doi: str = "") -> str:
 
 
 @mcp_app.tool()
-def scansci_pdf_schools(action: str = "search", query: str = "", school: str = "") -> str:
-    """Search (query) or set (school) supported WebVPN universities — 100+ Chinese universities."""
+def scansci_pdf_schools(
+    action: str = "search", query: str = "", school: str = "",
+    confirmed: Annotated[bool, Field(strict=True)] = False,
+) -> str:
+    """Search (query) or set (school) WebVPN universities. Setting a new gateway requires confirmed=true."""
     if action == "set":
-        return scansci_pdf_vpnsci_set_school(school=school)
+        return scansci_pdf_vpnsci_set_school(school=school, confirmed=confirmed)
     return scansci_pdf_vpnsci_schools(query=query)
 
 
@@ -1534,15 +1544,13 @@ def scansci_pdf_diagnostics(check: str = "health", detailed: bool = False) -> st
 
 
 @mcp_app.tool()
-def scansci_pdf_config(key: str = "", value: str = "", confirmed: bool = False) -> str:
+def scansci_pdf_config(
+    key: str = "", value: str = "",
+    confirmed: Annotated[bool, Field(strict=True)] = False,
+) -> str:
     """Get the full masked config (no key) / one key's value (key only) / set key=value (key + value)."""
     if key and value:
-        from .config_trust import is_trust_sensitive
-        from .security import strict_mode
-        # Fast, friendly refusal here; the authoritative check runs in
-        # update_config, which also covers direct (non-tool) callers.
-        if strict_mode() and is_trust_sensitive(key) and not confirmed:
-            return _json_result({'error': 'Explicit owner confirmation required for trusted network/executable/credential configuration'})
+        # The shared boundary distinguishes a real trust change from a no-op.
         return _config_set_impl(key=key, value=value, confirmed=confirmed)
     if key:
         cfg = json.loads(scansci_pdf_config_get())

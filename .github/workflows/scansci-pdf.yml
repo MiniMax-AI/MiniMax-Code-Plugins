@@ -26,12 +26,15 @@ jobs:
       - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c
         with:
           python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
       - name: Record the exact checked-out revision
         run: git rev-parse HEAD
       - run: python -m pip install --require-hashes -r plugins/NkAntony777/scansci-pdf/vendor/scansci-pdf/requirements-browser.lock
       - run: python -m pip install pytest cryptography
       - name: Verify the delivered source manifest and dependency locks
-        run: python plugins/NkAntony777/scansci-pdf/vendor/scansci-pdf/run_secure.py --verify
+        run: python -I plugins/NkAntony777/scansci-pdf/vendor/scansci-pdf/run_secure.py --verify
       - name: Run engine regressions including a real approved browser round trip
         env:
           SCANSCI_AUDIT_BROWSER: ${{ matrix.browser }}

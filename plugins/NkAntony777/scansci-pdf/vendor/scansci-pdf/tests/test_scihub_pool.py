@@ -87,6 +87,9 @@ class PersistentPoolTests(unittest.TestCase):
             self.skipTest("no browser backend installed")
         pool = scihub._race_pool({"scihub_browser_workers": 1})
         cfg = {"browser_backend": "patchright", "browser_headless": True}
+        import os
+        if os.environ.get("SCANSCI_AUDIT_BROWSER"):
+            cfg["browser_executable"] = os.environ["SCANSCI_AUDIT_BROWSER"]
         try:
             first = pool.submit(scihub._is_browser_available, {"scihub_enabled": True}).result()
             pool.submit(be._get_shared_browser, cfg).result()  # launch in worker

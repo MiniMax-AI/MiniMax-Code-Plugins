@@ -5,12 +5,17 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
 from .log import get_logger
 from .path_guard import resolve_attachment
 from .security import SecurityError
+from .credential_transport import confined_request, origin_of
+from urllib.parse import unquote, unquote_plus, urlsplit
+
+from .proxy_redaction import redact_proxy_text, register_config_secrets
 
 log = get_logger()
 
@@ -20,6 +25,41 @@ ATTACHMENT_SUFFIXES = frozenset({".pdf"})
 # Zotero write responses use a per-index envelope; a partial failure lands in
 # "failed" with a code and a message worth surfacing to the user.
 _OK_STATUS = (200, 201)
+
+
+UPLOAD_ORIGINS = frozenset({
+    ("https", "www.zotero.org", 443),
+    ("https", "zoterofilestorage.s3.amazonaws.com", 443),
+    ("https", "zoterofilestorage.s3.us-east-1.amazonaws.com", 443),
+})
+
+_UPLOAD_QUERY_SECRET = re.compile(
+    r"signature|token|credential|password|policy|api.?key|access.?key|secret|authorization|^sig$|^key-pair-id$",
+    re.I,
+)
+
+
+class _UploadStream:
+    def __init__(self, handle, prefix: bytes, suffix: bytes, length: int):
+        self.handle, self.prefix, self.suffix, self.length = handle, prefix, suffix, length
+
+    def __len__(self):
+        # Requests must not send both Content-Length and chunked encoding.
+        return self.length
+
+    def __iter__(self):
+        yield self.prefix
+        yield from iter(lambda: self.handle.read(1024 * 1024), b"")
+        yield self.suffix
+
+
+def validate_upload_url(url: str) -> str:
+    parts = urlsplit(str(url))
+    if parts.username is not None or parts.password is not None or parts.fragment:
+        raise SecurityError("Invalid Zotero storage upload URL")
+    if origin_of(url) not in UPLOAD_ORIGINS:
+        raise SecurityError("Zotero storage upload origin is not allowlisted")
+    return str(url)
 
 
 def _get_zotero_config(config: dict[str, Any]) -> tuple[str, str] | None:
@@ -34,11 +74,31 @@ def _get_zotero_config(config: dict[str, Any]) -> tuple[str, str] | None:
 
 
 def _scrub(text: str, secret: str) -> str:
-    """Remove the API key from anything user-visible or logged."""
-    message = str(text)
-    if secret:
-        message = message.replace(secret, "***")
-    return message
+    """Remove API and upload authorization from direct results and logs."""
+    register_config_secrets({"zotero_api_key": secret})
+    return redact_proxy_text(text)
+
+
+def _register_upload_authorization(payload: dict[str, Any]) -> None:
+    """Remember opaque response authorization before validation can fail.
+
+    Transport errors may contain only the URL path, with query values either
+    decoded or still percent-encoded, instead of the full response URL.
+    """
+    material = {"upload_key": payload.get("uploadKey")}
+    url = payload.get("url")
+    if isinstance(url, str):
+        material["upload_url_key"] = url
+        query = url.partition("?")[2].partition("#")[0]
+        material["upload_query_key"] = query
+        for index, field in enumerate(query.split("&")):
+            name, separator, value = field.partition("=")
+            if not separator or not _UPLOAD_QUERY_SECRET.search(unquote_plus(name)):
+                continue
+            material[f"upload_query_{index}_key"] = value
+            material[f"upload_query_{index}_decoded_key"] = unquote_plus(value)
+            material[f"upload_query_{index}_literal_key"] = unquote(value)
+    register_config_secrets(material)
 
 
 def _response_json(response: Any) -> dict[str, Any]:
@@ -97,6 +157,7 @@ def push_to_zotero(
         return _not_started("Zotero API key not configured")
 
     api_key, library_path = creds
+    register_config_secrets({"zotero_api_key": api_key})
     if not library_path:
         return _not_started("Zotero library_id not configured")
 
@@ -141,11 +202,11 @@ def push_to_zotero(
 
     # Create item
     try:
-        resp = requests.post(
+        resp = confined_request("POST",
             f"{base_url}/items",
             headers=headers,
             json=[item_data],
-            timeout=30,
+            timeout=30, allow_redirects=False,
         )
         if resp.status_code not in _OK_STATUS:
             return _not_started(f"Zotero API error: {resp.status_code}")
@@ -284,12 +345,19 @@ def _upload_attachment(
     import requests
 
     secret = api_key if api_key is not None else headers.get("Zotero-API-Key", "")
+    register_config_secrets({"zotero_api_key": secret})
+    upload_envelope: list[str] = []
 
     def _fail(status: str, error: str, attachment_key: str | None = None) -> dict[str, Any]:
+        # Multipart envelopes can embed authorization, but are not global
+        # secrets: short ordinary boundary strings must not mask other output.
+        message = str(error)
+        for value in sorted(upload_envelope, key=len, reverse=True):
+            message = message.replace(value, "***")
         return {
             "status": status,
             "attachment_key": attachment_key,
-            "error": _scrub(error, secret),
+            "error": _scrub(message, secret),
         }
 
     # Final read boundary, second half: re-validate immediately before the
@@ -303,10 +371,10 @@ def _upload_attachment(
     def _cleanup(attachment_key: str) -> None:
         # Best effort: drop a half-written attachment so a retry is clean.
         try:
-            requests.delete(
+            confined_request("DELETE",
                 f"{base_url}/items/{attachment_key}/file",
                 headers={"Zotero-API-Key": secret},
-                timeout=30,
+                timeout=30, allow_redirects=False,
             )
         except Exception:
             pass
@@ -321,11 +389,11 @@ def _upload_attachment(
     }
 
     try:
-        resp = requests.post(
+        resp = confined_request("POST",
             f"{base_url}/items",
             headers=headers,
             json=[attachment_data],
-            timeout=30,
+            timeout=30, allow_redirects=False,
         )
     except Exception as e:
         return _fail("create_failed", f"attachment create request failed: {e}")
@@ -349,7 +417,7 @@ def _upload_attachment(
             "filesize": str(stat.st_size),
             "mtime": str(int(stat.st_mtime * 1000)),
         }
-        resp = requests.post(
+        resp = confined_request("POST",
             f"{base_url}/items/{att_key}/file",
             headers={
                 "Zotero-API-Key": secret,
@@ -357,7 +425,7 @@ def _upload_attachment(
                 "If-None-Match": "*",
             },
             data=form,
-            timeout=30,
+            timeout=30, allow_redirects=False,
         )
     except Exception as e:
         _cleanup(att_key)
@@ -368,56 +436,48 @@ def _upload_attachment(
         return _fail("authorize_failed", f"upload authorization returned HTTP {resp.status_code}", att_key)
 
     payload = _response_json(resp)
-    if not payload:
-        # Zotero answers 200 with an empty body when an identical file is
-        # already attached; the attachment is complete.
-        log.info(f"Zotero: attachment {att_key} already holds this file")
+    _register_upload_authorization(payload)
+    upload_envelope.extend(value for key in ("prefix", "suffix")
+                           if isinstance(value := payload.get(key), str) and value)
+    if payload.get("exists") == 1:
         return {"status": "uploaded", "attachment_key": att_key, "error": None,
                 "filename": source.name, "already_attached": True}
-
-    upload_url = payload.get("url")
-    if not upload_url:
-        _cleanup(att_key)
-        return _fail("authorize_failed", "authorization response contained no upload URL", att_key)
-
-    prefix = payload.get("prefix") or ""
-    content_type = payload.get("contentType") or "application/pdf"
-
-    # 3. Push the leading bytes when the server split the upload.
-    if prefix:
-        try:
-            resp = requests.post(
-                upload_url,
-                headers={"Content-Type": content_type},
-                data=prefix.encode("utf-8"),
-                timeout=120,
-            )
-        except Exception as e:
-            _cleanup(att_key)
-            return _fail("upload_failed", f"prefix upload failed: {e}", att_key)
-        if resp.status_code not in _OK_STATUS:
-            _cleanup(att_key)
-            return _fail("upload_failed", f"prefix upload returned HTTP {resp.status_code}", att_key)
-
-    # 4. Push the file itself. Opened only after the boundary check above.
+    upload_key = payload.get("uploadKey")
     try:
-        with source.open("rb") as f:
-            resp = requests.post(
-                upload_url,
-                headers={
-                    "Authorization": f"Bearer {secret}",
-                    "Content-Type": content_type,
-                },
-                data=f,
-                timeout=300,
-            )
-    except Exception as e:
+        upload_url = validate_upload_url(payload.get("url") or "")
+        if not isinstance(upload_key, str) or not upload_key:
+            raise SecurityError("authorization response contained no upload key")
+        prefix = payload.get("prefix", "")
+        suffix = payload.get("suffix", "")
+        if not isinstance(prefix, str) or not isinstance(suffix, str):
+            raise SecurityError("Unsupported Zotero upload envelope")
+        content_type = payload.get("contentType") or "application/pdf"
+        prefix, suffix = prefix.encode("utf-8"), suffix.encode("utf-8")
+    except (SecurityError, ValueError) as exc:
         _cleanup(att_key)
-        return _fail("upload_failed", f"file upload failed: {e}", att_key)
+        return _fail("authorize_failed", str(exc), att_key)
 
-    if resp.status_code not in _OK_STATUS:
+    # Zotero's full-upload protocol is one multipart stream, not a prefix
+    # request followed by a second request carrying the API key to storage.
+    try:
+        source = resolve_attachment(source, suffixes=ATTACHMENT_SUFFIXES)
+        with source.open("rb") as handle:
+            length = len(prefix) + os.fstat(handle.fileno()).st_size + len(suffix)
+            resp = confined_request("POST", upload_url,
+                headers={"Content-Type": content_type,
+                         "Content-Length": str(length)},
+                data=_UploadStream(handle, prefix, suffix, length), timeout=300, allow_redirects=False)
+        if resp.status_code != 201:
+            raise SecurityError(f"file upload returned HTTP {resp.status_code}")
+        # Registration uses the API origin, never the response-supplied URL.
+        resp = confined_request("POST", f"{base_url}/items/{att_key}/file",
+            headers={"Zotero-API-Key": secret, "If-None-Match": "*"},
+            data={"upload": upload_key}, timeout=30, allow_redirects=False)
+        if resp.status_code != 204:
+            raise SecurityError(f"upload registration returned HTTP {resp.status_code}")
+    except Exception as exc:
         _cleanup(att_key)
-        return _fail("upload_failed", f"file upload returned HTTP {resp.status_code}", att_key)
+        return _fail("upload_failed", f"file upload failed: {exc}", att_key)
 
     log.info(f"Zotero: uploaded PDF {source.name}")
     return {"status": "uploaded", "attachment_key": att_key, "error": None,

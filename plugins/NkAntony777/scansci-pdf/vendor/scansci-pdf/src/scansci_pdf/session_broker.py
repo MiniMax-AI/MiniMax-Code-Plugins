@@ -113,7 +113,7 @@ def start_broker_process(
     from .security import strict_mode, workspace_path
     if strict_mode():
         cwd = workspace_path(cwd)
-        args = [sys.executable, os.environ['SCANSCI_PDF_SECURE_ENTRY'], '--module', 'scansci_pdf.cli', *args[3:]]
+        args = [sys.executable, '-I', os.environ['SCANSCI_PDF_SECURE_ENTRY'], '--module', 'scansci_pdf.cli', *args[3:]]
     return subprocess.Popen(
         args,
         cwd=str(cwd),

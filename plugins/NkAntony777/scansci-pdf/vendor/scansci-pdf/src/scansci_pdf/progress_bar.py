@@ -384,6 +384,9 @@ class ProgressWindow:
 
 
 def main() -> None:
+    if _os.environ.get("SCANSCI_PROGRESS_BAR") == "0":
+        print("progress bar disabled by owner", flush=True)
+        return
     try:
         ProgressWindow().run()
     except Exception as exc:  # headless / non-Windows fallback: console tail

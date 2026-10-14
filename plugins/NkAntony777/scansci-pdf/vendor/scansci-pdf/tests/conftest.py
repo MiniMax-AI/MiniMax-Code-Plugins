@@ -8,3 +8,17 @@ if str(SRC) not in sys.path:
 import os
 
 os.environ.setdefault("SCANSCI_PROGRESS_BAR", "0")  # pytest 不得弹出 GUI
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolated_secret_registry():
+    from scansci_pdf import proxy_redaction
+    proxy_redaction._SECRETS.clear()
+    yield
+    proxy_redaction._SECRETS.clear()
+    import atexit
+    login = sys.modules.get("scansci_pdf.browser_login")
+    if login:
+        atexit.unregister(login._browser.close)

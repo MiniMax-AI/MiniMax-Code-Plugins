@@ -738,7 +738,7 @@ def _try_instsci_browser(doi: str, output_path: Path, config: dict[str, Any]) ->
 
     try:
         browser = launch(headless=False, humanize=True,
-                     args=["--disable-features=CrossOriginOpenerPolicy"])
+                     args=["--disable-features=CrossOriginOpenerPolicy"], config=config)
         context = browser.new_context()
         page = context.new_page()
 

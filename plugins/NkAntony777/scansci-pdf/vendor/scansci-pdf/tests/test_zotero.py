@@ -58,7 +58,7 @@ class FakeZotero:
 
     def __init__(self, *, parent_status=200, parent_key="PARENTKEY",
                  attach_status=200, attach_key="ATTKEY",
-                 authorize_status=200, prefix_status=200, upload_status=201,
+                 authorize_status=200, prefix_status=200, upload_status=201, register_status=204,
                  authorize_payload=None, raises_on=()):
         self.parent_status = parent_status
         self.parent_key = parent_key
@@ -67,6 +67,7 @@ class FakeZotero:
         self.authorize_status = authorize_status
         self.prefix_status = prefix_status
         self.upload_status = upload_status
+        self.register_status = register_status
         self.authorize_payload = authorize_payload
         self.raises_on = set(raises_on)
         self.calls = []
@@ -91,13 +92,15 @@ class FakeZotero:
             if self.attach_status != 200:
                 return FakeResponse(self.attach_status, {"error": {"code": self.attach_status, "message": "bad item"}})
             return _write_ok(self.attach_key)
+        if stage == "register":
+            return FakeResponse(self.register_status, {})
         if stage == "authorize":
             if self.authorize_status != 200:
                 return FakeResponse(self.authorize_status, {"error": {"code": self.authorize_status, "message": "no auth"}})
             if self.authorize_payload is not None:
                 return FakeResponse(self.authorize_status, self.authorize_payload)
             return FakeResponse(200, {
-                "url": "https://storage.zotero.invalid/upload/ATTKEY",
+                "url": "https://www.zotero.org/services/storage/upload",
                 "contentType": "application/pdf",
                 "prefix": "",
                 "suffix": "",
@@ -109,7 +112,9 @@ class FakeZotero:
             data = kwargs.get("data")
             if hasattr(data, "read"):
                 data.read()
-                self.uploaded_streams.append(url)
+            elif data is not None:
+                b"".join(data)
+            self.uploaded_streams.append(url)
             return FakeResponse(self.upload_status, {})
         raise AssertionError(f"unexpected Zotero call: {url}")
 
@@ -126,8 +131,8 @@ class FakeZotero:
             item_type = payload[0].get("itemType") if payload else ""
             return "attachment" if item_type == "attachment" else "parent"
         if "/items/" in url and url.endswith("/file"):
-            return "authorize"
-        if url.startswith("https://storage.zotero.invalid"):
+            return "register" if "upload" in (kwargs.get("data") or {}) else "authorize"
+        if url.startswith("https://www.zotero.org/services/storage"):
             return "upload"
         return "unknown"
 
@@ -191,6 +196,8 @@ def _install_transport(monkeypatch, transport):
 
     monkeypatch.setattr(requests, "post", transport.post)
     monkeypatch.setattr(requests, "delete", transport.delete)
+    monkeypatch.setattr(zotero, "confined_request", lambda method, url, **kwargs:
+                        transport.post(url, **kwargs) if method == "POST" else transport.delete(url, **kwargs))
 
 
 def _tool_call(monkeypatch, identifier, cached_file):
@@ -259,14 +266,18 @@ def test_upload_attachment_follows_the_zotero_upload_protocol(monkeypatch, tmp_p
     assert upload["status"] == "uploaded"
     assert upload["attachment_key"] == "ATTKEY"
     # Create item -> authorize -> push file. A one-shot POST would prove nothing.
-    assert transport.stages() == ["attachment", "authorize", "upload"]
+    assert transport.stages() == ["attachment", "authorize", "upload", "register"]
     attach_kwargs = transport.calls[0][2]
     assert attach_kwargs["json"][0]["parentItem"] == "PARENTKEY"
     assert attach_kwargs["json"][0]["linkMode"] == "imported_file"
     auth_kwargs = transport.calls[1][2]
     assert set(auth_kwargs["data"]) == {"md5", "filename", "filesize", "mtime"}
     assert auth_kwargs["headers"]["If-None-Match"] == "*"
-    assert transport.calls[2][1] == "https://storage.zotero.invalid/upload/ATTKEY"
+    assert transport.calls[2][1] == "https://www.zotero.org/services/storage/upload"
+    assert "Authorization" not in transport.calls[2][2]["headers"]
+    assert "Zotero-API-Key" not in transport.calls[2][2]["headers"]
+    assert transport.calls[3][2]["headers"]["Zotero-API-Key"] == "test-key"
+    assert all(kwargs["allow_redirects"] is False for _, _, kwargs in transport.calls)
 
 
 # --------------------------------------------------------------------------
@@ -386,7 +397,7 @@ def test_in_workspace_pdf_uploads_through_absolute_and_relative_paths(workspace,
         assert result["success"] is True, label
         assert result["zotero_key"] == "PARENTKEY"
         assert result["attachment"]["status"] == "uploaded", label
-        assert transport.stages() == ["parent", "attachment", "authorize", "upload"]
+        assert transport.stages() == ["parent", "attachment", "authorize", "upload", "register"]
 
 
 def test_non_pdf_attachment_is_rejected(workspace, monkeypatch):
@@ -405,7 +416,7 @@ def test_non_pdf_attachment_is_rejected(workspace, monkeypatch):
 # D64-14 — partial failure reaches the caller
 # --------------------------------------------------------------------------
 
-@pytest.mark.parametrize("failing", ["parent", "attachment", "authorize", "upload"])
+@pytest.mark.parametrize("failing", ["parent", "attachment", "authorize", "upload", "register"])
 def test_each_stage_failure_is_visible_to_the_caller(workspace, monkeypatch, failing):
     """A failure at any stage must not be reported as an unqualified success."""
     pdf_path = _pdf(workspace["root"] / "papers" / "paper.pdf", b"%PDF-1.7\n%%EOF\n")
@@ -414,6 +425,7 @@ def test_each_stage_failure_is_visible_to_the_caller(workspace, monkeypatch, fai
         "attachment": {"attach_status": 400},
         "authorize": {"authorize_status": 413},
         "upload": {"upload_status": 502},
+        "register": {"register_status": 500},
     }[failing]
     transport = FakeZotero(**settings)
     _install_transport(monkeypatch, transport)
@@ -471,7 +483,7 @@ def test_failed_write_envelope_reports_the_api_message(workspace, monkeypatch):
         raise AssertionError(url)
 
     import requests
-    monkeypatch.setattr(requests, "post", post)
+    monkeypatch.setattr(zotero, "confined_request", lambda method, url, **kwargs: post(url, **kwargs))
 
     result = zotero.push_to_zotero(
         doi="10.1234/example", pdf_path=pdf_path,
@@ -490,6 +502,28 @@ def test_missing_local_pdf_is_reported_not_silently_skipped(workspace, monkeypat
     assert result["success"] is False
     assert result["attachment"]["status"] == "rejected"
     assert transport.calls == []
+
+
+@pytest.mark.parametrize("url", ["https://attacker.example/upload", "http://www.zotero.org/upload"])
+def test_response_supplied_upload_url_never_receives_file_or_api_key(workspace, monkeypatch, url):
+    transport = FakeZotero(authorize_payload={"url": url, "uploadKey": "upload-secret"})
+    _install_transport(monkeypatch, transport)
+    pdf = _pdf(workspace["root"] / "papers" / "paper.pdf")
+    result = zotero.push_to_zotero("10.1234/test", pdf, config_module.load_config())
+    assert result["success"] is False
+    assert transport.uploaded_streams == []
+    assert transport.stages() == ["parent", "attachment", "authorize"]
+
+
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+def test_storage_redirect_is_failure_not_success(workspace, monkeypatch, status):
+    transport = FakeZotero(upload_status=status)
+    _install_transport(monkeypatch, transport)
+    pdf = _pdf(workspace["root"] / "papers" / "paper.pdf")
+    result = zotero.push_to_zotero("10.1234/test", pdf, config_module.load_config())
+    assert result["success"] is False
+    assert result["attachment"]["status"] == "upload_failed"
+    assert all(kwargs["allow_redirects"] is False for _, _, kwargs in transport.calls)
 
 
 def test_api_key_never_leaks_into_results_or_logs(workspace, monkeypatch, caplog):

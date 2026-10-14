@@ -13,7 +13,7 @@ def test_cookie_store_drops_other_domains_and_keeps_security_fields(tmp_path):
     store = CookieStore(tmp_path / "cookies.json")
     saved = store.save([
         {"name": "vpn", "value": "ticket", "domain": ".webvpn.example.edu", "path": "/",
-         "httpOnly": True, "sameSite": "Lax", "expires": 9999999999},
+         "httpOnly": True, "secure": True, "sameSite": "Lax", "expires": 9999999999},
         {"name": "idp", "value": "sso", "domain": ".idp.example.edu", "path": "/"},
     ], target_url="https://webvpn.example.edu/login")
     assert [c["name"] for c in saved] == ["vpn"]
@@ -54,9 +54,9 @@ def test_restore_reapplies_scope_and_localstorage_opt_in(tmp_path):
         "target_url": "https://www.sciencedirect.com/",
         "cookies": [
             {"name": "sd", "value": "1", "domain": ".sciencedirect.com", "path": "/",
-             "httpOnly": True, "secure": True, "expires": 9999999999},
+             "httpOnly": True, "secure": True, "sameSite": "Lax", "expires": 9999999999},
             {"name": "idp", "value": "2", "domain": ".university.edu", "path": "/",
-             "httpOnly": True, "secure": True, "expires": 9999999999},
+             "httpOnly": True, "secure": True, "sameSite": "Lax", "expires": 9999999999},
         ],
         "localStorage": {"https://idp.university.edu": {"token": "secret"}},
     }), encoding="utf-8")

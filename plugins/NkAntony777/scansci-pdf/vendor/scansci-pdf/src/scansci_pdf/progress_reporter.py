@@ -91,7 +91,7 @@ def progress_bar_command() -> list[str]:
 
     entry = os.environ.get("SCANSCI_PDF_SECURE_ENTRY", "")
     if strict_mode() and entry and Path(entry).is_file():
-        return [sys.executable, entry, "--module", "scansci_pdf.progress_bar"]
+        return [sys.executable, "-I", entry, "--module", "scansci_pdf.progress_bar"]
     return [sys.executable, "-m", "scansci_pdf.progress_bar"]
 
 

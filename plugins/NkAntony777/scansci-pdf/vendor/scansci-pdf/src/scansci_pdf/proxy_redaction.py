@@ -3,14 +3,40 @@
 from __future__ import annotations
 
 import logging
+import builtins
+import sys
+import json
+import os
+import re
+import threading
+from urllib.parse import quote
 from typing import Any
+
+_SECRETS: set[str] = set()
+_LOCK = threading.RLock()
+_SECRET_KEY = re.compile(r"api.?key|private.?key|(?:access|refresh|inst|auth)?token|secret|password|credential|cookie", re.I)
+
+
+def register_config_secrets(config: dict) -> None:
+    """Remember secret values before any validation/error can echo them."""
+    with _LOCK:
+        for key, value in config.items():
+            sensitive = _SECRET_KEY.search(str(key)) or "key" in str(key).lower()
+            if sensitive and isinstance(value, str) and value:
+                _SECRETS.update((value, quote(value, safe=""), json.dumps(value)[1:-1]))
 
 
 def redact_proxy_text(value: object) -> str:
     """Mask embedded proxy passwords using the config display policy."""
     # Lazy import keeps config, transport, and logging imports independent.
     from .config import mask_config_value
-    return str(mask_config_value("network_proxy", str(value)))
+    register_config_secrets({key: value for key, value in os.environ.items()
+                             if key.startswith(("SCANSCI_", "ZOTERO_", "ELSEVIER_"))})
+    text = str(mask_config_value("network_proxy", str(value)))
+    with _LOCK:
+        for secret in sorted(_SECRETS, key=len, reverse=True):
+            text = text.replace(secret, "***")
+    return text
 
 
 def redact_proxy_structure(value: Any, _seen: set[int] | None = None) -> Any:
@@ -32,7 +58,8 @@ def redact_proxy_structure(value: Any, _seen: set[int] | None = None) -> Any:
     seen.add(identity)
     try:
         if isinstance(value, dict):
-            return {redact_proxy_structure(key, seen): redact_proxy_structure(item, seen)
+            return {redact_proxy_structure(key, seen): "***" if _SECRET_KEY.search(str(key))
+                    else redact_proxy_structure(item, seen)
                     for key, item in value.items()}
         items = [redact_proxy_structure(item, seen) for item in value]
         if isinstance(value, tuple):
@@ -81,3 +108,73 @@ def redacting_console(**options):
             return super().print(*(redact_proxy_structure(item) for item in objects), **kwargs)
 
     return RedactingConsole(**options)
+
+
+class _RedactingStream:
+    """Filter text writes, retaining partial secrets across write/flush calls."""
+
+    def __init__(self, stream):
+        self._stream = stream
+        self._pending = ""
+        self._lock = threading.RLock()
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+    def write(self, text):
+        with self._lock:
+            self._pending += str(text)
+            if "\n" in self._pending or "\r" in self._pending or len(self._pending) >= 65536:
+                self.flush()
+        return len(text)
+
+    def flush(self):
+        with self._lock:
+            text = redact_proxy_text(self._pending)
+            keep = 0
+            with _LOCK:
+                for secret in _SECRETS:
+                    for length in range(1, min(len(secret), len(text) + 1)):
+                        if text.endswith(secret[:length]):
+                            keep = max(keep, length)
+            self._pending = text[-keep:] if keep else ""
+            self._stream.write(text[:-keep] if keep else text)
+            self._stream.flush()
+
+
+def install_secret_egress() -> None:
+    """Cover legacy print() calls as well as uncaught Python tracebacks."""
+    if getattr(builtins.print, "_scansci_redacted", False):
+        return
+    sys.stdout = _RedactingStream(sys.stdout)
+    sys.stderr = _RedactingStream(sys.stderr)
+    original = builtins.print
+
+    def safe_print(*objects, **kwargs):
+        for key in ("sep", "end"):
+            if kwargs.get(key) is not None:
+                kwargs[key] = redact_proxy_text(kwargs[key])
+        return original(*(redact_proxy_text(item) for item in objects), **kwargs)
+
+    safe_print._scansci_redacted = True
+    builtins.print = safe_print
+    factory = logging.getLogRecordFactory()
+
+    def safe_record(*args, **kwargs):
+        record = factory(*args, **kwargs)
+        record.msg = redact_proxy_text(record.getMessage())
+        record.args = ()
+        if record.exc_info:
+            record.msg += "\n" + redact_proxy_text(logging.Formatter().formatException(record.exc_info))
+            record.exc_info = None
+        if record.stack_info:
+            record.stack_info = redact_proxy_text(record.stack_info)
+        return record
+
+    logging.setLogRecordFactory(safe_record)
+
+    def exception_hook(kind, value, tb):
+        import traceback
+        sys.stderr.write(redact_proxy_text("".join(traceback.format_exception(kind, value, tb))))
+
+    sys.excepthook = exception_hook

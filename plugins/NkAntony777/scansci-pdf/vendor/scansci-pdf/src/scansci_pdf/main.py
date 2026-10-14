@@ -353,6 +353,7 @@ def progress_cmd() -> None:
 def setup_school(
     school: str = typer.Argument("", help="School name to configure"),
     show: bool = typer.Option(False, "--show", help="Show current configuration"),
+    confirm_trust: bool = typer.Option(False, "--confirm-trust", help="Approve institutional trust changes."),
 ) -> None:
     """Configure institutional access (WebVPN/EZproxy/CARSI)."""
     from .config import load_config, mask_config_value, save_config
@@ -391,7 +392,7 @@ def setup_school(
     chosen = matches[0]
     config["vpnsci_school"] = chosen.name
     config["vpnsci_base_url"] = chosen.host
-    save_config(config)
+    save_config(config, confirmed=confirm_trust)
     print(f"  Configured: {chosen.name}")
     print(f"  Type:       {chosen.school_type}")
     print(f"  Gateway:    {chosen.host}")
@@ -1158,9 +1159,10 @@ def manifest_cmd(
 def config_show(
     key: str = typer.Argument("", help="Config key to show/set"),
     value: str = typer.Argument("", help="Value to set"),
+    confirm_trust: bool = typer.Option(False, "--confirm-trust", help="Approve proxy/browser trust changes."),
 ) -> None:
     """Show or set configuration values."""
-    from .config import load_config, save_config, update_config
+    from .config import load_config, mask_config_value, update_config
 
     config = load_config()
 
@@ -1169,22 +1171,24 @@ def config_show(
         for k, v in sorted(config.items()):
             if "key" in k.lower() or "token" in k.lower() or "secret" in k.lower() or "password" in k.lower():
                 v = "***" if v else "(not set)"
-            print(f"  {k:30s} = {v}")
+            print(f"  {k:30s} = {mask_config_value(k, v)}")
         return
 
     if not value:
         v = config.get(key, "(not set)")
         if "key" in key.lower() or "token" in key.lower():
             v = "***" if v and v != "(not set)" else "(not set)"
-        print(f"  {key} = {v}")
+        print(f"  {key} = {mask_config_value(key, v)}")
         return
 
     # Use update_config for proper type coercion and validation
     try:
-        update_config(key, value)
-        print(f"  Set {key} = {value}")
+        update_config(key, value, confirmed=confirm_trust)
+        print(f"  Set {key} = {mask_config_value(key, value)}")
     except ValueError as e:
-        print(f"  Error: {e}")
+        from .proxy_redaction import redact_proxy_text
+        print(f"  Error: {redact_proxy_text(e)}")
+        raise typer.Exit(1)
 
 
 def main() -> None:

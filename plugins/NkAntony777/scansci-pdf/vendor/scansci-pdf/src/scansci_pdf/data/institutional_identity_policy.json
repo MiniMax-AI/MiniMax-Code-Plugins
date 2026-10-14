@@ -161,5 +161,13 @@
         "Wiley"
       ]
     }
+  },
+  "hosted_native_profile_policy": {
+    "reuse": false,
+    "clone": false,
+    "legacy_profile_deleted": false,
+    "cross_run_credentials": "explicit target-scoped exports only",
+    "localStorage": "owner opt-in and exact authorized origin",
+    "non_exportable_state": "retained within a live context only; re-login may be needed after restart"
   }
 }

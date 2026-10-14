@@ -18,7 +18,7 @@ def test_hosted_launch_forces_proxy_in_browser_and_every_context(tmp_path, monke
         captured['launch'] = kwargs
         return Browser()
     monkeypatch.setattr(browser_backend, '_launch_patchright', launch)
-    browser = browser_backend.launch(proxy={'server': 'http://127.0.0.1:6666'})
+    browser = browser_backend.launch(config={}, proxy={'server': 'http://127.0.0.1:6666'})
     proxy = captured['launch']['proxy']
     assert proxy['server'] != 'http://127.0.0.1:6666'
     assert '--proxy-bypass-list=<-loopback>' in captured['launch']['args']
@@ -35,16 +35,17 @@ def test_hosted_persistent_launch_validates_profile_and_tls(tmp_path, monkeypatc
     import pytest
     from scansci_pdf.security import SecurityError
     monkeypatch.setenv('SCANSCI_PDF_WORKSPACE', str(tmp_path))
-    monkeypatch.setattr(browser_backend, 'resolve_backend', lambda config: 'patchright')
     captured = {}
     class Context:
-        pages = []
-        def new_page(self): pass
-    def launch(*args, **kwargs):
-        captured.update(kwargs)
-        return Context()
-    monkeypatch.setattr(browser_backend, '_launch_patchright_persistent', launch)
-    browser_backend.launch_persistent_context(str(tmp_path/'profile'), ignore_https_errors=True)
-    assert captured['ignore_https_errors'] is False
+        def close(self): pass
+    class Browser:
+        def new_context(self, **kwargs):
+            captured.update(kwargs)
+            return Context()
+        def close(self): pass
+    monkeypatch.setattr(browser_backend, 'launch', lambda **kwargs: Browser())
+    browser_backend.launch_persistent_context(str(tmp_path/'profile'), config={}, ignore_https_errors=True)
+    assert not (tmp_path/'profile').exists()
+    assert 'ignore_https_errors' not in captured
     with pytest.raises(SecurityError):
-        browser_backend.launch_persistent_context(str(tmp_path.parent/'outside-profile'))
+        browser_backend.launch_persistent_context(str(tmp_path.parent/'outside-profile'), config={})

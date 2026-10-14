@@ -266,6 +266,7 @@ class WebVPNAuth:
                 user_data_dir=str(profile_dir),
                 headless=False, humanize=True,
                 args=self._browser_launch_args(),
+                config=self.config,
             )
             self._browser = None
             self._page = self._context.new_page()
@@ -485,6 +486,7 @@ class EZProxyAuth:
             self._browser = launch(
                 headless=False, humanize=True,
                 args=self._browser_launch_args(),
+                config=self.config,
             )
             self._context = self._browser.new_context()
             self._page = self._context.new_page()

@@ -65,6 +65,7 @@ class PersistentBrowser:
         self._context = None
         self._page = None
         self._cookies_saved = False
+        self._config_identity = None
 
     @property
     def is_alive(self) -> bool:
@@ -79,8 +80,12 @@ class PersistentBrowser:
 
     def get_page(self, config: dict[str, Any] | None = None):
         """Get or create the browser page. Returns (context, page)."""
-        if self.is_alive:
+        identity = json.dumps(config, sort_keys=True, default=str)
+        if self.is_alive and self._config_identity == identity:
             return self._context, self._page
+        if self.is_alive:
+            self._cleanup()
+        self._config_identity = identity
         return self._start(config)
 
     def _start(self, config: dict[str, Any] | None = None):
@@ -91,6 +96,7 @@ class PersistentBrowser:
         self._browser = launch(
             headless=False, humanize=True,
             args=["--disable-features=CrossOriginOpenerPolicy"],
+            config=config,
         )
         self._context = self._browser.new_context()
         self._page = self._context.new_page()
@@ -214,11 +220,8 @@ class PersistentBrowser:
 
     @staticmethod
     def _origin_matches_target(origin: str, target_url: str) -> bool:
-        from urllib.parse import urlparse
-
-        host = (urlparse(target_url or "").hostname or "").lower()
-        page_host = (urlparse(origin or "").hostname or "").lower()
-        return bool(host and page_host) and (page_host == host or page_host.endswith("." + host))
+        from .credential_transport import origin_of
+        return bool(origin_of(target_url)[1]) and origin_of(origin) == origin_of(target_url)
 
     def _scoped_localstorage(self, target_url: str) -> dict[str, dict[str, Any]]:
         """Collect localStorage for the login target origin only."""
@@ -234,7 +237,8 @@ class PersistentBrowser:
                 if not self._origin_matches_target(url, target_url):
                     log.info(f"   [browser] Skipped localStorage for non-target origin: {page_host}")
                     continue
-                origin = f"{_urlparse(url).scheme}://{page_host}"
+                parts = _urlparse(url)
+                origin = f"{parts.scheme}://{parts.netloc}"
                 items = page.evaluate("""
                     (() => {
                         const items = {};
@@ -382,7 +386,7 @@ def open_login_browser(
 
     try:
         browser = launch(headless=False, humanize=True,
-                         args=["--disable-features=CrossOriginOpenerPolicy"])
+                         args=["--disable-features=CrossOriginOpenerPolicy"], config=config)
         context = browser.new_context()
         page = context.new_page()
 

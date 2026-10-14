@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import sys
+
+if sys.version_info < (3, 11):
+    raise SystemExit('Python >=3.11 is required')
+if not sys.flags.isolated:
+    raise SystemExit('Isolated Python startup required: use launch_secure.mjs or python -I run_secure.py')
+
 import os
 from pathlib import Path
-import sys
 import hashlib
 import importlib.abc
 import importlib.util
@@ -33,18 +39,23 @@ if provenance.exists():
 class SourceLoader(importlib.abc.MetaPathFinder, importlib.abc.Loader):
     """Load verified source directly, ignoring stale/untrusted bytecode caches."""
     def _pinned_file(self, fullname):
-        base = engine/'src'/Path(*fullname.split('.'))
-        file = base/'__init__.py' if base.is_dir() else base.with_suffix('.py')
-        return file if file.exists() else None
+        relative = 'src/' + fullname.replace('.', '/')
+        for name in (relative + '/__init__.py', relative + '.py'):
+            if name in manifest['files']:
+                file = engine / name
+                if file.is_file():
+                    return file
+        return None
     def find_spec(self, fullname, path=None, target=None):
-        if not fullname.startswith('scansci_pdf'):
+        if fullname != 'scansci_pdf' and not fullname.startswith('scansci_pdf.'):
             return None
-        base = engine/'src'/Path(*fullname.split('.'))
         file = self._pinned_file(fullname)
         if file is None:
-            return None
+            # Optional engine modules must retain their source fallback, not
+            # fall through to an unverified bytecode/native/namespace finder.
+            raise ModuleNotFoundError(f'No pinned engine source for {fullname}', name=fullname)
         return importlib.util.spec_from_file_location(fullname, file, loader=self,
-                    submodule_search_locations=[str(base)] if base.is_dir() else None)
+                    submodule_search_locations=[str(file.parent)] if file.name == '__init__.py' else None)
     def create_module(self, spec): return None
     def get_code(self, fullname):
         # `runpy` — which drives `--module` — asks the loader for the CODE of a
@@ -58,8 +69,7 @@ class SourceLoader(importlib.abc.MetaPathFinder, importlib.abc.Loader):
             raise ImportError(f'No pinned engine source for {fullname}', name=fullname)
         return compile(file.read_bytes(), str(file), 'exec')
     def exec_module(self, module):
-        file = Path(module.__spec__.origin)
-        exec(compile(file.read_bytes(), str(file), 'exec'), module.__dict__)
+        exec(self.get_code(module.__spec__.name), module.__dict__)
 
 sys.meta_path.insert(0, SourceLoader())
 sys.dont_write_bytecode = True
@@ -127,6 +137,8 @@ import tempfile
 tempfile.tempdir = str(temporary)
 enforce_public_transport()
 enforce_workspace_writes()
+from scansci_pdf.proxy_redaction import install_secret_egress
+install_secret_egress()
 
 if '--verify' in sys.argv:
     from scansci_pdf import __version__
@@ -136,6 +148,8 @@ if '--verify' in sys.argv:
     # bytes came from the upstream tag/commit recorded in the manifest, nor
     # that `__version__` identifies the executing distribution.
     print(json.dumps({'engine_version': __version__, 'source': str(src), 'workspace': str(root),
+                      'python_executable': sys.executable, 'python_version': list(sys.version_info[:2]),
+                      'isolated_startup': bool(sys.flags.isolated),
                       'source_manifest': 'verified', 'dependency_lock': 'verified',
                       'verification_scope': 'local file hashes + installed dependency versions; '
                                             'not an upstream provenance attestation'}))

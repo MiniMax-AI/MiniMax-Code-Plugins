@@ -4,6 +4,9 @@ import logging
 
 from .proxy_redaction import redacting_logger
 import sys
+from typing import Annotated
+
+from pydantic import Field
 
 try:
     from mcp.server.fastmcp import FastMCP  # mcp 1.x
@@ -147,7 +150,7 @@ async def get_paper_metadata(doi: str) -> str:
 
 
 @mcp.tool()
-async def configure_school(school: str) -> str:
+async def configure_school(school: str, confirmed: Annotated[bool, Field(strict=True)] = False) -> str:
     """Configure the institutional access school.
 
     Sets the school name for WebVPN/EZproxy authentication.
@@ -155,6 +158,7 @@ async def configure_school(school: str) -> str:
 
     Args:
         school: School name (e.g. "清华大学", "Nanjing University").
+        confirmed: Explicit owner approval for changing the institutional destination.
     """
     from .schools import search_schools
 
@@ -164,7 +168,10 @@ async def configure_school(school: str) -> str:
 
     config = load_config()
     config["vpnsci_school"] = matches[0].name
-    save_config(config)
+    try:
+        save_config(config, confirmed=confirmed)
+    except ValueError as exc:
+        return str(exc)
 
     # Reset cached fetcher so it picks up new config
     global _fetcher

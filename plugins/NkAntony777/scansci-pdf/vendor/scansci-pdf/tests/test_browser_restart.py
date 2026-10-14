@@ -35,7 +35,7 @@ class _FakeContext:
     def cookies(self):
         return [{"name": f"cookie-from-{self.name}", "value": "1",
                  "domain": ".sciencedirect.com", "path": "/",
-                 "httpOnly": True, "secure": True, "expires": -1}]
+                 "httpOnly": True, "secure": True, "sameSite": "Lax", "expires": -1}]
 
     def add_cookies(self, cookies):
         self.added.append(list(cookies))

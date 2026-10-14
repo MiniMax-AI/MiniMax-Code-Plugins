@@ -186,11 +186,11 @@ def test_legacy_four_field_file_cannot_resurrect_lost_flags():
 MIXED_JAR = [
     _synthetic_cookie(),
     {"name": "springer", "value": "other-publisher", "domain": ".springer.com",
-     "path": "/", "httpOnly": True, "secure": True, "expires": FUTURE},
+     "path": "/", "httpOnly": True, "secure": True, "sameSite": "Lax", "expires": FUTURE},
     {"name": "shibsession", "value": "idp-token", "domain": ".tsinghua.edu.cn",
-     "path": "/", "httpOnly": True, "secure": True, "expires": FUTURE},
+     "path": "/", "httpOnly": True, "secure": True, "sameSite": "Lax", "expires": FUTURE},
     {"name": "CAS", "value": "cas-token", "domain": "idp.campus.example.edu",
-     "path": "/", "httpOnly": True, "secure": True, "expires": FUTURE},
+     "path": "/", "httpOnly": True, "secure": True, "sameSite": "Lax", "expires": FUTURE},
 ]
 
 
@@ -270,11 +270,11 @@ def test_institutional_target_scope_still_allows_webvpn_and_ezproxy(tmp_path):
     """
     jar = [
         {"name": "vpn", "value": "ticket", "domain": ".webvpn.campus.edu.cn",
-         "path": "/", "httpOnly": True, "secure": True, "expires": FUTURE},
+         "path": "/", "httpOnly": True, "secure": True, "sameSite": "Lax", "expires": FUTURE},
         {"name": "ezproxy", "value": "proxy", "domain": ".login.ezproxy.edu.cn",
-         "path": "/", "httpOnly": True, "secure": True, "expires": FUTURE},
+         "path": "/", "httpOnly": True, "secure": True, "sameSite": "Lax", "expires": FUTURE},
         {"name": "shibsession", "value": "idp", "domain": ".tsinghua.edu.cn",
-         "path": "/", "httpOnly": True, "secure": True, "expires": FUTURE},
+         "path": "/", "httpOnly": True, "secure": True, "sameSite": "Lax", "expires": FUTURE},
     ]
     kept = bc.credentials_for_target(jar, {}, "https://webvpn.campus.edu.cn/remote/login")
     assert [c["name"] for c in kept] == ["vpn"]
@@ -294,7 +294,7 @@ def test_cookie_store_save_and_restore_both_apply_the_scope(tmp_path):
 
     store.save(
         [{"name": "vpn", "value": "ticket", "domain": ".webvpn.campus.edu.cn",
-          "path": "/", "httpOnly": True, "secure": True, "expires": FUTURE}],
+          "path": "/", "httpOnly": True, "secure": True, "sameSite": "Lax", "expires": FUTURE}],
         target_url="https://webvpn.campus.edu.cn/remote/login",
     )
     assert [c["name"] for c in store.load(target_url="https://webvpn.campus.edu.cn/")] == ["vpn"]

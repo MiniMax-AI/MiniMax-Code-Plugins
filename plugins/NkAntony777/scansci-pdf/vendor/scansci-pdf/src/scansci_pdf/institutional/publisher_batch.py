@@ -406,6 +406,9 @@ class PublisherBatchDownloader:
         return results
 
     def _prepare_worker_profile(self, source: Path, target: Path) -> Path:
+        from ..security import strict_mode, workspace_path
+        if strict_mode():
+            return workspace_path(target)
         if target.exists():
             shutil.rmtree(target, ignore_errors=True)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -445,6 +448,7 @@ class PublisherBatchDownloader:
             headless=False,
             humanize=True,
             args=["--disable-features=CrossOriginOpenerPolicy"],
+            config=self.config,
         )
 
     def fetch_one(self, context: Any, record: PaperRecord, run_dir: Path) -> DownloadResult:

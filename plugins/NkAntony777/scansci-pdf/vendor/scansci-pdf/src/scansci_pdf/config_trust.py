@@ -9,10 +9,9 @@ trust decision rather than a preference.
 Two properties are enforced here and nowhere else:
 
 1. **Confirmation at the write boundary.** :func:`enforce_trust_write` is called
-   from :func:`scansci_pdf.config.update_config`, which is the actual
-   persistence path for a single key. The MCP tool wrapper also checks, but a
-   wrapper is one caller — the boundary is what every caller shares, including
-   a direct ``update_config`` call that never goes through a tool.
+   from both :func:`scansci_pdf.config.update_config` and the final
+   :func:`scansci_pdf.config.save_config` trust-diff boundary. The MCP wrapper
+   also checks, but direct and bulk saves share the final confirmation gate.
 
 2. **Format validity before anything is persisted.** An illegal value raises
    instead of being written, so a malformed pin can never silently degrade into
@@ -32,6 +31,12 @@ from typing import Any
 # bytes may be executed, which is the strongest statement available offline.
 BROWSER_DIGEST_KEY = "browser_binary_sha256"
 
+TRUST_BOOL_KEYS: frozenset[str] = frozenset({
+    "browser_auto_upgrade",
+    "browser_persist_localstorage",
+    "remote_assist_lan",
+})
+
 # Every setting whose value decides which code runs or which host is contacted.
 # One list: callers ask :func:`is_trust_sensitive` instead of re-declaring a
 # subset, so a new trust key cannot silently escape confirmation.
@@ -47,6 +52,14 @@ TRUST_SENSITIVE_KEYS: frozenset[str] = frozenset({
     "tor_proxy",                 # egress
     "flaresolverr_url",          # host that executes JS on our behalf
     "camofox_url",               # host that executes JS on our behalf
+    "browser_static_proxy",
+    "chrome_profile_dir",
+    "vpnsci_school",             # bundled school selectors resolve a gateway
+    "instsci_school",            # legacy selector has the same destination role
+    "vpnsci_base_url",
+    "instsci_base_url",
+    "ezproxy_login_url",
+    "remote_assist_lan",
 })
 
 _CONFIRMATION_HINT = (
@@ -142,6 +155,19 @@ def normalize_trust_value(key: str, value: Any) -> Any:
     """
     if key == BROWSER_DIGEST_KEY:
         return normalize_browser_digests(value)
+    if key in TRUST_BOOL_KEYS:
+        from .config import config_bool
+
+        # Compare and persist the same fail-closed boolean that consumers read.
+        # A nonempty "False" string must never reach a truthiness-based caller.
+        return config_bool(key, value, False)
+    if key == "chrome_profile_dir":
+        if not value:
+            return ""
+        from .security import strict_mode, workspace_path
+
+        if strict_mode():
+            return str(workspace_path(value))
     if value is None:
         return ""
     return str(value)
@@ -167,8 +193,15 @@ def enforce_trust_write(
         return value
 
     normalized = normalize_trust_value(key, value)
-    if normalized == current:
-        return normalized
+    try:
+        previous = normalize_trust_value(key, current)
+    except ValueError:
+        # A corrupt pin or refused profile is not a no-op. A valid replacement
+        # still passes the confirmation gate, including SecurityError (ValueError).
+        pass
+    else:
+        if normalized == previous:
+            return normalized
 
     from .security import strict_mode
 

@@ -1,3 +1,93 @@
+## Round-4 repair, October 14, 2026
+
+This section supersedes earlier safety descriptions where they differ. These are local validation
+results, not upstream GitHub Checks. The submitted commit and any fork-hosted run links are recorded
+separately in the PR; no upstream workflow approval or CodeQL pass is claimed here.
+Plugin version is 1.18.0-minimax.2; the source-only engine is 1.18.0.post2.
+
+1. Native browser profile persistence: hosted launch_persistent_context creates a non-persistent
+   browser context and owns its browser cleanup. It never opens the requested legacy profile.
+   Both publisher-batch implementations refuse to clone native profiles. Live SSO remains available
+   in a context; across runs only scoped exports may be restored and re-login can be necessary.
+   Existing legacy profiles are not deleted. localStorage export/restore uses an exact origin,
+   including scheme and port, and still requires owner opt-in.
+2. Cookie migration: all identity and security fields must exist with valid types before scoped
+   save/restore/import/merge. Incomplete records, non-finite expiry, invalid SameSite and weakened
+   SameSite=None records are discarded rather than normalized into apparently complete credentials.
+3. Zotero: Zotero-API-Key joins the origin-confined credential header set. Every real API request
+   uses that transport and disables redirects. Storage upload origins have a small explicit HTTPS
+   allowlist (www.zotero.org and the declared Zotero S3 origins); API keys never go to storage.
+   Full uploads stream prefix/file/suffix in one request, with an unambiguous Content-Length, then
+   register uploadKey at the API origin. Redirects and failed registration are visible failures.
+   Protocol reference: https://www.zotero.org/support/dev/web_api/v3/file_upload
+   No successful live Zotero service upload is claimed.
+4. Browser config: every production launch call supplies config (also checked by an AST regression).
+   Hosted calls without config fail before backend selection. Explicit missing backends/binaries
+   fail closed, pins remain enforced, and a changed config invalidates the thread-local/live-browser
+   cache. Native-profile and normal browser calls share the provenance gate. Camoufox honors an
+   explicit browser_executable before installation discovery, refuses an invalid selection rather
+   than falling back, and rejects raw launch options that would replace the verified program.
+5. Sensitive output/trust writes: a process-local secret registry covers values loaded/set in config,
+   proxy passwords keep the existing structural masker, and CLI print/streams, logs/tracebacks,
+   Rich consoles and MCP JSON share redaction. Structured credential keys are masked without masking
+   Zotero object identifiers needed for retries. Both bulk save_config and single-key update_config
+   compare trust-affecting changes before any persistence and require actual boolean confirmation.
+   Trust booleans are compared, loaded and saved with the same fail-closed semantics; a string
+   "False" cannot enable automatic browser selection. Legacy boolean and relative-profile migration
+   do not turn unrelated updates into new trust decisions. Mutable defaults are independently copied,
+   so in-place pin changes cannot mutate the comparison baseline. A corrupt stored pin can be
+   replaced with a valid pin only after explicit confirmation; invalid replacements remain refused.
+   Both CLI surfaces expose --confirm-trust; MCP uses confirmed:true. Callers may not infer consent.
+6. Interpreter: mcp.json uses the packaged source-only Node bootstrap (Node >=22); the host may set
+   SCANSCI_PDF_PYTHON to an absolute prepared-environment interpreter. Otherwise it probes python3,
+   then python, using -I -S, checks >=3.11, and binds the absolute returned interpreter. Engine and
+   child module launches use -I; inherited PYTHON* state is removed by the bootstrap. run_secure.py
+   independently rejects an old interpreter or an unisolated launch. The bootstrap is source-hashed,
+   but these checks do not attest interpreter authenticity or owner-managed site-package signatures.
+   The actual stdio acceptance script reads the locked MCP 2.x input_schema attribute, with a
+   tested fallback for the MCP 1.x inputSchema attribute.
+
+Validation of the final source revision:
+
+- Windows Python 3.13.16: 1002 passed, 5 skipped, 0 failed (1007); real approved Edge enabled,
+  156.29 seconds after the final cross-review repairs.
+- Windows Python 3.11.17: 1002 passed, 5 skipped, 0 failed (1007); real approved Edge enabled,
+  153.58 seconds after the final cross-review repairs.
+- Fresh publication recheck: the same 1002-pass/5-skip result on both interpreters,
+  Python 3.11 in 148.17 seconds and Python 3.13 in 147.62 seconds. Actual delivered stdio,
+  strict school-confirmation/atomic setup, source/dependency verification, independent rehash,
+  root schema validation, Node syntax and whitespace checks were also repeated successfully.
+- Actual delivered mcp.json -> Node bootstrap -> isolated Python stdio: passed on both interpreters.
+  18 tools; initialize/tools-list, DOI parsing, outside-workspace rejection, Tor confirmation,
+  masked secret config, helper overwrite confirmation and modified-source rejection exercised.
+- SOURCE-HASHES.json independently recomputed: 173 entries, no mismatches.
+- Repository npm run validate: passed, 29 hosted plugins and all examples.
+- Root npm test: 336 passed, 6 failed, 3 skipped (345). One failure is an EPERM
+  symlink creation in test/hosted-plugins.test.mjs; five are unchanged octopus-meme-maker
+  CRLF/frontmatter-sensitive smoke assertions. These are not ScanSci engine failures;
+  no repository-wide green test result is claimed, and those files were not modified.
+- git diff --check and Node bootstrap syntax: passed.
+- The first 27 focused round-4 tests all failed against the original implementation and passed
+  after the core changes. Additional coverage exercises real browser restart, both native-profile
+  clone paths, CLI subprocesses, split secret writes, upload redirect/refusal and interpreter startup.
+- The local review follow-up adds 80 regressions: 42 typed trust/migration/default-isolation cases, 29 Camoufox
+  executable-selection/raw-option cases and 9 SDK-schema compatibility cases. The first 27
+  Camoufox cases failed before this follow-up repair. The full-suite MCP schema failure observed
+  during review is fixed rather than excluded or bypassed.
+- Final local logs are under the workspace directory
+  `repair-review-followup-20261014/final-r2-*.log`; earlier failing review and first repair runs
+  are separate from this final result. Publication recheck logs are under
+  `pr64-publish-verify-20261014/`. PR-BODY.md supplies the corrected PR description.
+  Upstream Checks remain a separate approval-gated release requirement.
+
+Five full-suite skips: three unavailable Windows symlink-privilege cases, absent second-checkout
+comparison and the intentionally optional Generic-strategy prefix case. The real browser fixtures
+intercept responses locally: no real institutional login, publisher retrieval or service entitlement
+is demonstrated. No Linux/macOS or real Camoufox/Firefox execution is claimed here. Linux/Windows
+3.11/3.13 workflow wiring now installs Node 22 and exercises the isolated launch; the upstream run
+still requires maintainer approval on a new submitted head. Native libraries/browser children are
+not an OS sandbox, and concurrent filesystem ancestor replacement remains a documented limitation.
+
 # PR #64: patched engine, security and performance
 
 This plugin now owns a source-only ScanSci fork based on upstream v1.18.0,

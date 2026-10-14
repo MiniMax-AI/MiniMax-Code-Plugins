@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import time
+import math
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -131,10 +132,9 @@ def parse_netscape_cookies(text: str) -> list[dict[str, Any]]:
         cookie: dict[str, Any] = {
             "name": name, "value": value,
             "domain": domain, "path": cookie_path,
-            "secure": secure, "expires": expires,
+            "httpOnly": http_only, "secure": secure, "expires": expires,
         }
-        if http_only:
-            cookie["httpOnly"] = True
+        # Netscape encodes False by omitting #HttpOnly_, not by losing the flag.
         same_site = metadata.get((name, domain, cookie_path))
         if same_site in ("Strict", "Lax", "None"):
             cookie["sameSite"] = same_site
@@ -318,7 +318,7 @@ def minimal_cookies(cookies: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def is_legacy_cookie_record(cookie: dict[str, Any]) -> bool:
-    """True for a pre-D64-05 record that carries no security attributes.
+    """True for a record with missing, partial or invalid security state.
 
     Such a file cannot restore the original cookie faithfully: the HttpOnly,
     Secure, SameSite and expiry state were never written. We do NOT guess them
@@ -332,7 +332,21 @@ def is_legacy_cookie_record(cookie: dict[str, Any]) -> bool:
     browser context or a native persistent profile. See
     ``data/institutional_identity_policy.json``.
     """
-    return isinstance(cookie, dict) and not (set(cookie) & set(COOKIE_SECURITY_FIELDS))
+    if not isinstance(cookie, dict) or not set(COOKIE_IDENTITY_FIELDS + COOKIE_SECURITY_FIELDS).issubset(cookie):
+        return True
+    if any(not isinstance(cookie[field], str) for field in COOKIE_IDENTITY_FIELDS):
+        return True
+    if type(cookie["httpOnly"]) is not bool or type(cookie["secure"]) is not bool:
+        return True
+    if not isinstance(cookie["sameSite"], str) or cookie["sameSite"] not in {"Strict", "Lax", "None"}:
+        return True
+    expiry = cookie["expires"]
+    try:
+        return (type(expiry) not in (int, float) or not math.isfinite(expiry)
+                or (expiry <= 0 and expiry != -1)
+                or (cookie["sameSite"] == "None" and not cookie["secure"]))
+    except OverflowError:
+        return True
 
 
 def _covers_host(cookie_domain: str, host: str) -> bool:
@@ -516,7 +530,7 @@ def extract_via_browser(
     print(f"  登录完成后关闭浏览器窗口即可\n")
 
     try:
-        browser = launch(headless=False, humanize=True)
+        browser = launch(headless=False, humanize=True, config=config)
         context = browser.new_context(viewport={"width": 1440, "height": 900})
         page = context.new_page()
 

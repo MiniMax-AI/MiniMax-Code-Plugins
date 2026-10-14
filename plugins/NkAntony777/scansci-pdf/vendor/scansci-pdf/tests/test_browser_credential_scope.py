@@ -244,9 +244,9 @@ def test_merge_cookies_preserves_security_attributes(tmp_path):
 def test_merge_cookies_drops_expired_records(tmp_path):
     config = {"cache_dir": str(tmp_path)}
     raw = [{"name": "dead", "value": "t", "domain": ".sciencedirect.com",
-            "path": "/", "expires": 1},
+            "path": "/", "httpOnly": True, "secure": True, "sameSite": "Lax", "expires": 1},
            {"name": "live", "value": "t", "domain": ".sciencedirect.com",
-            "path": "/", "expires": 9999999999}]
+            "path": "/", "httpOnly": True, "secure": True, "sameSite": "Lax", "expires": 9999999999}]
     result = bc.merge_cookies(raw, config, "https://www.sciencedirect.com/")
     assert [c["name"] for c in result] == ["live"]
 

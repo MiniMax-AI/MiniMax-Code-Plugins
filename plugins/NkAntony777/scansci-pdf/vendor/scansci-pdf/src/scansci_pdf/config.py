@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 import os
 import re
 from pathlib import Path
 from typing import Any
 from .security import secure_write_text, strict_mode, workspace_path, no_symlinks
 from .config_trust import (
+    TRUST_BOOL_KEYS,
     TRUST_SENSITIVE_KEYS,
     enforce_trust_write,
     is_trust_sensitive,
@@ -114,6 +116,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     #   browser_auto_upgrade: True 时自动探测本机 Chrome/Edge（版本 > 146 优先于内置 stealth Chromium）
     "browser_executable": "",
     "browser_auto_upgrade": True,
+    "remote_assist_lan": False,
     # 浏览器二进制指纹钉死表：{"<绝对路径或启动器名>": "<64 位 sha256>"}。
     # 它决定「哪些字节可以被执行」，因此属于信任设置：改动它必须经所有者
     # 显式确认，且只有规范的 SHA-256 十六进制值会被接受。
@@ -149,7 +152,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
 # Config keys that are security toggles rather than preferences. They share
 # one parser across load, write and migration, and any value that is not
 # unambiguously a boolean resolves OFF (fail closed).
-SECURITY_BOOL_KEYS = frozenset({"browser_persist_localstorage"})
+SECURITY_BOOL_KEYS = TRUST_BOOL_KEYS
 
 _BOOL_TRUE_LITERALS = frozenset({"true", "1", "yes", "on"})
 _BOOL_FALSE_LITERALS = frozenset({"false", "0", "no", "off", ""})
@@ -189,8 +192,8 @@ def config_bool(key: str, value: Any, default: bool = False) -> bool:
 
 
 
-def load_config() -> dict[str, Any]:
-    config = DEFAULT_CONFIG.copy()
+def _load_raw_config() -> dict[str, Any]:
+    config = deepcopy(DEFAULT_CONFIG)
     no_symlinks(CONFIG_FILE)
     if CONFIG_FILE.exists():
         try:
@@ -201,13 +204,20 @@ def load_config() -> dict[str, Any]:
         except Exception:
             pass
     for key, value in DEFAULT_CONFIG.items():
-        config.setdefault(key, value)
+        config.setdefault(key, deepcopy(value))
+    from .proxy_redaction import register_config_secrets
+    register_config_secrets(config)
+    return config
+
+
+def load_config() -> dict[str, Any]:
+    config = _load_raw_config()
     # Migration: a security toggle written before the schema declared its type
     # may sit in config.json as a STRING (and, worse, as the string "false",
     # which a naive truthiness test reads as ON). Normalize every toggle here
     # with the same parser the write path uses, so read/write/migration agree.
     for key in SECURITY_BOOL_KEYS:
-        config[key] = config_bool(key, config.get(key), bool(DEFAULT_CONFIG.get(key, False)))
+        config[key] = normalize_trust_value(key, config.get(key))
     if strict_mode():
         for key in ("cache_dir", "output_dir"):
             config[key] = str(workspace_path(config[key]))
@@ -221,21 +231,28 @@ def load_config() -> dict[str, Any]:
     return config
 
 
-def _validate_trust_values(config: dict[str, Any]) -> None:
-    """Reject a malformed trust value on any save path, not just ``update_config``.
+def _validate_trust_values(config: dict[str, Any]) -> dict[str, Any]:
+    """Return a normalized copy, rejecting malformed trust values before save.
 
-    Only the *shape* is checked here. Confirmation is a property of a single
-    key write and lives in :func:`update_config`, which is where the owner
-    decision is made.
+    Shape validation precedes the trust-diff/confirmation gate in save_config.
+    Neither single-key updates nor direct/bulk saves may bypass that gate.
     """
+    normalized = dict(config)
     for key in TRUST_SENSITIVE_KEYS:
-        if key in config:
-            normalize_trust_value(key, config[key])
+        if key in normalized:
+            normalized[key] = normalize_trust_value(key, normalized[key])
+    return normalized
 
 
-def save_config(config: dict[str, Any]) -> None:
-    _validate_trust_values(config)
-    secure_write_text(CONFIG_FILE, json.dumps(config, indent=2, ensure_ascii=False))
+def save_config(config: dict[str, Any], *, confirmed: bool = False) -> None:
+    from .proxy_redaction import register_config_secrets
+    register_config_secrets(config)
+    normalized = _validate_trust_values(config)
+    current = _load_raw_config()
+    effective = {**deepcopy(DEFAULT_CONFIG), **normalized}
+    for key in TRUST_SENSITIVE_KEYS:
+        enforce_trust_write(key, effective.get(key), confirmed=confirmed, current=current.get(key))
+    secure_write_text(CONFIG_FILE, json.dumps(normalized, indent=2, ensure_ascii=False))
 
 
 _VALIDATION_RULES: dict[str, tuple[type, Any, Any]] = {
@@ -259,6 +276,8 @@ def update_config(key: str, value: str, confirmed: bool = False) -> dict[str, An
     import warnings as _warnings
 
     config = load_config()
+    from .proxy_redaction import register_config_secrets
+    register_config_secrets({key: value})
     if strict_mode() and key == 'tor_install_confirmed':
         raise ValueError('Installation confirmation is per-call and cannot be persisted')
     if strict_mode() and key in {"output_dir", "cache_dir", "vpnsci_cookie_file", "instsci_cookie_file"}:
@@ -294,7 +313,7 @@ def update_config(key: str, value: str, confirmed: bool = False) -> dict[str, An
                 f"Invalid download_strategy '{value}'. Valid options: {', '.join(sorted(_VALID_STRATEGIES))}"
             )
         config[key] = value_lower
-        save_config(config)
+        save_config(config, confirmed=confirmed)
         return config
 
     if key in config:
@@ -339,7 +358,7 @@ def update_config(key: str, value: str, confirmed: bool = False) -> dict[str, An
         if config[key] < min_val or config[key] > max_val:
             config[key] = DEFAULT_CONFIG[key]
 
-    save_config(config)
+    save_config(config, confirmed=confirmed)
     return config
 
 

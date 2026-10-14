@@ -7,7 +7,7 @@ import requests
 # Headers that carry a secret Elsevier (or any API origin) issued to US. They
 # are confined to the origin that supplied them; a redirect that crosses an
 # origin boundary must not receive any of them.
-CREDENTIAL_HEADERS = ("X-ELS-APIKey", "X-ELS-InstToken", "Authorization")
+CREDENTIAL_HEADERS = ("X-ELS-APIKey", "X-ELS-InstToken", "Zotero-API-Key", "Authorization")
 
 _DEFAULT_PORTS = {"https": 443, "http": 80}
 

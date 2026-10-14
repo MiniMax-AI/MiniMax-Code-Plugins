@@ -364,13 +364,17 @@ def test_publisher_cookie_match_is_dot_anchored():
 # ---------------------------------------------------------------------------
 
 
-def test_localstorage_opt_in_requires_owner_confirmation(monkeypatch):
-    from scansci_pdf import server
+def test_localstorage_opt_in_requires_owner_confirmation(tmp_path, monkeypatch):
+    from scansci_pdf import config, server
 
-    monkeypatch.setenv("SCANSCI_PDF_WORKSPACE", str(Path.cwd()))
+    monkeypatch.setenv("SCANSCI_PDF_WORKSPACE", str(tmp_path))
+    monkeypatch.setattr(config, "CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setitem(config.DEFAULT_CONFIG, "cache_dir", str(tmp_path / "cache"))
+    monkeypatch.setitem(config.DEFAULT_CONFIG, "output_dir", str(tmp_path / "papers"))
     refused = server.scansci_pdf_config(key="browser_persist_localstorage",
                                         value="true", confirmed=False)
     assert "confirmation required" in refused
+    assert not config.CONFIG_FILE.exists()
 
 # ---------------------------------------------------------------------------
 # Per-user browser installs must stay usable without becoming trustworthy.

@@ -340,14 +340,18 @@ def _camoufox_candidates(root: Path) -> list[Path]:
 def resolve_camoufox_executable(config: dict[str, Any] | None = None) -> Path:
     """Resolve Camoufox's *actual program* and return it gate-verified.
 
-    An existing install directory proves nothing: the file inside it can be
-    replaced. This walks the directory deterministically, applies the same
-    allowlist + symlink + pinned-digest policy every other browser gets, and
-    raises when nothing acceptable is found.
+    An explicit owner-selected program takes precedence and is never replaced
+    with a discovered build on refusal. Otherwise this walks the installation
+    directory deterministically and applies the same allowlist + symlink +
+    pinned-digest policy every other browser gets.
 
     It never downloads or fetches anything: an absent Camoufox is an error the
     owner resolves deliberately, not code this engine pulls in on demand.
     """
+    explicit = str((config or {}).get("browser_executable", "") or "").strip()
+    if explicit:
+        return verify_browser_executable(explicit, config)
+
     root = _camoufox_root()
     if root is None:
         raise SecurityError(

@@ -38,14 +38,16 @@ tells you which papers remain behind institutional auth.
 
 ## Requirements
 
-- **Python >= 3.11** on the machine. The MCP server launches the vendored engine with `python`;
-  install the dependencies declared in `vendor/scansci-pdf/pyproject.toml` in the Python
-  environment used by MiniMax Code:
+- **Python >= 3.11 and Node >=22** on the machine. The MCP server uses a source-only Node
+  bootstrap that probes `python3` then `python` without site initialization, binds the resulting
+  absolute interpreter path, and starts Python with `-I`. Prefer setting `SCANSCI_PDF_PYTHON`
+  in the host environment to the absolute Python executable in your prepared virtual environment.
+  Install the hashed dependencies into that same environment:
 
   ```bash
   python -m pip install --require-hashes -r <PLUGIN_ROOT>/vendor/scansci-pdf/requirements.lock
   # Run from your project workspace:
-  python <PLUGIN_ROOT>/vendor/scansci-pdf/run_secure.py --verify
+  node <PLUGIN_ROOT>/vendor/scansci-pdf/launch_secure.mjs --verify
   ```
 
   For browser workflows, install the hashed optional dependency set instead:
@@ -73,6 +75,7 @@ tells you which papers remain behind institutional auth.
   Scholar, Europe PMC / PMC, arXiv, DOAJ, OpenAIRE, publisher sites and CDNs (e.g. Elsevier,
   Springer, MDPI), Sci-Hub mirrors, LibGen, and the user's own institutional WebVPN / CARSI
   endpoints. Unpaywall requires the user's real email address (requested via MCP when missing).
+- Optional Zotero uploads contact api.zotero.org and the explicit Zotero storage origin allowlist.
 - Configuration and credentials are stored under a private `.scansci-pdf/` directory in the active
   workspace. Cookie and config writes are atomic and private; existing symlinks are rejected.
 - The strict hosted transport accepts public HTTPS only, validates the peer IP at connection time,
@@ -84,15 +87,36 @@ tells you which papers remain behind institutional auth.
 - Tor installation requires owner confirmation and a source-controlled archive SHA-256 pin;
   archive paths and installed files are checked before execution. Existing external Tor services
   remain usable. Unsupported bundle architectures report an explicit error.
-- Run bundled sorting helpers through `run_secure.py --helper <script>`. Excel write-back requires
+- Run bundled sorting helpers through
+  `node <PLUGIN_ROOT>/vendor/scansci-pdf/launch_secure.mjs --helper <script>`.
+  Excel write-back requires
   `--confirm-writeback`; it atomically replaces the workbook after successful serialization.
 - See `REVIEW-NOTES.md` for measured performance, regression checks, and remaining validation limits.
 
 ## Security upgrade and credential migration
 
-- Saved cookies retain `HttpOnly`, `Secure`, `SameSite`, expiry and session semantics on browser and requests restore. Persistence and merges require an explicit authorized target, and pre-upgrade four-field cookie records are rejected: log in again once to recreate them with their original attributes. Our Netscape export includes private SameSite metadata; other cookie tools may not preserve that comment.
+- Hosted browser sessions are non-persistent native contexts, including institutional and batch
+  launches. Existing native profiles are not opened or cloned and are not deleted. Live SSO works
+  within a context; across runs re-login may be required. Only target-scoped credential exports
+  are restored, and localStorage is restored only with explicit opt-in for the exact HTTPS origin.
+- All proxy/backend/executable/digest and institutional-origin changes require explicit owner
+  confirmation at the config-file write boundary. This includes bulk/direct saves. MCP uses
+  `confirmed: true`; the two CLI surfaces use `--confirm-trust`. Do not set it without owner consent.
+  School selectors, including the legacy `instsci_school`, require the same approval because they
+  select a gateway. Use `scansci_pdf_schools(action="set", school="...", confirmed=true)` only after
+  approval; the school, gateway and enablement are saved together, or not changed at all.
+- Zotero API credentials never go to the storage service. Upload URLs are confined to the explicit
+  Zotero storage origin allowlist; credential and upload requests do not follow redirects. Multipart
+  prefix/file/suffix are streamed as one upload, then registered at the API origin.
+- Direct Python launch must use `python -I <PLUGIN_ROOT>/vendor/scansci-pdf/run_secure.py`.
+  `PYTHONPATH`, user-site startup hooks and workspace shadow modules are not supported. The bootstrap
+  also clears inherited `PYTHON*` settings. No interpreter authenticity/signature attestation is claimed.
+  Engine imports use only manifest-listed source modules. Old bytecode is ignored without deleting
+  it; missing optional compiled modules keep their source fallback rather than loading adjacent `.pyc`.
+
+- Saved cookies retain `HttpOnly`, `Secure`, `SameSite`, expiry and session semantics on browser and requests restore. Persistence and merges require an explicit authorized target, and records missing any security field or carrying invalid attribute types are rejected: log in again once to recreate them with their original attributes. Our Netscape export includes private SameSite metadata; other cookie tools may not preserve that comment.
 - `browser_persist_localstorage` defaults to `false`; only an explicitly enabled boolean saves/restores localStorage, and only for authorized origins. The string `"false"` stays off. Changing browser binary trust pins requires explicit owner confirmation. An owner-approved binary in a writable cache must have a matching digest.
-- The unauthenticated streamable HTTP transport is loopback-only. Web login tokens are not embedded in initial HTML, and both Web startup paths disable access logs to keep query tokens out of them. Elsevier credentials stay at their issuing origin on every redirect; proxy authentication is masked at result/log/console boundaries.
+- The unauthenticated streamable HTTP transport is loopback-only. Web login tokens are not embedded in initial HTML, and both Web startup paths disable access logs to keep query tokens out of them. Elsevier and Zotero credentials stay at their issuing origin on every redirect; registered API secrets and proxy authentication are masked at result/log/console boundaries.
 
 ## Upstream, license, and maintenance
 
@@ -102,5 +126,5 @@ tells you which papers remain behind institutional auth.
 - Submitted and maintained in this registry by [NkAntony777](https://github.com/NkAntony777).
   The helper scripts referenced by `scansci-sort` are shipped under
   `vendor/scansci-pdf/scripts/`.
-- Plugin `1.18.0-minimax.1` vendors engine `1.18.0.post1`, based on upstream v1.18.0.
+- Plugin `1.18.0-minimax.2` vendors engine `1.18.0.post2`, based on upstream v1.18.0.
 

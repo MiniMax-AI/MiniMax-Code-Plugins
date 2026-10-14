@@ -24,6 +24,7 @@ import os
 import re
 import shutil
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -44,12 +45,16 @@ DEFAULT_BACKEND = BACKEND_PATCHRIGHT
 
 def _installed_cloakbrowser(config):
     """Hosted launches use an owner-installed binary, never implicit installers."""
-    candidate = (config or {}).get('browser_executable') or os.environ.get('CLOAKBROWSER_BINARY_PATH')
+    explicit = str((config or {}).get('browser_executable', '') or '').strip()
+    candidate = explicit or os.environ.get('CLOAKBROWSER_BINARY_PATH')
     if not candidate:
         from cloakbrowser.config import get_binary_path
         candidate = get_binary_path()
-    path = Path(candidate).absolute()
+    path = Path(candidate).expanduser().absolute()
     if not path.is_file():
+        if explicit:
+            from .security import SecurityError
+            raise SecurityError("Configured browser executable is unavailable")
         candidate = find_local_browser(config)
         if not candidate:
             return False
@@ -124,6 +129,12 @@ def resolve_backend(config: dict[str, Any] | None = None) -> str:
     falls to camoufox when that is installed.
     """
     cfg = config or {}
+    from .security import strict_mode, SecurityError
+    if strict_mode() and cfg.get("browser_backend"):
+        requested = str(cfg["browser_backend"]).strip().lower()
+        if requested not in (BACKEND_PATCHRIGHT, BACKEND_CLOAKBROWSER, BACKEND_CAMOUFOX) or not is_available(requested):
+            raise SecurityError("Configured browser backend is unavailable")
+        return requested
     requested = str(cfg.get("browser_backend", DEFAULT_BACKEND) or DEFAULT_BACKEND).strip().lower()
     if requested not in (BACKEND_PATCHRIGHT, BACKEND_CLOAKBROWSER, BACKEND_CAMOUFOX):
         logger.warning("browser_backend: unknown backend '%s', using %s", requested, DEFAULT_BACKEND)
@@ -302,6 +313,9 @@ def resolve_browser_binary(config: dict[str, Any] | None = None) -> str | None:
     if explicit:
         if Path(explicit).exists():
             return str(verify_browser_executable(explicit, cfg))
+        from .security import strict_mode, SecurityError
+        if strict_mode():
+            raise SecurityError("Configured browser executable is unavailable")
         logger.warning("browser_backend: browser_executable '%s' not found, falling back", explicit)
     env_path = os.environ.get("CLOAKBROWSER_BINARY_PATH", "").strip()
     if env_path and Path(env_path).exists():
@@ -341,6 +355,9 @@ def _patchright_browser_kwargs(config: dict[str, Any] | None) -> dict[str, Any] 
     if explicit:
         if Path(explicit).exists():
             return {"executable_path": str(verify_browser_executable(explicit, cfg))}
+        from .security import strict_mode
+        if strict_mode():
+            raise SecurityError("Configured browser executable is unavailable")
         logger.warning("browser_backend: browser_executable '%s' not found, using channel=chrome", explicit)
     try:
         resolved = resolve_channel_executable("chrome", cfg)
@@ -386,6 +403,8 @@ def _patchright_launch_attempts(config: dict[str, Any] | None, driver: Any) -> l
     local = _patchright_browser_kwargs(config)
     if local:
         attempts.append(local)
+        if (config or {}).get("browser_executable"):
+            return attempts
     try:
         attempts.append(_bundled_chromium_kwargs(driver, config))
     except SecurityError:
@@ -631,15 +650,30 @@ def _verified_camoufox_executable(config: dict[str, Any] | None) -> str:
     """Resolve Camoufox's real program and return it gate-verified.
 
     Delegates to :func:`resolve_camoufox_executable`, which resolves the
-    directory *deterministically* (never by ``rglob`` order), excludes
-    directories, refuses symlinks/junctions, and applies the same
-    allowlist + pinned-digest policy every other browser gets.
+    owner-selected program first, otherwise the directory *deterministically*
+    (never by ``rglob`` order), excludes directories, refuses symlinks/junctions,
+    and applies the same allowlist + pinned-digest policy every other browser gets.
 
     Checking that the install directory exists is not enough: a replaced
     executable inside that directory would still be launched. This never
     downloads anything — a missing Camoufox raises.
     """
     return str(resolve_camoufox_executable(config))
+
+
+def _camoufox_launch_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Keep raw Camoufox options from replacing the config-verified program."""
+    opts = dict(kwargs)
+    from_options = opts.pop("from_options", None)
+    launch_options = opts.get("launch_options")
+    if ("executable_path" in opts or from_options
+            or (isinstance(launch_options, Mapping) and "executable_path" in launch_options)):
+        from .security import SecurityError
+        raise SecurityError(
+            "Select the Camoufox program with browser_executable in trusted config; "
+            "raw launch options may not replace the verified executable"
+        )
+    return opts
 
 
 def _launch_camoufox(
@@ -667,11 +701,11 @@ def _launch_camoufox(
     """
     if args:
         logger.debug("browser_backend: camoufox ignores %d caller arg(s) (Chromium flags)", len(args))
+    opts = _camoufox_launch_kwargs(kwargs)
     executable = _verified_camoufox_executable(config)
     from camoufox import DefaultAddons, NewBrowser
     from playwright.sync_api import sync_playwright
 
-    opts = dict(kwargs)
     # The bundled uBlock addon downloads at build time and fails (or is
     # rate-limited) -> exclude it, it is not needed for download sessions.
     opts.setdefault("exclude_addons", [DefaultAddons.UBO])
@@ -722,11 +756,11 @@ def _launch_camoufox_persistent(
     """
     if args:
         logger.debug("browser_backend: camoufox ignores %d caller arg(s) (Chromium flags)", len(args))
+    opts = _camoufox_launch_kwargs(kwargs)
     executable = _verified_camoufox_executable(config)
     from camoufox import DefaultAddons, NewBrowser
     from playwright.sync_api import sync_playwright
 
-    opts = dict(kwargs)
     opts.setdefault("exclude_addons", [DefaultAddons.UBO])
     pw = sync_playwright().start()
     try:
@@ -806,15 +840,19 @@ def launch(
     the patchright backend. Returns the same object as
     ``playwright.chromium.launch()`` / ``cloakbrowser.launch()``.
     """
-    backend = resolve_backend(config)
     from .security import strict_mode
+    if strict_mode() and not isinstance(config, dict):
+        from .security import SecurityError
+        raise SecurityError("Hosted browser launch requires trusted config")
+    backend = resolve_backend(config)
     if strict_mode():
         from .browser_guard import browser_proxy
         from .network import configured_proxy
         proxy = browser_proxy(configured_proxy(config) or None)
         if backend == BACKEND_CLOAKBROWSER:
             if not _installed_cloakbrowser(config):
-                backend = BACKEND_PATCHRIGHT
+                from .security import SecurityError
+                raise SecurityError("Configured CloakBrowser binary is unavailable")
         if backend == BACKEND_CAMOUFOX:
             # Camoufox must already be installed; never fetch executable code in
             # response to a paper URL or a browser-fallback trigger. The check
@@ -835,6 +873,10 @@ def launch(
     if backend == BACKEND_CAMOUFOX:
         browser = _launch_camoufox(headless=headless, proxy=proxy, args=args, humanize=humanize, config=config, **kwargs)
     else:
+        if not strict_mode():
+            binary = resolve_browser_binary(config)
+            if binary:
+                os.environ['CLOAKBROWSER_BINARY_PATH'] = binary
         browser = _launch_cloakbrowser(headless=headless, proxy=proxy, args=args, humanize=humanize, **kwargs)
     return _guard_context_proxy(browser, proxy) if strict_mode() else browser
 
@@ -853,24 +895,34 @@ def launch_persistent_context(
 
     Same contract as ``playwright.chromium.launch_persistent_context()``.
     """
-    backend = resolve_backend(config)
     from .security import strict_mode, workspace_path
     if strict_mode():
-        kwargs['ignore_https_errors'] = False
-        from .browser_guard import browser_proxy
-        from .network import configured_proxy
-        proxy = browser_proxy(configured_proxy(config) or None)
-        if backend == BACKEND_CLOAKBROWSER:
-            if not _installed_cloakbrowser(config):
-                backend = BACKEND_PATCHRIGHT
-        user_data_dir = str(workspace_path(user_data_dir))
-        if backend == BACKEND_CAMOUFOX:
-            _verified_camoufox_executable(config)
-            kwargs['firefox_user_prefs'] = {**kwargs.get('firefox_user_prefs', {}),
-                'network.proxy.no_proxies_on': '', 'network.proxy.allow_hijacking_localhost': True,
-                'media.peerconnection.enabled': False, 'network.http.http3.enable': False}
-        else:
-            args = [*(args or []), '--proxy-bypass-list=<-loopback>', '--disable-quic', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp']
+        from .security import SecurityError
+        if not isinstance(config, dict):
+            raise SecurityError("Hosted browser launch requires trusted config")
+        workspace_path(user_data_dir)
+        # Native profiles bypass scoped credential exports; never reopen them.
+        context_keys = {"viewport", "user_agent", "locale", "timezone_id", "accept_downloads"}
+        context_options = {key: kwargs.pop(key) for key in list(kwargs) if key in context_keys}
+        kwargs.pop("ignore_https_errors", None)
+        browser = launch(headless=headless, proxy=proxy, args=args, humanize=humanize,
+                         config=config, **kwargs)
+        try:
+            context = browser.new_context(**context_options)
+        except Exception:
+            browser.close()
+            raise
+        original_close = context.close
+
+        def close():
+            try:
+                original_close()
+            finally:
+                browser.close()
+
+        context.close = close
+        return context
+    backend = resolve_backend(config)
     if backend == BACKEND_CAMOUFOX and proxy is None:
         proxy = _proxy_from_config(config)
     if backend == BACKEND_PATCHRIGHT:
@@ -884,9 +936,12 @@ def launch_persistent_context(
             user_data_dir, headless=headless, proxy=proxy, args=args, humanize=humanize, config=config, **kwargs
         )
     else:
+        binary = resolve_browser_binary(config)
+        if binary:
+            os.environ['CLOAKBROWSER_BINARY_PATH'] = binary
         context = _launch_cloakbrowser_persistent(
             user_data_dir, headless=headless, proxy=proxy, args=args, humanize=humanize, **kwargs)
-    return _guard_context_navigation(context) if strict_mode() else context
+    return context
 
 
 def browser_info(config: dict[str, Any] | None = None) -> dict[str, Any]:

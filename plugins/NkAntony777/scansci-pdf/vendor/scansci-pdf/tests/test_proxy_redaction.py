@@ -266,7 +266,7 @@ def test_config_cmd_setter_echoes_mask_proxy_passwords(monkeypatch):
 
     saved: dict = {}
 
-    def _fake_save(cfg):
+    def _fake_save(cfg, **kwargs):
         saved.update(cfg)
 
     monkeypatch.setattr(_cli_core, "load_config", lambda: {})

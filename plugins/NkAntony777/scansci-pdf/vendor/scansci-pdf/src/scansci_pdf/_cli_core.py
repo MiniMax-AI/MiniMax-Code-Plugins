@@ -287,6 +287,7 @@ def setup(
     federated: bool = typer.Option(True, "--federated/--no-federated", help="Enable browser federated institutional login."),
     federated_school: str = typer.Option("", "--federated-school", help="Override the school name shown in publisher login pages."),
     check: bool = typer.Option(False, "--check", help="Check environment without changing configuration."),
+    confirm_trust: bool = typer.Option(False, "--confirm-trust", help="Approve institutional trust changes."),
 ):
     """One-step environment setup for institutional paper downloads."""
     cfg = load_config()
@@ -332,7 +333,7 @@ def setup(
         if d:
             Path(d).mkdir(parents=True, exist_ok=True)
     if changed:
-        save_config(cfg)
+        save_config(cfg, confirmed=confirm_trust)
 
     ready = bool(cfg.get("instsci_school", "") and _access_url(cfg) and ((not cfg.get("carsi_enabled", False)) or cfg.get("carsi_idp_name", "")))
     if ready:
@@ -1183,6 +1184,7 @@ def config_cmd(
     set_carsi_enable: bool = typer.Option(False, "--carsi-enable", help="Legacy federated auth option.", hidden=True),
     set_carsi_disable: bool = typer.Option(False, "--carsi-disable", help="Legacy federated auth option.", hidden=True),
     set_carsi_school: str = typer.Option("", "--carsi-school", help="Legacy federated school option.", hidden=True),
+    confirm_trust: bool = typer.Option(False, "--confirm-trust", help="Approve proxy/browser trust changes."),
 ):
     """View or update configuration."""
     cfg = load_config()
@@ -1283,7 +1285,7 @@ def config_cmd(
         console.print(f"[green]Max browser workers set to: {set_max_workers}[/green]")
 
     if changed:
-        save_config(cfg)
+        save_config(cfg, confirmed=confirm_trust)
 
     has_setter = any([set_email, set_output, set_access_url, set_webvpn_url, set_school,
                       set_connector_url, set_proxy_url,
@@ -1481,7 +1483,7 @@ def elsevier_setup(
     console.print()
     console.print(f"  API Key:        {key[:8]}...{key[-4:]}" if len(key) > 12 else f"  API Key:        {key}")
     _it = cfg.get("elsevier_insttoken", "") or "(not set)"
-    console.print(f"  Inst Token:     {_it}")
+    console.print(f"  Inst Token:     {mask_config_value('elsevier_insttoken', _it)}")
 
 
 if __name__ == "__main__":

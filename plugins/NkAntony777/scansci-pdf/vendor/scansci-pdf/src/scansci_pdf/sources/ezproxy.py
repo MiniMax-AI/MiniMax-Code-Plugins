@@ -236,7 +236,7 @@ def try_ezproxy(doi: str, output_path: Path, config: dict[str, Any]) -> dict[str
         except Exception:
             pass
 
-    browser = launch(headless=False, humanize=True, args=args)
+    browser = launch(headless=False, humanize=True, args=args, config=config)
     try:
         context = browser.new_context()
         page = context.new_page()

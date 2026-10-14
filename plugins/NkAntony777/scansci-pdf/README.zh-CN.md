@@ -23,12 +23,12 @@
 
 ## 环境要求
 
-- 本机 **Python >= 3.11**。请在 MiniMax Code 使用的 Python 环境中安装 `vendor/scansci-pdf/pyproject.toml` 声明的依赖：
+- 本机 **Python >= 3.11 和 Node >=22**。请在 MiniMax Code 使用的 Python 环境中安装 `vendor/scansci-pdf/pyproject.toml` 声明的依赖：
 
   ```bash
   python -m pip install --require-hashes -r <PLUGIN_ROOT>/vendor/scansci-pdf/requirements.lock
   # 在项目工作目录运行：
-  python <PLUGIN_ROOT>/vendor/scansci-pdf/run_secure.py --verify
+  node <PLUGIN_ROOT>/vendor/scansci-pdf/launch_secure.mjs --verify
   ```
 
   浏览器流程安装带哈希的可选依赖集：`python -m pip install --require-hashes -r <PLUGIN_ROOT>/vendor/scansci-pdf/requirements-browser.lock`，使用已安装的 Chrome/Edge 或明确安装选定后端内核。
@@ -36,7 +36,7 @@
 - 使用源码 fallback，无需编译器。浏览器回退和机构登录通过带认证的本机 CONNECT 代理访问公网，TLS 保持端到端验证。浏览器需单独安装可选依赖及内核；Chromium 已有真实集成测试，Camoufox/Firefox 仍需平台集成验证。
 - 远程 CamoFox/FlareSolverr 服务无法强制该安全策略，Hosted 模式改用受保护的本地浏览器；这两种远程服务接入仍受限。
 - 平台：Windows / macOS / Linux。明确处理大陆网络环境（镜像选择、代理探测），但非必需。
-- 不依赖 MiniMax Code 宿主工具；一切通过 MCP server（stdio，`scansci-pdf run` 启动）或 CLI 兜底完成。
+- 不依赖 MiniMax Code 宿主工具；一切通过 MCP server（stdio，由包内 Node bootstrap 启动）或同一 bootstrap 的 CLI 兜底完成。
 - 机构通道需要**用户自己的凭据**：校园网环境下的 Elsevier API key，或用户在浏览器里完成的 WebVPN / CARSI 登录。灰色源（Sci-Hub / LibGen）通道上游默认开启；用户可切换 `legal_only` 策略仅用合法来源。
 
 ## 数据与网络
@@ -46,8 +46,18 @@
 - 严格网络层只允许公网 HTTPS，在实际连接时校验对端 IP，逐跳检查重定向，并把论文正文/元数据视为不可信外部内容。
 - 引擎来源固定在 `vendor/scansci-pdf/SOURCE-COMMIT.txt`。每个工作线程复用 HTTP 连接池，保留批量并发、元数据缓存和流式原子写入。
 - 支持用户明确配置的 HTTP(S)/SOCKS5 代理；目标 DNS 在本机解析并校验，代理只能连接校验后的数字 IP，TLS 仍验证原站点名称。Tor 使用固定 SHA-256 的安装包，检查解压路径和已安装文件，安装需用户确认；已有外部 Tor 服务可继续使用。
-- 分类脚本通过 `run_secure.py --helper <脚本名>` 执行。原地回写 Excel 需明确同意并传入 `--confirm-writeback`，保存采用原子替换。
+- 分类脚本通过 `node <PLUGIN_ROOT>/vendor/scansci-pdf/launch_secure.mjs --helper <脚本名>` 执行。原地回写 Excel 需明确同意并传入 `--confirm-writeback`，保存采用原子替换。
 - 性能数据、回归测试和验证边界见 `REVIEW-NOTES.md`。
+
+## 隔离启动与第四轮安全迁移
+
+- MCP 使用 `launch_secure.mjs`，通过隔离且不加载 site 的探测检查 `python3` / `python`，绑定返回的绝对解释器路径，再以 `-I` 启动引擎。建议在宿主环境设置 `SCANSCI_PDF_PYTHON`，指向已安装固定依赖的虚拟环境解释器绝对路径。
+- Hosted 模式不会重新打开或复制原生浏览器 profile，也不会删除旧 profile。SSO 登录在同一存活 context 内可继续使用，跨运行可能需要重新登录；仅恢复目标域、完整安全属性的 Cookie。localStorage 需要明确开启，且按完整 origin（协议、主机、端口）限制。
+- 代理、后端、可执行文件、摘要和机构登录来源的更新都在配置文件真正写入前检查用户确认，包括批量直接保存。MCP 传 `confirmed: true`，CLI 使用 `--confirm-trust`；此参数必须建立在用户实际同意的基础上。
+- 学校选择器及旧版 `instsci_school` 同样决定机构地址，需要明确确认。用户同意后才可调用 `scansci_pdf_schools(action="set", school="...", confirmed=true)`；学校、机构地址和启用状态一次原子保存，拒绝时不留下部分改动。
+- Zotero 上传地址受显式 origin 白名单限制，API 凭据不会发给存储服务，上传也不会跟随重定向。上传与 API 登记分别检查，失败不会被报告为完整成功。
+- 直接使用 Python 时须执行 `python -I <PLUGIN_ROOT>/vendor/scansci-pdf/run_secure.py`。不支持继承 Python 启动钩子；bootstrap 在 Python 启动前清除 `PYTHON*` 设置。不声称对解释器二进制做签名认证。
+- 引擎模块仅从源码清单载入。旧字节码会被忽略而不删除；缺失的可选编译模块使用源码 fallback，不会转而载入相邻的 `.pyc`。
 
 ## 安全升级与凭据迁移
 
@@ -59,4 +69,4 @@
 
 - 上游项目：<https://github.com/Rimagination/scansci-pdf>（Apache-2.0，Copyright 2024-2026 scansci-pdf contributors）。本包内置上游 **v1.18.0** 源码及本次安全补丁，具体来源见 `vendor/scansci-pdf/SOURCE-COMMIT.txt`。
 - 由 [NkAntony777](https://github.com/NkAntony777) 在本注册表提交并维护。`scansci-sort` 引用的辅助脚本已随包放在 `vendor/scansci-pdf/scripts/`。
-- 插件版本 `1.18.0-minimax.1`，内置引擎版本 `1.18.0.post1`，基于上游 v1.18.0。
+- 插件版本 `1.18.0-minimax.2`，内置引擎版本 `1.18.0.post2`，基于上游 v1.18.0。

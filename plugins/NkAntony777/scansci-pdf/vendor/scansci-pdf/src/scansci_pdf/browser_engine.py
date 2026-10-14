@@ -236,6 +236,8 @@ def close_shared_browser(config: dict[str, Any] | None = None) -> None:
 
 def _get_shared_browser(config: dict[str, Any] | None = None):
     """Get or create a browser for the current thread. Returns (browser, context)."""
+    import json
+    identity = json.dumps(config, sort_keys=True, default=str)
     browser = getattr(_tls, "browser", None)
     context = getattr(_tls, "context", None)
     if browser is not None:
@@ -245,7 +247,7 @@ def _get_shared_browser(config: dict[str, Any] | None = None):
             connected = browser.is_connected()
         except Exception:
             connected = False
-        if connected:
+        if connected and getattr(_tls, "config_identity", None) == identity:
             return browser, context
         # Full teardown: browser.close() also stops the Playwright driver and
         # its asyncio loop. A half-alive driver would otherwise break the
@@ -324,6 +326,7 @@ def _get_shared_browser(config: dict[str, Any] | None = None):
         _tls.owned_loop = None
     _tls.browser = browser
     _tls.context = context
+    _tls.config_identity = identity
     logger.info(f"browser_engine: browser ready for thread {_threading.current_thread().name}")
     return browser, context
 
@@ -332,15 +335,12 @@ def get_persistent_context(
     profile_dir: str | Path,
     config: dict[str, Any] | None = None,
 ):
-    """Get or create a persistent browser context for fingerprint consistency.
+    """Create a live publisher context.
 
-    Unlike launch() + cookie restore, persistent context preserves:
-    - Browser fingerprint (canvas, WebGL, audio, fonts)
-    - Cookies and localStorage across restarts
-    - Login sessions without re-authentication
-
-    This is the recommended approach for publisher sessions that need
-    stable identity across multiple download runs.
+    Hosted mode never opens a native persistent profile: its disk writes and
+    restore bypass scoped credential persistence. Login is retained within the
+    live context; across runs only explicitly scoped cookie/storage exports
+    may be restored. Non-hosted use retains the upstream native-profile API.
     """
     if not _check_browser_backend(config):
         raise RuntimeError(

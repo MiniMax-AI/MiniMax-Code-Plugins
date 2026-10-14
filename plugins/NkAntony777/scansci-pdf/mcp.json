@@ -3,9 +3,10 @@
   "mcpServers": {
     "scansci-pdf": {
       "type": "stdio",
-      "command": "python",
-      "args": ["${PLUGIN_ROOT}/vendor/scansci-pdf/run_secure.py", "run", "--mode", "stdio"],
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/vendor/scansci-pdf/launch_secure.mjs", "run", "--mode", "stdio"],
       "env": {
+        "NODE_OPTIONS": "",
         "PYTHONUTF8": "1",
         "PYTHONNOUSERSITE": "1"
       }

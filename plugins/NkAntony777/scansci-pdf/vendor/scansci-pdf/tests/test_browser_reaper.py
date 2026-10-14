@@ -126,6 +126,9 @@ class RealBrowserTests(unittest.TestCase):
         if not be.is_available({}):
             self.skipTest("no browser backend installed")
         cfg = {"browser_backend": "patchright", "browser_headless": True}
+        import os
+        if os.environ.get("SCANSCI_AUDIT_BROWSER"):
+            cfg["browser_executable"] = os.environ["SCANSCI_AUDIT_BROWSER"]
         b, _ = be._get_shared_browser(cfg)
         self.assertIn(b, be._LIVE_BROWSERS)
         be._reap_browsers_at_exit()
