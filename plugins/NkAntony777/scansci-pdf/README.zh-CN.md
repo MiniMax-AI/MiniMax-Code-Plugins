@@ -39,6 +39,36 @@
 - 不依赖 MiniMax Code 宿主工具；一切通过 MCP server（stdio，由包内 Node bootstrap 启动）或同一 bootstrap 的 CLI 兜底完成。
 - 机构通道需要**用户自己的凭据**：校园网环境下的 Elsevier API key，或用户在浏览器里完成的 WebVPN / CARSI 登录。灰色源（Sci-Hub / LibGen）通道上游默认开启；用户可切换 `legal_only` 策略仅用合法来源。
 
+## 官方开发环境
+
+官方开发环境是位于 `vendor/scansci-pdf/.venv`（已被 git 忽略）的 CPython 3.11 虚拟环境，
+按 CI workflow 相同的方式从带哈希锁定的浏览器依赖集安装。3.11 是声明的依赖下限；所有本地
+验证都在这个环境里跑，结果才能与 CI 对齐：
+
+```bash
+cd <PLUGIN_ROOT>/vendor/scansci-pdf
+py -V:Astral/CPython3.11.17 -m venv .venv    # 任意 CPython 3.11；POSIX 下：python3.11 -m venv .venv
+.venv/Scripts/python -m pip install --require-hashes -r requirements-browser.lock
+.venv/Scripts/python -m pip install pytest cryptography
+```
+
+日常校验，顺序与 workflow CI 一致（POSIX 下用 `.venv/bin/python`）：
+
+```bash
+.venv/Scripts/python -I run_secure.py --verify    # 源码清单 + 锁定的依赖版本
+.venv/Scripts/python -m pytest tests -q -rs       # 完整引擎回归套件
+```
+
+修改 `src/` 下源码或启动器/锁定文件后，重新生成源码哈希清单并与改动一起提交：
+
+```bash
+.venv/Scripts/python scripts/hash_sources.py
+```
+
+Tor Expert Bundle 升级是受源码管理的 pin 更新：按对应版本的 Tor Project
+`sha256sums-signed-build.txt` 更新 `src/scansci_pdf/embedded_tor.py` 中的 `TOR_VERSION`
+和六个 `TOR_HASHES`（运行时绝不联网取 pin），然后重新生成清单并重跑测试套件。
+
 ## 数据与网络
 
 - 出站请求面向学术 API 与镜像：OpenAlex、Unpaywall、Crossref、Semantic Scholar、Europe PMC / PMC、arXiv、DOAJ、OpenAIRE、出版商站点与 CDN（Elsevier、Springer、MDPI 等）、Sci-Hub 镜像、LibGen，以及用户自己的机构 WebVPN / CARSI 端点。Unpaywall 要求用户真实邮箱（缺失时经 MCP 交互式索要）。

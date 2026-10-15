@@ -69,6 +69,39 @@ tells you which papers remain behind institutional auth.
   (Sci-Hub / LibGen) lanes are on by default upstream; users can restrict to legal-only sources
   (`legal_only` strategy).
 
+## Development environment
+
+The official development environment is a CPython 3.11 virtual environment at
+`vendor/scansci-pdf/.venv` (git-ignored), provisioned exactly like the CI workflow from the
+hash-locked browser dependency set. 3.11 is the declared dependency floor; keep all local
+validation on this environment so results are comparable with CI:
+
+```bash
+cd <PLUGIN_ROOT>/vendor/scansci-pdf
+py -V:Astral/CPython3.11.17 -m venv .venv    # any CPython 3.11; POSIX: python3.11 -m venv .venv
+.venv/Scripts/python -m pip install --require-hashes -r requirements-browser.lock
+.venv/Scripts/python -m pip install pytest cryptography
+```
+
+Daily checks, in the same order as the workflow CI (POSIX: `.venv/bin/python`):
+
+```bash
+.venv/Scripts/python -I run_secure.py --verify    # source manifest + pinned dependency versions
+.venv/Scripts/python -m pytest tests -q -rs       # full engine regression suite
+```
+
+After editing anything under `src/` or the launcher/lock files, regenerate the pinned source
+manifest and commit it together with the change:
+
+```bash
+.venv/Scripts/python scripts/hash_sources.py
+```
+
+Tor Expert Bundle upgrades are source-controlled pin bumps: set `TOR_VERSION` and the six
+`TOR_HASHES` values in `src/scansci_pdf/embedded_tor.py` from Tor Project's
+`sha256sums-signed-build.txt` for that release (never fetch pins at runtime), then regenerate
+the manifest and re-run the suite.
+
 ## Data and network
 
 - Outbound requests go to scholarly APIs and mirrors: OpenAlex, Unpaywall, Crossref, Semantic

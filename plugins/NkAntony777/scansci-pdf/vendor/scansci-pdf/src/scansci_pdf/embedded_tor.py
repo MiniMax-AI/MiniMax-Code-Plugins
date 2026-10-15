@@ -43,17 +43,17 @@ TOR_DOWNLOAD_MIRRORS = [
 ]
 
 # Tor Browser version shipping the Expert Bundle. Bump when torproject.org
-# cuts a new stable release. Hash manifest fetched from Tor Project 2026-10-09.
-TOR_VERSION = "15.0.24"
+# cuts a new stable release. Hash manifest fetched from Tor Project 2026-10-15.
+TOR_VERSION = "15.0.25"
 # SHA-256 values from Tor Project's sha256sums-signed-build.txt for this release.
 # A release upgrade must update these source-controlled pins, not fetch new pins.
 TOR_HASHES = {
-    'linux-x86_64': '8e012ec6815d7899cb64011582e2dade88e74119c6661068a2a3252de0ccd7f2',
-    'linux-i686': '7537fea3478d05b8af25d7f8199c031b281f7015c32bb4177bef71f8e5100d9b',
-    'macos-aarch64': 'd47afd04b6c751129978390ad003d74ac8b88adfbb939350f0f89999e6570644',
-    'macos-x86_64': '8acb0b590f6be34084dcb6d84009ac0c61cc7c5261b7a19d2ab94845aa9bd5b6',
-    'windows-x86_64': 'e9dc6ccc93cd6afa507193f4de284d6424233ff5102155cd2c94b259e8a22b65',
-    'windows-i686': '7c2755b09876ebc6c2e2d2d1d3279b2be3e9beec35ff0ca2e7df4c1abcad1ae4',
+    'linux-x86_64': '19cf18726eecb362e0f21d27afa9ea9efe5da928bfdfbb1ceb5fe54519e87f4a',
+    'linux-i686': 'e3195aa30946de60b1a31ef584f2e8bc2623a99815f4a102a89257a01bef9a77',
+    'macos-aarch64': 'a3febb6179152b0b4f56a0f5cc57bf5cc8ecef7db35e7c3e9d5a044c8158c26c',
+    'macos-x86_64': 'e1ae4d4a734d28bb590839188511deb3cebc26fcbce9df66d01b2c452060fe95',
+    'windows-x86_64': 'c1988c701de2f24f7d098d1d6d7f507b58f27740d097f29c246e0524d639b252',
+    'windows-i686': '55a1e4c9b6df47c6e5fde1b3d755c858374d6cc0809c1dd1533a8622bb52de96',
 }
 
 

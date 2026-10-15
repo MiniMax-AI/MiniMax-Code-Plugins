@@ -1,3 +1,30 @@
+## Tor expert-bundle pin refresh, October 15, 2026
+
+The Tor Expert Bundle pin moved from 15.0.24 to **15.0.25**. Two reasons: 15.0.24 was
+removed from the primary `dist.torproject.org` mirror (its directory returns 404 as of
+2026-10-15; only the `archive.torproject.org` mirror still hosts it), and 15.0.25 is a
+security update (Firefox security fixes, Tor 0.4.9.14, OpenSSL 3.5.9). The October 9
+inspection evidence for 15.0.24 further below remains historical record.
+
+- All six `TOR_HASHES` values come from Tor Project's `sha256sums-signed-build.txt` for
+  15.0.25, fetched independently from both mirrors with identical bytes. Pins change in
+  source control only; the runtime never fetches new pins.
+- Official Windows x86_64 archive (22,507,599 bytes) downloaded from `dist.torproject.org`:
+  SHA-256 `c1988c701de2f24f7d098d1d6d7f507b58f27740d097f29c246e0524d639b252` matched the new
+  pin, and guarded extraction plus installed-file verification passed against the shipped code.
+- The pinned source manifest was regenerated (still 173 entries; only `embedded_tor.py`
+  changed) and `run_secure.py --verify` passes with source manifest and dependency lock
+  verified.
+- Full suite in the now-documented official development environment (CPython 3.11.17 venv at
+  `vendor/scansci-pdf/.venv`, hash-locked `requirements-browser.lock`, real installed Edge):
+  **1002 passed, 5 skipped, 0 failed in 147.13 s** — identical counts to the previous head.
+  The delivered MCP package check passes (18 tools, stdio, path-escape block, tamper rejection).
+- `README.md` / `README.zh-CN.md` now define that official development environment and the
+  daily verify/test/manifest-regeneration commands, mirroring the CI workflow.
+
+No working Tor circuit, no Linux/macOS local runs, and no upstream CI result for this new
+head are claimed here.
+
 ## Round-4 repair, October 14, 2026
 
 This section supersedes earlier safety descriptions where they differ. These are local validation

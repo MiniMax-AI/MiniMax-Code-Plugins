@@ -48,7 +48,7 @@
     "src/scansci_pdf/discovery.py": "00ec77af7f4f6b95de71296203bf0bd78f2a8e24c1b7906dd3372551d9f1960e",
     "src/scansci_pdf/domain_db.py": "4ff8204320239ed38a67e7f6dfe6237101154286678aac7c8d15e59eb1f52c33",
     "src/scansci_pdf/elsevier_check.py": "b264100d74bed00f2e92d4229ef27c13a380ff4406a8d188f0875e250a9837fe",
-    "src/scansci_pdf/embedded_tor.py": "c3f0c2ac43d7b6e791e9b84f426c449b7f80804425c58f4d8d146576c4d2f07c",
+    "src/scansci_pdf/embedded_tor.py": "3975fa3b68d6d361bf5b5ca291b4247b07dcba12dc0fc18c04bb4f361d9053f1",
     "src/scansci_pdf/extractors/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "src/scansci_pdf/extractors/html_extractor.py": "eb77ccf9fbfb95292888b8f300ae5cf89bf65966e6e4c4f36fd49f4e540a172d",
     "src/scansci_pdf/extractors/pdf_extractor.py": "013acf032a450cb48667c953e22230387fdf588c200fd1f826da045852e505bd",
