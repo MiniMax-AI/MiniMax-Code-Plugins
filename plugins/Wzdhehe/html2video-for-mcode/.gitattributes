@@ -1,0 +1,10 @@
+# Force LF for this plugin's text files. Added in 1.9.3: nine files carried CRLF
+# (authored on Windows), which made `git diff --check` report trailing-whitespace
+# errors on the PR under default whitespace rules. Same convention as
+# plugins/antianqi/mcode-island/.gitattributes.
+# Override at clone time: `git config core.autocrlf input`.
+*           text=auto eol=lf
+*.md        text eol=lf
+*.mjs       text eol=lf
+*.json      text eol=lf
+LICENSE     text eol=lf
