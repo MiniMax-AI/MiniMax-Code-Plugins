@@ -9,7 +9,7 @@ import { Engine } from './engine.mjs';
 import { startHTTP } from './http.mjs';
 import { startStdio } from './tools.mjs';
 import {createWorkspaceRouter,PROJECT_TOOLS} from './workspace-router.mjs';
-const {values}=parseArgs({options:{stdio:{type:'boolean'},'stop-service':{type:'boolean'},settings:{type:'string'},workspace:{type:'string'},'data-dir':{type:'string'},port:{type:'string'},'mcode-script':{type:'string'},'worker-config':{type:'string'}}});
+const {values}=parseArgs({options:{stdio:{type:'boolean'},'stop-service':{type:'boolean'},settings:{type:'string'},workspace:{type:'string'},'data-dir':{type:'string'},port:{type:'string'},'mcode-script':{type:'string'},'worker-config':{type:'string'},'rotate-archive':{type:'boolean'},restore:{type:'string'},verify:{type:'boolean'}}});
 const settings=values.settings?JSON.parse(await readFile(resolve(values.settings),'utf8')):{};
 for(const key of Object.keys(settings))if(!['workspace','dataDir'].includes(key)||typeof settings[key]!=='string')throw Error('settings 只允许 workspace/dataDir 字符串');
 if(values.port!==undefined&&(!/^\d+$/.test(values.port)||Number(values.port)>65535))throw Error('port 必须是 0–65535 的整数');
@@ -70,12 +70,48 @@ if(values.stdio&&process.env.MCODE_WORKFLOW_CHILD==='1'){
    if(!service)throw Error(`本地服务启动失败。上次端口可能被占用；不会自动更换地址。请查看 ${join(dataDir,'service.log')}`);
   }
   const mcp=await startStdio(async(name,args)=>{
-   if((name==='workflow_repair'||(name==='workflow_results'&&args?.includeDefinition))&&!service.config.features?.workflowRepair)throw Error('WORKFLOW_SERVICE_UPGRADE_REQUIRED: 当前后台服务版本不支持脚本修复。退出聊天不会重启服务。请先暂停或取消活动工作流，使用新版插件的 --stop-service（相同 --workspace 和 --data-dir）停止此项目服务，再重新连接 MCP；端口和历史会保留。data-dir: '+dataDir);
+   if(((name==='workflow_repair'||(name==='workflow_results'&&args?.includeDefinition))&&!service.config.features?.workflowRepair)
+    ||((name==='workflow_delete'||name==='workflow_restore')&&!service.config.features?.trashManagement))throw Error('WORKFLOW_SERVICE_UPGRADE_REQUIRED: 当前后台服务版本不支持此操作。退出聊天不会重启服务。请先暂停或取消活动工作流，使用新版插件的 --stop-service（相同 --workspace 和 --data-dir）停止此项目服务，再重新连接 MCP；端口和历史会保留。data-dir: '+dataDir);
    const res=await fetch(service.u.origin+'/api/tools',{method:'POST',headers:headersFor(service.u),body:JSON.stringify({name,arguments:args}),signal:AbortSignal.timeout(65000)});
    const v=await res.json();if(!res.ok)throw Error(v.error);return v;
   });
   // A chat owns only this transport. The service, workers and dashboard outlive it.
   process.stdin.once('end',()=>void mcp.close());
+ }else if(values['rotate-archive']||values.restore!==undefined){
+  // One-shot maintenance face: rotate due tombstones into the archive
+  // (--rotate-archive, optionally --verify) or restore a run from trash or
+  // archive (--restore <runId>). Forwards to a live service when one owns the
+  // directory; otherwise takes the owner lock directly. Never both.
+  const service=await existing();
+  if(service){
+   const call=async(path,init)=>{const res=await fetch(new URL(path,service.u.origin),{...init,headers:headersFor(service.u),signal:AbortSignal.timeout(65000)});const v=await res.json();if(!res.ok)throw Error(v.error);return v;};
+   if(values.restore!==undefined){
+    const v=await call(`/api/runs/${encodeURIComponent(values.restore)}/restore`,{method:'POST',body:JSON.stringify({by:'cli'})});
+    process.stdout.write(JSON.stringify({id:v.id,status:v.status,restored:true})+'\n');
+   }else{
+    const v=await call('/api/archive/rotate',{method:'POST',body:JSON.stringify({verify:values.verify===true})});
+    process.stdout.write(JSON.stringify(v)+'\n');
+    // verified:null means "no chain rows to verify" (e.g. an empty repair face);
+    // only an explicit false verdict is a failure.
+    if(values.verify===true&&(v.archive?.verified===false||v.integrity?.events?.verified===false||v.integrity?.repair?.verified===false))process.exitCode=1;
+   }
+  }else{
+   await mkdir(dataDir,{recursive:true,mode:0o700});
+   const store=new Store(dataDir);let engine;
+   try{
+    engine=new Engine(store,{workspace});
+    if(values.restore!==undefined){
+     const v=await engine.restoreRun(values.restore,{by:'cli'});
+     process.stdout.write(JSON.stringify({id:v.id,status:v.status,restored:true})+'\n');
+    }else{
+     const v=engine.rotateArchive({verify:values.verify===true});
+     process.stdout.write(JSON.stringify(v)+'\n');
+     // verified:null means "no chain rows to verify" (e.g. an empty repair face);
+    // only an explicit false verdict is a failure.
+    if(values.verify===true&&(v.archive?.verified===false||v.integrity?.events?.verified===false||v.integrity?.repair?.verified===false))process.exitCode=1;
+    }
+   }finally{await engine?.close();store.close();}
+  }
  }else{
   const previous=(await readJSON(endpointPath))??await readJSON(addressPath);
   if(previous?.workspace&&previous.workspace!==workspace)throw Error('状态目录绑定了不同工作区，请配置独立 data-dir');
@@ -84,9 +120,21 @@ if(values.stdio&&process.env.MCODE_WORKFLOW_CHILD==='1'){
   const store=new Store(dataDir);let engine,panel;
   try{
    engine=new Engine(store,{workspace,command:values['mcode-script']?process.execPath:'mcode',args:values['mcode-script']?[resolve(values['mcode-script'])]:[],configPath:values['worker-config']?resolve(values['worker-config']):undefined});
+   // Startup compaction: expired tombstones past the volume thresholds are
+   // rotated into archive.db before the dashboard starts serving — bounded to
+   // exactly ONE batch so startup never blocks on a large backlog. Failure is
+   // not swallowed — an unrotatable library fails the service start loudly.
+   const compaction=engine.autoRotateAtStartup();
+   if(compaction.rotated)process.stdout.write(`Rotated ${compaction.runCount} trashed workflow(s) into archive.db (rotation ${compaction.rotationId}); ${compaction.remaining} still due.\n`);
    panel=await startHTTP(engine,{port});
    await saveAddress(panel.url);
    const temp=endpointPath+'.'+process.pid+'.tmp';await writeFile(temp,JSON.stringify({pid:process.pid,url:panel.url,workspace,serviceProtocol:2}),{mode:0o600});await rename(temp,endpointPath);
+   // The bounded startup pass may leave due tombstones behind once its batch
+   // budget is spent; now that the dashboard is listening, the backlog drains
+   // in the background — one throttled batch at a time, never holding the
+   // service hostage. Rotation batches are idempotent recovery units, so an
+   // interrupted drain simply resumes on the next start or manual rotation.
+   if(compaction.autoRotated&&compaction.remaining>0)engine.drainRotationsInBackground();
   }catch(e){await engine?.close();await panel?.close();store.close();throw e;}
   process.stdout.write(`Workflow Studio: ${panel.url}\n`);
   let closing=false;async function close(){if(closing)return;closing=true;await engine.close();await panel.close();store.close();process.exitCode=0;}

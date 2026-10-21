@@ -1850,6 +1850,10 @@ Object.assign(messages.zh, { "templates": "\u6A21\u677F\u5E93", "saveTemplate": 
 Object.assign(messages.en, { "templates": "Templates", "saveTemplate": "Save as template", "latestProgress": "Latest progress", "taskBrief": "Task brief", "objective": "Objective", "inputDescription": "Input description", "deliverables": "Expected deliverables", "deliverablesHelp": "One per line, up to 12 items of 300 characters each.", "downloadHTML": "Download HTML report", "downloadMD": "Download Markdown report", "reportExportHelp": "Export saved results with run status, node outputs, and failures. Execution does not prove factual accuracy.", "templatesHelp": "Local templates include the script, current input, brief, and budgets, but no run results. Using a template opens an editable form; saving still requires review.", "templateName": "Template name", "saveCurrentTemplate": "Save current workflow as template", "useTemplate": "Use template", "deleteTemplate": "Delete", "emptyTemplates": "No templates yet. Open a workflow to save one.", "templateSaved": "Template saved", "deleteTemplateConfirm": "Delete this local template? Run history is unaffected.", "exportUnavailable": "Reports can be downloaded after completion or pause.", "demoReportNotice": "Demo results: no model was called. These are not real task findings.", "reportCoverage": "{done}/{total} agents succeeded; failed or incomplete: {failed}.", "reportResult": "Result", "reportFailures": "Failed or incomplete nodes", "defaultObjective": "Review material from several perspectives, verify each independently, and synthesize findings.", "defaultInputDescription": "Provide the code or material to review in the JSON material field.", "defaultDeliverables": "Review and verification results\nA synthesis report with coverage gaps" });
 Object.assign(messages.zh, { "reviewCompact": "\u7B49\u5F85\u5BA1\u6838", "reviewCompactHelp": "\u68C0\u67E5\u4E0B\u65B9\u6D41\u7A0B\uFF0C\u786E\u8BA4\u540E\u5F00\u59CB\u3002", "reviewDetails": "\u4EFB\u52A1\u8BE6\u60C5\u4E0E\u6267\u884C\u8BBE\u7F6E", "reviewBudgets": "\u5E76\u53D1 {concurrency} \xB7 \u6700\u591A {calls} \u6B21\u8C03\u7528 \xB7 \u6BCF\u8282\u70B9 {steps} \u6B65 / {minutes} \u5206\u949F", "status.awaiting": "\u5C1A\u672A\u5F00\u59CB", "status.blocked": "\u4F9D\u8D56\u53D7\u963B", "status.not_run": "\u672A\u6267\u884C", "awaitingHelp": "\u8BE5\u8282\u70B9\u5C1A\u672A\u521B\u5EFA\u6267\u884C\u4EFB\u52A1\u3002\u542F\u52A8\u540E\u4F1A\u5728\u8FD9\u91CC\u66F4\u65B0\u72B6\u6001\u3002", "blockedHelp": "\u5DF2\u58F0\u660E\u7684\u4E0A\u6E38\u8282\u70B9\u672A\u6210\u529F\uFF0C\u5F53\u524D\u8282\u70B9\u5C1A\u672A\u6267\u884C\u3002", "notRunHelp": "\u672C\u6B21\u8FD0\u884C\u5DF2\u7ECF\u7ED3\u675F\uFF0C\u672A\u89E6\u53D1\u8FD9\u4E2A\u8BA1\u5212\u8282\u70B9\u3002", "dynamicHelp": "\u8282\u70B9\u6570\u91CF\u7531\u8FD0\u884C\u7ED3\u679C\u51B3\u5B9A\uFF1B\u5DF2\u521B\u5EFA\u7684\u8282\u70B9\u4F1A\u5728\u6B64\u5206\u7EC4\u4E2D\u5C55\u5F00\u3002" });
 Object.assign(messages.en, { "reviewCompact": "Ready for review", "reviewCompactHelp": "Check the flow below, then start.", "reviewDetails": "Task details & execution settings", "reviewBudgets": "Concurrency {concurrency} \xB7 Up to {calls} calls \xB7 {steps} steps / {minutes} min per agent", "status.awaiting": "Not started", "status.blocked": "Dependency blocked", "status.not_run": "Not executed", "awaitingHelp": "This planned node has not been dispatched. Its status will update here when it starts.", "blockedHelp": "A declared upstream node did not succeed; this node has not executed.", "notRunHelp": "This run ended without triggering this planned node.", "dynamicHelp": "The number of nodes depends on runtime results. Created nodes expand within this group." });
+Object.assign(messages.zh, { "trash": "\u56DE\u6536\u7AD9", "trashHelp": "\u5220\u9664\u7684\u5DE5\u4F5C\u6D41\u5148\u8FDB\u5165\u56DE\u6536\u7AD9\uFF1A\u4E8B\u4EF6\u3001\u8282\u70B9\u4E0E\u7ED3\u679C\u5168\u90E8\u4FDD\u7559\uFF0C\u53EF\u968F\u65F6\u6062\u590D\u3002\u5230\u671F\u540E\u7531\u5F52\u6863\u8F6E\u8F6C\u56DE\u6536\u5B58\u50A8\uFF1B\u5BA1\u8BA1\u4E8B\u4EF6\u6C38\u4E0D\u5220\u9664\u3002", "trashEmpty": "\u56DE\u6536\u7AD9\u4E3A\u7A7A\u3002", "trashRestore": "\u6062\u590D", "trashRemaining": "\u4FDD\u7559\u5269\u4F59 {days} \u5929", "trashExpired": "\u5DF2\u5230\u671F\uFF0C\u7B49\u5F85\u5F52\u6863\u8F6E\u8F6C", "trashDeleted": "\u5220\u9664\u4E8E {date}", "trashRetention": "\u56DE\u6536\u7AD9\u4FDD\u7559\u671F\uFF08\u5929\uFF09", "trashRetentionHelp": "\u9ED8\u8BA4 30 \u5929\uFF1B0 \u8868\u793A\u4E0D\u5230\u671F\uFF0C\u4EC5\u624B\u52A8\u8F6E\u8F6C\u5F52\u6863\u3002\u4FEE\u6539\u4F1A\u540C\u6B65\u66F4\u65B0\u56DE\u6536\u7AD9\u4E2D\u5DF2\u6709\u6761\u76EE\u7684\u5230\u671F\u65F6\u95F4\u3002", "event.run.deleted": "\u5DF2\u5220\u9664\u5230\u56DE\u6536\u7AD9", "event.run.restored": "\u5DF2\u6062\u590D" });
+Object.assign(messages.en, { "trash": "Trash", "trashHelp": "Deleted workflows move to the trash first: events, nodes, and results are all kept and restorable at any time. Expired entries are rotated into the local archive to reclaim storage; audit events are never deleted.", "trashEmpty": "Trash is empty.", "trashRestore": "Restore", "trashRemaining": "{days} days left", "trashExpired": "Expired; waiting for archive rotation", "trashDeleted": "Deleted {date}", "trashRetention": "Trash retention (days)", "trashRetentionHelp": "Default 30 days; 0 disables expiry, leaving only manual archive rotation. Changes restamp entries already in the trash.", "event.run.deleted": "Moved to trash", "event.run.restored": "Restored" });
+Object.assign(messages.zh, { "event.archive.rotated": "\u56DE\u6536\u7AD9\u5F52\u6863\u8F6E\u8F6C" });
+Object.assign(messages.en, { "event.archive.rotated": "Archive rotation" });
 var LANGUAGE_KEY = "workflow-language";
 function normalizePreference(value) {
   return ["zh", "en"].includes(value) ? value : "auto";
@@ -2831,6 +2835,62 @@ $2("#template-form").onsubmit = async (e) => {
   } catch (e2) {
     $2("#templates-error").hidden = false;
     $2("#templates-error").textContent = apiMessage(e2.message);
+  } finally {
+    button.disabled = false;
+  }
+};
+async function renderTrash() {
+  const list = $2("#trash-list");
+  list.replaceChildren();
+  const runs2 = await api("/runs?trash=1");
+  if (!runs2.length) list.append(el("p", { class: "subtle" }, t("trashEmpty")));
+  for (const r of runs2) {
+    const row = el("article", { class: "template-card" }), text = el("div");
+    const days = Math.ceil((r.purgeAfter - Date.now()) / 864e5);
+    text.append(el("h3", {}, r.name), el("p", {}, `${labels[r.status] ?? r.status} \xB7 ${t("trashDeleted", { date: new Date(r.deletedAt).toLocaleString(language === "zh" ? "zh-CN" : "en-US") })} \xB7 ${days > 0 ? t("trashRemaining", { days }) : t("trashExpired")}`));
+    const restore = el("button", { type: "button" }, t("trashRestore"));
+    restore.onclick = async () => {
+      restore.disabled = true;
+      try {
+        await api(`/runs/${r.id}/restore`, "POST", { by: "studio" });
+        await renderTrash();
+        await refreshList();
+      } catch (e) {
+        $2("#trash-error").hidden = false;
+        $2("#trash-error").textContent = apiMessage(e.message);
+        restore.disabled = false;
+      }
+    };
+    const actions = el("div", { class: "template-actions" });
+    actions.append(restore);
+    row.append(text, actions);
+    list.append(row);
+  }
+}
+$2("#open-trash").onclick = async () => {
+  $2("#trash-error").hidden = true;
+  $2("#trash-dialog").showModal();
+  try {
+    const { trashRetentionDays } = await api("/trash");
+    $2("#trash-form").elements.trashRetentionDays.value = String(trashRetentionDays);
+    await renderTrash();
+  } catch (e) {
+    $2("#trash-error").hidden = false;
+    $2("#trash-error").textContent = apiMessage(e.message);
+  }
+};
+$2("#close-trash").onclick = () => $2("#trash-dialog").close();
+$2("#trash-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const button = e.submitter ?? $2("#trash-form").querySelector("button[type=submit]");
+  button.disabled = true;
+  try {
+    await api("/trash", "POST", { trashRetentionDays: Number(e.currentTarget.elements.trashRetentionDays.value) });
+    $2("#trash-error").hidden = true;
+    await renderTrash();
+  } catch (e2) {
+    $2("#trash-error").hidden = false;
+    $2("#trash-error").textContent = apiMessage(e2.message);
   } finally {
     button.disabled = false;
   }
