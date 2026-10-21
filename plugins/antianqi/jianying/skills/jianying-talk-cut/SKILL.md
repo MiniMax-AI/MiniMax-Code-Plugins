@@ -95,7 +95,8 @@ node ${PLUGIN_ROOT}/scripts/run-verb.mjs verify_diff '{
 | **自己做 ASR** | 官方 ASR 在 agent runtime（HTTP 63178），**不在我们的 VE 管道里**；本地 whisper 要装模型（可选，不在默认路径） | **用户给 SRT / 转写稿**（我们缺的是"事实来源"，不是"经验"） |
 | **改写台词 / 生成旁白** | 官方也明确「自由改写和生成旁白走通用链路」 | 人工改写；或用 `jianying-draft-edit` 的 `text.add` 另加一段 |
 | **按主题重排**（官方 topic_cut） | 需要素材召回（`SegmentRecall`）⇒ 拿不到 | 我们只做 **Clean Cut**（按 SRT 删废话） |
-| **自动加字幕** | 字幕规范/样式是另一条链 | `jianying-draft-edit` 的 `text.add` 可以做，但不是本 skill 的事 |
+| **自动生成字幕文本**（ASR） | 官方 ASR 在 agent runtime，拿不到 | **用户给 SRT**；本 skill 已有 SRT 解析与逐句时间轴 |
+| **落字幕（把 SRT 变成草稿里的字幕轨）** | 不属于"判断哪句是废话"的范畴 | **已能做**：`scripts/add-subtitles.mjs`（`text.add` + `startTime`/`duration` ⇒ 带时码的文字段；★ 时码按 fps 帧对齐，验收容差 ±1 帧） |
 | **不加人工确认就落刀** | 判定只到 `review` 级的水词/停顿/重复**默认不删** | `talk-cut-plan` 出保留区间表 ⇒ 人工确认 ⇒ `talk-cut-apply` 才落刀 |
 
 ## 参考

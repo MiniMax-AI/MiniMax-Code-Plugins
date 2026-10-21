@@ -2,13 +2,13 @@
 name: jianying-draft-edit
 description: 'Use when: 改剪映草稿 / 给草稿加素材或音轨 / 移动裁剪片段 / 调某段的音量 / 加文字 / 加轨道 / 撤销重做 / 改完落盘并验证生效. 触发词: 给这个草稿加个片段 / 把这段剪短 / 把这轨静音 / 加个文字 / 改完存一下 / 撤销刚才那步 / 看看改动生效没有.'
 displayNames:
-  zh-Hans: 剪映·改草稿（27 个官方操作 · 落盘不动真草稿）
+  zh-Hans: 剪映·改草稿（官方行为操作全集 · 加字幕 · 落盘不动真草稿）
 license: Apache-2.0
 compatibility: Requires Windows + 剪映 11.6 在运行（edit 域走官方命名管道）+ JYAI_HOME 指向 JYAI 仓库（落盘/渲染/验收在 JYAI_HOME/tools）+ ffmpeg + Python 3.14.
 metadata:
   author: antianqi
   version: "0.1.0"
-  basis: "官方 edit 域 27 个带命名空间的行为操作（实测 27/27）；落盘走 draft/writeFile；验收走【语义】逐段字段差（像素差需先量噪声底）"
+  basis: "官方 edit 域带命名空间的行为操作全集（实测 18 域 199 个、桥全部放行，全量见 references/official-ops.md）；落盘走 draft/writeFile；验收走【语义】逐段字段差（像素差需先量噪声底）"
 ---
 
 # 剪映改草稿（jianying-draft-edit）
@@ -22,12 +22,15 @@ metadata:
 |---|---|
 | `draft_open` | 打开草稿（**默认开副本**；`allowReal` 与 `copy` 冲突会被拒） |
 | `draft_read` | 读草稿语义结构（时间线/片段/素材）—— 拿 `segmentId` 等 id 用 |
-| `draft_patch` | **27 个官方行为操作**（见下表） |
+| `draft_patch` | **官方行为操作全集**（18 域 / 199 个，桥**全部放行**；常用见下表，全量见 `references/official-ops.md`） |
 | `draft_commit` | 落盘（自动**素材路径重定位** + **真草稿 sha 前后断言**） |
 | `render_frames` | 用官方渲染器出帧（改前/改后各一次） |
 | `verify_diff` | 逐帧像素差（**取全帧最大**）判定"看得见" |
 
-## ★ 27 个官方操作（带命名空间，**不是裸名**）
+## ★ 官方行为操作（带命名空间，**不是裸名**）
+
+> **★ 全集是 18 域 / 199 个 op，我们这道桥实测全部放行（0 个被拒）** —— 以前"只有 27 个"是我们只试了 27 个。
+> 全量清单 + 已知参数契约 + 三个坑：`references/official-ops.md`。
 
 | 组 | 操作 |
 |---|---|
@@ -41,8 +44,8 @@ metadata:
 | 批量 | `invokeBatch` |
 
 **★ 已知必填项**（缺了会被本地先拦下，不白跑一次官方调用）：
-`video.add`→`path` · **`audio.add`→`audioPath`** · `text.add`→`content` · `track.mute`/`track.delete`→`trackId` ·
-`segment.move`/`setTimeRange`/`setDescription`→`segmentId` · **`segment.split`→`splitTime`** ·
+`video.add`→`path` · **`audio.add`→`audioPath`** · **`text.add`→`content`+`startTime`/`duration`** · `track.mute`/`track.delete`→`trackId` ·
+`segment.move`/`setDescription`→`segmentId` · **`segment.split`→`splitTime`** ·
 `segment.updateLayout`→`layout` · `segment.innerReplace`→`replacement`
 
 ## 主工作流
@@ -89,12 +92,13 @@ node ${PLUGIN_ROOT}/scripts/run-verb.mjs verify_diff '{
 | 加一条视频 | `video.add` `{path}`（★ 参数名是 `path`，不是 `source`/`filePath`） |
 | 加一条音频 | `audio.add` `{audioPath}`（★ 不是 `source`） |
 | 加一段文字 | `text.add` `{content}`（★ 不是 `text`） |
+| **加字幕（带时码）** | `text.add` `{content, startTime, duration}`（★ 时码直接吃这两个键，官方按 fps 帧对齐） |
 | 这段音量调到 25% | `video.setVolume` `{segmentId, volume}` |
 | 这段静音 | `video.muteOn` `{segmentId}` |
 | 把这段剪成两半 | `segment.split` `{segmentId, splitTime}`（★ 不是 `splitTimeUs`） |
 | 删掉这段 | `segment.delete` `{segmentId}` |
 | 挪到别的位置 | `segment.move` `{segmentId, ...}`（★ 需要先有 snapshot） |
-| 改这段的时间范围 | `segment.setTimeRange` `{segmentId, startTimeUs?\|startUs?, durationUs?}` |
+| 改这段的时间范围 | `segment.setTimeRange` `{segmentId, …}` ⚠️ **参数名尚未确证**：传 `startUs/durationUs` 官方回 `accepted` 但回读时码被清零 ⇒ 判据必须是"回读后字段真的变了" |
 | 撤销上一步 | `undoRedo.undo` `{}` |
 | 一次做多步 | `invokeBatch` `{operations:[...]}` |
 
@@ -127,6 +131,6 @@ node ${PLUGIN_ROOT}/scripts/run-verb.mjs verify_diff '{
 
 ## 参考
 
-- 官方 27 op 的实测报告：`<JYAI_HOME>\logs\editops.md`（含每个 op 的官方报错 ⇒ 参数反推依据）
+- 官方 op 全集的实测清单：`references/official-ops.md`（18 域 199 个、逐个打桥的结果、已确证参数契约、三个"accepted 但没生效"的坑）
 - 判据纪律：`references/verify-discipline.md`
 - 踩坑清单：`references/pitfalls.md`
