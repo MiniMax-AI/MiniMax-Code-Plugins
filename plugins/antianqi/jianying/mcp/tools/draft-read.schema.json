@@ -1,0 +1,27 @@
+{
+  "name": "draft_read",
+  "description": "读取草稿的语义结构（时间线 / 片段 / 素材），返回 JSON + 结构化摘要。给 sessionId 时读【会话内存当前状态】（即 draft_patch 改过、还没落盘的那份）；不给则读磁盘上的草稿。",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "draft_content.json 路径（明文）。不传 sessionId 时用它；不传则读当前 session 的草稿"
+      },
+      "sessionId": {
+        "type": "string",
+        "description": "draft_open 返回的 sessionId。给了就读【会话内存】当前状态（draft_patch 改过但未落盘的改动也看得到）"
+      },
+      "root": {
+        "type": "string",
+        "description": "草稿根目录（素材/子目录的解析基准）。不传则取 path 的上级目录。★ 官方 readFile 没有它会解析不出 workspace ⇒ 静默返回空"
+      },
+      "scope": {
+        "type": "string",
+        "enum": ["full", "timeline", "segments", "materials"],
+        "default": "full"
+      }
+    },
+    "additionalProperties": false
+  }
+}

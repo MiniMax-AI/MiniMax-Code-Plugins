@@ -1,0 +1,132 @@
+{
+  "schema": "jianying.capability-dict.v1",
+  "note": "46 项能力 → 动词 → 参数/op → 判据。机器可读版；人读版见 references/chain-api.md",
+  "verbs": {
+    "draft_open": {
+      "kind": "official-semantics",
+      "ops": [],
+      "guards": [
+        "默认开副本",
+        "非副本需 allowReal"
+      ]
+    },
+    "draft_read": {
+      "kind": "official-semantics",
+      "ops": [
+        "full",
+        "timeline",
+        "segments",
+        "materials"
+      ],
+      "guards": []
+    },
+    "draft_patch": {
+      "kind": "official-semantics",
+      "ops": [
+        "video.add"
+      ],
+      "guards": [
+        "改前必须先 draft_open"
+      ]
+    },
+    "draft_commit": {
+      "kind": "official-semantics",
+      "ops": [],
+      "guards": [
+        "素材路径重定位",
+        "真草稿 sha 前后比对"
+      ]
+    },
+    "render_frames": {
+      "kind": "official-semantics",
+      "ops": [],
+      "guards": []
+    },
+    "grade_apply": {
+      "kind": "ours",
+      "ops": [
+        "adjustColor",
+        "colorCorrection",
+        "curves",
+        "hsl",
+        "hsl_curves",
+        "logWheel",
+        "particle",
+        "primaryWheel",
+        "sharpen",
+        "vignetting"
+      ],
+      "guards": [
+        "未知键直接拒绝",
+        "逐节点生效探针（节点为 0 ⇒ 失败）"
+      ]
+    },
+    "audio_mix": {
+      "kind": "ours",
+      "ops": [],
+      "guards": [
+        "响度归一到 −14 LUFS"
+      ]
+    },
+    "verify_diff": {
+      "kind": "ours",
+      "ops": [],
+      "guards": [
+        "max-over-frames（不抽单帧）",
+        "真草稿 sha 断言"
+      ]
+    }
+  },
+  "capabilities": {
+    "element": {
+      "draft": "draft_read",
+      "main": "draft_read",
+      "multi": "draft_read"
+    },
+    "segment": {
+      "video": "draft_patch#video.add",
+      "image": "draft_patch",
+      "text": "draft_patch",
+      "subtitle": "draft_patch",
+      "sound": "audio_mix",
+      "sticker": "draft_patch"
+    },
+    "property": {
+      "transform": "draft_patch",
+      "time": "draft_patch",
+      "alpha": "draft_patch",
+      "content": "draft_patch",
+      "sub": "draft_patch",
+      "effect": "grade_apply#adjustColor|colorCorrection|hsl|logWheel|primaryWheel|curves|hsl_curves|sharpen|vignetting|particle",
+      "mask": "draft_patch",
+      "matting": "draft_patch",
+      "animation": "draft_patch",
+      "speed_curve": "draft_patch"
+    }
+  },
+  "node_kinds": {
+    "bakeable_3dlut": [
+      "adjustColor",
+      "colorCorrection",
+      "curves",
+      "hsl",
+      "hsl_curves",
+      "logWheel",
+      "primaryWheel"
+    ],
+    "render_time": [
+      "particle",
+      "sharpen",
+      "vignetting"
+    ],
+    "sub_param_of_adjustColor": [
+      "fade",
+      "lightSensation"
+    ]
+  },
+  "acceptance": {
+    "grade_apply": "每个节点单开必须产生非零改变（MAD>0）",
+    "verify_diff": "max MAD > threshold",
+    "draft_commit": "真草稿 sha 前后逐字节相同"
+  }
+}

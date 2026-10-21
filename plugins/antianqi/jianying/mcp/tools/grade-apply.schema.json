@@ -1,0 +1,645 @@
+{
+  "name": "grade_apply",
+  "description": "用我们逐像素复刻的调色链（10 个节点，对齐官方 shader，误差 ≤1 LSB）给片子调色，出 10bit 成片（保留原音轨）。自带逐节点生效探针：任一节点单独打开无变化 ⇒ 判失败。",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "src": {
+        "type": "string",
+        "description": "源片路径"
+      },
+      "outDir": {
+        "type": "string",
+        "description": "输出目录"
+      },
+      "spec": {
+        "type": "object",
+        "description": "调色 spec：键是节点名，值是该节点的参数。未知键会被拒绝（防静默失效）。",
+        "properties": {
+          "adjustColor": {
+            "type": "object",
+            "description": "基础画面调节（官方 adjustColor）。fade/lightSensation 是它的子参数，不是独立节点。",
+            "properties": {
+              "brightness": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              },
+              "contrast": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              },
+              "saturation": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              },
+              "vibrance": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              },
+              "highlight": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              },
+              "shadow": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              },
+              "black": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              },
+              "white": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              },
+              "temperature": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              },
+              "fade": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "lightSensation": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "colorCorrection": {
+            "type": "object",
+            "description": "色彩校正（官方 colorCorrection，与 adjustColor 同源的精简变体）。",
+            "properties": {
+              "contrast": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              },
+              "saturation": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              },
+              "brightness": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              },
+              "highlight": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              },
+              "shadow": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              },
+              "black": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              },
+              "white": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              },
+              "temperature": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "hsl": {
+            "type": "object",
+            "description": "分色调整（官方 HSL）。键是颜色名，值是 hue/saturation/lightness（界面值 ±100）。",
+            "properties": {
+              "HSLRed": {
+                "type": "object",
+                "properties": {
+                  "hue": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "saturation": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "lightness": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  }
+                },
+                "additionalProperties": false
+              },
+              "HSLGreen": {
+                "type": "object",
+                "properties": {
+                  "hue": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "saturation": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "lightness": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  }
+                },
+                "additionalProperties": false
+              },
+              "HSLBlue": {
+                "type": "object",
+                "properties": {
+                  "hue": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "saturation": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "lightness": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  }
+                },
+                "additionalProperties": false
+              },
+              "HSLYellow": {
+                "type": "object",
+                "properties": {
+                  "hue": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "saturation": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "lightness": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  }
+                },
+                "additionalProperties": false
+              },
+              "HSLCyan": {
+                "type": "object",
+                "properties": {
+                  "hue": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "saturation": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "lightness": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  }
+                },
+                "additionalProperties": false
+              },
+              "HSLMagenta": {
+                "type": "object",
+                "properties": {
+                  "hue": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "saturation": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "lightness": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": true,
+            "patternProperties": {
+              "^[0-9]{2}#[0-9a-fA-F]{6}_[HSL]$": {
+                "type": "object",
+                "properties": {
+                  "hue": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "saturation": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "lightness": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "logWheel": {
+            "type": "object",
+            "description": "对数轮（四段：阴影/中间调/高光/偏移）。",
+            "properties": {
+              "shadow": {
+                "type": "object",
+                "properties": {
+                  "r": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "g": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "b": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "s": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  }
+                },
+                "additionalProperties": false
+              },
+              "midtone": {
+                "type": "object",
+                "properties": {
+                  "r": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "g": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "b": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "s": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  }
+                },
+                "additionalProperties": false
+              },
+              "highlights": {
+                "type": "object",
+                "properties": {
+                  "r": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "g": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "b": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "s": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  }
+                },
+                "additionalProperties": false
+              },
+              "offset": {
+                "type": "object",
+                "properties": {
+                  "r": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "g": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "b": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  },
+                  "s": {
+                    "type": "number",
+                    "minimum": -1,
+                    "maximum": 1
+                  }
+                },
+                "additionalProperties": false
+              },
+              "intensity": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "rngDown": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "rngUp": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "primaryWheel": {
+            "type": "object",
+            "description": "三原色轮（官方 primaryWheel）。",
+            "properties": {
+              "red": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              },
+              "green": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              },
+              "blue": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              },
+              "cyan": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              },
+              "magenta": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              },
+              "yellow": {
+                "type": "number",
+                "minimum": -1,
+                "maximum": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "curves": {
+            "type": "object",
+            "description": "曲线（官方 curves，4 条 1D 曲线）。控制点组是官方 A,L,R 布局。",
+            "properties": {
+              "red": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                }
+              },
+              "green": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                }
+              },
+              "blue": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                }
+              },
+              "luma": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "hsl_curves": {
+            "type": "object",
+            "description": "HSL 耦合曲线（6 条）。points 是官方 L,A,R 扁平坐标（与 curves 的 A,L,R 不同！）。",
+            "properties": {
+              "hue2hue": {
+                "type": "object",
+                "properties": {
+                  "points": {
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "required": [
+                  "points"
+                ],
+                "additionalProperties": false
+              },
+              "hue2sat": {
+                "type": "object",
+                "properties": {
+                  "points": {
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "required": [
+                  "points"
+                ],
+                "additionalProperties": false
+              },
+              "hue2lum": {
+                "type": "object",
+                "properties": {
+                  "points": {
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "required": [
+                  "points"
+                ],
+                "additionalProperties": false
+              },
+              "lum2sat": {
+                "type": "object",
+                "properties": {
+                  "points": {
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "required": [
+                  "points"
+                ],
+                "additionalProperties": false
+              },
+              "satsat": {
+                "type": "object",
+                "properties": {
+                  "points": {
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "required": [
+                  "points"
+                ],
+                "additionalProperties": false
+              },
+              "satlum": {
+                "type": "object",
+                "properties": {
+                  "points": {
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "required": [
+                  "points"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          },
+          "sharpen": {
+            "type": "object",
+            "description": "锐化（渲染期算子，邻域依赖，不能烘 3D LUT）。",
+            "properties": {
+              "intensity": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "vignetting": {
+            "type": "object",
+            "description": "暗角/白角（渲染期算子，uv 依赖，不能烘 3D LUT）。",
+            "properties": {
+              "intensity": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "param": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "particle": {
+            "type": "object",
+            "description": "颗粒/光斑（渲染期算子，uv 依赖）。",
+            "properties": {
+              "intensity": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "param": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "seed": {
+                "type": "integer"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "frames": {
+        "type": "integer",
+        "default": 12,
+        "description": "处理前 N 帧"
+      },
+      "noLut": {
+        "type": "boolean",
+        "default": false,
+        "description": "只出逐点直算那一版"
+      }
+    },
+    "required": [
+      "src",
+      "outDir",
+      "spec"
+    ],
+    "additionalProperties": false
+  }
+}

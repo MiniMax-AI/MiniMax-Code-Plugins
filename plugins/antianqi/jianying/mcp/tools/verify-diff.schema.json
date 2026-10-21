@@ -1,0 +1,72 @@
+{
+  "name": "verify_diff",
+  "description": "审片/验收：改动前后对照。可查多个维度 —— visibility（画面变化是否可见，max-over-frames）、picture（画质：均值漂移/高光削波/暗部死黑）、audio（响度 LUFS 与 true peak）、timeline（段数/轨道/时长变化）、draft_integrity（真草稿 sha）。任一维度不达标即判 FAIL 并列出 problems。",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "beforeDir": {
+        "type": "string",
+        "description": "改前帧目录（PNG 序列）"
+      },
+      "afterDir": {
+        "type": "string",
+        "description": "改后帧目录（PNG 序列）"
+      },
+      "checks": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": ["visibility", "picture", "audio", "timeline", "draft_integrity"]
+        },
+        "default": ["visibility"],
+        "description": "要查的维度。缺省只查 visibility。"
+      },
+      "threshold": {
+        "type": "number",
+        "default": 0.5,
+        "description": "visibility 的 max MAD 阈值（0..255 标度）。★ 官方渲染器同态重渲染就有噪声（实测 17/108 帧变、最差 MAD 123.55）⇒ 建议同时给 noiseDir 做校准。"
+      },
+      "noiseDir": {
+        "type": "string",
+        "description": "★ 噪声基线帧目录：同一状态【再渲染一次】的帧。给了就把判据线抬到 max(threshold, noiseMad×noiseK)，不给则判据【未校准】（输出里会标 note）。"
+      },
+      "noiseK": {
+        "type": "number",
+        "default": 1.5,
+        "description": "噪声底的倍数（判据线 = max(threshold, noiseMad × noiseK)）"
+      },
+      "expect": {
+        "type": "object",
+        "description": "★ 期望断言（给 timeline 维度用）。给了就按期望判定，不再用\"什么都没动\"的启发式。",
+        "properties": {
+          "segmentsDelta": { "type": "number", "description": "期望的段数变化（如剪掉一段 = -1）" },
+          "durationDeltaUs": { "type": "number", "description": "期望的时长变化（µs）" },
+          "segmentFieldChanged": { "type": "string", "description": "期望某个 segment 字段发生变化（如 volume）" },
+          "segmentFieldUnchanged": { "type": "string", "description": "期望某个 segment 字段【不】变化" }
+        },
+        "additionalProperties": false
+      },
+      "beforeVideo": {
+        "type": "string",
+        "description": "audio 维度用：改前 mp4"
+      },
+      "afterVideo": {
+        "type": "string",
+        "description": "audio 维度用：改后 mp4"
+      },
+      "beforeDraft": {
+        "type": "string",
+        "description": "timeline 维度用：改前草稿 JSON 路径（明文）"
+      },
+      "afterDraft": {
+        "type": "string",
+        "description": "timeline 维度用：改后草稿 JSON 路径（明文）"
+      },
+      "realDraft": {
+        "type": "string",
+        "description": "draft_integrity 维度用：真草稿目录（只读）"
+      }
+    },
+    "additionalProperties": false
+  }
+}

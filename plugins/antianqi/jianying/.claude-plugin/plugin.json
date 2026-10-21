@@ -1,0 +1,27 @@
+{
+  "name": "jianying",
+  "version": "0.1.0",
+  "description": "用逐像素复刻的剪映调色链给视频调色并出 10bit 成片（保留原音轨），附逐节点生效探针与画面级验收。8 个 MCP 动词覆盖草稿读写、调色、混音、渲染、验收。",
+  "author": {
+    "name": "antianqi",
+    "url": "https://github.com/antianqi"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["mcode", "jianying", "video-editing", "color-grading", "10bit", "mcp"],
+  "skills": [
+    "./skills/jianying-cut/SKILL.md",
+    "./skills/jianying-draft-edit/SKILL.md",
+    "./skills/jianying-review/SKILL.md",
+    "./skills/jianying-talk-cut/SKILL.md",
+    "./skills/jianying-verify/SKILL.md",
+    "./skills/jianying-grade-chain/SKILL.md"
+  ],
+  "mcpServers": {
+    "jianying": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["./mcp/server.mjs"],
+      "cwd": "./mcp"
+    }
+  }
+}

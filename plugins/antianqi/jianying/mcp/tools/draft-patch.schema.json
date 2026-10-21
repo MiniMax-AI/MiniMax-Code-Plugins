@@ -1,0 +1,52 @@
+{
+  "name": "draft_patch",
+  "description": "对草稿做语义级修改。官方 edit 域共 27 个带命名空间的行为操作（实测 27/27 可用）：draft.setCanvasSize/setDraftId · track.add/delete/mute · segment.move/scale/translate/rotate/updateLayout/split/delete/setTimeRange/innerReplace/setDescription · video.add/muteOn/muteOff/setVolume · audio.add/setVolume · text.add · undoRedo.undo/redo/canUndo/canRedo · invokeBatch。先调 draft_open 拿 sessionId。",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "op": {
+        "type": "string",
+        "enum": [
+          "draft.setCanvasSize",
+          "draft.setDraftId",
+          "track.add",
+          "track.delete",
+          "track.mute",
+          "segment.move",
+          "segment.scale",
+          "segment.translate",
+          "segment.rotate",
+          "segment.updateLayout",
+          "segment.split",
+          "segment.delete",
+          "segment.setTimeRange",
+          "segment.innerReplace",
+          "segment.setDescription",
+          "video.add",
+          "video.muteOn",
+          "video.muteOff",
+          "video.setVolume",
+          "audio.add",
+          "audio.setVolume",
+          "text.add",
+          "undoRedo.undo",
+          "undoRedo.redo",
+          "undoRedo.canUndo",
+          "undoRedo.canRedo",
+          "invokeBatch"
+        ],
+        "description": "官方行为操作名（带命名空间，不是裸名）"
+      },
+      "sessionId": {
+        "type": "string",
+        "description": "draft_open 返回的 sessionId"
+      },
+      "params": {
+        "type": "object",
+        "description": "该 op 的参数（官方原生语义）。已知必填：video.add→path · text.add→content · track.mute/delete→trackId · segment.move/setTimeRange/setDescription→segmentId · segment.updateLayout→layout · segment.innerReplace→replacement。缺必填会先被本地拦下，不会白跑一次官方调用。"
+      }
+    },
+    "required": ["op", "sessionId"],
+    "additionalProperties": false
+  }
+}
