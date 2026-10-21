@@ -1,0 +1,21 @@
+Upstream project: https://github.com/Rimagination/scansci-pdf
+Upstream tag: v1.18.0
+Upstream commit: ec812f085f392a9b67768fbcad7ddeb340e0245f
+Fork patch: MiniMax hosted-plugin security and performance hardening
+Historical initial engine patch commit: 703fb9e (fix/minimax-plugin-security; not published upstream)
+Engine version: 1.18.0.post2
+Plugin version: 1.18.0-minimax.2
+
+The vendor directory is source-only. No precompiled Cython extensions or downloaded
+executables are included. The MCP entrypoint uses launch_secure.mjs and an isolated, bound Python interpreter
+to execute vendor/scansci-pdf/run_secure.py. Round-4 changes are maintained in the
+registry plugin/scansci-pdf branch; the source manifest describes local delivered
+bytes, not an upstream-release attestation.
+
+Lower-level follow-up: engine imports are confined to manifest-listed source;
+legacy bytecode cannot supply absent optional modules. Explicit hosted browser
+selection, complete Netscape cookie round trips, confirmed atomic school setup
+and response-provided upload authorization redaction have local regressions.
+Review follow-up also normalizes typed trust values before comparison/persistence,
+honors explicit Camoufox program selection on every launch path, rejects raw
+program overrides, and exercises the locked MCP SDK schema in the stdio check.
