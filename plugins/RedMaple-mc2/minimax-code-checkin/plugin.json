@@ -1,0 +1,19 @@
+{
+    "$schema":  "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+    "name":  "minimax-code-checkin",
+    "version":  "1.0.0",
+    "description":  "Complete MiniMax Code\u0027s daily check-in to claim free credits (400/day, 1000 on day 4 and day 7, 4000/week, valid 30 days) and manage the schedule of the automated check-in.",
+    "author":  {
+                   "name":  "RedMaple-mc2"
+               },
+    "license":  "MIT",
+    "homepage":  "https://github.com/MiniMax-AI/MiniMax-Code-Plugins/tree/main/plugins/RedMaple-mc2/minimax-code-checkin",
+    "repository":  "https://github.com/MiniMax-AI/MiniMax-Code-Plugins",
+    "keywords":  [
+                     "minimax-code",
+                     "checkin",
+                     "credits",
+                     "cron",
+                     "automation"
+                 ]
+}
