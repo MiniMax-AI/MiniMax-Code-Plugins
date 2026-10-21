@@ -227,7 +227,9 @@
         "改前必须先 draft_open",
         "★ 全集 199 个 op 我们这道桥【全部放行】（0 个 unsupported）⇒ 以前\"只有 27 个\"是我们只试了 27 个",
         "★ accepted:true ≠ 生效：判据必须是\"回读草稿后字段真的变了\"（segment.setTimeRange 传 startUs/durationUs ⇒ 官方回 accepted 但时码被清零）",
-        "★ text.add 的 needInsertTargetTrack=true 时段会插进 trackIndex 指向的那条轨（哪怕是 video 轨）⇒ 往同一条 text 轨塞多条字幕要用 needInsertTargetTrack=false + 该 text 轨下标"
+        "★ text.add 的 needInsertTargetTrack=true 时段会插进 trackIndex 指向的那条轨（哪怕是 video 轨）⇒ 往同一条 text 轨塞多条字幕要用 needInsertTargetTrack=false + 该 text 轨下标",
+        "★ 视频/音频 AI 效果类 op 的契约（实测 2026-10-21）：video.denoiseOn{segmentId,isDenoise?,denoiseMode?,denoiseRate?} ⇒ materials.realtime_denoises（引擎 sami_name=denoise_v2，本地实时 DSP）；audio.setVocalBeautify{segmentId,enable:true} ⇒ materials.vocal_beautifys（本地实时）；audio.setVocalSeparation{…} ⇒ materials.vocal_separations（production_path 为空 ⇒ 产出要剪映的 AI 任务，我们只写引用）",
+        "★ 视频/音频 AI 效果类 op 的契约（实测 2026-10-21）：video.denoiseOn{segmentId,isDenoise?,denoiseMode?,denoiseRate?} ⇒ materials.realtime_denoises（引擎 sami_name=denoise_v2，本地实时 DSP）；audio.setVocalBeautify{segmentId,enable:true} ⇒ materials.vocal_beautifys（本地实时）；audio.setVocalSeparation{…} ⇒ materials.vocal_separations（production_path 为空 ⇒ 产出要剪映的 AI 任务，我们只写引用）"
       ]
     },
     "draft_commit": {
@@ -302,7 +304,8 @@
       "mask": "draft_patch",
       "matting": "draft_patch",
       "animation": "draft_patch",
-      "speed_curve": "draft_patch"
+      "speed_curve": "draft_patch",
+      "audio_ai": "draft_patch#video.denoiseOn|audio.setVocalBeautify|audio.setVoiceEffect"
     }
   },
   "node_kinds": {
@@ -330,6 +333,7 @@
     "verify_diff": "画面维度：max MAD > max(threshold, noiseMad×1.5)，且必须给 noiseDir（同态重渲染的帧）做噪声校准；官方渲染器同态噪声底实测 MAD 48~123 ⇒ 未校准的裸 MAD 只能作参考。语义维度：用 expect 断言落盘草稿的逐段字段差（不依赖像素）",
     "draft_commit": "真草稿 sha 前后逐字节相同",
     "draft_patch": "回读草稿后目标字段真的变了（不接受\"官方说 accepted\"）",
-    "text.add": "字幕时码与期望吻合（容差 ±1 帧，官方按 fps 帧对齐）"
+    "text.add": "字幕时码与期望吻合（容差 ±1 帧，官方按 fps 帧对齐）",
+    "audio_ai": "回读草稿：materials.realtime_denoises / vocal_beautifys / audio_effects 里有新条目且段上 extra_material_refs 变了"
   }
 }

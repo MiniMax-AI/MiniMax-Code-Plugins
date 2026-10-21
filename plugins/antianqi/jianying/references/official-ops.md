@@ -147,6 +147,18 @@
 实测：各种形态都**只建了空 text 轨、没落段**。
 ⇒ **但普通 `text.add` + `startTime/duration` 已经能落出带时码的文字（= 字幕轨）** ⇒ 走那条路。
 
+
+## ★ 音频 AI 效果类 op（实测 2026-10-21）
+
+| 能力 | op | 参数 | 落成 | 能不能真算 |
+|---|---|---|---|---|
+| **降噪** | `video.denoiseOn`（★ **不是** `audio.denoiseOn`） | `{segmentId, isDenoise?, denoiseMode?, denoiseRate?}` | `materials.realtime_denoises[]`：`{type:"realtime_denoise", sami_name:"denoise_v2", sami_version:"1.0", is_denoise, denoise_mode, denoise_rate}` | ✅ **本地 SAMI 实时 DSP**，不依赖云端 |
+| **人声美化** | `audio.setVocalBeautify` | `{segmentId, enable:true}` | `materials.vocal_beautifys[]`：`{type:"vocal_beautify", enable, ambient_sound_level:75, voice_change_mode:null, production_path:""}` | ✅ **本地实时**（`production_path` 为空 ⇒ 不是云端产出） |
+| **变声** | `audio.setVoiceEffect` | `{segmentId}` | `materials.audio_effects[]` | ✅ 本地 |
+| **人声分离** | `audio.setVocalSeparation` | ★ 参数未探对（6 种形态都无变化） | 结构已知：`{type:"vocal_separation", choice, removed_sounds, time_range, final_algorithm:"", production_path:""}` | ⚠️ **写引用可以，产出拿不到** —— `production_path`/`final_algorithm` 为空 ⇒ 分离是**剪映的 AI 任务**（与 ASR 同类，在 agent runtime / 云端） |
+
+**键名风格**：`isDenoise`/`is_denoise`、`denoiseMode`/`denoise_mode` 两种都认；`enable` 只认 `enable`（`isEnable` 无效）。
+
 ## 关键入口速查
 
 | 想做的事 | 走哪个 op |
