@@ -471,6 +471,9 @@ const IMPL = {
       let best = { mad: -1, frame: -1, maxAbs: 0, changed: 0 };
       let noiseBest = { mad: -1, frame: -1 };
       let changedFrames = 0, noiseChangedFrames = 0;
+      // ★ 逐帧噪声（2026-10-21 实测：非确定性是【逐帧】的，不是全局的）
+      const perFrameNoise = [];
+      const perFrameMad = [];
       // picture 统计（after 侧全局；before 侧同步累计，用来算【增量】）
       const sum = [0, 0, 0];
       const mn = [255, 255, 255];
@@ -488,6 +491,7 @@ const IMPL = {
           dsum += d; if (d > dmx) dmx = d; if (d > 0) ch++;
         }
         const mad = dsum / x.length;
+        perFrameMad[i] = mad;
         if (mad > 0) changedFrames++;
         if (mad > best.mad) best = { mad, frame: i, maxAbs: dmx, changed: ch };
         // ★ 噪声底：同一状态【再渲染一次】的帧 ⇒ 同态差异就是渲染器噪声
@@ -497,6 +501,7 @@ const IMPL = {
             let nsum = 0;
             for (let k = 0; k < x.length; k++) nsum += Math.abs(x[k] - z[k]);
             const nmad = nsum / x.length;
+            perFrameNoise[i] = nmad;
             if (nmad > 0) noiseChangedFrames++;
             if (nmad > noiseBest.mad) noiseBest = { mad: nmad, frame: i };
           }
@@ -528,21 +533,55 @@ const IMPL = {
         const noiseMad = noiseBest.mad < 0 ? null : noiseBest.mad;
         const noiseK = a.noiseK ?? 1.5;
         const calibrated = noiseMad !== null;
-        const bar = calibrated ? Math.max(th, noiseMad * noiseK) : th;
-        const visible = best.mad > bar;
+        // ★★★ 逐帧判据线（2026-10-21 §82 修正）
+        //   实测：官方预览渲染的【非确定性是逐帧的】——同一草稿渲两遍，
+        //   整片 MAD 123.55，但同一片里另一些帧只差 0.5；
+        //   而且【连着抓两次同一时刻】像素就不同 ⇒ 是"每次抓帧"层面的非确定，
+        //   不是"重渲染"层面的。官方 GUI 里也是这套引擎（连续播放时人眼察觉不到），
+        //   但逐像素静态比对会把它放大。
+        //   ⇒ 判据线必须【逐帧用自己的噪声】来定，而不是用全局最大噪声：
+        //        bar_i = max(threshold, noise_i × noiseK)
+        //      这样"那一帧本来就分不出"（noise_i 很大 ⇒ bar_i 更大 ⇒ 不算可见），
+        //      而其它稳定帧的真实改动照常被检出。
+        const frameDetail = [];
+        for (let i = 0; i < n; i++) {
+          const mad = perFrameMad[i];
+          if (mad === undefined) continue;
+          const nm = perFrameNoise[i];
+          const barI = calibrated && nm !== undefined ? Math.max(th, nm * noiseK) : th;
+          frameDetail.push({
+            frame: i, mad, noise: nm === undefined ? null : nm, bar: barI,
+            unstable: calibrated && nm !== undefined && nm > th,
+            visible: mad > barI,
+          });
+        }
+        const visibleRows = frameDetail.filter((r) => r.visible);
+        const unstable = frameDetail.filter((r) => r.unstable).map((r) => r.frame);
+        const bestVisible = visibleRows.length
+          ? visibleRows.reduce((a, b) => (b.mad > a.mad ? b : a))
+          : null;
+        const bar = calibrated ? Math.max(th, noiseMad * noiseK) : th;   // 全局参考线（仅作参考）
+        const visible = visibleRows.length > 0;
         const v = { maxMad: best.mad, frame: best.frame, maxAbs: best.maxAbs,
                     changedPixels: best.changed, changedFrames, totalFrames: n, threshold: th,
                     noiseMad, noiseFrame: noiseBest.frame, noiseChangedFrames, noiseK,
                     calibrated, noiseBar: bar,
+                    unstableFrames: unstable,
+                    unstableFrameCount: unstable.length,
+                    visibleMaxMad: bestVisible ? bestVisible.mad : null,
+                    visibleFrame: bestVisible ? bestVisible.frame : null,
+                    visibleFrameCount: visibleRows.length,
+                    frameDetail,
                     madOverNoise: noiseMad ? +(best.mad / noiseMad).toFixed(3) : null };
         v.verdict = visible ? 'PASS（改动可见）' : 'FAIL（改动在画面上不可见）';
         if (!calibrated) {
-          v.note = '未校准：官方渲染器同态重渲染噪声实测可达 MAD 123.55（17/108 帧变）⇒ 裸 MAD 不能单独证明"改动可见"；请补 noiseDir';
+          v.note = '未校准：官方渲染器同态重渲染噪声实测可达 MAD 123.55（逐帧分布，17/108 帧变）⇒ 裸 MAD 不能单独证明"改动可见"；请补 noiseDir';
         }
         res.checks.visibility = v;
         if (!visible) {
-          problems.push(`画面不可见：max MAD ${best.mad.toFixed(4)} ≤ 判据线 ${bar.toFixed(4)}`
-            + (calibrated ? `（噪声底 ${noiseMad.toFixed(4)} × ${noiseK}）` : '（未校准，阈值仅 0.5）'));
+          const shown = bestVisible ? bestVisible.mad : (calibrated ? 0 : best.mad);
+          problems.push(`画面不可见：${calibrated ? '逐帧判据线下没有一帧达标' : `max MAD ${shown.toFixed(4)} ≤ 阈值 ${th}`}`
+            + (calibrated ? `（全局噪声底 ${noiseMad.toFixed(4)} × ${noiseK}；不稳定帧 ${unstable.length}/${n} 帧：噪声本身就超过阈值 ⇒ 这些帧分不出改动）` : '（未校准，阈值仅 0.5）'));
         }
       }
       if (want('picture') && px > 0) {

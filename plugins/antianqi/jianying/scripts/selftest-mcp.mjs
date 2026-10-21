@@ -56,6 +56,29 @@ async function synthFrames(dir, brightness) {
   return colors.length;
 }
 
+// ★ 逐帧稳定性用例（§82）：造三组帧
+//   base   : 3 帧原样
+//   unstable: 只有第 1 帧被大幅扰动（模拟"官方预览渲染在该帧非确定"）
+//   changed : 只有第 2 帧被小幅真实改动
+//   ⇒ 期望：第 1 帧被判为不稳定并排除；第 2 帧的稳定改动仍被检出 ⇒ 判"可见"
+async function synthFramesPerFrame(dir, { unstableIndex = null, unstableBright = null, changedIndex = null, changedBright = null } = {}) {
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  const colors = ['606060', '808080', 'A0A0A0'];
+  for (let i = 0; i < colors.length; i++) {
+    let bright = null;
+    if (i === unstableIndex) bright = unstableBright;
+    if (i === changedIndex) bright = changedBright;
+    const f = path.join(dir, String(i).padStart(5, '0') + '.png');
+    const args = ['-y', '-v', 'error', '-f', 'lavfi', '-i', `color=c=0x${colors[i]}:s=64x64`];
+    if (bright !== null) args.push('-vf', `eq=brightness=${bright}`);
+    args.push('-frames:v', '1', f);
+    const r = await sh(args);
+    if (r.code !== 0) return 0;
+  }
+  return colors.length;
+}
+
 const child = spawn(process.execPath, [SRV], {
   env: { ...process.env, JYAI_HOME: JYAI, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
   stdio: ['pipe', 'pipe', 'inherit'],
@@ -176,6 +199,24 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
   check('★★ verify_diff 负向注入：白底被推爆 ⇒ 必须报「新增削波」',
     (picc.clipDelta ?? 0) > 0.02 && (v1cj?.problems || []).some((p) => /削波/.test(p)),
     `clip=${picc.clipRatio} clipΔ=${picc.clipDelta} problems=${JSON.stringify(v1cj?.problems)}`);
+
+  // 4e. ★★ 逐帧稳定性（§82）：噪声集中在少数帧 ⇒ 不稳定帧排除，稳定帧的改动仍要检出
+  const FR_PF_BASE = path.join(OUT, 'frames-pf-base');
+  const FR_PF_UNSTABLE = path.join(OUT, 'frames-pf-unstable');
+  const FR_PF_CHANGED = path.join(OUT, 'frames-pf-changed');
+  await synthFramesPerFrame(FR_PF_BASE, {});
+  await synthFramesPerFrame(FR_PF_UNSTABLE, { unstableIndex: 1, unstableBright: -0.5 });
+  await synthFramesPerFrame(FR_PF_CHANGED, { changedIndex: 2, changedBright: -0.2 });
+  const v1d = await call('tools/call', { name: 'verify_diff', arguments: {
+    beforeDir: FR_PF_BASE, afterDir: FR_PF_CHANGED, noiseDir: FR_PF_UNSTABLE, checks: ['visibility'] } });
+  const v1dj = (() => { try { return JSON.parse(textOf(v1d)); } catch { return null; } })();
+  const visd = v1dj?.checks?.visibility || {};
+  check('★★ verify_diff 逐帧稳定性：不稳定帧被单独标出',
+    visd.unstableFrameCount === 1 && (visd.unstableFrames || []).includes(1),
+    `unstableFrames=${JSON.stringify(visd.unstableFrames)} visibleFrameCount=${visd.visibleFrameCount}`);
+  check('★★ verify_diff 逐帧稳定性：稳定帧上的真实改动仍被判为可见',
+    v1d.result?.isError !== true && v1dj?.verdict === 'PASS' && (visd.visibleMaxMad ?? 0) > 0,
+    `verdict=${v1dj?.verdict} visibleMaxMad=${visd.visibleMaxMad} @frame${visd.visibleFrame}`);
 
   // 5. ★ 阴性：同一目录对同一目录 ⇒ 必须 FAIL（判据要有判别力）
   const v2 = await call('tools/call', { name: 'verify_diff', arguments: { beforeDir: FR_BASE, afterDir: FR_BASE } });
