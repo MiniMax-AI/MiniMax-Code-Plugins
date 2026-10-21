@@ -1,0 +1,13 @@
+
+# v2026-08-28 modacker: webui runtime artifacts (server.err + sessions json)
+.server.err
+.webui-sessions.json
+
+# v2026-09-20 webui-rigor-fix H1: test/coverage artifacts
+# c8 writes per-subprocess tmp JSON under coverage/tmp/ and coverage_tmp/;
+# keep all of it, lcov output, logs, and scratch dirs out of the tree.
+coverage/
+coverage_tmp/
+*.lcov
+*.log
+.tmp/
