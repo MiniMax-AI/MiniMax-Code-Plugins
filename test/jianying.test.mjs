@@ -1,11 +1,17 @@
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const pluginRoot = path.join(repositoryRoot, 'plugins', 'antianqi', 'jianying');
+// The Plugin lives either under plugins/<owner>/<name>/ (the hosted layout of
+// the community repository) or at the repository root (a standalone Plugin
+// repository that the local marketplace can install directly). Detect both so
+// one test file can guard either layout.
+const hostedRoot = path.join(repositoryRoot, 'plugins', 'antianqi', 'jianying');
+const pluginRoot = existsSync(path.join(hostedRoot, 'plugin.json')) ? hostedRoot : repositoryRoot;
 const read = (relative) => readFile(path.join(pluginRoot, relative), 'utf8');
 const exists = async (relative) => {
   try { await stat(path.join(pluginRoot, relative)); return true; } catch { return false; }
