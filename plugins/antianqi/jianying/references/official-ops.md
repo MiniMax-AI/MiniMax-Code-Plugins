@@ -157,6 +157,28 @@
 | **变声** | `audio.setVoiceEffect` | `{segmentId}` | `materials.audio_effects[]` | ✅ 本地 |
 | **人声分离** | `audio.setVocalSeparation` | ★ 参数未探对（6 种形态都无变化） | 结构已知：`{type:"vocal_separation", choice, removed_sounds, time_range, final_algorithm:"", production_path:""}` | ⚠️ **写引用可以，产出拿不到** —— `production_path`/`final_algorithm` 为空 ⇒ 分离是**剪映的 AI 任务**（与 ASR 同类，在 agent runtime / 云端） |
 
+
+**★ 但我们的出片链目前【不应用】这些效果**（2026-10-21 查清，重要）：
+
+我们的出片是 **官方渲染器出画面（`player` 域）+ 我们自己用 ffmpeg 混音**：
+
+| 环节 | 实际做了什么 | 剪映的音频效果 |
+|---|---|---|
+| 画面 | 官方渲染器出 PNG 序列（`player` 域）⇒ **带**剪映的调色/特效/转场 | — |
+| 音频 | `jyai-audio-mix.mjs` 自己混：`volume` / `fade_in.ms` / `fade_out.ms` / `speed`（官方 `media change-audio-speed` 保音高）/ 响度归一（ffmpeg loudnorm） | ❌ **不读** `realtime_denoises` / `vocal_beautifys` |
+| 官方渲染产物 | 实测**只有 video 流、没有音轨** | — |
+| 官方 `media` 域 | 只有文件级工具（trim / extract-frames / trim-audio / change-audio-speed / resize / compress），**没有带效果的渲染或导出** | — |
+| 官方导出器 | 被 `-100007` / `-100015` 挡死 | — |
+
+⇒ 所以准确说法是：**降噪/美化/变声能写进草稿**（剪映 GUI 打开看得到、它自己导出时会用），
+**但我们自己出的片不带这些效果**。
+
+⇒ 要让降噪真的出现在成片里，两条路：
+1. **让剪映渲染音频** —— 需要它的导出/渲染管线，我们拿不到（导出器被官方挡死）。
+2. **自己在混音链里加**（ffmpeg `afftdn` 降噪 / EQ / 压缩 / 去齿音近似"人声美化"；
+   人声分离要模型 Demucs/Spleeter）⇒ **这才是"我们自己实现"那条路的真正价值：
+   不是复刻剪映的 DSP，而是补上剪映本地链的缺口。**
+
 **键名风格**：`isDenoise`/`is_denoise`、`denoiseMode`/`denoise_mode` 两种都认；`enable` 只认 `enable`（`isEnable` 无效）。
 
 ## 关键入口速查
