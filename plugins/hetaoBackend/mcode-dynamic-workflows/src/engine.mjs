@@ -12,9 +12,9 @@ import { constants } from 'node:fs';
 import { resolve, relative, isAbsolute, sep } from 'node:path';
 import Ajv from 'ajv';
 import { check, hash, boundedJSON, validateScript } from './common.mjs';
-import { resolveMcode } from './availability.mjs';
+import { preflightMcode } from './availability.mjs';
 import { DEFAULT_LIMITS, LEGACY_LIMITS, resolveLimits, runLimits, durationLabel } from './limits.mjs';
-import { agentFailure,failureError } from './failure.mjs';
+import { agentFailure,failureError,EXECUTOR_FAILURE_CODES } from './failure.mjs';
 import { demoExecute, mcodeExecute } from './executor.mjs';
 export class Engine extends EventEmitter {
  constructor(store,options){super();this.store=store;this.options=options;this.defaults=resolveLimits(options,DEFAULT_LIMITS);this.globalConcurrency=this.store.setting('globalConcurrency')??8;this.lastServedRun=null;this.approving=new Set();this.active=new Map();this.slots=0;this.queue=[];this.closing=false;}
@@ -91,16 +91,39 @@ export class Engine extends EventEmitter {
    const template={id:randomUUID(),name:name.trim(),createdAt:Date.now(),definition:templateDefinition(run)};
    this.store.saveTemplate(template);return template;
  }
+ // Executor preflight (fail-loud). Returns null when there is nothing to
+ // probe — demo runs, or a test-injected execute() that replaces the real
+ // CLI entirely. For mcode runs the result is stamped on the run as the
+ // readable `preflight` field surfaced by workflow_status.
+ async preflightExecutor(run) {
+   if(run.executor!=='mcode'||this.options.execute)return null;
+   // Injectable probe budget for the tree-cleanup regressions only; the
+   // default (20000, inside availability.mjs) and the CLI flag surface are
+   // unchanged.
+   const {preflightTimeoutMs}=this.options;
+   return preflightMcode(this.options.command??'mcode',{args:this.options.args??[],...(preflightTimeoutMs===undefined?{}:{timeoutMs:preflightTimeoutMs})});
+ }
  async approve(id,{revision}={}) {
    check(!this.closing,'服务正在关闭');let run=this.store.get(id);check(run?.status==='pending_review','工作流不在待审核状态');
    check(Number.isInteger(revision)&&revision===run.revision,'审核版本已更新，请刷新拓扑后再开始');assertValidDependencies(previewTopology(run.script,run.input));check(!this.approving.has(id),'工作流正在启动');this.approving.add(id);
    try {
-    if(run.executor==='mcode'&&!this.options.execute)check(await resolveMcode(this.options.command??'mcode'),'找不到 MCode CLI，请安装并登录后开始。');
+    const preflight=await this.preflightExecutor(run);
+    if(preflight&&!preflight.ok){
+     // Fail loud at the gate: an unusable executor is recorded on the run
+     // itself — failed status, actionable errorDetails — before any dispatch.
+     // Incident 2026-09-20: a resolution-only check let a crashed CLI
+     // (better-sqlite3 ABI break + mcode v0.2.4) pass approval, and three
+     // runs then "succeeded" in 42ms with steps:0/attempts:0. A dead
+     // executor must never be translatable into success.
+     Object.assign(run,{status:'failed',error:preflight.message,errorDetails:preflight,preflight});
+     this.save(run);this.emitEvent(id,'run.finished',{status:'failed',error:preflight.message});
+     check(false,preflight.message);
+    }
     const fingerprints=await this.fingerprints(run.input.files??[]);
     run=this.store.get(id);check(run?.status==='pending_review'&&run.revision===revision,'审核版本已更新，请刷新拓扑后再开始');
     check(!this.closing&&!this.active.has(id)&&this.active.size<3,'服务正在关闭或执行容量已满');
     check(run.workspace===this.options.workspace,'工作区已改变，请创建新工作流');
-    Object.assign(run,{fingerprints,approvedRevision:revision,approvedAt:Date.now()});this.save(run);this.emitEvent(id,'run.approved',{revision});this.launch(run);return this.snapshot(id);
+    Object.assign(run,{fingerprints,approvedRevision:revision,approvedAt:Date.now(),...(preflight?{preflight}:{})});this.save(run);this.emitEvent(id,'run.approved',{revision});this.launch(run);return this.snapshot(id);
    } finally {this.approving.delete(id);}
  }
  snapshot(id){const run=this.store.get(id);check(run,'工作流不存在');const limits=runLimits(run),topology=run.topology?.version===3?run.topology:previewTopology(run.script,run.input);return {...run,topology,...historicalFailure(run,topology),...limits,legacyLimits:run.maxSteps===undefined,scheduler:this.schedulerStatus(),steps:this.store.steps(id).map(stored=>{const s=stored.kind==='agent'?{...stored,maxSteps:stored.maxSteps??LEGACY_LIMITS.maxSteps,timeoutMs:stored.timeoutMs??LEGACY_LIMITS.stepTimeoutMs}:stored;if(!s.errorDetails&&/^MCode (limit_exceeded|timeout)$/.test(s.error??'')){const errorDetails=agentFailure(s.error.slice(6),{maxSteps:s.maxSteps??limits.maxSteps,timeoutMs:s.timeoutMs??limits.stepTimeoutMs,sessionId:s.sessionId,turnId:s.turnId});return {...s,error:errorDetails.message,errorDetails};}return s.status==='queued'?{...s,queueInfo:this.queueInfo(id,s.id)}:s;})};}
@@ -145,9 +168,54 @@ export class Engine extends EventEmitter {
      if(!ok||ctx.intent){ctx.controller.abort();await worker.terminate();}
      await Promise.allSettled([...ctx.operations]);await worker.terminate();
      const steps=this.store.steps(run.id);
-     run.status=ctx.intent??(ok?(steps.some(s=>s.status!=='succeeded')?'completed_with_gaps':'succeeded'):'failed');
-     if(ok&&!ctx.intent){try{boundedJSON(value,100_000);run.result=value;}catch(e){run.status='failed';run.error=e.message;}}
-     else {const failure=workflowFailure(value);run.error=ctx.reason??failure.message;run.errorDetails=ctx.failure??failure.details??run.errorDetails;}
+     const agents=steps.filter(s=>s.kind==='agent');
+     // Engine-layer failure sample: the first agent that died in the executor
+     // itself (never started / no completion protocol / protocol break /
+     // unreconciled exit). Null when every failure was business-level.
+     const executorFailure=agents.find(s=>s.status!=='succeeded'&&EXECUTOR_FAILURE_CODES.has(s.errorDetails?.code))?.errorDetails??null;
+     // Required-vs-optional split for the zero-dispatch guard. A planned agent
+     // node is REQUIRED only when static analysis marked it neither conditional
+     // (IfStatement/ConditionalExpression/SwitchCase/LogicalExpression/
+     // CatchClause ancestor — the documented contract allows such branches not
+     // to run) nor dynamic (loop/function ancestor or non-literal id — the
+     // dispatch count cannot be known in advance). Zero dispatch over an
+     // all-optional plan is a legitimate branch outcome, not an incident;
+     // zero dispatch while any required node sits undispatched is the
+     // swallowed-failure shape and must fail. Nodes missing both flags
+     // (unexpected or legacy shapes) count as required — the conservative
+     // side, because a false success is worse than a false failure.
+     const requiredAgentNodes=run.topology?.nodes?.filter(n=>n.kind==='agent'&&!n.conditional&&!n.dynamic)??[];
+     if(ok&&!ctx.intent){
+      if(!agents.length&&requiredAgentNodes.length){
+       // Zero-expansion guard (incident 2026-09-20): the script completed
+       // while the topology still planned required agent nodes and not one was
+       // dispatched — typically a swallowed pre-dispatch failure. Such a run
+       // is failed, never a zero-step success. Scripts whose topology plans
+       // no agent nodes at all are exempt (legal zero-step scripts), and so
+       // are scripts whose every planned node is conditional/dynamic and the
+       // runtime legitimately took the zero-dispatch path.
+       run.status='failed';
+       run.errorDetails={code:'NO_AGENTS_EXECUTED',plannedAgentNodes:run.topology.nodes.filter(n=>n.kind==='agent').length,requiredAgentNodes:requiredAgentNodes.length,
+        message:'脚本已完成，但拓扑中计划的 Agent 节点一个都没有执行（0 个步骤被派发）。运行按失败处理。',
+        suggestion:'检查脚本是否在 try/catch 中吞掉了启动失败并提前返回；修复后可恢复运行，已执行节点会复用。'};
+       run.error=run.errorDetails.message;
+      } else if(executorFailure&&!agents.some(s=>s.status==='succeeded')){
+       // Every dispatched agent died in the executor layer: the run produced
+       // nothing usable. Fail with the recorded sample instead of a
+       // gaps/success verdict the incident showed to be a lie.
+       run.status='failed';run.error=executorFailure.message;run.errorDetails=executorFailure;
+      } else {
+       run.status=steps.some(s=>s.status!=='succeeded')?'completed_with_gaps':'succeeded';
+       // Keep one engine-layer sample readable on partial-success runs; the
+       // script handled each failure itself, so the verdict stays unchanged.
+       if(executorFailure)run.errorDetails=executorFailure;
+      }
+      try{boundedJSON(value,100_000);run.result=value;}catch(e){run.status='failed';run.error=e.message;}
+     } else {
+      run.status=ctx.intent??'failed';
+      const failure=workflowFailure(value);
+      run.error=ctx.reason??failure.message;run.errorDetails=ctx.failure??failure.details??run.errorDetails;
+     }
      for(const s of steps)if(['running','queued'].includes(s.status)){s.status='interrupted';s.endedAt=Date.now();this.store.saveStep(run.id,s);}
      this.save(run);this.active.delete(run.id);this.emitEvent(run.id,'run.finished',{status:run.status,error:run.error});ctx.resolveDone?.();
    };
@@ -265,7 +333,11 @@ const step={id:key,kind:'checkpoint',status:'succeeded',output:payload.value,req
    check(!this.closing,'服务正在关闭');const run=this.store.get(id);check(run,'工作流不存在');check(!this.active.has(id),'工作流仍在运行');check(run.workspace===this.options.workspace,'工作区已改变，请创建新工作流');
    check(!run.revision||run.approvedRevision===run.revision,'未审核工作流不能恢复，请创建新草稿');
    check(['paused','failed','interrupted','cancelled','needs_attention','completed_with_gaps'].includes(run.status),'当前状态不能恢复');check(run.status!=='needs_attention'||options.confirmStopped===true,'上次异常退出，需确认旧 Agent 已停止');
-   if(run.executor==='mcode'&&!this.options.execute)check(await resolveMcode(this.options.command??'mcode'),'找不到 MCode CLI，请安装并登录后恢复。');
+   // Same preflight as approval: a dead executor must not be resumable into
+   // another fake success. The run keeps its current (retryable) status; the
+   // refusal and its reason are recorded on the preflight field.
+   const preflight=await this.preflightExecutor(run);
+   if(preflight){if(!preflight.ok){run.preflight=preflight;this.save(run);check(false,preflight.message);}run.preflight=preflight;}
    assertValidDependencies(previewTopology(run.script,run.input));
    const limits=resolveLimits(options,runLimits(run)),maxCalls=options.maxCalls??run.maxCalls;
    check(Number.isInteger(maxCalls)&&maxCalls>=1&&maxCalls<=100,'调用数范围 1–100');check(run.attempts<maxCalls,`已使用 ${run.attempts} 次 Agent 调用，请将总调用上限设置得更高后恢复。`);

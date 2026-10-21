@@ -7682,7 +7682,7 @@ var require_cross_spawn = __commonJS({
     var cp = __require("child_process");
     var parse6 = require_parse();
     var enoent = require_enoent();
-    function spawn4(command, args, options) {
+    function spawn5(command, args, options) {
       const parsed = parse6(command, args, options);
       const spawned = cp.spawn(parsed.command, parsed.args, parsed.options);
       enoent.hookChildProcess(spawned, parsed);
@@ -7694,8 +7694,8 @@ var require_cross_spawn = __commonJS({
       result.error = result.error || enoent.verifyENOENTSync(result.status, parsed);
       return result;
     }
-    module.exports = spawn4;
-    module.exports.spawn = spawn4;
+    module.exports = spawn5;
+    module.exports.spawn = spawn5;
     module.exports.sync = spawnSync;
     module.exports._parse = parse6;
     module.exports._enoent = enoent;
@@ -7707,8 +7707,8 @@ import { parseArgs } from "node:util";
 import { resolve as resolve3, join as join4 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir as homedir2 } from "node:os";
-import { readFile as readFile2, writeFile, mkdir, open as open3, rename } from "node:fs/promises";
-import { spawn as spawn3 } from "node:child_process";
+import { readFile as readFile3, writeFile, mkdir, open as open3, rename } from "node:fs/promises";
+import { spawn as spawn4 } from "node:child_process";
 
 // src/store.mjs
 import { DatabaseSync } from "node:sqlite";
@@ -13690,6 +13690,7 @@ function agentFailure(status, { maxSteps, timeoutMs, exitCode = null, cause = ""
 function failureError(details, usage = null) {
   return Object.assign(new Error(details.message), { details, usage });
 }
+var EXECUTOR_FAILURE_CODES = /* @__PURE__ */ new Set(["MCODE_START_FAILED", "MCODE_MISSING_RESULT", "MCODE_PROTOCOL_ERROR", "MCODE_CLEANUP_UNCONFIRMED", "MCODE_EXIT"]);
 
 // src/structured-output.mjs
 function structuredOutput(raw, validate2, stepId) {
@@ -13701,13 +13702,27 @@ function structuredOutput(raw, validate2, stepId) {
       candidate = JSON.parse(text);
       format = "json";
     } catch {
-      const fenced = text.match(/^```(?:json)?\s*\r?\n([\s\S]*?)\r?\n```$/i);
-      if (!fenced || fenced[1].includes("```")) throw invalid("invalid_json");
-      try {
-        candidate = JSON.parse(fenced[1]);
-        format = "json_fence";
-      } catch {
-        throw invalid("invalid_json");
+      const blocks = [...text.matchAll(/```(?:json)?\s*\r?\n([\s\S]*?)\r?\n```/gi)];
+      if (blocks.length > 1) throw invalid("invalid_json");
+      if (blocks.length === 1) {
+        if (blocks[0][1].includes("```")) throw invalid("invalid_json");
+        try {
+          candidate = JSON.parse(blocks[0][1]);
+          format = blocks[0][0] === text ? "json_fence" : "json_fence_embedded";
+        } catch {
+          throw invalid("invalid_json");
+        }
+      } else {
+        const spans = bareSpans(text);
+        if (spans.length !== 1) throw invalid("invalid_json");
+        const tail = text.slice(spans[0][1]).match(/\S/);
+        if (tail && ",]}:".includes(tail[0])) throw invalid("invalid_json");
+        try {
+          candidate = JSON.parse(text.slice(spans[0][0], spans[0][1]));
+          format = "json_embedded";
+        } catch {
+          throw invalid("invalid_json");
+        }
       }
     }
   }
@@ -13718,6 +13733,31 @@ function structuredOutput(raw, validate2, stepId) {
     const cause = reason === "invalid_json" ? "\u8FD4\u56DE\u5185\u5BB9\u4E0D\u662F\u6709\u6548\u7684\u5B8C\u6574 JSON \u6216\u5355\u4E2A\u5B8C\u6574 JSON \u4EE3\u7801\u5757\u3002" : issues.map((e) => `${e.path}${e.missingProperty ? ` \u7F3A\u5C11 ${e.missingProperty}` : ` ${e.message}`}`).join("\uFF1B");
     return failureError({ code: "OUTPUT_SCHEMA_INVALID", stepId, reason, issues, message: `\u8282\u70B9 ${stepId} \u7684\u7ED3\u6784\u5316\u8F93\u51FA\u65E0\u6548\uFF1A${cause}`, suggestion: "\u67E5\u770B\u8282\u70B9\u539F\u59CB\u8F93\u51FA\u5E76\u6838\u5BF9 schema\u3002\u4E0D\u8981\u8BFB\u53D6\u5931\u8D25\u7ED3\u679C\u7684\u5B57\u6BB5\u3001\u586B\u5145\u731C\u6D4B\u503C\u6216\u81EA\u52A8\u91CD\u8BD5\uFF1B\u4FDD\u7559\u672A\u8986\u76D6\u9879\u540E\u518D\u51B3\u5B9A\u4FEE\u6B63\u6216\u91CD\u8DD1\u3002" });
   }
+}
+function bareSpans(text) {
+  const spans = [];
+  let depth = 0, start = -1, inString = false, escaped = false;
+  for (let i2 = 0; i2 < text.length; i2++) {
+    const ch = text[i2];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{" || ch === "[") {
+      if (depth === 0) start = i2;
+      depth++;
+    } else if ((ch === "}" || ch === "]") && depth > 0) {
+      depth--;
+      if (depth === 0) {
+        spans.push([start, i2 + 1]);
+        start = -1;
+      }
+    }
+  }
+  return spans;
 }
 
 // src/dependencies.mjs
@@ -14012,8 +14052,11 @@ import { realpath, open } from "node:fs/promises";
 import { constants as constants2 } from "node:fs";
 import { resolve as resolve2, relative, isAbsolute, sep } from "node:path";
 
+// src/availability.mjs
+import { spawn } from "node:child_process";
+
 // src/mcode-location.mjs
-import { access, stat } from "node:fs/promises";
+import { access, stat, readFile, readdir } from "node:fs/promises";
 import { constants } from "node:fs";
 import { delimiter, dirname, join as join2, resolve } from "node:path";
 import { homedir } from "node:os";
@@ -14028,16 +14071,30 @@ async function fileExists(file, executable = false, platform = process.platform)
     return false;
   }
 }
+function loadableEntry(entry) {
+  return String(entry).replace(/^\\\\\?\\UNC\\/, "\\\\").replace(/^\\\\\?\\([a-zA-Z]:)/, "$1");
+}
 async function executablePath(command, env = process.env, platform = process.platform) {
   if (typeof command !== "string" || !command) return null;
   const direct = /[\\/]/.test(command);
   const dirs = direct ? [""] : (env.PATH ?? env.Path ?? "").split(platform === "win32" ? ";" : delimiter).filter(Boolean);
-  const extensions = platform === "win32" ? ["", ...(env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";")] : [""];
+  const dotted = /\.[a-z0-9]+$/i.test(command);
+  const extensions = platform === "win32" ? [...dotted ? [""] : [], ...(env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";").filter(Boolean)] : [""];
   for (const dir of dirs) for (const ext of extensions) {
     const file = direct ? resolve(command + ext) : resolve(join2(dir, command + ext));
     if (await fileExists(file, true, platform)) return file;
   }
   return null;
+}
+async function launcherEntry(script, dir) {
+  try {
+    const ref2 = (await readFile(script, "utf8")).match(/[^\s"'*]*node_modules[^\s"'*]*cli\.js/)?.[0];
+    if (!ref2) return null;
+    const entry = resolve(dir, ref2.replace(/%~dp0/gi, () => `${dir.replace(/\\/g, "/")}/`).replace(/\\/g, "/"));
+    return await fileExists(entry) ? entry : null;
+  } catch {
+    return null;
+  }
 }
 async function resolveMcode(command = "mcode", { env = process.env, home = homedir(), platform = process.platform } = {}) {
   let path = await executablePath(command, env, platform);
@@ -14048,27 +14105,73 @@ async function resolveMcode(command = "mcode", { env = process.env, home = homed
   }
   if (path) {
     if (platform === "win32" && /\.(cmd|bat)$/i.test(path)) {
+      const active = await launcherEntry(join2(dirname(path), ".mcode-launcher.cmd"), dirname(path));
+      if (active) return { command: process.execPath, args: [loadableEntry(active)], source };
+      const root = officialRoot(home, env);
+      const candidates = [
+        { entry: join2(dirname(path), "node_modules", "@minimax-ai", "code", "cli.js"), tie: "" },
+        { entry: join2(root, "lib", "node_modules", "@minimax-ai", "code", "cli.js"), tie: "" },
+        { entry: join2(root, "node_modules", "@minimax-ai", "code", "cli.js"), tie: "" }
+      ];
+      try {
+        for (const entry of await readdir(join2(root, "releases"), { withFileTypes: true }))
+          if (entry.isDirectory()) candidates.push({ entry: join2(root, "releases", entry.name, "node_modules", "@minimax-ai", "code", "cli.js"), tie: entry.name });
+      } catch {
+      }
+      const parseSemVer = (value) => {
+        const m2 = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(String(value ?? "").trim());
+        if (!m2) return null;
+        return {
+          core: [Number(m2[1]), Number(m2[2]), Number(m2[3])],
+          pre: m2[4] === void 0 ? null : m2[4].split(".").map((id2) => ({ numeric: /^\d+$/.test(id2), value: id2 }))
+        };
+      };
+      const cmpSemVer = (a, b2) => {
+        if (!a || !b2) return !a && !b2 ? 0 : a ? 1 : -1;
+        if (!a.pre !== !b2.pre) return a.pre ? -1 : 1;
+        const core = a.core[0] - b2.core[0] || a.core[1] - b2.core[1] || a.core[2] - b2.core[2];
+        if (core) return core;
+        if (!a.pre) return 0;
+        for (let i2 = 0; i2 < Math.max(a.pre.length, b2.pre.length); i2++) {
+          const x2 = a.pre[i2], y2 = b2.pre[i2];
+          if (!x2 || !y2) return x2 ? 1 : -1;
+          if (x2.numeric && y2.numeric) {
+            if (x2.value !== y2.value) return Number(x2.value) - Number(y2.value);
+          } else if (x2.numeric !== y2.numeric) return x2.numeric ? -1 : 1;
+          else if (x2.value !== y2.value) return x2.value < y2.value ? -1 : 1;
+        }
+        return 0;
+      };
+      const versionOf = async (entry) => {
+        try {
+          return parseSemVer(JSON.parse(await readFile(join2(entry, "..", "package.json"), "utf8")).version);
+        } catch {
+          return null;
+        }
+      };
+      let best = null;
+      for (const candidate of candidates) {
+        if (!await fileExists(candidate.entry)) continue;
+        const version3 = await versionOf(candidate.entry);
+        if (!best || cmpSemVer(version3, best.version) > 0 || cmpSemVer(version3, best.version) === 0 && candidate.tie > best.tie) best = { ...candidate, version: version3 };
+      }
+      if (best) return { command: process.execPath, args: [loadableEntry(best.entry)], source };
       const launcher = join2(dirname(path), "mcode.ps1");
       if (await fileExists(launcher)) {
-        const powershell = await executablePath("powershell.exe", env, platform) ?? await executablePath("pwsh.exe", env, platform);
+        const powershell = await executablePath("pwsh.exe", env, platform) ?? await executablePath("powershell.exe", env, platform);
         if (!powershell) throw new Error("\u53D1\u73B0 MCode PowerShell \u542F\u52A8\u5668\uFF0C\u4F46\u627E\u4E0D\u5230 PowerShell\u3002");
         return { command: powershell, args: ["-NoProfile", "-File", launcher], source };
       }
-      const entry = join2(dirname(path), "node_modules", "@minimax-ai", "code", "cli.js");
-      if (!await fileExists(entry)) throw new Error(`\u53D1\u73B0 ${path}\uFF0C\u4F46\u627E\u4E0D\u5230\u53EF\u76F4\u63A5\u6267\u884C\u7684 cli.js\uFF1B\u8BF7\u4FEE\u590D\u8BE5 CLI \u5B89\u88C5\u3002`);
-      return { command: process.execPath, args: [entry], source };
+      throw new Error(`\u53D1\u73B0 ${path}\uFF0C\u4F46\u627E\u4E0D\u5230\u53EF\u76F4\u63A5\u6267\u884C\u7684 cli.js\uFF1B\u8BF7\u4FEE\u590D\u8BE5 CLI \u5B89\u88C5\u3002`);
     }
     return { command: path, args: [], source };
   }
   if (command === "mcode") {
     const entry = managedEntry(home, platform);
-    if (await fileExists(entry)) return { command: process.execPath, args: [entry], source: "workflow-managed" };
+    if (await fileExists(entry)) return { command: process.execPath, args: [loadableEntry(entry)], source: "workflow-managed" };
   }
   return null;
 }
-
-// src/executor.mjs
-import { spawn } from "node:child_process";
 
 // src/process-tree.mjs
 import { execFile } from "node:child_process";
@@ -14139,7 +14242,124 @@ async function stopProcessTree(child, {
   }
 }
 
+// src/availability.mjs
+var CLEANUP_BUDGET_MS = 5e3;
+async function preflightMcode(command = "mcode", { args = [], env = process.env, timeoutMs = 2e4, stopTree = stopProcessTree } = {}) {
+  check(Number.isInteger(timeoutMs) && timeoutMs >= 100 && timeoutMs <= 6e5, "preflightTimeoutMs \u5FC5\u987B\u662F 100\u2013600000 \u8303\u56F4\u5185\u7684\u6574\u6570\u6BEB\u79D2\u503C");
+  let cli = null;
+  try {
+    cli = await resolveMcode(command, { env });
+  } catch (e) {
+    return {
+      ok: false,
+      code: "MCODE_PREFLIGHT_FAILED",
+      executor: "mcode",
+      probe: null,
+      message: `MCode CLI \u89E3\u6790\u5931\u8D25\uFF1A${safeDetail(e.message)}`,
+      suggestion: "\u4FEE\u590D\u8BE5 CLI \u5B89\u88C5\u540E\u91CD\u8BD5\uFF1B\u672C\u6B21\u8FD0\u884C\u672A\u6267\u884C\u4EFB\u4F55 Agent\u3002"
+    };
+  }
+  if (!cli) {
+    return {
+      ok: false,
+      code: "MCODE_PREFLIGHT_FAILED",
+      executor: "mcode",
+      probe: null,
+      message: "\u627E\u4E0D\u5230 MCode CLI\uFF0C\u8BF7\u901A\u8FC7\u5B98\u65B9\u6E20\u9053\u5B89\u88C5\u5E76\u767B\u5F55\uFF0C\u518D\u6309 Skill \u7684 CLI preflight \u68C0\u67E5 mcode --version \u548C mcode exec --help\u3002",
+      suggestion: "\u5B89\u88C5\u6216\u4FEE\u590D mcode \u540E\u91CD\u8BD5\uFF1B\u672C\u6B21\u8FD0\u884C\u672A\u6267\u884C\u4EFB\u4F55 Agent\u3002"
+    };
+  }
+  const probe = await new Promise((resolve4) => {
+    const captured = { stdout: "", stderr: "" };
+    let timedOut = false, settled = false;
+    const child = spawn(cli.command, [...cli.args, ...args, "--version"], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, detached: process.platform !== "win32" });
+    let timer = null, cleanupTimer = null;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(cleanupTimer);
+      resolve4(result);
+    };
+    for (const [stream, key] of [[child.stdout, "stdout"], [child.stderr, "stderr"]]) {
+      stream.setEncoding("utf8");
+      stream.on("data", (chunk) => {
+        const text = captured[key];
+        captured[key] = text.length + chunk.length > 8e3 ? text : text + chunk;
+      });
+    }
+    child.on("error", (e) => {
+      if (timedOut) return;
+      finish({ exitCode: null, spawnError: e.code ?? safeDetail(e.message), ...captured, timedOut });
+    });
+    child.on("close", (exitCode) => {
+      if (timedOut) return;
+      finish({ exitCode, spawnError: null, ...captured, timedOut });
+    });
+    timer = setTimeout(() => {
+      timedOut = true;
+      const cleanup = stopTree(child);
+      const settle2 = (cleanupConfirmed, reason) => {
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        finish({ exitCode: child.exitCode, spawnError: null, ...captured, timedOut, cleanupConfirmed, ...reason ? { cleanupReason: reason } : {} });
+      };
+      void cleanup.then(
+        (result) => {
+          clearTimeout(cleanupTimer);
+          settle2(result.confirmed, result.confirmed ? null : safeDetail(result.reason));
+        },
+        // stopProcessTree never rejects by construction; guard injected fakes.
+        () => settle2(false, "\u6E05\u7406\u64CD\u4F5C\u81EA\u8EAB\u5931\u8D25")
+      );
+      cleanupTimer = setTimeout(() => settle2(false, `\u505C\u6B62\u786E\u8BA4\u672A\u5728\u6E05\u7406\u9884\u7B97\uFF08${CLEANUP_BUDGET_MS}ms\uFF09\u5185\u843D\u5B9A`), CLEANUP_BUDGET_MS);
+      cleanupTimer.unref();
+    }, timeoutMs);
+    timer.unref();
+  });
+  if (probe.exitCode === 0 && !probe.spawnError && !probe.timedOut) {
+    return {
+      ok: true,
+      executor: "mcode",
+      probe: "--version",
+      source: cli.source,
+      checkedAt: Date.now(),
+      version: probe.stdout.trim().split("\n").pop()?.slice(0, 120) || null
+    };
+  }
+  const tail = safeDetail(probe.stderr.trim() || probe.stdout.trim()).slice(-300);
+  if (probe.timedOut && !probe.cleanupConfirmed) {
+    return {
+      ok: false,
+      code: "MCODE_PREFLIGHT_FAILED",
+      executor: "mcode",
+      probe: "--version",
+      exitCode: probe.exitCode,
+      spawnError: probe.spawnError,
+      cleanupConfirmed: false,
+      cleanupReason: probe.cleanupReason ?? null,
+      ...tail ? { stderr: tail } : {},
+      message: `MCode CLI \u4E0D\u53EF\u7528\uFF1A\u63A2\u6D4B\u8D85\u65F6\uFF08\u8D85\u8FC7 ${Math.round(timeoutMs / 1e3)} \u79D2\u672A\u9000\u51FA\uFF09\uFF0C\u4E14\u65E0\u6CD5\u786E\u8BA4\u8FDB\u7A0B\u6811\u5DF2\u505C\u6B62\uFF08${probe.cleanupReason ?? "\u539F\u56E0\u672A\u77E5"}\uFF09\u3002\u8BF7\u68C0\u67E5\u5E76\u7ED3\u675F\u540E\u6B8B\u7559\u7684 mcode \u53CA\u5176\u5B50\u8FDB\u7A0B\u540E\u91CD\u8BD5\u3002\u672C\u6B21\u8FD0\u884C\u5DF2\u6309\u5931\u8D25\u5904\u7406\uFF0C\u672A\u6267\u884C\u4EFB\u4F55 Agent\u3002`,
+      suggestion: "\u5148\u5728\u7EC8\u7AEF\u8FD0\u884C mcode --version \u786E\u8BA4\u72B6\u6001\uFF1B\u82E5\u547D\u4EE4\u5361\u6B7B\uFF0C\u5148\u7ED3\u675F\u6B8B\u7559\u7684 mcode \u53CA\u5176\u5B50\u8FDB\u7A0B\uFF0C\u4FEE\u590D\u5B89\u88C5\u540E\u91CD\u8BD5\u3002"
+    };
+  }
+  const cause = probe.timedOut ? `\u63A2\u6D4B\u8D85\u65F6\uFF08\u8D85\u8FC7 ${Math.round(timeoutMs / 1e3)} \u79D2\u672A\u9000\u51FA\uFF0C\u8FDB\u7A0B\u6811\u5DF2\u786E\u8BA4\u505C\u6B62\uFF09` : probe.spawnError ? `\u65E0\u6CD5\u542F\u52A8\uFF08${probe.spawnError}\uFF09` : `mcode --version \u9000\u51FA\u7801 ${probe.exitCode ?? "\u672A\u77E5"}`;
+  return {
+    ok: false,
+    code: "MCODE_PREFLIGHT_FAILED",
+    executor: "mcode",
+    probe: "--version",
+    exitCode: probe.exitCode,
+    spawnError: probe.spawnError,
+    ...probe.timedOut ? { cleanupConfirmed: probe.cleanupConfirmed } : {},
+    ...tail ? { stderr: tail } : {},
+    message: `MCode CLI \u4E0D\u53EF\u7528\uFF1A${cause}${tail ? `\uFF1A${tail}` : ""}\u3002\u672C\u6B21\u8FD0\u884C\u5DF2\u6309\u5931\u8D25\u5904\u7406\uFF0C\u672A\u6267\u884C\u4EFB\u4F55 Agent\u3002`,
+    suggestion: "\u5148\u5728\u7EC8\u7AEF\u8FD0\u884C mcode --version \u786E\u8BA4\u53EF\u7528\uFF1A\u68C0\u67E5 mcode \u5B89\u88C5\u4E0E\u5347\u7EA7\uFF08\u7248\u672C\u635F\u574F\u6216\u539F\u751F\u6A21\u5757\u4E0D\u5339\u914D\u65F6\u91CD\u88C5\uFF09\u3001\u767B\u5F55\u72B6\u6001\u4E0E\u7F51\u7EDC\uFF0C\u4FEE\u590D\u540E\u6062\u590D\u8FD0\u884C\u3002"
+  };
+}
+
 // src/executor.mjs
+import { spawn as spawn2 } from "node:child_process";
 import { setTimeout as delay2 } from "node:timers/promises";
 async function demoExecute(spec, { signal, onEvent }) {
   await delay2(500 + spec.id.length % 4 * 220, void 0, { signal });
@@ -14159,7 +14379,7 @@ async function mcodeExecute(spec, { signal, onEvent, workspace, command, args = 
     if (configPath) argv.push("--config", configPath);
     if (spec.model) argv.push("--model", spec.model);
     if (spec.effort) argv.push("--effort", spec.effort);
-    const child = spawn(command, argv, { cwd: workspace, shell: false, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: { ...process.env, MCODE_WORKFLOW_CHILD: "1" } });
+    const child = spawn2(command, argv, { cwd: workspace, shell: false, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"], windowsHide: true, env: { ...process.env, MCODE_WORKFLOW_CHILD: "1" } });
     let buffer = "", stderr = "", terminal2 = null, protocolError = null, finished2 = false, completing = false, cleanup = null, watchdogExpired = false;
     const stop = () => {
       if (cleanup || finished2) return;
@@ -14400,6 +14620,15 @@ var Engine = class extends EventEmitter {
     this.store.saveTemplate(template);
     return template;
   }
+  // Executor preflight (fail-loud). Returns null when there is nothing to
+  // probe — demo runs, or a test-injected execute() that replaces the real
+  // CLI entirely. For mcode runs the result is stamped on the run as the
+  // readable `preflight` field surfaced by workflow_status.
+  async preflightExecutor(run) {
+    if (run.executor !== "mcode" || this.options.execute) return null;
+    const { preflightTimeoutMs } = this.options;
+    return preflightMcode(this.options.command ?? "mcode", { args: this.options.args ?? [], ...preflightTimeoutMs === void 0 ? {} : { timeoutMs: preflightTimeoutMs } });
+  }
   async approve(id2, { revision } = {}) {
     check(!this.closing, "\u670D\u52A1\u6B63\u5728\u5173\u95ED");
     let run = this.store.get(id2);
@@ -14409,13 +14638,19 @@ var Engine = class extends EventEmitter {
     check(!this.approving.has(id2), "\u5DE5\u4F5C\u6D41\u6B63\u5728\u542F\u52A8");
     this.approving.add(id2);
     try {
-      if (run.executor === "mcode" && !this.options.execute) check(await resolveMcode(this.options.command ?? "mcode"), "\u627E\u4E0D\u5230 MCode CLI\uFF0C\u8BF7\u5B89\u88C5\u5E76\u767B\u5F55\u540E\u5F00\u59CB\u3002");
+      const preflight = await this.preflightExecutor(run);
+      if (preflight && !preflight.ok) {
+        Object.assign(run, { status: "failed", error: preflight.message, errorDetails: preflight, preflight });
+        this.save(run);
+        this.emitEvent(id2, "run.finished", { status: "failed", error: preflight.message });
+        check(false, preflight.message);
+      }
       const fingerprints = await this.fingerprints(run.input.files ?? []);
       run = this.store.get(id2);
       check(run?.status === "pending_review" && run.revision === revision, "\u5BA1\u6838\u7248\u672C\u5DF2\u66F4\u65B0\uFF0C\u8BF7\u5237\u65B0\u62D3\u6251\u540E\u518D\u5F00\u59CB");
       check(!this.closing && !this.active.has(id2) && this.active.size < 3, "\u670D\u52A1\u6B63\u5728\u5173\u95ED\u6216\u6267\u884C\u5BB9\u91CF\u5DF2\u6EE1");
       check(run.workspace === this.options.workspace, "\u5DE5\u4F5C\u533A\u5DF2\u6539\u53D8\uFF0C\u8BF7\u521B\u5EFA\u65B0\u5DE5\u4F5C\u6D41");
-      Object.assign(run, { fingerprints, approvedRevision: revision, approvedAt: Date.now() });
+      Object.assign(run, { fingerprints, approvedRevision: revision, approvedAt: Date.now(), ...preflight ? { preflight } : {} });
       this.save(run);
       this.emitEvent(id2, "run.approved", { revision });
       this.launch(run);
@@ -14536,8 +14771,28 @@ var Engine = class extends EventEmitter {
       await Promise.allSettled([...ctx.operations]);
       await worker.terminate();
       const steps = this.store.steps(run.id);
-      run.status = ctx.intent ?? (ok ? steps.some((s) => s.status !== "succeeded") ? "completed_with_gaps" : "succeeded" : "failed");
+      const agents = steps.filter((s) => s.kind === "agent");
+      const executorFailure = agents.find((s) => s.status !== "succeeded" && EXECUTOR_FAILURE_CODES.has(s.errorDetails?.code))?.errorDetails ?? null;
+      const requiredAgentNodes = run.topology?.nodes?.filter((n) => n.kind === "agent" && !n.conditional && !n.dynamic) ?? [];
       if (ok && !ctx.intent) {
+        if (!agents.length && requiredAgentNodes.length) {
+          run.status = "failed";
+          run.errorDetails = {
+            code: "NO_AGENTS_EXECUTED",
+            plannedAgentNodes: run.topology.nodes.filter((n) => n.kind === "agent").length,
+            requiredAgentNodes: requiredAgentNodes.length,
+            message: "\u811A\u672C\u5DF2\u5B8C\u6210\uFF0C\u4F46\u62D3\u6251\u4E2D\u8BA1\u5212\u7684 Agent \u8282\u70B9\u4E00\u4E2A\u90FD\u6CA1\u6709\u6267\u884C\uFF080 \u4E2A\u6B65\u9AA4\u88AB\u6D3E\u53D1\uFF09\u3002\u8FD0\u884C\u6309\u5931\u8D25\u5904\u7406\u3002",
+            suggestion: "\u68C0\u67E5\u811A\u672C\u662F\u5426\u5728 try/catch \u4E2D\u541E\u6389\u4E86\u542F\u52A8\u5931\u8D25\u5E76\u63D0\u524D\u8FD4\u56DE\uFF1B\u4FEE\u590D\u540E\u53EF\u6062\u590D\u8FD0\u884C\uFF0C\u5DF2\u6267\u884C\u8282\u70B9\u4F1A\u590D\u7528\u3002"
+          };
+          run.error = run.errorDetails.message;
+        } else if (executorFailure && !agents.some((s) => s.status === "succeeded")) {
+          run.status = "failed";
+          run.error = executorFailure.message;
+          run.errorDetails = executorFailure;
+        } else {
+          run.status = steps.some((s) => s.status !== "succeeded") ? "completed_with_gaps" : "succeeded";
+          if (executorFailure) run.errorDetails = executorFailure;
+        }
         try {
           boundedJSON(value, 1e5);
           run.result = value;
@@ -14546,6 +14801,7 @@ var Engine = class extends EventEmitter {
           run.error = e.message;
         }
       } else {
+        run.status = ctx.intent ?? "failed";
         const failure2 = workflowFailure(value);
         run.error = ctx.reason ?? failure2.message;
         run.errorDetails = ctx.failure ?? failure2.details ?? run.errorDetails;
@@ -14824,7 +15080,15 @@ var Engine = class extends EventEmitter {
     check(!run.revision || run.approvedRevision === run.revision, "\u672A\u5BA1\u6838\u5DE5\u4F5C\u6D41\u4E0D\u80FD\u6062\u590D\uFF0C\u8BF7\u521B\u5EFA\u65B0\u8349\u7A3F");
     check(["paused", "failed", "interrupted", "cancelled", "needs_attention", "completed_with_gaps"].includes(run.status), "\u5F53\u524D\u72B6\u6001\u4E0D\u80FD\u6062\u590D");
     check(run.status !== "needs_attention" || options.confirmStopped === true, "\u4E0A\u6B21\u5F02\u5E38\u9000\u51FA\uFF0C\u9700\u786E\u8BA4\u65E7 Agent \u5DF2\u505C\u6B62");
-    if (run.executor === "mcode" && !this.options.execute) check(await resolveMcode(this.options.command ?? "mcode"), "\u627E\u4E0D\u5230 MCode CLI\uFF0C\u8BF7\u5B89\u88C5\u5E76\u767B\u5F55\u540E\u6062\u590D\u3002");
+    const preflight = await this.preflightExecutor(run);
+    if (preflight) {
+      if (!preflight.ok) {
+        run.preflight = preflight;
+        this.save(run);
+        check(false, preflight.message);
+      }
+      run.preflight = preflight;
+    }
     assertValidDependencies(previewTopology(run.script, run.input));
     const limits = resolveLimits(options, runLimits(run)), maxCalls = options.maxCalls ?? run.maxCalls;
     check(Number.isInteger(maxCalls) && maxCalls >= 1 && maxCalls <= 100, "\u8C03\u7528\u6570\u8303\u56F4 1\u2013100");
@@ -16819,7 +17083,7 @@ var REPORT_STYLES = contentStyles + reportStyles;
 
 // src/http.mjs
 import http from "node:http";
-import { readFile } from "node:fs/promises";
+import { readFile as readFile2 } from "node:fs/promises";
 
 // node_modules/zod/v4/core/util.js
 var util_exports = {};
@@ -26655,7 +26919,7 @@ async function startHTTP(engine, { port = 0, webRoot = new URL("../web/", import
       const url = new URL(req.url, origin);
       if (url.pathname.startsWith("/api/")) {
         if (req.headers["x-workflow-client"] !== "1" || ["cross-site", "same-site"].includes(req.headers["sec-fetch-site"])) return json({ error: "\u8BF7\u4ECE\u672C\u5730 Workflow Studio \u9762\u677F\u8BBF\u95EE\u3002" }, 403);
-        if (req.method === "GET" && url.pathname === "/api/config") return json({ serviceProtocol: 2, features: { workflowRepair: true }, pid: process.pid, workspace: engine.options.workspace, executor: engine.options.command, defaults: engine.defaults, scheduler: engine.schedulerStatus(), mcodeAvailable: !!await resolveMcode(engine.options.command ?? "mcode"), example: await readFile(new URL("audit.js", exampleRoot), "utf8") });
+        if (req.method === "GET" && url.pathname === "/api/config") return json({ serviceProtocol: 2, features: { workflowRepair: true }, pid: process.pid, workspace: engine.options.workspace, executor: engine.options.command, defaults: engine.defaults, scheduler: engine.schedulerStatus(), mcodeAvailable: !!await resolveMcode(engine.options.command ?? "mcode"), example: await readFile2(new URL("audit.js", exampleRoot), "utf8") });
         if (req.method === "GET" && url.pathname === "/api/templates") return json(engine.store.templates().map(({ definition, ...t }) => ({ ...t, objective: definition.metadata?.objective ?? "" })));
         const template = url.pathname.match(/^\/api\/templates\/([a-f0-9-]+)$/);
         if (template && req.method === "GET") {
@@ -26710,7 +26974,7 @@ async function startHTTP(engine, { port = 0, webRoot = new URL("../web/", import
         res.writeHead(404);
         return res.end();
       }
-      const data2 = await readFile(new URL(name, webRoot));
+      const data2 = await readFile2(new URL(name, webRoot));
       res.writeHead(200, { "Content-Type": name.endsWith(".js") ? "text/javascript; charset=utf-8" : name.endsWith(".css") ? "text/css; charset=utf-8" : "text/html; charset=utf-8", "Content-Security-Policy": `default-src 'self'; script-src 'self'; style-src 'self' 'sha256-${reportStyleHash}'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`, "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store" });
       res.end(data2);
     } catch (e) {
@@ -27646,7 +27910,7 @@ function createWorkspaceRouter({ binary, pluginRoot, dataRoot, extraArgs = [] })
 
 // src/main.mjs
 var { values } = parseArgs({ options: { stdio: { type: "boolean" }, "stop-service": { type: "boolean" }, settings: { type: "string" }, workspace: { type: "string" }, "data-dir": { type: "string" }, port: { type: "string" }, "mcode-script": { type: "string" }, "worker-config": { type: "string" } } });
-var settings = values.settings ? JSON.parse(await readFile2(resolve3(values.settings), "utf8")) : {};
+var settings = values.settings ? JSON.parse(await readFile3(resolve3(values.settings), "utf8")) : {};
 for (const key of Object.keys(settings)) if (!["workspace", "dataDir"].includes(key) || typeof settings[key] !== "string") throw Error("settings \u53EA\u5141\u8BB8 workspace/dataDir \u5B57\u7B26\u4E32");
 if (values.port !== void 0 && (!/^\d+$/.test(values.port) || Number(values.port) > 65535)) throw Error("port \u5FC5\u987B\u662F 0\u201365535 \u7684\u6574\u6570");
 var delay3 = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -27661,7 +27925,7 @@ var alive = (pid) => {
 };
 async function readJSON(path) {
   try {
-    return JSON.parse(await readFile2(path, "utf8"));
+    return JSON.parse(await readFile3(path, "utf8"));
   } catch (e) {
     if (e.code === "ENOENT") return null;
     throw e;
@@ -27729,7 +27993,7 @@ if (values.stdio && process.env.MCODE_WORKFLOW_CHILD === "1") {
         const log = await open3(join4(dataDir, "service.log"), "a", 384);
         const args = [fileURLToPath(import.meta.url), "--workspace", workspace, "--data-dir", dataDir];
         for (const key of ["port", "mcode-script", "worker-config"]) if (values[key] !== void 0) args.push("--" + key, key === "port" ? values[key] : resolve3(values[key]));
-        const child = spawn3(process.execPath, args, { cwd: workspace, detached: true, stdio: ["ignore", log.fd, log.fd], windowsHide: true });
+        const child = spawn4(process.execPath, args, { cwd: workspace, detached: true, stdio: ["ignore", log.fd, log.fd], windowsHide: true });
         let spawnError;
         child.once("error", (e) => {
           spawnError = e;
