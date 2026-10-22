@@ -52,13 +52,20 @@ function which(cmd, extra = []) {
   for (const p of extra) { try { if (fs.existsSync(p)) return p; } catch { /* ignore */ } }
   return cmd;   // 交给 spawn 报错
 }
+// ★ 2026-10-22 审计：候选路径一律从 env 拼（ProgramFiles / LOCALAPPDATA），【不写盘符字面量】
+//   （非 Windows 上这些 env 不存在 ⇒ 自然跳过，不产生"只能在 Windows 跑"的硬绑定）
+const progFiles = () => (process.env.ProgramFiles || '').trim();
+const localApp = () => (process.env.LOCALAPPDATA || '').trim();
 const FFMPEG = () => which('ffmpeg', [
-  path.join(process.env.ProgramFiles || 'C:\\Program Files', 'ffmpeg', 'ffmpeg.exe'),
+  ...(progFiles() ? [path.join(progFiles(), 'ffmpeg', 'ffmpeg.exe')] : []),
 ]);
+// ★ 2026-10-22 审计：原来写死 Python314 ⇒ 装 3.11/3.12/3.13 的用户会找不到。改为按版本泛化 + 多个解释器名。
+const PY_VERS = ['Python314', 'Python313', 'Python312', 'Python311', 'Python310', 'Python39'];
 const PYTHON = () => process.env.JYAI_PYTHON || which('python', [
-  path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Python314', 'python.exe'),
-  path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python314', 'python.exe'),
-]);
+  ...(progFiles() ? PY_VERS.map((v) => path.join(progFiles(), v, 'python.exe')) : []),
+  ...(localApp() ? PY_VERS.map((v) => path.join(localApp(), 'Programs', 'Python', v, 'python.exe')) : []),
+  ...(localApp() ? [path.join(localApp(), 'Programs', 'Python', 'Launcher', 'py.exe')] : []),
+]) || which('python3', []) || 'python';
 
 /* ------------------------------------------------- 轻量 JSON Schema 校验 */
 /* 只支持我们 schema 里用到的关键字：type/properties/required/additionalProperties/ */
@@ -382,7 +389,7 @@ const IMPL = {
     if (a.realDraft) before = shaTree(a.realDraft);
 
     // 护栏 2：素材路径重定位（草稿搬过家后 path 失效 ⇒ 指回草稿目录内）
-    const draftDir = st.draftDir || a.draftDir || '';
+    const draftDir = st.draftDir || '';   // ★ 入参里的 draftDir 是死代码：schema 拒未知键 ⇒ 永远取不到（审计发现）
     const fixes = relocateMaterialPaths(draft, draftDir);
     const target = st.draftPath || path.join(draftDir, 'draft_content.json');
     const rootPath = draftDir || path.dirname(target);
@@ -434,7 +441,18 @@ const IMPL = {
     const j = JSON.parse(fs.readFileSync(cmp, 'utf8'));
     const probe = j.node_effect_probe || {};
     const dead = Object.entries(probe).filter(([k, v]) => k !== '_full_chain' && !(Number(v) > 0)).map(([k]) => k);
-    if (dead.length) throw new Error(`★ 下列节点没有生效（探针为 0）：${dead.join(', ')} —— 判定失败`);
+    if (dead.length) {
+      // ★ 2026-10-22 审计：探针为 0 有两种可能，错误信息必须分开说
+      //   ① 源画面几乎全黑 ⇒ 任何"加亮/加对比"类调色都被 clip 回 0 ⇒ 探针测不出（链是好的）
+      //   ② 参数形态不对 ⇒ 节点真的没生效
+      const srcLuma = Number(j.src_luma_max);
+      if (Number.isFinite(srcLuma) && srcLuma < 8.0) {
+        throw new Error(`★ 节点 ${dead.join(', ')} 的探针为 0 —— 但源画面几乎全黑（YAVG=${srcLuma.toFixed(2)}/255）`
+          + `⇒ 这是【源没有可测信息】，不是节点没生效（加亮类调色会被 clip 回 0）。换一个有大面积中间调/亮部的源再验。`);
+      }
+      throw new Error(`★ 下列节点没有生效（探针为 0）：${dead.join(', ')} —— 判定失败`
+        + (Number.isFinite(srcLuma) ? `（源画面 YAVG=${srcLuma.toFixed(2)}/255）` : ''));
+    }
     if (!(Number(j.grade_change_mad) > 0)) throw new Error('★ 调色改变量为 0 ⇒ 判定失败');
     return ok({ out: j.out10, outLut: j.out10_lut, gradeChangeMad: j.grade_change_mad, probe });
   },
@@ -586,7 +604,8 @@ const IMPL = {
         const visibleRows = frameDetail.filter((r) => r.visible);
         const unstable = frameDetail.filter((r) => r.unstable).map((r) => r.frame);
         const bestVisible = visibleRows.length
-          ? visibleRows.reduce((a, b) => (b.mad > a.mad ? b : a))
+          // ★ 累加器别叫 a：handler 形参也叫 a ⇒ 同名会让"入参扫描"把 a.mad 当成入参（审计踩过）
+          ? visibleRows.reduce((acc, row) => (row.mad > acc.mad ? row : acc))
           : null;
         const bar = calibrated ? Math.max(th, noiseMad * noiseK) : th;   // 全局参考线（仅作参考）
         const visible = visibleRows.length > 0;
@@ -749,6 +768,9 @@ const IMPL = {
 
     res.verdict = problems.length ? 'FAIL' : 'PASS';
     res.problems = problems;
+    // ★ isError=true 仍保留（skill 语义：判不过就是判不过），但加 failureKind 让调用方能区分
+    //   「验收结论不通过」与「工具故障」⇒ 后者走 .catch 的 `xxx 失败：…` 文本，没有 failureKind
+    if (problems.length) res.failureKind = 'acceptance';
     return problems.length ? fail(res) : ok(res);
   },
 };

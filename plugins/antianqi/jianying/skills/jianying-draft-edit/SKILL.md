@@ -55,7 +55,8 @@ metadata:
 node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_open '{"draft":"<草稿库>\\<草稿名>","copy":true}'
 
 # ② 读结构（拿 segmentId）
-node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_read '{"scope":"segments"}'
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_read '{"path":"<草稿目录>/draft_content.json","root":"<草稿目录>"}'
+# ★ 不要传 scope：后端不支持（分段读取未实现，传了会被 schema 拒）
 
 # ③ 改（可多次；每次 baseRevision 会递增）
 node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_patch '{"op":"video.setVolume","sessionId":"ve-session-N","params":{"segmentId":"<uuid>","volume":0.25}}'

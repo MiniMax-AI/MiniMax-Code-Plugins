@@ -1,7 +1,7 @@
 // jianying MCP server 的客户端验收脚本
 // 用法: node selftest-mcp.mjs
 // 环境: JYAI_HOME 指向 JYAI 仓库
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -366,6 +366,71 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
     check('★★ grade 含渲染期算子(sharpen) ⇒ 明确报错（指向 grade_apply），不许静默忽略',
       rnRun.result?.isError === true && /grade_apply|渲染期/.test(textOf(rnRun)),
       textOf(rnRun).replace(/\s+/g, ' ').slice(-200));
+
+    // ── ★★ MCP 层全动词冒烟（2026-10-22 审计补：此前 5 个动词【从未走过 MCP 层】）
+    //   draft_read / draft_patch / draft_commit / render_frames / audio_mix
+    const SMOKE = path.join(OUT, 'mcp-smoke');
+    // ★ video.add 需要一个【真的能读的视频源】（传草稿 json 会得 video_source_unreadable）
+    const FILM_MEDIA = process.env.JYAI_TEST_MEDIA
+      || path.join(process.env.LOCALAPPDATA || '', 'Temp', 'jy-media-probe.mp4');
+    if (!fs.existsSync(FILM_MEDIA)) {
+      // 造一个 1 秒的测试视频（不依赖用户素材）
+      const ff = path.join(path.dirname(FFMPEG), process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
+      try {
+        execFileSync(ff,
+          ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=gray:s=320x180:r=12:d=1',
+            '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=mono', '-shortest',
+            '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', FILM_MEDIA],
+          { windowsHide: true, stdio: 'ignore' });
+      } catch { /* 造不出来就跳过该用例 */ }
+    }
+    const op1 = await call('tools/call', { name: 'draft_open', arguments: { draft: FILM_DRAFT, copy: true } });
+    const opTxt = textOf(op1);
+    const sid1 = (opTxt.match(/ve-session-\d+/) || [])[0] || '';
+    check('★★ MCP: draft_open 走通并给出 sessionId', op1.result?.isError !== true && !!sid1, sid1 || opTxt.slice(0, 120));
+
+    const rd1 = await call('tools/call', { name: 'draft_read', arguments: { sessionId: sid1 } });
+    const rdTxt = textOf(rd1);
+    check('★★ MCP: draft_read(sessionId) 读回草稿结构',
+      rd1.result?.isError !== true && /"tracks"|"segments"/.test(rdTxt), rdTxt.replace(/\s+/g, ' ').slice(0, 100));
+
+    const rd2 = await call('tools/call', { name: 'draft_read', arguments: { path: path.join(FILM_DRAFT, 'draft_content.json'), root: FILM_DRAFT } });
+    check('★★ MCP: draft_read(path+root) 读回草稿结构',
+      rd2.result?.isError !== true && /"tracks"|"segments"/.test(textOf(rd2)), textOf(rd2).replace(/\s+/g, ' ').slice(0, 100));
+
+    // ★ 回归：scope 已从 schema 移除 ⇒ 传它必须被【拒】（不许静默接受）
+    const rdScope = await call('tools/call', { name: 'draft_read', arguments: { path: path.join(FILM_DRAFT, 'draft_content.json'), root: FILM_DRAFT, scope: 'segments' } });
+    check('★★ MCP: draft_read 传 scope 被拒（后端不支持 ⇒ 别装成能用）',
+      rdScope.result?.isError === true && /未知键/.test(textOf(rdScope)), textOf(rdScope).replace(/\s+/g, ' ').slice(0, 120));
+
+    const pt1 = await call('tools/call', {
+      name: 'draft_patch',
+      arguments: { op: 'video.add', sessionId: sid1, params: { path: FILM_MEDIA, startTime: 0, sourceDuration: 1000000, trackIndex: 9 } },
+    });
+    check('★★ MCP: draft_patch(video.add) 被官方接受',
+      fs.existsSync(FILM_MEDIA) && pt1.result?.isError !== true && /accepted"?\s*:\s*true/.test(textOf(pt1)),
+      textOf(pt1).replace(/\s+/g, ' ').slice(0, 120));
+
+    const cm1 = await call('tools/call', { name: 'draft_commit', arguments: { sessionId: sid1, realDraft: FILM_DRAFT } });
+    check('★★ MCP: draft_commit 落盘且真草稿未变',
+      cm1.result?.isError !== true && /"committed"\s*:\s*true/.test(textOf(cm1))
+      && /"realDraftUnchanged"\s*:\s*true/.test(textOf(cm1)), textOf(cm1).replace(/\s+/g, ' ').slice(0, 140));
+
+    const rf1 = await call('tools/call', { name: 'render_frames', arguments: { draft: FILM_DRAFT, outDir: SMOKE, fps: 6 } });
+    const framesOk = fs.existsSync(path.join(SMOKE, 'frames')) &&
+      fs.readdirSync(path.join(SMOKE, 'frames')).some(f => /^\d+\.png$/.test(f));
+    check('★★ MCP: render_frames 产出帧序列', rf1.result?.isError !== true && framesOk,
+      textOf(rf1).replace(/\s+/g, ' ').slice(0, 120));
+
+    const am1 = await call('tools/call', {
+      name: 'audio_mix',
+      arguments: { draft: FILM_DRAFT, video: path.join(FILM_DRAFT, 'draft_content.json'), out: path.join(SMOKE, 'mix.mp4') },
+    });
+    const amTxt = textOf(am1);
+    // ★ 这个草稿没有可用音轨 ⇒ 预期是"明确报 nothing to mix"（输入问题），而不是别的错
+    check('★★ MCP: audio_mix 在无音轨草稿上明确报输入问题（nothing to mix），不静默出坏片',
+      am1.result?.isError === true ? /nothing to mix/.test(amTxt) : fs.existsSync(path.join(SMOKE, 'mix.mp4')),
+      amTxt.replace(/\s+/g, ' ').slice(0, 140));
   } else {
     console.log(`  [SKIP] make_film 真 e2e —— 需要 env JYAI_DRAFT_LIB（草稿库）+ 剪映在跑；本机未提供 ⇒ 【不计入 PASS】`);
   }

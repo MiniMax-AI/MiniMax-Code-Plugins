@@ -15,13 +15,9 @@
       "root": {
         "type": "string",
         "description": "草稿根目录（素材/子目录的解析基准）。不传则取 path 的上级目录。★ 官方 readFile 没有它会解析不出 workspace ⇒ 静默返回空"
-      },
-      "scope": {
-        "type": "string",
-        "enum": ["full", "timeline", "segments", "materials"],
-        "default": "full"
       }
     },
-    "additionalProperties": false
+    "additionalProperties": false,
+    "description": "（scope 分段读取当前【未实现】：后端不支持，schema 已移除该参数，别按它写代码）"
   }
 }
