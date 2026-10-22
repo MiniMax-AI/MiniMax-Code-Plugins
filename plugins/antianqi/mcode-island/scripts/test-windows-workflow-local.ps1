@@ -8,13 +8,24 @@
 #   - You want to develop / debug the contract surfaces without
 #     waiting for the CI queue.
 #
-# Steps verified (all 4 are PR #21 round-5 requirements):
-#   1. Parse all .ps1 files (round-5 #1)        - all 27 parse OK
+# Steps verified (mirrors .github/workflows/mcode-island-windows.yml 1:1):
+#   1. Parse all .ps1 files (round-5 #1)        - all 31 parse OK
 #   2. Token set / show / clear roundtrip       - 4 / 4 checks pass
 #   3. Hook stdin / stdout writes status.json   - state=working, source=agent
 #   4. Mocked usage-API roundtrip               - auth + path + body shape
+#   5. Behavioral sub-step + redaction suite    - the only suite that
+#                                                 executes the PowerShell
+#                                                 under test
 #
-# Usage (from the repo root, with PowerShell 7+):
+# Step 5 was missing here while the workflow had it, and that is exactly
+# what the round-21 review called out: a local runner with fewer steps
+# than CI is a runner that does not reproduce CI. The behavioral suite
+# carries the secret canary and the two-writer interleaving regression,
+# so a redaction or atomicity regression could pass locally and fail in
+# CI -- or the other way round, which is worse: a suite that only ever
+# runs on the runner stops being evidence for the person running it.
+#
+# Usage (PowerShell 7+; works from any directory):
 #   pwsh -File plugins/antianqi/mcode-island/scripts/test-windows-workflow-local.ps1
 #
 # Exit code: 0 on full pass, 1 on any failure. Each step prints a
@@ -33,7 +44,13 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 try { chcp 65001 | Out-Null } catch {}
 
 $ErrorActionPreference = 'Stop'
-$repoRoot = (Get-Location).Path
+# The repo root, resolved from this script's own location rather than
+# from the current directory. The workflow resolves it the same way
+# (from $GITHUB_WORKSPACE). A runner that only works when invoked from
+# one specific directory is a runner that silently reproduces nothing
+# from anywhere else -- it dies at step 1 with a path error instead of
+# doing the thing.
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..\..')).Path
 
 # --- Shared fixtures ----------------------------------------------------
 
@@ -273,5 +290,46 @@ Write-Host "OK Step 4c (no token): Get-5hUsage returned null"
 
 Write-Host "OK Step 4: Get-5hUsage via dot-source + matching fixture + token-source precedence: 3/3 OK"
 Write-Host ""
-Write-Host "=== All 4 steps OK ==="
+
+# --- Step 5: behavioral sub-step + redaction suite ----------------------
+
+Write-Host "--- Step 5: behavioral sub-step + redaction suite ---"
+
+# 1:1 with .github/workflows/mcode-island-windows.yml step 5. The suite
+# resolves its own PowerShell: $env:PS_BIN if set, otherwise an existing
+# path, otherwise pwsh / powershell.exe / powershell on PATH. It never
+# assumes a user-specific absolute path.
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+try { chcp 65001 | Out-Null } catch {}
+
+# Report which PowerShell the suite will use. Not a hard requirement:
+# the suite does its own resolution and falls back to PATH.
+$candidates = @('pwsh', 'powershell.exe', 'powershell')
+$chosen = $null
+foreach ($c in $candidates) {
+  if (Get-Command $c -ErrorAction SilentlyContinue) { $chosen = $c; break }
+}
+if ($chosen) {
+  Write-Host "PowerShell on PATH: $chosen ($((& $chosen -NoProfile -Command '$PSVersionTable.PSVersion.ToString()')))"
+} else {
+  Write-Host "No PowerShell found on PATH; the suite will fail loudly rather than skip"
+}
+
+# Resolve the suite path against the repo root, not the current
+# directory, so the runner behaves the same whatever it is invoked from.
+$suite = Join-Path $repoRoot 'plugins/antianqi/mcode-island/scripts/test-substep-progress.mjs'
+if (-not (Test-Path $suite)) {
+  throw "Step 5: $suite not found (cwd: $((Get-Location).Path))"
+}
+Write-Host "Suite: $((Resolve-Path $suite).Path)"
+
+node $suite
+if ($LASTEXITCODE -ne 0) {
+  throw "Step 5: test-substep-progress.mjs failed with exit code $LASTEXITCODE"
+}
+
+Write-Host "OK Step 5: behavioral sub-step + redaction suite"
+Write-Host ""
+Write-Host "=== All 5 steps OK ==="
 exit 0
