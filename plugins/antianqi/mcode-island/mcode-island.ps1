@@ -631,11 +631,13 @@ function Resolve-CallerWindow {
   $hwnd = [IntPtr]::Zero
   $targetPid = 0
   $targetExe = ''
+  $targetSource = ''
   try {
     $data = Get-Content $callerFile -Raw -Encoding UTF8 | ConvertFrom-Json
     $hwnd = [IntPtr]::new([int64]$data.targetHwnd)
     $targetPid = [int]$data.targetPid
     $targetExe = if ($data.targetExe) { [string]$data.targetExe } else { '' }
+    $targetSource = if ($data.source) { [string]$data.source } else { '' }
   } catch {
     Dbg "RESOLVE: caller.json parse error"
     return $null
@@ -658,6 +660,7 @@ function Resolve-CallerWindow {
       if ($parentProc) {
         $targetPid = $parentProc.Id
         $targetExe = $parentProc.ProcessName
+        $targetSource = 'parent-fallback'
         if ($parentProc.MainWindowHandle -ne [IntPtr]::Zero) {
           $hwnd = $parentProc.MainWindowHandle
         } else {
@@ -683,31 +686,147 @@ function Resolve-CallerWindow {
     Dbg "RESOLVE: re-resolved to hwnd $hwnd"
   }
 
+  return [PSCustomObject]@{ Hwnd = $hwnd; Pid = $targetPid; Exe = $targetExe; Source = $targetSource }
+}
+
+# ---------------------------------------------------------------------------
+# Click target resolution.
+#
+# In the desktop app (MiniMax Inside Code / MiniMax Code / Mavis) the agent
+# is hosted by the app and runs in a terminal the app opened. That terminal
+# belongs to the app session, so "hide the terminal" is meaningless there:
+# the agent keeps running behind a static pill. "Take me back to the app
+# window" is the action that matches the intent.
+#
+# The click target is therefore resolved in this order:
+#   1. a manual pin (pin.json) -- the user named the target explicitly, so it
+#      wins. A CLI user pins their terminal and it stays the target even
+#      while the desktop app is open.
+#   2. the desktop app main window -- found through a process-name allowlist
+#      and focused, never hidden.
+#   3. the caller's terminal (caller.json) -- without the desktop app the
+#      original show/hide toggle is kept.
+# ---------------------------------------------------------------------------
+
+# Process-name allowlist of the desktop app. The app is not an ancestor of
+# the agent process (the agent runs in a terminal the app opened), so the
+# process tree cannot be used to locate it.
+$script:desktopAppNames = @('MiniMax Inside Code', 'MiniMax Code', 'Mavis')
+
+# Read pin.json: the click target the user pinned by hand.
+# pin.json is separate from caller.json -- caller.json is rewritten by the
+# agent side on every state transition, so a pin stored there would not
+# survive the next notify and priority 1 would be unreachable.
+function Resolve-PinnedWindow {
+  $pinFile = Join-Path $env:APPDATA 'mcode-island\pin.json'
+  if (!(Test-Path $pinFile)) { return $null }
+
+  $hwnd = [IntPtr]::Zero
+  $targetPid = 0
+  $targetExe = ''
+  try {
+    $data = Get-Content $pinFile -Raw -Encoding UTF8 | ConvertFrom-Json
+    $hwnd = [IntPtr]::new([int64]$data.targetHwnd)
+    $targetPid = [int]$data.targetPid
+    $targetExe = if ($data.targetExe) { [string]$data.targetExe } else { '' }
+  } catch {
+    Dbg 'PIN: pin.json parse error'
+    return $null
+  }
+  if ($targetPid -le 0) { return $null }
+
+  # the hwnd died (window destroyed or recreated) -> find it again by pid
+  if ($hwnd -eq [IntPtr]::Zero -or -not [WinAPI]::IsWindow($hwnd)) {
+    $hwnd = [WinAPI]::FindVisibleWindowForPid([uint32]$targetPid)
+  }
+  if ($hwnd -eq [IntPtr]::Zero) {
+    Dbg "PIN: pinned PID $targetPid is gone"
+    return $null
+  }
   return [PSCustomObject]@{ Hwnd = $hwnd; Pid = $targetPid; Exe = $targetExe }
 }
 
-# 强制把调用方窗口拉到前台（modern Windows 要求 AllowSetForegroundWindow）。
-# 不管当前 visible 与否,都做 show + focus。Focus-CallerWindow 保留,
-# 因为它是 Resolve-CallerWindow + 强制 show 的最小封装,可用于自动聚焦
-# 流程（needs_input 状态自动弹窗那种）。
-function Focus-CallerWindow {
-  $r = Resolve-CallerWindow
-  if (-not $r) { return }
+# Find the desktop app main window: a process in the same session whose name
+# hits the allowlist and that owns a main window. The app is an Electron
+# multi-process (main + renderer + GPU + utility); only the main process
+# reports a non-zero MainWindowHandle.
+function Find-DesktopAppWindow {
+  $mySession = (Get-Process -Id $PID).SessionId
+  $cands = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+    $script:desktopAppNames -contains $_.ProcessName -and $_.SessionId -eq $mySession
+  })
+  if ($cands.Count -eq 0) { Dbg 'APP: no desktop app process'; return $null }
+
+  foreach ($p in $cands) {
+    if ($p.MainWindowHandle -ne [IntPtr]::Zero) {
+      Dbg "APP: desktop app $($p.ProcessName) PID=$($p.Id) hwnd=$($p.MainWindowHandle)"
+      return [PSCustomObject]@{ Hwnd = $p.MainWindowHandle; Pid = $p.Id; Exe = $p.ProcessName }
+    }
+  }
+  # The main process reports no MainWindowHandle (some Electron builds) ->
+  # enumerate the visible windows as a fallback.
+  foreach ($p in $cands) {
+    $h = [WinAPI]::FindVisibleWindowForPid([uint32]$p.Id)
+    if ($h -ne [IntPtr]::Zero) {
+      Dbg "APP: desktop app $($p.ProcessName) PID=$($p.Id) hwnd=$h (enumerated)"
+      return [PSCustomObject]@{ Hwnd = $h; Pid = $p.Id; Exe = $p.ProcessName }
+    }
+  }
+  Dbg 'APP: desktop app process has no visible window'
+  return $null
+}
+
+# Resolve the click target. Mode = focus (raise and activate only) /
+# toggle (show / hide).
+function Resolve-ClickTarget {
+  # 1) the manual pin
+  $pin = Resolve-PinnedWindow
+  if ($pin) {
+    return [PSCustomObject]@{ Hwnd = $pin.Hwnd; Pid = $pin.Pid; Exe = $pin.Exe; Mode = 'focus'; Origin = 'pin' }
+  }
+  # 2) the desktop app main window
+  $app = Find-DesktopAppWindow
+  if ($app) {
+    return [PSCustomObject]@{ Hwnd = $app.Hwnd; Pid = $app.Pid; Exe = $app.Exe; Mode = 'focus'; Origin = 'desktop-app' }
+  }
+  # 3) the caller's terminal (old behaviour: show / hide)
+  $caller = Resolve-CallerWindow
+  if ($caller) {
+    return [PSCustomObject]@{ Hwnd = $caller.Hwnd; Pid = $caller.Pid; Exe = $caller.Exe; Mode = 'toggle'; Origin = 'caller' }
+  }
+  return $null
+}
+
+# Raise a window to the front: show + focus, whatever its current visible
+# state is. After the desktop-app adaptation both focus and toggle take a
+# resolved target object; the caller decides which one it is.
+function Focus-Window {
+  param([Parameter(Mandatory = $true)]$Target)
 
   try {
-    [WinAPI]::AllowSetForegroundWindow([uint32]$r.Pid) | Out-Null
-    if ([WinAPI]::IsIconic($r.Hwnd)) {
-      [WinAPI]::ShowWindow($r.Hwnd, 9) | Out-Null   # SW_RESTORE
+    [WinAPI]::AllowSetForegroundWindow([uint32]$Target.Pid) | Out-Null
+    if ([WinAPI]::IsIconic($Target.Hwnd)) {
+      [WinAPI]::ShowWindow($Target.Hwnd, 9) | Out-Null   # SW_RESTORE
+    } else {
+      [WinAPI]::ShowWindow($Target.Hwnd, 5) | Out-Null   # SW_SHOW
     }
-    [WinAPI]::SetWindowPos($r.Hwnd, [WinAPI]::HWND_TOPMOST, 0, 0, 0, 0, [WinAPI]::SWP_NOACTIVATE) | Out-Null
-    [WinAPI]::SetWindowPos($r.Hwnd, [IntPtr]::new(-2), 0, 0, 0, 0, [WinAPI]::SWP_NOACTIVATE) | Out-Null  # HWND_NOTOPMOST
-    [WinAPI]::BringWindowToTop($r.Hwnd) | Out-Null
-    [WinAPI]::SetForegroundWindow($r.Hwnd) | Out-Null
-    $proc2 = Get-Process -Id $r.Pid -ErrorAction SilentlyContinue
-    Dbg ("FOCUS OK: target=" + $proc2.ProcessName + " PID=" + $r.Pid + " hwnd=" + $r.Hwnd)
+    # TOPMOST -> NOTOPMOST: it lets BringWindowToTop push the window all the
+    # way up without leaving a "always on top" side effect behind.
+    [WinAPI]::SetWindowPos($Target.Hwnd, [WinAPI]::HWND_TOPMOST, 0, 0, 0, 0, [WinAPI]::SWP_NOACTIVATE) | Out-Null
+    [WinAPI]::SetWindowPos($Target.Hwnd, [IntPtr]::new(-2), 0, 0, 0, 0, [WinAPI]::SWP_NOACTIVATE) | Out-Null  # HWND_NOTOPMOST
+    [WinAPI]::BringWindowToTop($Target.Hwnd) | Out-Null
+    [WinAPI]::SetForegroundWindow($Target.Hwnd) | Out-Null
+    Dbg ("FOCUS OK: target=" + $Target.Exe + " PID=" + $Target.Pid + " hwnd=" + $Target.Hwnd)
   } catch {
     Dbg "FOCUS FAIL: $($_.Exception.Message)"
   }
+}
+
+# 兼容旧调用点：自动聚焦流程（needs_input 状态自动弹窗那种）用调用方窗口。
+function Focus-CallerWindow {
+  $r = Resolve-CallerWindow
+  if (-not $r) { return }
+  Focus-Window $r
 }
 
 # 单击 pill toggle：可见 → 隐藏；隐藏 → 全屏还原 + 抢焦点。
@@ -725,25 +844,27 @@ function Focus-CallerWindow {
 # 状态判定: IsWindowVisible 在 SW_HIDE 和 SW_MINIMIZE 后都返回 false
 # (区别是 IsIconic:SW_HIDE 后 false,SW_MINIMIZE 后 true)。toggle 只看
 # IsWindowVisible 即可,SW_MAXIMIZE 在内部正确处理两种 case。
-function Toggle-CallerWindow {
-  $r = Resolve-CallerWindow
-  if (-not $r) { return }
+function Toggle-Window {
+  param([Parameter(Mandatory = $true)]$Target)
 
   try {
-    $isShown = [WinAPI]::IsWindowVisible($r.Hwnd)
+    $isShown = [WinAPI]::IsWindowVisible($Target.Hwnd)
     if ($isShown) {
-      [WinAPI]::ShowWindow($r.Hwnd, 0) | Out-Null   # SW_HIDE
-      Dbg "TOGGLE: hid target=$($r.Exe) PID=$($r.Pid) hwnd=$($r.Hwnd)"
+      [WinAPI]::ShowWindow($Target.Hwnd, 0) | Out-Null   # SW_HIDE
+      Dbg "TOGGLE: hid target=$($Target.Exe) PID=$($Target.Pid) hwnd=$($Target.Hwnd)"
     } else {
       # 1) SW_MAXIMIZE 激活+标记 maximized
-      [WinAPI]::ShowWindow($r.Hwnd, 3) | Out-Null   # SW_MAXIMIZE
+      [WinAPI]::ShowWindow($Target.Hwnd, 3) | Out-Null   # SW_MAXIMIZE
       # 2) SetWindowPos 强制拉到 monitor work area (绕过 DPI/remembered-size 限制)
-      $wa = [WinAPI]::GetWorkAreaForWindow($r.Hwnd)
+      $wa = [WinAPI]::GetWorkAreaForWindow($Target.Hwnd)
       if ($wa.Left -ne -1) {
         $cx = $wa.Right - $wa.Left
         $cy = $wa.Bottom - $wa.Top
-        [WinAPI]::SetWindowPos($r.Hwnd, [IntPtr]::Zero, $wa.Left, $wa.Top, $cx, $cy, [WinAPI]::SWP_NOZORDER) | Out-Null
-        Dbg "TOGGLE: forced to work area ({0},{1}) {2}x{3}" -f $wa.Left, $wa.Top, $cx, $cy
+        [WinAPI]::SetWindowPos($Target.Hwnd, [IntPtr]::Zero, $wa.Left, $wa.Top, $cx, $cy, [WinAPI]::SWP_NOZORDER) | Out-Null
+        # The -f has to sit inside the parentheses: written as
+        # `Dbg "..." -f a, b` the format operator binds to the command, not to
+        # the string, and the log line keeps the raw {0} {1} placeholders.
+        Dbg ("TOGGLE: forced to work area ({0},{1}) {2}x{3}" -f $wa.Left, $wa.Top, $cx, $cy)
       }
       # 3) 抢 z-order 到最前(SetWindowPos(HWND_TOP) 不需要 foreground 权限)
       #    SWP_NOSIZE：cx=0/cy=0 缺它会被 Windows 当成"resize 到 0x0"，
@@ -752,15 +873,36 @@ function Toggle-CallerWindow {
       #    但副屏（monitor 原点非 0）上会把还原后的窗口甩到主屏左上角。
       #    同样不能加 SWP_NOZORDER——那个 flag 会让 hWndInsertAfter 被忽略，
       #    HWND_TOP 就白传了，BringWindowToTop 之后仍可能被别的窗口盖住。
-      [WinAPI]::AllowSetForegroundWindow([uint32]$r.Pid) | Out-Null
+      [WinAPI]::AllowSetForegroundWindow([uint32]$Target.Pid) | Out-Null
       $nofollow = [WinAPI]::SWP_NOACTIVATE -bor [WinAPI]::SWP_NOSIZE -bor [WinAPI]::SWP_NOMOVE
-      [WinAPI]::SetWindowPos($r.Hwnd, [WinAPI]::HWND_TOP, 0, 0, 0, 0, $nofollow) | Out-Null
-      [WinAPI]::BringWindowToTop($r.Hwnd) | Out-Null
-      [WinAPI]::SetForegroundWindow($r.Hwnd) | Out-Null
-      Dbg "TOGGLE: shown (maximized + work-area) target=$($r.Exe) PID=$($r.Pid) hwnd=$($r.Hwnd)"
+      [WinAPI]::SetWindowPos($Target.Hwnd, [WinAPI]::HWND_TOP, 0, 0, 0, 0, $nofollow) | Out-Null
+      [WinAPI]::BringWindowToTop($Target.Hwnd) | Out-Null
+      [WinAPI]::SetForegroundWindow($Target.Hwnd) | Out-Null
+      Dbg "TOGGLE: shown (maximized + work-area) target=$($Target.Exe) PID=$($Target.Pid) hwnd=$($Target.Hwnd)"
     }
   } catch {
     Dbg "TOGGLE FAIL: $($_.Exception.Message)"
+  }
+}
+
+# 兼容旧调用点。
+function Toggle-CallerWindow {
+  $r = Resolve-CallerWindow
+  if (-not $r) { return }
+  Toggle-Window $r
+}
+
+# The single entry point for a pill click: resolve the target, then run the
+# mode it resolved to. focus (manual pin / desktop app) and toggle (the
+# caller's terminal) are two different semantics -- do not mix them.
+function Invoke-ClickTarget {
+  $t = Resolve-ClickTarget
+  if (-not $t) { Dbg 'CLICK: no target resolved'; return }
+  Dbg "CLICK: target=$($t.Exe) PID=$($t.Pid) hwnd=$($t.Hwnd) mode=$($t.Mode) origin=$($t.Origin)"
+  if ($t.Mode -eq 'focus') {
+    Focus-Window $t
+  } else {
+    Toggle-Window $t
   }
 }
 
@@ -782,7 +924,9 @@ public class FG2 {
   if (-not $proc) { Dbg 'PIN: target process gone'; return }
   $myPid = [int](Get-Process -Id $PID).Id
   $mySession = (Get-Process -Id $myPid).SessionId
-  $callerFile = Join-Path $env:APPDATA 'mcode-island\caller.json'
+  # Write pin.json, not caller.json: a pin is the user's explicit choice and
+  # must not be wiped by the agent-side caller.json on every transition.
+  $pinFile = Join-Path $env:APPDATA 'mcode-island\pin.json'
   $payload = [PSCustomObject]@{
     callerPid = $myPid
     callerSession = $mySession
@@ -793,7 +937,7 @@ public class FG2 {
     source = 'manual-pin'
     ts = (Get-Date).ToString('o')
   } | ConvertTo-Json -Compress
-  [System.IO.File]::WriteAllText($callerFile, $payload, [System.Text.Encoding]::UTF8)
+  [System.IO.File]::WriteAllText($pinFile, $payload, [System.Text.Encoding]::UTF8)
   Dbg ("PIN: target=" + $proc.ProcessName + " PID=" + $proc.Id + " hwnd=" + $hwnd)
 }
 
@@ -969,7 +1113,7 @@ $window.Add_MouseLeftButtonUp({
     if ($script:dragStart -and -not $script:didDrag) {
       Dbg 'CLICK detected'
       Flash-Click
-      Toggle-CallerWindow
+      Invoke-ClickTarget
     }
   } catch {
     Dbg "CLICK FAIL: $($_.Exception.Message)"

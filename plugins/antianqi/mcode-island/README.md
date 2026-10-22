@@ -11,7 +11,9 @@ the terminal in the background and still see exactly what your agent is doing.
 |:----:|:--------:|:-------:|:-------:|:----:|:-----:|
 | ![idle](assets/state-idle.png) | ![thinking](assets/state-thinking.png) | ![working](assets/state-working.png) | ![waiting](assets/state-waiting.png) | ![done](assets/state-done.png) | ![error](assets/state-error.png) |
 
-The pill is a single 320×60 WPF window, always-on-top, click-to-focus. The
+The pill is a single 320×60 WPF window, always-on-top, click-to-focus: the click goes
+back to the desktop app window, to a manually pinned window, or to the
+originating terminal. The
 widget polls `%APPDATA%\mcode-island\status.json` every 400 ms; the agent (or a
 thin wrapper) just writes JSON to that file.
 
@@ -216,7 +218,7 @@ mcode-island/
 ├── stop-island.ps1                   # stop the widget
 ├── status-island.ps1                 # print widget PID + recent log
 ├── show-island.ps1                   # re-raise hidden widget
-├── pin-island.ps1                    # lock click-to-focus target
+├── pin-island.ps1                    # pin the click target to the foreground window
 ├── autostart.ps1                     # register / unregister Windows logon
 ├── notify-island.ps1                 # state-push helper (Mode B)
 ├── wrap-tool.ps1                     # all-in-one bash wrapper
@@ -263,7 +265,8 @@ binary, no symlink, no `node_modules`.
 | data             | location                              | lifetime                  | purpose                              |
 | ---------------- | ------------------------------------- | ------------------------- | ------------------------------------ |
 | `status.json`    | `%APPDATA%\mcode-island\`             | rewritten every transition | widget polling                       |
-| `caller.json`    | `%APPDATA%\mcode-island\`             | rewritten every transition | click-to-focus target HWND           |
+| `caller.json`    | `%APPDATA%\mcode-island\`             | rewritten every transition | originating terminal HWND (click fallback) |
+| `pin.json`       | `%APPDATA%\mcode-island\`             | until `mcode-island unpin` | manually pinned click target        |
 | `config.json`    | `%APPDATA%\mcode-island\`             | rewritten on drag         | pill position, size, opacity         |
 | `config.json` -> `planApiTokenEnc` | `%APPDATA%\mcode-island\` | until `-Clear` or manual edit | 5h usage API token, DPAPI-encrypted (opt-in; see "Accounts") |
 | `widget.pid`     | `%APPDATA%\mcode-island\`             | rewritten on start        | widget process PID                   |
@@ -365,8 +368,8 @@ mcode-island                REM start the widget (no-op if already running)
 mcode-island stop           REM stop the widget
 mcode-island status         REM show widget PID, session, last 5 log lines
 mcode-island show           REM re-raise a hidden widget
-mcode-island pin            REM lock click-to-focus target to current foreground
-mcode-island unpin          REM clear focus target
+mcode-island pin            REM pin the click target to the current foreground window
+mcode-island unpin          REM clear the pinned click target
 mcode-island autostart-on   REM register for Windows logon
 mcode-island autostart-off  REM unregister
 ```
@@ -377,15 +380,30 @@ invoke `.ps1` more easily than `.cmd`.
 
 ## How click-to-focus works
 
-When the agent calls `notify-island.ps1`, the helper probes the process chain
-for an attached console window, and falls back to the first ancestor with a
-`MainWindowHandle`. The discovered HWND / PID is written to `caller.json`. When
-the user clicks the pill, the widget uses `SetForegroundWindow` on that HWND.
+The click target is resolved on every click, in this order:
 
-If the auto-detected HWND is wrong (common on Windows Terminal with multiple
-tabs), run `mcode-island pin` from inside the tab you want to return to. The
-CLI grabs the foreground window *before* the widget steals focus, so this is
-the most reliable fix.
+| # | target              | how it is found                        | what the click does              |
+| - | ------------------- | -------------------------------------- | -------------------------------- |
+| 1 | a manual pin        | `pin.json` (written by `mcode-island pin`) | focuses that window        |
+| 2 | the desktop app     | a process named `MiniMax Inside Code` / `MiniMax Code` / `Mavis` in the widget's own session | focuses the app window |
+| 3 | the caller's terminal | `caller.json` (written by `notify-island.ps1`) | shows it, or hides it if it is already visible |
+
+**Why the desktop app wins over the terminal.** In the desktop app the agent
+is hosted by the app and runs in a terminal the app opened. Hiding that
+terminal does not stop the agent — it just leaves the user looking at a static
+pill. "Take me back to the app window" is the action that matches the
+intent, so the app window is focused and never hidden.
+
+**Why the pin still wins.** `mcode-island pin` stores the foreground window in
+`pin.json`, a separate file from `caller.json`: `caller.json` is rewritten on
+every status transition, so a pin stored there would not survive the next
+push. The pin is the escape hatch for the case where the desktop app is open
+next to a CLI session and the user wants the click to go to their terminal.
+
+When the auto-detected HWND is wrong (common on Windows Terminal with
+multiple tabs), run `mcode-island pin` from inside the tab you want to return
+to. The CLI grabs the foreground window *before* the widget steals focus, so
+this is the most reliable fix. `mcode-island unpin` clears it.
 
 The widget is also intentionally hard to kill. Alt+F4 sends `WM_CLOSE`, which
 the widget intercepts in `WndProc` and treats as Hide rather than Close. To
@@ -404,6 +422,11 @@ a live MiniMax Code session. Empirical evidence (captured during development):
   `waiting` → `working` → `done` on a real `bash npm test` run.
 - Click-to-focus round-trip verified: from a Feishu tab, click the pill, focus
   jumps to the originating Windows Terminal tab (HWND consistent).
+- Click-target order verified against the live desktop app: with
+  `MiniMax Inside Code` running, the click resolves to the app window
+  (`mode=focus`, never hidden); with a `pin.json` present it resolves to the
+  pinned window; with neither, it falls back to the caller's terminal with
+  the original show/hide toggle (`mode=toggle`).
 - `wrap-tool.ps1` exit-code semantics: 0 → `done`, 1 → `waiting` (default;
   configurable via `-WaitingExitCodes`), other → `error`. As of v0.2.1 the
   wrapper no longer executes the command itself; the agent runs the command

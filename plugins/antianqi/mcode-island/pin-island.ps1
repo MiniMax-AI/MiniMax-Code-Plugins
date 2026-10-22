@@ -29,7 +29,13 @@ if (-not $proc) {
 
 $configDir = Join-Path $env:APPDATA 'mcode-island'
 if (!(Test-Path $configDir)) { New-Item -ItemType Directory -Path $configDir -Force | Out-Null }
-$callerFile = Join-Path $configDir 'caller.json'
+# Write pin.json, not caller.json.
+#
+# A pin is the user's explicit click target and has to outlive the agent-side
+# state transitions: caller.json is rewritten on every notify, so a pin
+# stored there would not survive the next status push, which would make
+# "the manual pin beats the desktop app" unreachable.
+$pinFile = Join-Path $configDir 'pin.json'
 
 $myPid = [int](Get-Process -Id $PID).Id
 $mySession = (Get-Process -Id $myPid).SessionId
@@ -44,9 +50,9 @@ $payload = [PSCustomObject]@{
   ts           = (Get-Date).ToString('o')
 } | ConvertTo-Json -Compress
 
-$tmpFile = "$callerFile.tmp"
+$tmpFile = "$pinFile.tmp"
 [System.IO.File]::WriteAllText($tmpFile, $payload, [System.Text.Encoding]::UTF8)
-Move-Item -Path $tmpFile -Destination $callerFile -Force
+Move-Item -Path $tmpFile -Destination $pinFile -Force
 
 Write-Output ("OK: pin'd " + $proc.ProcessName + " (PID=" + $proc.Id + ", hwnd=" + $hwnd + ")")
 Write-Output ("     title: " + $proc.MainWindowTitle)

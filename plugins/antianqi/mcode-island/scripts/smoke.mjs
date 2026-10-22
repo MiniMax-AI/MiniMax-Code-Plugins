@@ -390,48 +390,192 @@ const main = async () => {
         out('PASS', 'scripts/test-substep-progress.mjs exists (run separately for full suite)');
     }
 
-    // 5c2. Click toggle extension (round-14 refactor).
-    // The pill's MouseLeftButtonUp must call Toggle-CallerWindow, NOT
-    // Focus-CallerWindow. Single-click show is one-way and forces the
-    // CLI to the front every time the user clicks, which is wrong for
-    // "I clicked the pill to hide the CLI" — the second click would
-    // re-show it and surprise the user. Toggle semantics match the
-    // user's "单击收起单击调出" mental model.
-    // Drift lock: Resolve-CallerWindow + Toggle-CallerWindow must
-    // exist as named functions (refactor target), and the click
-    // handler must invoke Toggle-CallerWindow, not Focus-CallerWindow.
+    // 5c2. Click target resolution (desktop-app adaptation).
+    //
+    // The click used to be a plain show/hide toggle of the caller's terminal.
+    // In the desktop app the agent is hosted by the app and that terminal
+    // window belongs to the app session, so "hide the terminal" is
+    // meaningless there -- the agent keeps running behind a static pill.
+    // What the user wants is "take me back to the app window".
+    //
+    // The contract is a priority chain, resolved on every click:
+    //   1. manual pin (pin.json)   -> focus that window
+    //   2. desktop app main window -> focus it
+    //   3. the caller's terminal   -> keep the old show/hide toggle
+    //
+    // These locks are text-shaped (the widget is a WPF app; there is no
+    // headless way to click it), so every one of them has to anchor on the
+    // code that actually carries the contract -- and has to be able to fail.
     if (await exists(substepWidgetPath)) {
         const widget = await readFile(substepWidgetPath, 'utf8');
-        if (!/function Resolve-CallerWindow\b/.test(widget)) {
-            out('FAIL', 'mcode-island.ps1: Resolve-CallerWindow function missing (toggle refactor target)');
-        } else {
-            out('PASS', 'mcode-island.ps1: Resolve-CallerWindow function present');
+
+        // (a) the resolution helpers exist as named functions
+        for (const [name, re] of [
+            ['Resolve-CallerWindow', /function Resolve-CallerWindow\b/],
+            ['Toggle-CallerWindow', /function Toggle-CallerWindow\b/],
+            ['Resolve-ClickTarget', /function Resolve-ClickTarget\b/],
+            ['Resolve-PinnedWindow', /function Resolve-PinnedWindow\b/],
+            ['Find-DesktopAppWindow', /function Find-DesktopAppWindow\b/],
+            ['Invoke-ClickTarget', /function Invoke-ClickTarget\b/],
+            ['Focus-Window', /function Focus-Window\b/],
+            ['Toggle-Window', /function Toggle-Window\b/],
+        ]) {
+            if (re.test(widget)) {
+                out('PASS', `mcode-island.ps1: ${name} function present`);
+            } else {
+                out('FAIL', `mcode-island.ps1: ${name} function missing (click-target contract broken)`);
+            }
         }
-        if (!/function Toggle-CallerWindow\b/.test(widget)) {
-            out('FAIL', 'mcode-island.ps1: Toggle-CallerWindow function missing');
+
+        // (b) the priority chain is in the right ORDER inside
+        // Resolve-ClickTarget. Order is the whole contract: a pin that loses
+        // to the desktop app is useless for a CLI user who happens to have
+        // the app open at the same time.
+        const clickTargetBody = (widget.match(/function Resolve-ClickTarget[\s\S]*?\n\}\n/) || [''])[0];
+        if (!clickTargetBody) {
+            out('FAIL', 'mcode-island.ps1: Resolve-ClickTarget body not found (priority drift lock skipped)');
         } else {
-            out('PASS', 'mcode-island.ps1: Toggle-CallerWindow function present');
+            const pinAt = clickTargetBody.indexOf('Resolve-PinnedWindow');
+            const appAt = clickTargetBody.indexOf('Find-DesktopAppWindow');
+            const callerAt = clickTargetBody.indexOf('Resolve-CallerWindow');
+            if (pinAt < 0 || appAt < 0 || callerAt < 0) {
+                out('FAIL', `mcode-island.ps1: Resolve-ClickTarget does not consult all three sources (pin=${pinAt} app=${appAt} caller=${callerAt})`);
+            } else if (!(pinAt < appAt && appAt < callerAt)) {
+                out('FAIL', `mcode-island.ps1: Resolve-ClickTarget priority order is wrong -- it must be pin -> desktop app -> caller terminal (offsets pin=${pinAt} app=${appAt} caller=${callerAt})`);
+            } else {
+                out('PASS', 'mcode-island.ps1: Resolve-ClickTarget resolves pin -> desktop app -> caller terminal in that order');
+            }
+            if (!/Mode\s*=\s*'focus'/.test(clickTargetBody)) {
+                out('FAIL', "mcode-island.ps1: Resolve-ClickTarget does not mark any target as Mode = 'focus'");
+            } else {
+                out('PASS', "mcode-island.ps1: Resolve-ClickTarget marks the pin / desktop app as Mode = 'focus'");
+            }
+            if (!/Mode\s*=\s*'toggle'/.test(clickTargetBody)) {
+                out('FAIL', "mcode-island.ps1: Resolve-ClickTarget does not keep Mode = 'toggle' for the caller's terminal");
+            } else {
+                out('PASS', "mcode-island.ps1: Resolve-ClickTarget keeps the caller's terminal on Mode = 'toggle'");
+            }
         }
-        // Toggle-CallerWindow must dispatch on IsWindowVisible (the
-        // core visibility check). A regression that always calls
-        // ShowWindow(SW_HIDE) without checking state would silently
-        // break the toggle (every click = hide, never show).
-        if (!/IsWindowVisible\s*\(\s*\$r\.Hwnd\s*\)/.test(widget)) {
-            out('FAIL', 'mcode-island.ps1: Toggle-CallerWindow does not check IsWindowVisible');
-        } else {
-            out('PASS', 'mcode-island.ps1: Toggle-CallerWindow gates on IsWindowVisible');
-        }
-        // The click handler must call Toggle-CallerWindow, not Focus.
-        // We anchor on the MouseLeftButtonUp event to scope the check.
+
+        // (c) the click handler goes through the dispatcher, not straight to
+        // the toggle. A handler that still called Toggle-CallerWindow would
+        // hide the terminal instead of focusing the app.
         const clickMatch = widget.match(/Add_MouseLeftButtonUp\([\s\S]*?\}\s*\)\s*$/m);
         if (!clickMatch) {
             out('WARN', 'mcode-island.ps1: Add_MouseLeftButtonUp handler not found (drift lock skipped)');
-        } else if (!/Toggle-CallerWindow\b/.test(clickMatch[0])) {
-            out('FAIL', 'mcode-island.ps1: MouseLeftButtonUp does not invoke Toggle-CallerWindow (still using Focus-only)');
-        } else if (/Focus-CallerWindow\b/.test(clickMatch[0])) {
-            out('FAIL', 'mcode-island.ps1: MouseLeftButtonUp invokes both Toggle and Focus — pick one');
+        } else if (!/Invoke-ClickTarget\b/.test(clickMatch[0])) {
+            out('FAIL', 'mcode-island.ps1: MouseLeftButtonUp does not invoke Invoke-ClickTarget (the click would skip the desktop-app target)');
+        } else if (/Toggle-CallerWindow\b/.test(clickMatch[0])) {
+            out('FAIL', 'mcode-island.ps1: MouseLeftButtonUp still calls Toggle-CallerWindow directly -- it must go through Invoke-ClickTarget');
         } else {
-            out('PASS', 'mcode-island.ps1: MouseLeftButtonUp invokes Toggle-CallerWindow (single click toggles show/hide)');
+            out('PASS', 'mcode-island.ps1: MouseLeftButtonUp invokes Invoke-ClickTarget (pin / desktop app / terminal resolved per click)');
+        }
+
+        // (d) the dispatcher honours the resolved Mode. Always focusing would
+        // break the CLI "click to hide my terminal" muscle memory; always
+        // toggling would hide the desktop app window.
+        const dispatchBody = (widget.match(/function Invoke-ClickTarget[\s\S]*?\n\}\n/) || [''])[0];
+        if (!dispatchBody) {
+            out('FAIL', 'mcode-island.ps1: Invoke-ClickTarget body not found (mode dispatch drift lock skipped)');
+        } else if (!/Focus-Window\s+\$t\b/.test(dispatchBody)) {
+            out('FAIL', 'mcode-island.ps1: Invoke-ClickTarget does not call Focus-Window for a focus target');
+        } else if (!/Toggle-Window\s+\$t\b/.test(dispatchBody)) {
+            out('FAIL', 'mcode-island.ps1: Invoke-ClickTarget does not call Toggle-Window for a toggle target');
+        } else if (!/\$t\.Mode\s*-eq\s*'focus'/.test(dispatchBody)) {
+            out('FAIL', "mcode-island.ps1: Invoke-ClickTarget does not branch on the resolved Mode -- a dispatcher that always picks one behaviour breaks the other target kind");
+        } else {
+            out('PASS', 'mcode-island.ps1: Invoke-ClickTarget dispatches focus vs toggle by the resolved Mode');
+        }
+
+        // (e) the desktop app is found by process name, and only inside the
+        // widget's own session. A cross-session match could focus another
+        // session's app instance.
+        const appFn = (widget.match(/function Find-DesktopAppWindow[\s\S]*?\n\}\n/) || [''])[0];
+        if (!appFn) {
+            out('FAIL', 'mcode-island.ps1: Find-DesktopAppWindow body not found');
+        } else {
+            if (!/MiniMax Inside Code/.test(widget)) {
+                out('FAIL', "mcode-island.ps1: the desktop app allowlist does not contain 'MiniMax Inside Code' (the desktop app window would never be found)");
+            } else {
+                out('PASS', "mcode-island.ps1: the desktop app allowlist contains 'MiniMax Inside Code'");
+            }
+            if (!/SessionId\s*-eq\s*\$mySession/.test(appFn)) {
+                out('FAIL', 'mcode-island.ps1: Find-DesktopAppWindow does not restrict the search to the widget session');
+            } else {
+                out('PASS', 'mcode-island.ps1: Find-DesktopAppWindow only considers processes in the widget session');
+            }
+        }
+
+        // (f) focusing must never hide. Focus-Window serves the desktop app
+        // and a pinned window; hiding the app would take the agent surface
+        // away from the user, which is exactly the bug this adaptation fixes.
+        const focusBody = (widget.match(/function Focus-Window[\s\S]*?\n\}\n/) || [''])[0];
+        if (!focusBody) {
+            out('FAIL', 'mcode-island.ps1: Focus-Window body not found');
+        } else if (/ShowWindow\(\s*\$Target\.Hwnd\s*,\s*0\s*\)/.test(focusBody)) {
+            out('FAIL', 'mcode-island.ps1: Focus-Window calls ShowWindow(SW_HIDE) -- focusing the desktop app must never hide it');
+        } else if (!/SetForegroundWindow/.test(focusBody)) {
+            out('FAIL', 'mcode-island.ps1: Focus-Window does not call SetForegroundWindow');
+        } else {
+            out('PASS', 'mcode-island.ps1: Focus-Window raises and activates without ever hiding the target');
+        }
+
+        // (g) the pin has to be sticky. It lives in pin.json, not in the
+        // caller.json that every status transition overwrites: a pin stored
+        // in caller.json dies at the next notify, which makes "the pin beats
+        // the desktop app" unreachable in practice.
+        const pinBody = (widget.match(/function Resolve-PinnedWindow[\s\S]*?\n\}\n/) || [''])[0];
+        if (!pinBody) {
+            out('FAIL', 'mcode-island.ps1: Resolve-PinnedWindow body not found');
+        } else if (!/Join-Path[^\n]*pin\.json/.test(pinBody)) {
+            // Anchor on the path expression, not on the bare file name: a
+            // Dbg message that merely mentions pin.json must not satisfy
+            // this lock.
+            out('FAIL', 'mcode-island.ps1: Resolve-PinnedWindow does not read pin.json (the pin would be overwritten by every status transition)');
+        } else {
+            out('PASS', 'mcode-island.ps1: Resolve-PinnedWindow reads the sticky pin.json');
+        }
+
+        // (h) the writer has to write the file the resolver reads, and it
+        // must not write caller.json -- that file is overwritten by every
+        // status transition, so a pin stored there is gone at the next
+        // notify.
+        const pinWriterPath = join(PLUGIN_ROOT, 'pin-island.ps1');
+        if (!(await exists(pinWriterPath))) {
+            out('FAIL', 'pin-island.ps1 missing (pin writer drift lock skipped)');
+        } else {
+            const pinWriter = await readFile(pinWriterPath, 'utf8');
+            // Anchor on the destination expression, not on the bare file
+            // name: the file explains in a comment why it does NOT use
+            // caller.json, and that comment must not satisfy this lock.
+            if (!/Join-Path[^\n]*'pin\.json'/.test(pinWriter)) {
+                out('FAIL', 'pin-island.ps1 does not write pin.json (the pin would not survive the next status transition)');
+            } else if (/Join-Path[^\n]*'caller\.json'/.test(pinWriter)) {
+                out('FAIL', 'pin-island.ps1 still writes caller.json (the pin would be overwritten by every status transition)');
+            } else {
+                out('PASS', 'pin-island.ps1 writes the sticky pin.json');
+            }
+        }
+
+        // (i) unpin has to clear the sticky pin, otherwise the pin survives
+        // the one command that exists to remove it.
+        const cmdPath = join(PLUGIN_ROOT, 'mcode-island.cmd');
+        if (!(await exists(cmdPath))) {
+            out('FAIL', 'mcode-island.cmd missing (unpin drift lock skipped)');
+        } else {
+            const cmd = await readFile(cmdPath, 'utf8');
+            // The label has to start the line: the dispatch table also
+            // mentions "unpin" ("if /i "%1"=="unpin" goto :unpin").
+            const unpinBlock = (cmd.match(/\r?\n:unpin[\s\S]*?exit \/b %errorlevel%/i) || [''])[0];
+            if (!unpinBlock) {
+                out('FAIL', 'mcode-island.cmd: the unpin command is missing');
+            } else if (!/Remove-Item[^\n]*'mcode-island\\pin\.json'/.test(unpinBlock)) {
+                // Anchor on the removal itself: the command's own output text
+                // mentions "pin.json" and must not satisfy this lock.
+                out('FAIL', 'mcode-island.cmd: unpin does not clear pin.json (the pinned window would stay the click target)');
+            } else {
+                out('PASS', 'mcode-island.cmd: unpin clears the sticky pin.json');
+            }
         }
 
         // Round-15: Toggle's restore branch must call SW_MAXIMIZE (3), not
@@ -442,9 +586,9 @@ const main = async () => {
         // it as that strip — the user's complaint was "hide works, show is
         // a thin strip". SW_MAXIMIZE forces full-screen on hidden /
         // minimized / normal windows alike; no-op on already-maximized.
-        const toggleMatch = widget.match(/function Toggle-CallerWindow[\s\S]*?\n\}\n/);
+        const toggleMatch = widget.match(/function Toggle-Window[\s\S]*?\n\}\n/);
         if (!toggleMatch) {
-            out('WARN', 'mcode-island.ps1: Toggle-CallerWindow body not found (drift lock skipped)');
+            out('WARN', 'mcode-island.ps1: Toggle-Window body not found (drift lock skipped)');
         } else {
             const toggleBody = toggleMatch[0];
             // Extract the `else` branch (the restore path) so the check
@@ -453,10 +597,10 @@ const main = async () => {
             const elseMatch = toggleBody.match(/else\s*\{([\s\S]*?)\n\s*\}\s*\n\s*\}\s*$/m);
             const restoreBody = elseMatch ? elseMatch[1] : '';
             if (!restoreBody) {
-                out('FAIL', 'mcode-island.ps1: Toggle-CallerWindow else branch not parseable');
-            } else if (!/ShowWindow\(\s*\$r\.Hwnd\s*,\s*3\s*\)/.test(restoreBody)) {
+                out('FAIL', 'mcode-island.ps1: Toggle-Window else branch not parseable');
+            } else if (!/ShowWindow\(\s*\$Target\.Hwnd\s*,\s*3\s*\)/.test(restoreBody)) {
                 out('FAIL', 'mcode-island.ps1: Toggle restore branch does not call SW_MAXIMIZE (ShowWindow(_, 3)). A regression to SW_SHOW (5) or SW_RESTORE (9) re-shows the window at its pre-hide size (e.g., 480x84 strip if WT got accidentally resized).');
-            } else if (/ShowWindow\(\s*\$r\.Hwnd\s*,\s*5\s*\)/.test(restoreBody)) {
+            } else if (/ShowWindow\(\s*\$Target\.Hwnd\s*,\s*5\s*\)/.test(restoreBody)) {
                 out('FAIL', 'mcode-island.ps1: Toggle restore branch calls SW_SHOW (5) in addition to SW_MAXIMIZE — keep only SW_MAXIMIZE; SW_SHOW re-shows at pre-hide size and defeats the maximize intent.');
             } else {
                 out('PASS', 'mcode-island.ps1: Toggle restore branch forces SW_MAXIMIZE (full-screen on show, fixes 480x84 strip bug)');
@@ -474,7 +618,7 @@ const main = async () => {
             // SetWindowPos path.
             if (!/GetWorkAreaForWindow|GetMonitorInfo|MonitorFromWindow/.test(toggleBody)) {
                 out('FAIL', 'mcode-island.ps1: Toggle restore branch does not query monitor work area. Without MonitorFromWindow + SetWindowPos(explicit size), SW_MAXIMIZE alone fills only the WinForms 1920x1080 logical work area, not the actual 2560x1440 physical monitor — leaves WT at the top-left 75%.');
-            } else if (!/SetWindowPos\([^)]*\$wa\.|SetWindowPos\(\$r\.Hwnd,[^,]+,\s*\$wa\.Left,\s*\$wa\.Top,\s*\$cx,\s*\$cy/.test(toggleBody)) {
+            } else if (!/SetWindowPos\([^)]*\$wa\.|SetWindowPos\(\$Target\.Hwnd,[^,]+,\s*\$wa\.Left,\s*\$wa\.Top,\s*\$cx,\s*\$cy/.test(toggleBody)) {
                 out('FAIL', 'mcode-island.ps1: Toggle restore branch has monitor query but does not SetWindowPos with work-area coords. The contract is: read monitor work area, then SetWindowPos with explicit (Left, Top, cx, cy) — never rely on SW_MAXIMIZE alone for size.');
             } else {
                 out('PASS', 'mcode-island.ps1: Toggle restore branch forces work-area size via MonitorFromWindow + SetWindowPos (fills 2560x1440 physical monitor, not just 1920x1080 logical)');

@@ -537,12 +537,12 @@ ${call}
 // ---------------------------------------------------------------------------
 
 {
-    const toggle = extractFn(widget, 'Toggle-CallerWindow');
+    const toggle = extractFn(widget, 'Toggle-Window');
     const zorderCall = toggle.match(
         /SetWindowPos\([^)]*HWND_TOP[^)]*\)/);
 
     check('restore z-order call exists', !!zorderCall,
-        'could not find the HWND_TOP SetWindowPos call in Toggle-CallerWindow');
+        'could not find the HWND_TOP SetWindowPos call in Toggle-Window');
 
     if (zorderCall) {
         // Pull the flags expression that feeds this specific call. Anchor on

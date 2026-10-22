@@ -26,9 +26,21 @@ theme. Six states with distinct color and motion:
 | `done`     | green          | ✓    | step finished, more to do        |
 | `error`    | red            | ✕    | tool or step failed              |
 
-Click the pill to switch focus back to the originating terminal tab. Run
-`mcode-island pin` from inside a terminal to fix the focus target explicitly
-(useful when the auto-detected HWND is wrong, e.g. Windows Terminal multi-tab).
+Click the pill to go back to where the work happens. The target is resolved on
+every click, in this order:
+
+1. **A manual pin** (`mcode-island pin`) — that window is focused.
+2. **The desktop app window** (`MiniMax Inside Code` / `MiniMax Code` /
+   `Mavis`) — it is focused, never hidden. In the desktop app the agent runs
+   inside the app, so hiding the terminal behind it would leave the user
+   staring at a static pill while the agent keeps running.
+3. **The originating terminal** (`caller.json`) — the original behaviour: one
+   click hides the terminal, the next brings it back maximized.
+
+Run `mcode-island pin` from inside a terminal to override the target
+explicitly (useful when the auto-detected HWND is wrong, e.g. Windows Terminal
+multi-tab, or when the desktop app is open next to a CLI session).
+`mcode-island unpin` clears the pin.
 
 ## Two ways to drive the pill
 
@@ -164,10 +176,11 @@ deliberately avoids hard-coded paths so any user / any install location works.
 ## Expected result
 
 After each push (or after each hook fires), the widget on the user's primary
-display updates within ~400 ms (one polling cycle). On click, the originating
-terminal tab regains focus. The widget is intentionally hard to kill: Alt+F4
-hides it, not closes it, and `mcode-island show` re-raises the hidden window
-in under 1 second.
+display updates within ~400 ms (one polling cycle). On click, the widget
+focuses the desktop app window (or the pinned window, or the originating
+terminal tab — see the click-target order above). The widget is intentionally
+hard to kill: Alt+F4 hides it, not closes it, and `mcode-island show` re-raises
+the hidden window in under 1 second.
 
 ## User-side management
 
@@ -176,8 +189,8 @@ mcode-island                  REM start the widget (idempotent)
 mcode-island stop             REM stop the widget
 mcode-island status           REM show PID + recent log
 mcode-island show             REM re-raise hidden widget
-mcode-island pin              REM lock focus target to current foreground window
-mcode-island unpin            REM clear focus target
+mcode-island pin              REM pin the click target to the current foreground window
+mcode-island unpin            REM clear the pinned click target
 mcode-island autostart-on     REM register for Windows logon
 mcode-island autostart-off    REM unregister
 ```
@@ -199,6 +212,7 @@ All widget state lives under `%APPDATA%\mcode-island\`:
 | ---------------- | ----------------------------------------------------- |
 | `status.json`    | current state (widget polls this every 400 ms)        |
 | `caller.json`    | originating terminal HWND / PID (for click-to-focus)  |
+| `pin.json`       | manually pinned click target (survives status pushes) |
 | `config.json`    | pill position, size, opacity (saved on drag)          |
 | `widget.pid`     | widget process PID (used by start/stop/status)        |
 | `island.log`     | append-only state transition history                  |
