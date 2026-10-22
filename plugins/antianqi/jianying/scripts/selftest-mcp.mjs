@@ -257,7 +257,7 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
   //    结构性断言 + 阴性断言永远跑；真 e2e 需要草稿库（env JYAI_DRAFT_LIB）+ 剪映在跑
   //    ⇒ 没有草稿库时【显式 SKIP 且不计入 PASS】（不做假绿）
   const FILM_LIB = process.env.JYAI_DRAFT_LIB || '';
-  const FILM_DRAFT = process.env.JYAI_FILM_DRAFT || (FILM_LIB ? path.join(FILM_LIB, 'JYAI明文测试') : '');
+  const FILM_DRAFT = process.env.JYAI_FILM_DRAFT || (FILM_LIB ? path.join(FILM_LIB, 'JYAI能力批测9a-纯视频探针') : '');
   const FILM_OUT = path.join(OUT, 'film');
   const mf = tools.find((t) => t.name === 'make_film');
   check('tools/list 暴露 make_film', !!mf, mf ? Object.keys(mf.inputSchema?.properties || {}).join(',') : '缺失');
@@ -301,16 +301,12 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
           (mfTxt.match(/整体响度[^\n]*/) || ['(无响度行)'])[0].trim());
       }
     }
-    // e2e ②：★ 无音轨草稿（音频素材文件不在磁盘上）⇒ 也必须出片（纯画面），【不能】判失败
-    //   这是 2026-10-22 自检抓到的真缺陷：草稿没音轨被误报成"出片失败"
-    const NOAUDIO_DRAFT = FILM_LIB ? path.join(FILM_LIB, 'JYAI功能矩阵') : '';
-    if (NOAUDIO_DRAFT && fs.existsSync(NOAUDIO_DRAFT)) {
-      const na = await call('tools/call', { name: 'make_film', arguments: { draft: NOAUDIO_DRAFT, outDir: path.join(OUT, 'film-noaudio'), fps: 12, denoise: 'auto' } });
-      const naTxt = textOf(na);
-      check('★★ make_film：草稿无可用音轨 ⇒ 仍出片（纯画面），不判失败',
-        na.result?.isError !== true && /验收通过/.test(naTxt),
-        naTxt.replace(/\s+/g, ' ').slice(-220));
-    }
+    // ★ e2e ②（无音轨）：现在 e2e 草稿本身就是【纯视频、无可用音轨】的
+    //   （草稿库清理后，带音频的测试稿已不存在 ⇒ 9a-纯视频探针 顶上）
+    //   ⇒ 断言：这种草稿也必须出片、且【不能】判失败（2026-10-22 抓到的真缺陷）
+    check('★★ make_film：草稿无可用音轨 ⇒ 仍出片（纯画面），不判失败',
+      mfOk && /验收通过/.test(mfTxt) && !/✘ 验收不通过/.test(mfTxt),
+      (mfTxt.match(/整体响度[^\n]*/) || ['(无响度行)'])[0].trim());
     // e2e ③：★★ 我们自己给曲线（grade.curves）⇒ ① 烘出的 cube 必须【不是恒等】
     //   （判据不依赖渲染确定性：只查 cube）② 少一条通道必须【报错】（不许静默恒等）
     const CURVE = [0, 0, 0.1, 0.0533, 0.2, 0.1067, 0.3, 0.16, 0.4067, 0.3933, 0.5133, 0.6267,
