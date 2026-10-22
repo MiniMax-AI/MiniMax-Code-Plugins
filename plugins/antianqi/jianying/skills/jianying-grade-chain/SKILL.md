@@ -25,7 +25,7 @@ metadata:
 | `colorCorrection` | 逐点 | ✅ | 色彩校正（adjustColor 的精简变体） |
 | `hsl` | 逐点 | ✅ | 分色调整（8 默认色 + 用户取色） |
 | `logWheel` | 逐点 | ✅ | 对数轮（阴影/中间调/高光/偏移 四段） |
-| `primaryWheel` | 逐点 | ✅ | 三原色轮 |
+| `primaryWheel` | 逐点 | ✅ | 三原色轮 ★ **链 API 形态未接入**（参数语义未定义）⇒ 写进来直接报错 |
 | `curves` | 逐点 | ✅ | 曲线（red/green/blue/luma 4 条 1D） |
 | `hsl_curves` | 逐点 | ✅ | HSL 耦合曲线（6 条） |
 | `sharpen` | **邻域** | ❌ | 锐化（渲染期算子） |
@@ -86,4 +86,6 @@ metadata:
 | **把曲线 / HSL / 色轮写回剪映预览** | 草稿侧字段名尚未确证，**且官方预览渲染器本身也不认这些**（实测：它只认强度型调色）⇒ 这条路对曲线类是关的 | 本地出片（`jianying-cut` / `make_film --grade`）；★ 曲线参数由我们自己的接口给，**不需要用户在剪映里存草稿** |
 | **给 `sharpen` / `vignetting` / `particle` 配 LUT 烘焙** | 这三个是**渲染期**节点（邻域 / uv 依赖）⇒ LUT 表达不了 | 链内渲染期算（已在链里） |
 | **把 `fade` / `lightSensation` 当独立节点** | 它们是 **`adjustColor` 的子参数**，不是顶层 spec 键 | 写 `spec.adjustColor.fade` / `spec.adjustColor.lightSensation` |
+| **用 `primaryWheel`** | 链 API 形态的**参数语义未定义** ⇒ 过去静默烘成恒等 LUT | 现在直接报错（用 `adjustColor` / `logWheel` 近似） |
+| **用 `hsl` 的用户取色键（`01#ad8a86_H`）** | 链 API 形态未接入（官方要按取色器分配色相范围） | 现在直接报错 ⇒ 改用官方默认色 |
 | **照抄官方 shader 的定点编码** | 官方 `enCode` 会截断（\|v\|>1 时截断）⇒ 拉普拉斯差分超 [−1,1] 会丢精度 | 链内用 float64 复刻，别在中间丢 |

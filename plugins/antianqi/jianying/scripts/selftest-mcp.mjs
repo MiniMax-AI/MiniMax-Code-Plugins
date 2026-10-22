@@ -367,6 +367,42 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
       rnRun.result?.isError === true && /grade_apply|渲染期/.test(textOf(rnRun)),
       textOf(rnRun).replace(/\s+/g, ' ').slice(-200));
 
+    // ── ★★ 2026-10-22 审计：参数名拼错 ⇒ 过去【静默烘成恒等 LUT】─────
+    //   实测：make_film --grade '{"adjustColor":{"brightnessX":0.1}}' 产出的 cube
+    //   与【空 spec】的 cube 逐字节相同（md5 3abf7454…）⇒ 调色根本没发生，但出片"成功"、验收"通过"。
+    //   根因：make-film.schema.json 里 grade 的每个节点只写了 {type:object}（弱校验），
+    //   而烘焙器也不认识拼错的键 ⇒ 两层都不拦。
+    const typoRun = await call('tools/call', {
+      name: 'make_film',
+      arguments: { draft: FILM_DRAFT, outDir: path.join(OUT, 'film-grade-typo'), fps: 6, denoise: 'off',
+        grade: { adjustColor: { brightnessX: 0.1 } } },
+    });
+    check('★★ grade 参数名拼错 ⇒ 明确报错（不许静默烘成恒等 LUT）',
+      typoRun.result?.isError === true && /未知键|不合法/.test(textOf(typoRun)),
+      textOf(typoRun).replace(/\s+/g, ' ').slice(-200));
+    // ★ 越界数值同样必须被拒（强度语义是 −1..1，界面 0..100 要换算）
+    const rangeRun = await call('tools/call', {
+      name: 'make_film',
+      arguments: { draft: FILM_DRAFT, outDir: path.join(OUT, 'film-grade-range'), fps: 6, denoise: 'off',
+        grade: { adjustColor: { brightness: 5 } } },
+    });
+    check('★★ grade 数值越界 ⇒ 明确报错（强度语义是 −1..1）',
+      rangeRun.result?.isError === true && /最大|不合法/.test(textOf(rangeRun)),
+      textOf(rangeRun).replace(/\s+/g, ' ').slice(-200));
+    // ★★★ 绕过 schema 直接调烘焙器 ⇒ 同样必须报错（防线在【实现层】，不只靠 schema）
+    const bakeDirect = await shBin(PYTHON, ['-c', [
+      'import importlib.util, sys',
+      'spec = importlib.util.spec_from_file_location("b", sys.argv[1])',
+      'm = importlib.util.module_from_spec(spec)',
+      'spec.loader.exec_module(m)',
+      'm.bake({"adjustColor": {"brightnessX": 0.1}})',
+      'print("NO_ERROR_BAKED")',
+    ].join('\n'), path.join(JYAI, 'tools', 'jyai-gl-bake.py')]);
+    const bdTxt = `${bakeDirect.stdout || ''}\n${bakeDirect.stderr || ''}`;
+    check('★★★ 绕过 schema 直接调烘焙器：拼错参数名 ⇒ 同样报错（防线在实现层）',
+      !/NO_ERROR_BAKED/.test(bdTxt) && /不认识的参数/.test(bdTxt),
+      bdTxt.replace(/\s+/g, ' ').slice(-200));
+
     // ── ★★ MCP 层全动词冒烟（2026-10-22 审计补：此前 5 个动词【从未走过 MCP 层】）
     //   draft_read / draft_patch / draft_commit / render_frames / audio_mix
     const SMOKE = path.join(OUT, 'mcp-smoke');

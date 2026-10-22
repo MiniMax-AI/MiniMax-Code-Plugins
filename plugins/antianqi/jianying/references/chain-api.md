@@ -17,7 +17,7 @@
 | `colorCorrection` | 逐点 | ✅ | 色彩校正（adjustColor 的精简变体） |
 | `hsl` | 逐点 | ✅ | 分色调整（8 默认色 + 用户取色） |
 | `logWheel` | 逐点 | ✅ | 对数轮（阴影/中间调/高光/偏移 四段） |
-| `primaryWheel` | 逐点 | ✅ | 三原色轮 |
+| `primaryWheel` | 逐点 | ✅ | 三原色轮 ★ **链 API 形态未接入**（`red/green/blue/cyan/magenta/yellow` 各自的参数语义从未定义）⇒ 写进来**直接报错** |
 | `curves` | 逐点 | ✅ | 曲线（red/green/blue/luma 4 条 1D） |
 | `hsl_curves` | 逐点 | ✅ | HSL 耦合曲线（6 条） |
 | `sharpen` | **邻域** | ❌ | 锐化（渲染期算子） |
@@ -37,6 +37,8 @@
 ⇒ ★ **两条链都不许"静默失效"**：
 - 3D LUT 路径：缺曲线通道 / 含渲染期算子 / 含未实现节点 ⇒ **抛异常**，不烘恒等
 - 逐点直算路径：带**逐节点生效探针**（单节点 vs 零，必须非零），并输出 "★ 无效果（参数形态可能不对）"
+- **节点内的参数名**：拼错 ⇒ 过去被静默忽略、烘出**恒等 LUT**（出片"成功"但调色没发生）
+  ⇒ 现在**两层都堵**：schema 用 `grade_apply` 的 spec 约束（跨动词复用），烘焙器自己也拒未知参数名
 
 ### `adjustColor`（含两个"子参数"，不是独立节点）
 
@@ -60,6 +62,9 @@
 键 = 颜色名，值 = `{hue, saturation, lightness}`（界面值 ±100）：
 `HSLRed` / `HSLGreen` / `HSLBlue` / `HSLYellow` / `HSLCyan` / `HSLMagenta`，
 以及**用户取色**（形如 `01#ad8a86_H` 的键，schema 里用 `patternProperties` 放行）。
+
+> ★ **用户取色键尚未接入链 API 形态**（官方要按取色器给它分配色相范围，见 `HSL_LEFT/RIGHT_KEY_PTS` 那套）
+> ⇒ 过去会被**静默丢弃**（该颜色完全不生效，看起来像"没反应"）⇒ 现在**直接报错**，请改用官方默认色。
 
 ### `logWheel`（对数轮，四段）
 
@@ -122,6 +127,8 @@
 ## 已知不覆盖
 
 - `fade` / `lightSensation` 只在 `adjustColor` 内有效，单独提出来无效（会被 schema 拒）
+- `primaryWheel`（三原色轮）**尚未接入链 API 形态** —— 参数语义未定义，过去会静默烘成恒等 LUT ⇒ 现在直接报错
+- `hsl` 的**用户取色键**（`01#ad8a86_H`）**尚未接入链 API 形态** ⇒ 现在直接报错（请用官方默认色）
 - `clear`（清晰度，8 级金字塔）**尚未接入链**（官方默认 intensity=0 本身是空转）
 - `colorMigration`（色彩迁移）官方算法在闭源 `Amaz.Algorithm` ⇒ 只能自算替代
 - 曲线 / HSL / 色轮**写回剪映**的草稿字段名尚未确证 ⇒ 目前只能**我们本地出片**，不能写进剪映预览

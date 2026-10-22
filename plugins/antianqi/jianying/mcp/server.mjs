@@ -120,6 +120,25 @@ function validate(args, schema) {
   return out;
 }
 
+/* ------------------------------------------------------------ 跨动词参数复用校验
+   ★ make_film 的 `grade` 与 grade_apply 的 `spec` 是【同一套链 API 语义】，
+     但 make-film.schema.json 里 grade 的每个节点只写了 {type:object}（弱校验）
+     ⇒ 拼错的参数名会被【静默忽略】：烘出恒等 LUT（实测：cube 与空 spec 逐字节相同）
+        ⇒ 出片"成功"、验收"通过"，但调色根本没发生。
+   ⇒ 这里用 grade_apply 的 spec schema 再校验一次（单一真源，零重复声明），
+     两个入口的校验强度从此天然一致。 */
+function validateCrossVerb(name, args) {
+  if (name !== 'make_film' || !args || !args.grade) return;
+  const t = TOOLLIST.find((x) => x.name === 'grade_apply');
+  const specSchema = t?.inputSchema?.properties?.spec;
+  if (!specSchema) return;
+  ERR.length = 0;
+  val(args.grade, specSchema, 'args.grade');
+  if (ERR.length) {
+    throw new Error(`入参不合法（grade 与 grade_apply 的 spec 是同一套契约）：\n  - ${ERR.join('\n  - ')}`);
+  }
+}
+
 /* ------------------------------------------------------------ 插件状态目录 */
 /* mcode 注入 ${PLUGIN_DATA}（每个实例独立）；没有则用临时目录。
    ★ 动词之间靠它共享状态：draft_open 记 session → draft_patch 存改后草稿快照 → draft_commit 取快照落盘。 */
@@ -828,6 +847,7 @@ function handle(message) {
     let args = {};
     try {
       args = validate(message.params?.arguments || {}, t.inputSchema);
+      validateCrossVerb(name, args);
     } catch (e) {
       return { result: fail(String(e.message)) };
     }
