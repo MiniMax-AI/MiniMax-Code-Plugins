@@ -825,6 +825,16 @@ if (-not $Once) {
 
 try {
   while ($true) {
+   # --- per-tick guard -------------------------------------------------------
+   # This loop had no catch: any terminating error (malformed status.json, a
+   # WMI/CIM hiccup, a locked file, a bad cast in the todo parser) escaped the
+   # loop, fired the finally block, logged "detector stopped" and exited the
+   # process. The widget kept running, so the pill just froze on the last
+   # status.json with no visible cause -- status.json silently stopped
+   # changing while widget.log kept logging TOPMOST re-raises. Log the real
+   # message and retry on the next tick instead of dying.
+   # Indentation is intentionally flat here so the diff stays reviewable.
+   try {
     $now = Get-Date
     $inferred = $null
     $latestFile = $null
@@ -951,6 +961,16 @@ try {
 
     if ($Once) { break }
     Start-Sleep -Milliseconds 1000
+   } catch {
+    # Log the exception type too: "loop error" alone would not tell us whether
+    # this is a JSON parse, a WMI failure or an IO lock. Truncate so a runaway
+    # error cannot flood island.log every tick.
+    $msg = $_.Exception.GetType().Name + ': ' + $_.Exception.Message
+    if ($msg.Length -gt 300) { $msg = $msg.Substring(0, 300) + '...' }
+    Log-Line ('loop error (retrying): ' + $msg)
+    if ($Once) { break }
+    Start-Sleep -Milliseconds 1000
+   }
   }
 } finally {
   if (-not $Once -and (Test-Path $pidFile)) {
