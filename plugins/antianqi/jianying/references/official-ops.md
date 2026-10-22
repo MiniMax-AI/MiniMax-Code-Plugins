@@ -158,26 +158,42 @@
 | **人声分离** | `audio.setVocalSeparation` | ★ 参数未探对（6 种形态都无变化） | 结构已知：`{type:"vocal_separation", choice, removed_sounds, time_range, final_algorithm:"", production_path:""}` | ⚠️ **写引用可以，产出拿不到** —— `production_path`/`final_algorithm` 为空 ⇒ 分离是**剪映的 AI 任务**（与 ASR 同类，在 agent runtime / 云端） |
 
 
-**★ 但我们的出片链目前【不应用】这些效果**（2026-10-21 查清，重要）：
+**★ 我们的出片链原先【不应用】这些效果（2026-10-21 查清）⇒ 现已【落地并实测】（2026-10-22）**：
 
 我们的出片是 **官方渲染器出画面（`player` 域）+ 我们自己用 ffmpeg 混音**：
 
 | 环节 | 实际做了什么 | 剪映的音频效果 |
 |---|---|---|
 | 画面 | 官方渲染器出 PNG 序列（`player` 域）⇒ **带**剪映的调色/特效/转场 | — |
-| 音频 | `jyai-audio-mix.mjs` 自己混：`volume` / `fade_in.ms` / `fade_out.ms` / `speed`（官方 `media change-audio-speed` 保音高）/ 响度归一（ffmpeg loudnorm） | ❌ **不读** `realtime_denoises` / `vocal_beautifys` |
+| 音频 | 混音器自己混：`volume` / `fade_in.ms` / `fade_out.ms` / `speed`（官方 `media change-audio-speed` 保音高）/ 响度归一（ffmpeg loudnorm） | ✅ **降噪已接上**：混音器读草稿 `materials.realtime_denoises` → 按段 `extra_material_refs` 匹配 → ffmpeg `afftdn`（**近似**，见下）· 美化仍是近似且**默认关闭** |
 | 官方渲染产物 | 实测**只有 video 流、没有音轨** | — |
 | 官方 `media` 域 | 只有文件级工具（trim / extract-frames / trim-audio / change-audio-speed / resize / compress），**没有带效果的渲染或导出** | — |
 | 官方导出器 | 被 `-100007` / `-100015` 挡死 | — |
 
-⇒ 所以准确说法是：**降噪/美化/变声能写进草稿**（剪映 GUI 打开看得到、它自己导出时会用），
-**但我们自己出的片不带这些效果**。
+⇒ **降噪的完整链路已端到端实测**（草稿 op 写意图 → 混音器读草稿 → ffmpeg → 成片）：
 
-⇒ 要让降噪真的出现在成片里，两条路：
+- 成片**文件内 SNR**：无降噪 5.646 dB → 有降噪 **12.128 dB**（**+6.482 dB**）
+- **负向注入组 = 0.0000 dB**（同草稿但混音器强制不应用 ⇒ 差异必须归零，实测精确归零 ⇒ 差异确实来自降噪本身）
+- 判据用"文件内 SNR"（语音带 RMS − 噪声带 RMS），抗 loudnorm 归一化干扰
+
+⇒ **但这是近似，不是剪映的 DSP**（剪映用 SAMI `denoise_v2`）。边界（务必一起说）：
+- 降噪后语音带能量比干净人声低 **3.1 ~ 5.4 dB**（"带能量"口径，**不等于"听感有损"**）
+- 只在**稳态粉噪**一种噪声上标定过；音乐/风声/键盘声等非稳态噪声未覆盖
+- 空洞检测（语音带 >30 ms 静音段）= 0 ⇒ 没有整段吞音；**更细粒度的音乐噪声未排除**
+- 混音器不随本插件分发（它是 JYAI 侧的出片工具）
+
+⇒ 剩下两条路：
 1. **让剪映渲染音频** —— 需要它的导出/渲染管线，我们拿不到（导出器被官方挡死）。
-2. **自己在混音链里加**（ffmpeg `afftdn` 降噪 / EQ / 压缩 / 去齿音近似"人声美化"；
+2. **自己在混音链里加**（ffmpeg `afftdn` 降噪 ✅已做 / EQ + 压缩 近似"人声美化" ⚠️默认关闭；
    人声分离要模型 Demucs/Spleeter）⇒ **这才是"我们自己实现"那条路的真正价值：
    不是复刻剪映的 DSP，而是补上剪映本地链的缺口。**
+
+**★ 复现降噪标定时会踩的坑**：
+- **ffmpeg `afftdn` 的 `nf` 参数合法范围是 `[-80, -20]`**（上游文档写的 `[-99, -5]` 在新版被拒：`Value -15.000000 for parameter 'nf' out of range [-80 - -20]`）⇒ `-20` 是能用的最强档
+- 实测在这版 ffmpeg 上 `nf` 越不负 = 降噪越多**且**语音带损失越小（nr=21 时：nf=-26 ⇒ 降噪 10.3 dB/语音保全 −5.4 dB；nf=-20 ⇒ 19.7 dB/−3.1 dB）
+- 力度映射：`nr = 6 + 15*rate`；档位：`nf = -26 / -23 / -20`（mode 1/2/3）——**注意这是我们自己的强度阶梯，与剪映的 `denoise_mode` 语义无关**（剪映的档位含义在 app bundle 里不可检索）
+- **`anlmdn` 在语音上完全无效**（实测降噪 0.001 dB）；`arndn` 需要模型，不可用
+- **别用纯噪声当测试信号**：`afftdn` 是语音降噪器，喂纯粉噪只能测出 0.63 dB 的假象
 
 **键名风格**：`isDenoise`/`is_denoise`、`denoiseMode`/`denoise_mode` 两种都认；`enable` 只认 `enable`（`isEnable` 无效）。
 

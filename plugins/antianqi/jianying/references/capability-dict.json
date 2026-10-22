@@ -230,7 +230,7 @@
         "★ text.add 的 needInsertTargetTrack=true 时段会插进 trackIndex 指向的那条轨（哪怕是 video 轨）⇒ 往同一条 text 轨塞多条字幕要用 needInsertTargetTrack=false + 该 text 轨下标",
         "★ 视频/音频 AI 效果类 op 的契约（实测 2026-10-21）：video.denoiseOn{segmentId,isDenoise?,denoiseMode?,denoiseRate?} ⇒ materials.realtime_denoises（引擎 sami_name=denoise_v2，本地实时 DSP）；audio.setVocalBeautify{segmentId,enable:true} ⇒ materials.vocal_beautifys（本地实时）；audio.setVocalSeparation{…} ⇒ materials.vocal_separations（production_path 为空 ⇒ 产出要剪映的 AI 任务，我们只写引用）",
         "★ 视频/音频 AI 效果类 op 的契约（实测 2026-10-21）：video.denoiseOn{segmentId,isDenoise?,denoiseMode?,denoiseRate?} ⇒ materials.realtime_denoises（引擎 sami_name=denoise_v2，本地实时 DSP）；audio.setVocalBeautify{segmentId,enable:true} ⇒ materials.vocal_beautifys（本地实时）；audio.setVocalSeparation{…} ⇒ materials.vocal_separations（production_path 为空 ⇒ 产出要剪映的 AI 任务，我们只写引用）",
-        "★ 剪映的音频效果只被【剪映自己的渲染/导出】应用；我们的出片链（官方渲染出画面 + ffmpeg 自己混音）不读 realtime_denoises / vocal_beautifys ⇒ 写进草稿 ≠ 出现在我们的成片里"
+        "★ 我们的出片链【已接上降噪】（2026-10-22 端到端实测）：混音器读草稿 materials.realtime_denoises → 按段 extra_material_refs 匹配 → ffmpeg afftdn（★ 近似，不是剪映的 SAMI denoise_v2）⇒ 成片文件内 SNR 5.646→12.128 dB（+6.482 dB），负向注入组 0.0000 dB；vocal_beautifys 仍是近似且默认关闭，vocal_separations 拿不到产出 ⇒ 对美化/分离而言『写进草稿 ≠ 出现在我们的成片里』依然成立"
       ]
     },
     "draft_commit": {
@@ -335,6 +335,6 @@
     "draft_commit": "真草稿 sha 前后逐字节相同",
     "draft_patch": "回读草稿后目标字段真的变了（不接受\"官方说 accepted\"）",
     "text.add": "字幕时码与期望吻合（容差 ±1 帧，官方按 fps 帧对齐）",
-    "audio_ai": "回读草稿：materials.realtime_denoises / vocal_beautifys / audio_effects 里有新条目且段上 extra_material_refs 变了（★ 这只证明\"写进草稿了\"，不证明\"出现在我们的成片里\"——后者要另外在混音链里实现）"
+    "audio_ai": "回读草稿：materials.realtime_denoises / vocal_beautifys / audio_effects 里有新条目且段上 extra_material_refs 变了（★ 这只证明\"写进草稿了\"，不证明\"出现在我们的成片里\"——降噪已另外在混音链里实现并实测：成片文件内 SNR +6.482 dB、负向注入 0.0000 dB；美化/分离仍未实现）"
   }
 }
