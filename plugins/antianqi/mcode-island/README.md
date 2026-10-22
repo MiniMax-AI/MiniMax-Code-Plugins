@@ -278,9 +278,33 @@ and never reads or writes anything outside `%APPDATA%\mcode-island\`.
 
 ## Network access
 
-The widget is fully offline. The only network caller in this plugin is
-`mcode-status-detect.ps1` (Mode B detector), and it only makes a request
-when ALL of the following are true:
+**The 5h usage readout does not need the network.** The MiniMax Code
+runtime already resolves the token plan with the user's own login (the
+mcode launcher's "MCode status" panel renders it, footer: "Local view -
+credentials hidden"). When the runtime writes that result to a local file,
+the plugin reads it and never touches a credential.
+
+```
+%APPDATA%\mcode-island\usage.json
+```
+
+```json
+{
+  "fetchedAtMs": 1792800000000,
+  "fiveHour": { "remainingPercent": 58, "resetAtMs": 1792800000000, "unlimited": false },
+  "weekly":    { "remainingPercent": 40, "resetAtMs": 1792900000000, "unlimited": false },
+  "video":     { "remainingCount": 12, "totalCount": 40 }
+}
+```
+
+`scripts/lib/Plan-Usage.ps1` reads it. `MCODE_PLAN_USAGE_FILE` overrides
+the path; `~/.minimax/usage.json` is read as a fallback. `fiveHour` is
+required, `weekly` and `video` are optional.
+
+When that file is absent, the plugin falls back to asking the API itself,
+and the only network caller in this plugin is `mcode-status-detect.ps1`
+(Mode B detector). It only makes a request when ALL of the following are
+true:
 
 1. A token is configured — either `set-token.ps1 <token>`, which encrypts
    it into `config.json:planApiTokenEnc`, or an environment variable

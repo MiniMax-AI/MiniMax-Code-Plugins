@@ -167,6 +167,8 @@ if (Test-Path "$PSScriptRoot/scripts/lib/Get-5hUsage.ps1") {
 # than from a hook event, so it needs the same redaction the hook path
 # applies. Wiring only the hook left the raw command in island.log.
 . "$PSScriptRoot/scripts/lib/Protect-Text.ps1"
+# 运行时落盘的套餐用量(零凭据:只读本地文件,自己不联网)
+. "$PSScriptRoot/scripts/lib/Plan-Usage.ps1"
 # Cross-process status.json protocol (round-21 review #1).
 #
 # The detector and the agent hooks are two independent processes that
@@ -932,7 +934,10 @@ try {
     # 4) 5h 用量：每 60s 刷一次，刷新后若数字变化就写 status.json（让 widget 看到）
     $prevPct  = $script:plan5hRemainingPct
     $prevMs   = $script:plan5hResetMs
-    if ($script:plan5hAvailable) { Refresh-5hUsage }
+    # 优先读运行时落盘的用量(零凭据:只读本地文件,自己不联网)
+    Get-PlanUsage | Out-Null
+    # 读不到才回落到自实现查询(需要凭据;上架包不发布那个模块,这一行会被剥掉)
+    if (-not $script:plan5hFromRuntime -and $script:plan5hAvailable) { Refresh-5hUsage }
     $curPct   = $script:plan5hRemainingPct
     $curMs    = $script:plan5hResetMs
     $usageChanged = ($prevPct -ne $curPct) -or ($prevMs -ne $curMs) -and ($null -ne $curPct)
