@@ -22,6 +22,10 @@ const PLUGIN_ROOT = dirname(HERE);
 
 let pass = 0;
 let fail = 0;
+// A skip that is not counted is a skip that reads as a pass. The suite
+// skips a Windows-only section on other platforms, and that fact has
+// to be visible in the summary rather than only in the scrollback.
+let skipped = 0;
 const failures = [];
 
 function ok(name) { pass++; console.log(`[ok  ] ${name}`); }
@@ -992,6 +996,18 @@ try {
 // event on stdin, and read back what it wrote to status.json. A
 // function-body test would not prove the hook wires the classification
 // to the state it pushes.
+//
+// WINDOWS ONLY. The hook calls `chcp 65001` and `Add-Type` with Win32
+// P/Invoke signatures, so it cannot run anywhere else -- there is no
+// console to change the code page of and no user32.dll to bind. The
+// repository's `node --test` picks this file up on the ubuntu job as
+// well as the Windows one, so this section is gated rather than
+// failing there. It is skipped LOUDLY: a skip that is invisible reads
+// as a pass.
+//
+// The rest of the suite runs on both platforms. The status.json
+// protocol is plain PowerShell, and the suite supplies an isolated
+// %APPDATA% so the store resolves to a scratch directory.
 
 /**
  * Run a hook script as a real child process with a JSON event on stdin.
@@ -1014,7 +1030,10 @@ function runHookWithStdin(hookPath, eventJson, extraEnv) {
     });
 }
 
-if (PS_BIN) {
+if (process.platform !== 'win32') {
+    console.log('[skip] section 9: the PostToolUse hook needs Windows (chcp, Add-Type with Win32 P/Invoke)');
+    skipped++;
+} else if (PS_BIN) {
     const hookPath = join(PLUGIN_ROOT, 'io.minimax.mcode', 'hooks', 'scripts', 'post-tool-use.ps1');
     const postTool = readFileSync(hookPath, 'utf8');
 
@@ -1080,7 +1099,7 @@ if (PS_BIN) {
 try { rmSync(TMP, { recursive: true, force: true }); } catch { /* best effort */ }
 
 console.log('-'.repeat(60));
-console.log(`${pass} pass, ${fail} fail`);
+console.log(`${pass} pass, ${fail} fail${skipped ? `, ${skipped} skipped (platform)` : ''}`);
 if (fail > 0) {
     console.log('\nfailures:');
     for (const f of failures) console.log(`  - ${f}`);
