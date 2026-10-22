@@ -98,10 +98,15 @@ public class WinAPI {
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
   [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc lpEnumFunc, IntPtr lParam);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT pt);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassNameW(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
   [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint dwFlags);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool GetMonitorInfoW(IntPtr hMonitor, ref MONITORINFO lpmi);
   [StructLayout(LayoutKind.Sequential)]
   public struct RECT { public int Left, Top, Right, Bottom; }
+  [StructLayout(LayoutKind.Sequential)]
+  public struct POINT { public int X, Y; }
   [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
   public struct MONITORINFO {
     public int cbSize;
@@ -118,6 +123,27 @@ public class WinAPI {
   public const uint SWP_NOSIZE = 0x0001;
   public const uint SWP_NOMOVE = 0x0002;
   public const uint MONITOR_DEFAULTTONEAREST = 0x00000002;
+  public const uint SWP_SHOWWINDOW = 0x0040;
+
+  // True when a window owned by another process sits on top of the pill's centre
+  // pixel. Menus / tooltips / tray balloons are exempt so we never fight
+  // transient UI that is supposed to be above the pill anyway.
+  public static bool IsPillCovered(IntPtr self) {
+    RECT r;
+    if (!GetWindowRect(self, out r)) return false;
+    var pt = new POINT { X = (r.Left + r.Right) / 2, Y = (r.Top + r.Bottom) / 2 };
+    IntPtr hit = WindowFromPoint(pt);
+    if (hit == IntPtr.Zero || hit == self) return false;
+    var sb = new System.Text.StringBuilder(256);
+    GetClassNameW(hit, sb, 256);
+    string cls = sb.ToString();
+    if (cls.StartsWith("#32768")) return false;           // menu / tooltip
+    if (cls == "NotifyIconTooltipWindow") return false;  // tray balloon
+    if (cls == "Windows.UI.Core.CoreWindow") return false;
+    uint p;
+    GetWindowThreadProcessId(hit, out p);
+    return p != (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+  }
 
   // 取窗口所在 monitor 的 work area。如果失败返回 (-1,-1)-(-1,-1) 表示无效。
   public static RECT GetWorkAreaForWindow(IntPtr hWnd) {
@@ -790,6 +816,50 @@ function Flash-Click {
   $sb.Begin($window)
 }
 
+# Keep the pill above everything else.
+#
+# Why this exists: the only thing that ever made the pill topmost is
+# Topmost="True" in the XAML, evaluated once at window creation. Every other
+# SetWindowPos in this file targets the *caller* window, not the pill. So once
+# anything else lands above the pill -- a maximized terminal being activated, a
+# fullscreen app, another always-on-top tool -- the pill stays buried forever.
+# WS_EX_TOPMOST is a persistent style but only orders the pill against the
+# topmost band; whichever topmost window was raised last wins, and a plain
+# maximized window that got re-shown can end up painting over it too.
+# Observed 2026-09-28: pill fully invisible behind Windows Terminal while
+# IsWindowVisible=1, IsIconic=0, DWMWA_CLOAKED=0, widget still polling.
+#
+# Fix: hit-test the pill centre on a throttle and re-assert HWND_TOPMOST when
+# something else owns that pixel. SWP_NOACTIVATE means this never steals focus
+# from the user's terminal. Skipped entirely while the pill is hidden so it
+# cannot undo a user-initiated hide. "mcode-island show" passes -Force because
+# $window.Show() is a no-op on an already-visible WPF window and therefore
+# never restored z-order on its own.
+$script:lastTopmostCheck = [DateTime]::MinValue
+function Assert-Topmost {
+  param([switch]$Force)
+  if (-not $Force -and
+      [DateTime]::UtcNow - $script:lastTopmostCheck -lt [TimeSpan]::FromMilliseconds(1500)) {
+    return
+  }
+  $script:lastTopmostCheck = [DateTime]::UtcNow
+  try {
+    $helper = New-Object System.Windows.Interop.WindowInteropHelper($window)
+    $h = $helper.Handle
+    if (-not $h -or -not [WinAPI]::IsWindow($h)) { return }
+    # Never resurrect a pill the user hid.
+    if (-not [WinAPI]::IsWindowVisible($h)) { return }
+    if ($Force -or [WinAPI]::IsPillCovered($h)) {
+      $flags = [WinAPI]::SWP_NOACTIVATE -bor [WinAPI]::SWP_NOMOVE -bor `
+               [WinAPI]::SWP_NOSIZE -bor [WinAPI]::SWP_SHOWWINDOW
+      [WinAPI]::SetWindowPos($h, [WinAPI]::HWND_TOPMOST, 0, 0, 0, 0, $flags) | Out-Null
+      Dbg "TOPMOST: re-raised (forced=$([bool]$Force))"
+    }
+  } catch {
+    Dbg "TOPMOST FAIL: $($_.Exception.Message)"
+  }
+}
+
 # 窗口定位
 $screen = [System.Windows.SystemParameters]::WorkArea
 if ($cfg.x -lt 0) {
@@ -916,6 +986,8 @@ $showSignalFile = Join-Path $configDir 'show.signal'
 $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(400)
 $timer.Add_Tick({
+  # 0) 自愈：被别的窗口压住就重新置顶（内部 1.5s 节流）
+  Assert-Topmost
   # 1) 处理 "show" 信号（"mcode-island show" 创建这个文件）
   if (Test-Path $showSignalFile) {
     try { Remove-Item $showSignalFile -Force -ErrorAction SilentlyContinue } catch {}
@@ -923,6 +995,7 @@ $timer.Add_Tick({
       $window.Show()
       $window.WindowState = [System.Windows.WindowState]::Normal
       $window.Activate()
+      Assert-Topmost -Force
       Dbg 'SHOWN via signal file'
     })
   }
