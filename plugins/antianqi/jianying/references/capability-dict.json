@@ -1,6 +1,6 @@
 {
   "schema": "jianying.capability-dict.v1",
-  "note": "46 项能力 → 动词 → 参数/op → 判据。机器可读版；人读版见 references/chain-api.md。★ 官方 op 全集 18 域 199 个、桥全部放行（实测），全量见 references/official-ops.md",
+  "note": "9 个动词 / 3 类元素 / 3 类节点 / 6 类判据 的机器可读版；人读版见 references/chain-api.md。★ 官方 op 全集 18 域 199 个、桥全部放行（实测），全量见 references/official-ops.md",
   "verbs": {
     "draft_open": {
       "kind": "official-semantics",
@@ -13,12 +13,11 @@
     "draft_read": {
       "kind": "official-semantics",
       "ops": [
-        "full",
-        "timeline",
-        "segments",
-        "materials"
+        "full"
       ],
-      "guards": []
+      "guards": [
+        "★ scope 分段读取【未实现】（后端不支持）⇒ schema 已移除该参数，传了会被拒而不是静默忽略"
+      ]
     },
     "draft_patch": {
       "kind": "official-semantics（全集 18 域 / 199 个 op，桥实测全部放行）",

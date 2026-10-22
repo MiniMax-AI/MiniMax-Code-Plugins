@@ -15,7 +15,7 @@
 2. **自己复刻**（本插件）—— 把官方的调色数学逐 feature 复刻出来（13/13 逐像素对齐，误差 ≤ 1 LSB），
    自己出片。
 
-⇒ 本插件走第 2 条：**MCP 提供 8 个原子动词**（草稿读写 / 调色 / 混音 / 渲染 / 验收），
+⇒ 本插件走第 2 条：**MCP 提供 9 个原子动词**（草稿读写 / 调色 / 出片 / 混音 / 渲染 / 验收），
 **Skill 提供 6 条"有自己中间思路 + 门禁"的剪辑链路**。
 
 ## 试一下
@@ -36,6 +36,17 @@
 5. 画面验收用 `verify_diff` 对改前/改后帧做**全帧最大**像素差；注意官方渲染器本身有噪声底，
    像素结论要带 `noiseDir` 校准（见 `skills/jianying-verify/SKILL.md`）。
 
+**示例提示词二（给剪映草稿出成片）**：
+
+```text
+把这个剪映草稿出成片，输出到 out\cut\demo.mp4
+```
+
+⇒ 走 `make_film`：**官方渲染器出画面** → 可选我们的 3D LUT（曲线类调色）→ **我们的混音链**
+（音量 / 淡入淡出 / 降噪 / 响度归一）→ ffmpeg 编码 → **带断言的验收**
+（双流齐备 + 时长对齐官方时间线 ±1 帧 + 响度偏离 ≤1 LUFS ⇒ 否则判失败）。
+★ **曲线参数由我们自己的接口给**（`grade` 字段），不需要你在剪映里先存一份带曲线的草稿。
+
 也可以直接调动词：
 
 ```bash
@@ -43,7 +54,7 @@ node scripts/run-verb.mjs --list
 node scripts/run-verb.mjs grade_apply '{"src":"<源视频.mp4>","outDir":"<输出目录>","spec":{"adjustColor":{"brightness":0.1,"temperature":0.15}}}'
 ```
 
-## 8 个动词
+## 9 个动词
 
 | 动词 | 作用 |
 |---|---|
@@ -55,6 +66,7 @@ node scripts/run-verb.mjs grade_apply '{"src":"<源视频.mp4>","outDir":"<输�
 | `grade_apply` | 调色（10 节点链）+ 出 10bit 成片（**自带逐节点生效探针**） |
 | `audio_mix` | 混音 + 响度归一到 −14 LUFS |
 | `verify_diff` | 多维度验收：画面可见性 / 画质 / 响度 / 时间线 / 草稿完整性 |
+| **`make_film`** | **给剪映草稿一条命令出成片**（官方渲染器出画面 + 我们的调色/混音/编码 + 带断言的验收） |
 
 ## 6 个 Skill
 
@@ -85,7 +97,7 @@ plugin-root/
 ├── mcp.json                    # MCP 声明（0.3.x）
 ├── .claude-plugin/plugin.json  # v0.4.0+ manifest（skills[] + mcpServers）
 ├── mcp/
-│   ├── server.mjs              # 8 动词 stdio MCP server（0 npm 依赖）
+│   ├── server.mjs              # 9 动词 stdio MCP server（0 npm 依赖）
 │   └── tools/<verb>.schema.json# 每个动词的入参 schema（硬校验）
 ├── skills/
 │   ├── jianying-cut/SKILL.md
@@ -96,13 +108,14 @@ plugin-root/
 │   └── jianying-grade-chain/SKILL.md
 ├── references/                 # 共享知识（按需引用）
 │   ├── chain-api.md            #   链 API 语义（10 节点 × 参数）
+│   ├── official-ops.md         #   官方 op 全集（18 域 199 个，逐个打桥的结果）
 │   ├── verify-discipline.md    #   判据纪律（视野 / 噪声底 / 注入自检）
 │   ├── pitfalls.md             #   踩坑清单
-│   └── capability-dict.json    #   46 项能力 → 动词 → 参数/op → 判据（机器可读）
+│   └── capability-dict.json    #   能力字典（9 动词 / 3 类元素 / 3 类节点 / 6 类判据，机器可读）
 └── scripts/
     ├── run-verb.mjs            # 插件自带的 MCP 客户端（让 skill 调动词）
     ├── check-env.mjs           # 环境自检
-    ├── selftest-mcp.mjs        # MCP 动词自检（17 项，含 6 个阴性用例）
+    ├── selftest-mcp.mjs        # MCP 动词自检（40 项断言，含 8 条 MCP 层冒烟）
     ├── selftest-draft-edit.mjs # 改草稿链路端到端自检（16 项）
     ├── selftest-talk-cut.mjs   # 剪口播自检（10 项）
     ├── talk-cut-plan.mjs       # 口播保留区间规划器
@@ -118,7 +131,7 @@ plugin-root/
 **需要在本机存在的可执行文件**：
 
 - `ffmpeg` 6.0 —— 在 `PATH`，或用 `FFMPEG` 环境变量指定
-- Python 3.14 —— 在 `PATH`，或用 `JYAI_PYTHON` 环境变量指定
+- Python 3.9+ —— 在 `PATH`，或用 `JYAI_PYTHON` 环境变量指定
 - `node` ≥ 22（运行 MCP server 与脚本）
 - 剪映 11.6 —— **草稿相关动词需要它在运行**（走本机命名管道 `\\.\pipe\videoeditor-runtime-*`）；
   调色与出片本身不依赖 GUI
@@ -147,6 +160,10 @@ plugin-root/
   `keyframe.*` / `video.setBasicColor` 实测全部放行，草稿里也有 `materials.hsl` / `hsl_curves` / `color_curves` /
   `log_color_wheels` / `primary_color_wheels` 这些现成的 material 集合），但**参数契约还没探完** ⇒ 目前只能**本地出片**，
   不能写进剪映预览。
+- ★ **官方预览渲染器的能力边界**（实测，噪声底精确为 0 的同源对照）：它**自带强度型调色**
+  （`materials.effects[]` 里的 `type:"brightness"` + 段引用）与几何/合成；
+  **不认**曲线 / HSL / 色轮 / effect 链 / `adjust` placeholder / forceRender 链。
+  ⇒ 所以"把曲线写回剪映预览"这条路对**曲线类**是关的 —— 曲线类只能走我们自己的出片链（`make_film --grade`）。
 - 官方导出器不可达（见上）。
 - `clear`（清晰度，8 级金字塔）尚未接入链。
 - 口播剪辑**不做 ASR**：官方 ASR 在 agent runtime 里、拿不到；我们用**用户提供的 SRT**，
@@ -155,4 +172,4 @@ plugin-root/
 ## 证据
 
 调色链逐 feature 对齐、10bit 出片链路、官方参考帧获取、**官方行为操作全集（199 个）+ 字幕落稿**、判据纪律 ——
-见 JYAI 仓库的 `docs/OFFICIAL-REALTIME-PATH.md`（§54–§76）与 `docs/最终架构与开发路线.md`。
+见 JYAI 仓库的 `docs/OFFICIAL-REALTIME-PATH.md`（§54–§100；其中 §100 是插件整体审计报告）与 `docs/最终架构与开发路线.md`。

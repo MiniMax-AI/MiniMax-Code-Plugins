@@ -1,7 +1,7 @@
 # 链 API 人读版（`grade.apply` 的 `spec` 怎么填）
 
 > **机器可读版**：`mcp/tools/grade-apply.schema.json`（硬校验，非法键直接拒绝）
-> **能力字典**：`references/capability-dict.json`（46 项能力 → 动词 → 参数/op → 判据）
+> **能力字典**：`references/capability-dict.json`（9 动词 / 3 类元素 / 3 类节点 / 6 类判据）
 > ★ 本文的语义部分（每个参数**什么意思**）只有这里有；schema 管"能不能填"。
 
 ## 强度语义

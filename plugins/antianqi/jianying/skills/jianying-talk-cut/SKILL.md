@@ -4,7 +4,7 @@ description: 'Use when: 剪口播 / 去掉口播里的废话、停顿、重复�
 displayNames:
   zh-Hans: 剪映·剪口播（去水词/停顿/重复 · 带人工确认）
 license: Apache-2.0
-compatibility: Requires Windows + 剪映 11.6 在运行 + ffmpeg 6.0 + Python 3.14 + JYAI_HOME 指向 JYAI 仓库. ★ 需要用户提供转写稿(SRT) —— 官方 ASR(AnalyzeAsset) 在 agent runtime，管道里拿不到（§74.4）。
+compatibility: Requires Windows + 剪映 11.6 在运行 + ffmpeg 6.0 + Python 3.9+ + JYAI_HOME 指向 JYAI 仓库. ★ 需要用户提供转写稿(SRT) —— 官方 ASR(AnalyzeAsset) 在 agent runtime，管道里拿不到（§74.4）。
 metadata:
   author: antianqi
   version: "0.1.0"

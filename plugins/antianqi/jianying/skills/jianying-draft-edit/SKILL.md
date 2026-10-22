@@ -4,7 +4,7 @@ description: 'Use when: 改剪映草稿 / 给草稿加素材或音轨 / 移动�
 displayNames:
   zh-Hans: 剪映·改草稿（官方行为操作全集 · 加字幕 · 落盘不动真草稿）
 license: Apache-2.0
-compatibility: Requires Windows + 剪映 11.6 在运行（edit 域走官方命名管道）+ JYAI_HOME 指向 JYAI 仓库（落盘/渲染/验收在 JYAI_HOME/tools）+ ffmpeg + Python 3.14.
+compatibility: Requires Windows + 剪映 11.6 在运行（edit 域走官方命名管道）+ JYAI_HOME 指向 JYAI 仓库（落盘/渲染/验收在 JYAI_HOME/tools）+ ffmpeg + Python 3.9+.
 metadata:
   author: antianqi
   version: "0.1.0"
@@ -62,7 +62,7 @@ node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_read '{"path":"<草稿目录>/dra
 node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_patch '{"op":"video.setVolume","sessionId":"ve-session-N","params":{"segmentId":"<uuid>","volume":0.25}}'
 
 # ④ 落盘（会做路径重定位 + 真草稿 sha 断言）
-node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_commit '{"realDraft":"<草稿库>\\<草稿名>"}'
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_commit '{"sessionId":"ve-session-N","realDraft":"<草稿库>\\<草稿名>"}'  # ★ sessionId 必填（draft_open 给的）
 
 # ⑤ 验收（★ 主判据 = 语义：落盘草稿的逐段字段差）
 #    改前/改后各读一次明文草稿，再让 verify_diff 比"哪个字段变了"
@@ -125,7 +125,7 @@ node ${PLUGIN_ROOT}/scripts/run-verb.mjs verify_diff '{
 | 不做 | 为什么 | 替代 |
 |---|---|---|
 | 改**真**草稿 | 官方零文件监听 ⇒ 写盘不保证 GUI 立刻可见；且我们的红线是"官方库只读" | 人工在 GUI 里导入/替换 |
-| 写**结构化调色**（曲线/HSL/色轮） | 草稿侧字段名尚未确证 | `jianying-cut` 走我们自己的链出片 |
+| 写**结构化调色**（曲线/HSL/色轮） | 草稿侧字段名尚未确证，**且官方预览渲染器本身也不认这些** | `jianying-cut` / `make_film --grade` 走我们自己的链出片 |
 | 官方导出器出片 | 官方 CLI 被 −100007 / −100015 挡死，**不绕** | `jianying-cut` |
 | 画布节点操作（连线/卡片） | 画布是**生成线**，与"编辑已有草稿时间线"不同轴 | 不做 |
 | 从零生成（AIGC 资产/单集成片） | processor 走沙箱 agent，取不到 | 不做 |

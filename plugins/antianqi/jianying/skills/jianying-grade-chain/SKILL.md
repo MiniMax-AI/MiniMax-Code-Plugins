@@ -74,7 +74,7 @@ metadata:
 ## 机器可读版
 
 - 入参 schema（硬校验，**未知键直接拒绝**）：`mcp/tools/grade-apply.schema.json`
-- 能力字典（46 项能力 → 动词 → 参数/op → 判据）：`references/capability-dict.json`
+- 能力字典（9 动词 / 3 类元素 / 3 类节点 / 6 类判据）：`references/capability-dict.json`
 - 人读版（每个参数的语义、官方对应、已知不覆盖）：`references/chain-api.md`
 
 ## ★ 边界（不做什么 / 为什么 / 替代）
@@ -83,7 +83,7 @@ metadata:
 |---|---|---|
 | **`clear`（清晰度，8 级金字塔）接入链** | 尚未接入；且**官方默认 intensity=0 本身就是空转**（§67 实测 value=0 逐像素相同） | 只能出参考帧做对照，不能当可用节点 |
 | **`colorMigration`（色彩迁移）** | 官方算法在闭源 `Amaz.Algorithm` ⇒ 拿不到 | 自算替代（与 `clear` 同类：只能自己实现） |
-| **把曲线 / HSL / 色轮写回剪映预览** | 草稿侧字段名尚未确证（**intensity 型已不需要用户**） | 本地出片（`jianying-cut`）；写回要等用户 GUI 存一份带曲线的草稿 |
+| **把曲线 / HSL / 色轮写回剪映预览** | 草稿侧字段名尚未确证，**且官方预览渲染器本身也不认这些**（实测：它只认强度型调色）⇒ 这条路对曲线类是关的 | 本地出片（`jianying-cut` / `make_film --grade`）；★ 曲线参数由我们自己的接口给，**不需要用户在剪映里存草稿** |
 | **给 `sharpen` / `vignetting` / `particle` 配 LUT 烘焙** | 这三个是**渲染期**节点（邻域 / uv 依赖）⇒ LUT 表达不了 | 链内渲染期算（已在链里） |
 | **把 `fade` / `lightSensation` 当独立节点** | 它们是 **`adjustColor` 的子参数**，不是顶层 spec 键 | 写 `spec.adjustColor.fade` / `spec.adjustColor.lightSensation` |
 | **照抄官方 shader 的定点编码** | 官方 `enCode` 会截断（\|v\|>1 时截断）⇒ 拉普拉斯差分超 [−1,1] 会丢精度 | 链内用 float64 复刻，别在中间丢 |

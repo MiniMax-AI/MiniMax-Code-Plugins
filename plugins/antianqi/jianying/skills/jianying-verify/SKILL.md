@@ -8,7 +8,7 @@ compatibility: Requires nothing beyond the plugin's own verbs (verify_diff / gra
 metadata:
   author: antianqi
   version: "0.1.0"
-  basis: "三层判定纪律 + 七条硬规矩 + negative-injection 自检（docs/OFFICIAL-REALTIME-PATH.md §68.3/§75.2/§76.7）"
+  basis: "三层判定纪律 + 十条硬规矩 + negative-injection 自检（docs/OFFICIAL-REALTIME-PATH.md §68.3/§75.2/§76.7）"
 ---
 
 # 剪映验收判据（jianying-verify · 库 skill）
@@ -60,7 +60,7 @@ metadata:
 | **渲染层** | 有没有效果 | 无头取帧 + **A/B 逐像素差分** + **阳性对照** | `render_frames` + `verify_diff` |
 | **机械层** | 危险动作被拦了吗 | 护栏断言 | `draft_commit`（真草稿 sha）/ `grade_apply`（逐节点探针） |
 
-## 七条硬规矩
+## 十条硬规矩
 
 1. **判据视野覆盖被测对象** —— 用 max-over-frames，不用单帧。
 2. **阴性对照必须存在** —— 每个"能跑"都要配一个"不能跑"的对照。
@@ -70,6 +70,9 @@ metadata:
 5. **参数形态不对 ⇒ 静默失效** —— 链的每个节点要么真生效、要么被整段跳过，**不会报错** ⇒ 必须逐节点探针。
 6. **注入坏了必须失败** —— 每个判据都要能被"故意弄坏"而失败。
 7. **★ 像素判据必须先量噪声底** —— 没有噪声底就不要报"改动可见"；**基线必须本次自产**。
+8. **★ 阳性对照必须与被测项【同路径、同对象】** —— 只换一个已知会生效的东西；它也"没变" ⇒ 是装置坏了，换装置再测。
+9. **★ 判据的期望值必须先在【已知正确的实现】上成立** —— 判据与被测对象语义矛盾 = 自己判自己失败。
+10. **★ 噪声底必须【逐帧】量** —— 官方渲染非确定：平均 MAD 可能 0.00000 也可能 0.01602（差 1 帧、maxAbs=255）⇒ 平均值会随机翻车。
 
 ## 数字底线（我们复刻链的验收口径）
 

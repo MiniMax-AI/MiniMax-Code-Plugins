@@ -4,7 +4,7 @@ description: 'Use when: 审片 / 检查这版剪得对不对 / 返修验收 / �
 displayNames:
   zh-Hans: 剪映·审片验收（多维度 · 带数字和证据边界）
 license: Apache-2.0
-compatibility: Requires Windows + 剪映 11.6 在运行（官方渲染器）+ ffmpeg 6.0 + Python 3.14 + JYAI_HOME 指向 JYAI 仓库.
+compatibility: Requires Windows + 剪映 11.6 在运行（官方渲染器）+ ffmpeg 6.0 + Python 3.9+ + JYAI_HOME 指向 JYAI 仓库.
 metadata:
   author: antianqi
   version: "0.1.0"
@@ -51,10 +51,14 @@ metadata:
 ```bash
 node ${PLUGIN_ROOT}/scripts/run-verb.mjs verify_diff '{
   "beforeDir": "<before>/frames", "afterDir": "<after>/frames",
-  "noiseDir":  "<before>/frames-again",          # ← 同态再渲染一次
+  "noiseDir":  "<before>/frames-again",
   "checks": ["visibility","picture","timeline"]
 }'
 ```
+
+> ★ `noiseDir` = **同一状态再渲染一次**的帧目录。
+> ★ **JSON 里不能写行内注释**（`#` 或 `//` 都不行）⇒ 照抄会被 `run-verb.mjs` 拒成"参数不是合法 JSON"。
+> 要注释就写在 JSON 外面（像这样）。
 
 - 给了 `noiseDir` ⇒ 判据线 = `max(threshold, noiseMad × 1.5)`，输出里有 `noiseMad` / `madOverNoise`；
 - **没给** ⇒ 输出里 `calibrated:false` + note ⇒ **这时"可见"只能当参考，不能当结论**。
