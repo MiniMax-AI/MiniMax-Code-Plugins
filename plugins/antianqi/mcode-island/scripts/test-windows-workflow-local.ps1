@@ -95,6 +95,11 @@ Write-Host ""
 
 Write-Host "--- Step 2: token set / show / clear roundtrip ---"
 $set = Join-Path $repoRoot 'plugins/antianqi/mcode-island/set-token.ps1'
+# The DPAPI helpers live in their own lib; step 2 needs them to check that
+# what set-token.ps1 wrote really decrypts back to the token.
+$protectTokenLib = Join-Path $repoRoot 'plugins/antianqi/mcode-island/scripts/lib/Protect-Token.ps1'
+if (-not (Test-Path $protectTokenLib)) { throw "Step 2: $protectTokenLib not found" }
+. $protectTokenLib
 
 # 2a
 $r1 = (& $set $FAKE | Out-String).Trim()
@@ -102,11 +107,14 @@ if ($r1 -notmatch '^已写入') { throw "Step 2a: expected '已写入' header, g
 $cfgFile = Join-Path $apphome.FullName 'mcode-island\config.json'
 if (-not (Test-Path $cfgFile)) { throw "Step 2a: $cfgFile not written" }
 $cfg = Get-Content $cfgFile -Raw | ConvertFrom-Json
-if ($cfg.planApiToken -ne $FAKE) { throw "Step 2a: config.json planApiToken mismatch" }
+if ($cfg.PSObject.Properties['planApiToken']) { throw "Step 2a: config.json still has a plaintext planApiToken" }
+if (-not $cfg.PSObject.Properties['planApiTokenEnc']) { throw "Step 2a: config.json has no planApiTokenEnc" }
+$decrypted = Unprotect-Token ([string]$cfg.planApiTokenEnc)
+if ($decrypted -ne $FAKE) { throw "Step 2a: planApiTokenEnc does not decrypt back to the token" }
 
 # 2b
 $r2 = (& $set -Show | Out-String).Trim()
-if ($r2 -notmatch 'config\.json planApiToken') { throw "Step 2b: expected 'config.json planApiToken', got: $r2" }
+if ($r2 -notmatch 'config\.json planApiTokenEnc') { throw "Step 2b: expected 'config.json planApiTokenEnc', got: $r2" }
 $expectedMask = $FAKE.Substring(0, [Math]::Min(10, $FAKE.Length)) + '\.\.\.'
 if ($r2 -notmatch $expectedMask) { throw "Step 2b: expected masked prefix matching '$expectedMask', got: $r2" }
 
@@ -114,13 +122,14 @@ if ($r2 -notmatch $expectedMask) { throw "Step 2b: expected masked prefix matchi
 $r3 = (& $set -Clear | Out-String).Trim()
 if ($r3 -notmatch '已从 config\.json 删除') { throw "Step 2c: expected '已从 config.json 删除', got: $r3" }
 $cfgAfter = Get-Content $cfgFile -Raw | ConvertFrom-Json
+if ($cfgAfter.PSObject.Properties['planApiTokenEnc']) { throw "Step 2c: planApiTokenEnc still present in config.json" }
 if ($cfgAfter.PSObject.Properties['planApiToken']) { throw "Step 2c: planApiToken still present in config.json" }
 
 # 2d
 $r4 = (& $set -Show | Out-String).Trim()
-if ($r4 -ne 'token 未配置') { throw "Step 2d: expected 'token 未配置', got: $r4" }
+if ($r4 -notmatch 'token 未配置') { throw "Step 2d: expected 'token 未配置', got: $r4" }
 
-Write-Host "OK Step 2: set / show / clear roundtrip (4 / 4 checks)"
+Write-Host "OK Step 2: set / show / clear roundtrip (4 / 4 checks, token stored DPAPI-encrypted)"
 Write-Host ""
 
 # --- Step 3: hook stdin / stdout ---------------------------------------
@@ -221,54 +230,62 @@ function Run-MockOneRequest {
   return ,$j
 }
 
-# Test a: env-var token wins; implementation must read the
-# new field names; return value must be the documented
-# { remainingPct, resetMs } shape.
+# Test a: env-var token, but only because the user opted in
+# (config.json -> allowEnvToken = true). The token resolution goes
+# through Resolve-PlanToken, i.e. the same path the detector uses.
 $jobA = Run-MockOneRequest $freePort $fixtureBody
 try {
   $env:MINIMAX_OAUTH_TOKEN = $FAKE
-  $script:plan5hToken = $FAKE
+  $cfgDirA = Join-Path $apphome 'mcode-island'
+  if (-not (Test-Path $cfgDirA)) { New-Item -ItemType Directory -Path $cfgDirA -Force | Out-Null }
+  @{ allowEnvToken = $true } | ConvertTo-Json |
+    Out-File -FilePath (Join-Path $cfgDirA 'config.json') -Encoding utf8
+  $cfgFile = Join-Path $cfgDirA 'config.json'
+  $script:plan5hToken = $null
+  Resolve-PlanToken
+  if ($script:plan5hToken -ne $FAKE) {
+    throw "Step 4a: Resolve-PlanToken did not pick up the env token (got '$($script:plan5hToken)')"
+  }
   $data = Get-5hUsage
   $mock = $jobA | Wait-Job -Timeout 15 | Receive-Job
   if (-not $mock) { throw "Step 4a: listener did not complete (state $($jobA.State))" }
   if ($mock.auth -ne "Bearer $FAKE") { throw "Step 4a: auth='$($mock.auth)' (want 'Bearer $FAKE')" }
   if ($mock.path -ne '/v1/coding_plan/remains') { throw "Step 4a: path='$($mock.path)'" }
-  if ($null -eq $data) { throw "Step 4a: Get-5hUsage returned `$null` (fixture field-name contract broken)" }
+  if ($null -eq $data) { throw "Step 4a: Get-5hUsage returned `$null (fixture field-name contract broken)" }
   if ($data.remainingPct -ne 84) { throw "Step 4a: remainingPct=$($data.remainingPct) (want 84)" }
   if ($data.resetMs      -ne 16200000) { throw "Step 4a: resetMs=$($data.resetMs) (want 16200000)" }
-  Write-Host "OK Step 4a (env token, matching fixture): remainingPct=$($data.remainingPct)% resetMs=$($data.resetMs)"
+  Write-Host "OK Step 4a (env token after explicit opt-in, matching fixture): remainingPct=$($data.remainingPct)% resetMs=$($data.resetMs)"
 } finally {
   if ($jobA.State -ne 'Completed') { Stop-Job $jobA }
   Remove-Job $jobA -Force
 }
 
-# Test b: env vars cleared, only config.json. Re-derive
-# $script:plan5hToken from config.json the same way the
-# detector's top-level init does. Get-5hUsage must pick
-# up the config.json token.
+# Test b: config-only token, stored DPAPI-encrypted. The config
+# carries planApiTokenEnc (never a plaintext token) and the
+# resolution goes through Resolve-PlanToken again.
 $cfgDir = Join-Path $apphome 'mcode-island'
 if (-not (Test-Path $cfgDir)) { New-Item -ItemType Directory -Path $cfgDir -Force | Out-Null }
 $cfgToken = 'ci-cfg-only-token-abcdef0123456789'
-@{ planApiToken = $cfgToken } | ConvertTo-Json |
+$cfgEnc = Protect-Token $cfgToken
+if (-not $cfgEnc) { throw "Step 4b: Protect-Token returned null (DPAPI unavailable)" }
+@{ planApiTokenEnc = $cfgEnc } | ConvertTo-Json |
   Out-File -FilePath (Join-Path $cfgDir 'config.json') -Encoding utf8
 Remove-Item 'env:MINIMAX_OAUTH_TOKEN' -ErrorAction SilentlyContinue
 Remove-Item 'env:MINIMAX_API_KEY'      -ErrorAction SilentlyContinue
-$cfg = Get-Content (Join-Path $cfgDir 'config.json') -Raw | ConvertFrom-Json
+$cfgFile = Join-Path $cfgDir 'config.json'
 $script:plan5hToken = $null
-if ($cfg.PSObject.Properties['planApiToken'] -and $cfg.planApiToken) {
-  $script:plan5hToken = [string]$cfg.planApiToken
-}
-if ($script:plan5hToken -ne $cfgToken) { throw "Step 4b: config.json planApiToken not picked up (got '$($script:plan5hToken)')" }
+Resolve-PlanToken
+if ($script:plan5hToken -ne $cfgToken) { throw "Step 4b: config.json planApiTokenEnc not picked up (got '$($script:plan5hToken)')" }
 $jobB = Run-MockOneRequest $freePort $fixtureBody
 try {
   $data = Get-5hUsage
   $mock = $jobB | Wait-Job -Timeout 15 | Receive-Job
   if (-not $mock) { throw "Step 4b: listener did not complete (state $($jobB.State))" }
   if ($mock.auth -ne "Bearer $cfgToken") { throw "Step 4b: auth='$($mock.auth)' (want 'Bearer $cfgToken')" }
-  if ($null -eq $data) { throw "Step 4b: Get-5hUsage returned `$null` (config-only path broken)" }
+  if ($null -eq $data) { throw "Step 4b: Get-5hUsage returned `$null (config-only path broken)" }
   if ($data.remainingPct -ne 84)      { throw "Step 4b: remainingPct=$($data.remainingPct) (want 84)" }
   if ($data.resetMs      -ne 16200000) { throw "Step 4b: resetMs=$($data.resetMs) (want 16200000)" }
-  Write-Host "OK Step 4b (config-only token): remainingPct=$($data.remainingPct)% resetMs=$($data.resetMs)"
+  Write-Host "OK Step 4b (config-only token, DPAPI encrypted): remainingPct=$($data.remainingPct)% resetMs=$($data.resetMs)"
 } finally {
   if ($jobB.State -ne 'Completed') { Stop-Job $jobB }
   Remove-Job $jobB -Force
@@ -282,6 +299,10 @@ try {
 # would not be contacted.
 Remove-Item (Join-Path $cfgDir 'config.json') -Force -ErrorAction SilentlyContinue
 $script:plan5hToken = $null
+Resolve-PlanToken
+if ($null -ne $script:plan5hToken) {
+  throw "Step 4c: Resolve-PlanToken found a token with no config and no env (got: $script:plan5hToken)"
+}
 $data = Get-5hUsage
 if ($null -ne $data) {
   throw "Step 4c: Get-5hUsage should return null (no token), got: $data"

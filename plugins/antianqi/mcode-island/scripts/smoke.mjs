@@ -663,7 +663,7 @@ const main = async () => {
         // This matters most on `full access` setups, where the permission hook
         // never fires and ask_user is the only thing that ever blocks.
         for (const [label, re] of [
-            ['$S_WAITING is defined', /\$S_WAITING\s*=\s*_s\s*\(/],
+            ['$S_WAITING is defined', /\$S_WAITING\s*=\s*(?:_s\s*\(|')/],
             ['Test-IsAskUser helper', /function Test-IsAskUser\s*\(/],
             ['Get-AskQuestionCount helper', /function Get-AskQuestionCount\s*\(/],
         ]) {
@@ -932,13 +932,15 @@ const main = async () => {
     //
     // Contract: every MiniMax API host the plugin NAMES in user-facing
     // docs (and in the lib's own trailing comment) must be the SAME host
-    // the code actually calls. The code obfuscates the URL into a byte
-    // array as a PS 5.1 parser-quirk defense, so this check DECODES that
-    // array and compares the docs against the decoded truth. It never
-    // hard-codes the endpoint itself, which matters twice over: the check
-    // cannot drift into becoming a second copy of the disclosure it is
-    // meant to police, and it cannot be satisfied by "fixing" the docs to
-    // match whatever the code happens to be tomorrow.
+    // the code actually calls. The endpoint used to be obfuscated into a
+    // byte array, so this check DECODED that array and compared the docs
+    // against the decoded truth. The endpoint is plain text now -- the
+    // byte array only hid it from a grep, which is indistinguishable from
+    // hiding it from review -- so the check reads the literal. It still
+    // never hard-codes the endpoint itself, which matters twice over: the
+    // check cannot drift into becoming a second copy of the disclosure it
+    // is meant to police, and it cannot be satisfied by "fixing" the docs
+    // to match whatever the code happens to be tomorrow.
     //
     // This exists because the two drifted. The README carried an absolute
     // security claim ("no request is ever sent to a host other than
@@ -948,21 +950,23 @@ const main = async () => {
     const planLibAbs = join(PLUGIN_ROOT, 'scripts', 'lib', 'Get-5hUsage.ps1');
     if (await exists(planLibAbs)) {
         const libText = await readFile(planLibAbs, 'utf8');
-        const hostArr = libText.match(/\$PLAN_API_HOST\s*=\s*_s\s*\(([^)]*)\)/);
+        const hostArr = libText.match(/\$PLAN_API_HOST\s*=\s*(?:_s\s*\(([^)]*)\)|'([^']*)')/);
         if (!hostArr) {
-            out('FAIL', 'Get-5hUsage.ps1: cannot locate the $PLAN_API_HOST byte array (disclosure check has no truth to compare against)');
+            out('FAIL', 'Get-5hUsage.ps1: cannot locate the $PLAN_API_HOST constant (disclosure check has no truth to compare against)');
         } else {
-            const bytes = hostArr[1]
-                .split(',')
-                .map(s => parseInt(s.trim().replace(/^0x/i, ''), 16))
-                .filter(n => Number.isFinite(n));
-            const realUrl = Buffer.from(bytes).toString('utf8');
+            const realUrl = hostArr[2] !== undefined
+                ? hostArr[2]
+                : Buffer.from(
+                    hostArr[1].split(',')
+                        .map(s => parseInt(s.trim().replace(/^0x/i, ''), 16))
+                        .filter(n => Number.isFinite(n))
+                  ).toString('utf8');
             let realHost = null;
             try { realHost = new URL(realUrl).hostname; } catch { realHost = null; }
             if (!realHost) {
-                out('FAIL', `Get-5hUsage.ps1: decoded $PLAN_API_HOST is not a parseable URL ("${realUrl}")`);
+                out('FAIL', `Get-5hUsage.ps1: $PLAN_API_HOST is not a parseable URL ("${realUrl}")`);
             } else {
-                out('PASS', `Get-5hUsage.ps1: $PLAN_API_HOST decodes to a valid host (${realHost})`);
+                out('PASS', `Get-5hUsage.ps1: $PLAN_API_HOST names a valid host (${realHost})`);
 
                 const namedHosts = [
                     'README.md',
@@ -993,6 +997,89 @@ const main = async () => {
         }
     } else {
         out('FAIL', 'scripts/lib/Get-5hUsage.ps1 missing (disclosure check skipped)');
+    }
+
+    // 7b. Credential handling (round-21).
+    //
+    // The Marketplace review rejected an earlier submission for three
+    // credential problems in the 5h usage path, and none of them is
+    // visible in a file listing:
+    //
+    //   * the request carried "MM-API-Source: Minimax-MCP", i.e. it
+    //     claimed to be a MiniMax-owned surface;
+    //   * the endpoint and several strings were assembled from byte
+    //     arrays, which reads as hiding them from review;
+    //   * the token was stored in the clear in config.json, and an
+    //     ambient environment token was picked up and sent without the
+    //     user ever opting in.
+    //
+    // These checks make the contract explicit, so a later edit cannot
+    // quietly reintroduce any of them.
+    {
+        const ps1Files = [];
+        const walkPs1 = async (dir) => {
+            let entries = [];
+            try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+            for (const e of entries) {
+                const abs = join(dir, e.name);
+                if (e.isDirectory()) await walkPs1(abs);
+                else if (e.name.endsWith('.ps1')) ps1Files.push(abs);
+            }
+        };
+        await walkPs1(PLUGIN_ROOT);
+
+        let sourceHeader = 0, byteArray = 0;
+        for (const abs of ps1Files) {
+            const rel = abs.slice(PLUGIN_ROOT.length + 1).replace(/\\/g, '/');
+            const text = await readFile(abs, 'utf8');
+            // A header assignment, not a mention in a comment: the
+            // comment that explains why the header was removed is
+            // allowed to name it.
+            if (/['"]MM-API-Source['"]\s*=/.test(text)) {
+                out('FAIL', `${rel}: sends an MM-API-Source header (it claims to be a MiniMax-owned surface)`);
+                sourceHeader++;
+            }
+            if (/_s\s*\(\s*0x/i.test(text)) {
+                out('FAIL', `${rel}: builds a string from a byte array (hides it from review)`);
+                byteArray++;
+            }
+        }
+        if (sourceHeader === 0) out('PASS', 'no .ps1 sends an MM-API-Source header');
+        if (byteArray === 0) out('PASS', 'no .ps1 builds a string from a byte array');
+
+        const setTokenAbs = join(PLUGIN_ROOT, 'set-token.ps1');
+        if (await exists(setTokenAbs)) {
+            const st = await readFile(setTokenAbs, 'utf8');
+            if (st.includes('planApiTokenEnc')) {
+                out('PASS', 'set-token.ps1 stores the token as planApiTokenEnc (encrypted)');
+            } else {
+                out('FAIL', 'set-token.ps1 does not store the token as planApiTokenEnc');
+            }
+            // A plaintext write is the thing the review rejected. The
+            // legacy field may still be READ (to migrate it), but it must
+            // never be written back.
+            const writesPlain = /NotePropertyValue\s+'?\$?Token'|planApiToken'\s*\]\s*=\s*\$Token/.test(st);
+            const addsPlain = /Add-Member[^\n]*NotePropertyName\s+'planApiToken'/.test(st);
+            if (writesPlain || addsPlain) {
+                out('FAIL', 'set-token.ps1 writes a plaintext planApiToken');
+            } else {
+                out('PASS', 'set-token.ps1 never writes a plaintext planApiToken');
+            }
+        }
+
+        if (await exists(planLibAbs)) {
+            const lib = await readFile(planLibAbs, 'utf8');
+            if (lib.includes('allowEnvToken')) {
+                out('PASS', 'Get-5hUsage.ps1 gates the environment token behind allowEnvToken');
+            } else {
+                out('FAIL', 'Get-5hUsage.ps1 reads the environment token without an allowEnvToken gate');
+            }
+            if (lib.includes('planApiTokenEnc')) {
+                out('PASS', 'Get-5hUsage.ps1 reads the token from planApiTokenEnc');
+            } else {
+                out('FAIL', 'Get-5hUsage.ps1 does not read the encrypted planApiTokenEnc');
+            }
+        }
     }
 
     // 8. Log growth is bounded (round-20).

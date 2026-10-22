@@ -265,16 +265,16 @@ binary, no symlink, no `node_modules`.
 | `status.json`    | `%APPDATA%\mcode-island\`             | rewritten every transition | widget polling                       |
 | `caller.json`    | `%APPDATA%\mcode-island\`             | rewritten every transition | click-to-focus target HWND           |
 | `config.json`    | `%APPDATA%\mcode-island\`             | rewritten on drag         | pill position, size, opacity         |
-| `config.json` -> `planApiToken` | `%APPDATA%\mcode-island\` | until `-Clear` or manual edit | 5h usage API token (opt-in; see "Accounts") |
+| `config.json` -> `planApiTokenEnc` | `%APPDATA%\mcode-island\` | until `-Clear` or manual edit | 5h usage API token, DPAPI-encrypted (opt-in; see "Accounts") |
 | `widget.pid`     | `%APPDATA%\mcode-island\`             | rewritten on start        | widget process PID                   |
 | `island.log`     | `%APPDATA%\mcode-island\`             | append-only, never pruned  | state transition history             |
 | `widget.log`     | `%APPDATA%\mcode-island\`             | append-only, never pruned  | widget internal debug                |
 | `show.signal`    | `%APPDATA%\mcode-island\`             | transient                 | "raise hidden window" signal        |
 | `HKCU\...\Run`   | Windows registry                      | until disabled            | logon auto-start                     |
 
-**Telemetry: none.** **No data is sent off-machine unless the optional
-`planApiToken` is configured (see "Network access" below).** The widget
-itself is offline and never reads or writes anything outside `%APPDATA%\mcode-island\`.
+**Telemetry: none.** **No data is sent off-machine unless a token is
+configured (see "Network access" below).** The widget itself is offline
+and never reads or writes anything outside `%APPDATA%\mcode-island\`.
 
 ## Network access
 
@@ -282,8 +282,12 @@ The widget is fully offline. The only network caller in this plugin is
 `mcode-status-detect.ps1` (Mode B detector), and it only makes a request
 when ALL of the following are true:
 
-1. A token is configured (env `MINIMAX_OAUTH_TOKEN` or `MINIMAX_API_KEY`,
-   or `set-token.ps1 <token>` which writes to `config.json:planApiToken`).
+1. A token is configured — either `set-token.ps1 <token>`, which encrypts
+   it into `config.json:planApiTokenEnc`, or an environment variable
+   (`MINIMAX_OAUTH_TOKEN` / `MINIMAX_API_KEY`) that the user has
+   explicitly opted in to with `set-token.ps1 -AllowEnvToken`. An ambient
+   environment variable is not consent to send it to an API, so the
+   environment is not read by default.
 2. The detector is running (`mcode-island detect-on`, the default).
 3. At least 60 seconds have elapsed since the last call (rate-limited).
 
@@ -309,15 +313,26 @@ the 5-hour usage readout in the pill.
 
 | token type        | how it enters the plugin                                | where it is stored                                | how it is removed                            |
 | ----------------- | -------------------------------------------------------- | -------------------------------------------------- | -------------------------------------------- |
-| `MINIMAX_OAUTH_TOKEN` (env) | set by the user in their shell or mcode config | process env (not on disk)                          | unset env / close shell                      |
-| `MINIMAX_API_KEY` (env)     | same as above                                          | process env                                       | same as above                                |
-| `config.json:planApiToken`   | `set-token.ps1 <token>`                                | `%APPDATA%\mcode-island\config.json` (plaintext)  | `set-token.ps1 -Clear` or edit the file      |
+| `MINIMAX_OAUTH_TOKEN` (env) | set by the user in their shell or mcode config | process env (not on disk), read only after `set-token.ps1 -AllowEnvToken` | unset env / close shell / `set-token.ps1 -NoEnvToken` |
+| `MINIMAX_API_KEY` (env)     | same as above                                          | process env, same opt-in                          | same as above                                |
+| `config.json:planApiTokenEnc` | `set-token.ps1 <token>`                               | `%APPDATA%\mcode-island\config.json`, DPAPI-encrypted (CurrentUser scope) | `set-token.ps1 -Clear` or edit the file      |
 
 The token is **never logged, never written to any other file, and never
 sent to a host other than `api.minimaxi.com`**. `set-token.ps1` only writes
 to `config.json`; it makes no network call. The detector only reads the
 token to attach as an `Authorization: Bearer ...` header on the single
 GET documented above.
+
+The token is stored encrypted with Windows DPAPI (CurrentUser scope):
+only the same Windows user on the same machine can decrypt it, so
+copying `config.json` elsewhere yields nothing usable. A `config.json`
+written by an older version, which kept the token in the clear under
+`planApiToken`, is migrated in place on the next detector start: the
+token is encrypted and the plaintext field is removed. No action is
+required from the user.
+
+The request carries the `Authorization` header and nothing else. It does
+not claim to be a MiniMax-owned surface.
 
 ## CLI reference
 

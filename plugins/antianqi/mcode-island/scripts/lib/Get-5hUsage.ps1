@@ -34,13 +34,15 @@
 # # Contract for callers
 #
 #   * `$script:plan5hToken` (script-scope string) must be set by
-#     the caller BEFORE calling `Get-5hUsage`. Three acceptable
-#     sources, in precedence order:
-#         1. $env:MINIMAX_OAUTH_TOKEN
-#         2. $env:MINIMAX_API_KEY
-#         3. (config.json).planApiToken at $cfgFile
-#     When unset, the function returns $null at line 67 without
-#     touching the network.
+#     the caller BEFORE calling `Get-5hUsage`. `Resolve-PlanToken`
+#     (below) does that for the detector. Two acceptable sources:
+#         1. config.json -> planApiTokenEnc, the DPAPI-encrypted blob
+#         2. $env:MINIMAX_OAUTH_TOKEN / $env:MINIMAX_API_KEY, and only
+#            when the user has explicitly opted in with
+#            `set-token.ps1 -AllowEnvToken` (config.json ->
+#            allowEnvToken). An ambient environment variable is not
+#            consent to send it to an API.
+#     When unset, the function returns $null without touching the network.
 #
 #   * `$script:PLAN_API_HOST` and `$script:PLAN_API_PATH` are
 #     exposed for tests that want to redirect the request to a
@@ -53,16 +55,16 @@
 #     silently no-op because the only callable is `Get-5hUsage`
 #     and there is no entry point.
 
-# PS 5.1 parser quirk (same as mcode-status-detect.ps1):
-#   short ASCII string literals at the end of `-eq` / `= state=`
-#   lines get parsed as cmdlet arguments. The URL/host bytes are
-#   obfuscated through a private `_s` helper to keep the
-#   production endpoint out of a naive `grep`.
-function _s { param([byte[]]$b) [System.Text.Encoding]::UTF8.GetString($b) }
-
 # 5h usage API endpoint.
-$PLAN_API_HOST = _s (0x68,0x74,0x74,0x70,0x73,0x3A,0x2F,0x2F,0x61,0x70,0x69,0x2E,0x6D,0x69,0x6E,0x69,0x6D,0x61,0x78,0x69,0x2E,0x63,0x6F,0x6D)  # https://api.minimaxi.com
-$PLAN_API_PATH = _s (0x2F,0x76,0x31,0x2F,0x63,0x6F,0x64,0x69,0x6E,0x67,0x5F,0x70,0x6C,0x61,0x6E,0x2F,0x72,0x65,0x6D,0x61,0x69,0x6E,0x73)  # /v1/coding_plan/remains
+#
+# Plain text on purpose: the endpoint used to be assembled from a byte
+# array so that a naive `grep` for the host would not find it. That is
+# indistinguishable from hiding a string from review, and it made the
+# disclosure in README.md unverifiable. The endpoint is the user's own
+# MiniMax account endpoint and is named in the README, so it is written
+# out.
+$PLAN_API_HOST = 'https://api.minimaxi.com'
+$PLAN_API_PATH = '/v1/coding_plan/remains'
 
 # Get-5hUsage
 #   Reads $script:plan5hToken from the caller's scope. Returns
@@ -83,9 +85,14 @@ function Get-5hUsage {
       [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
     }
     $url = $PLAN_API_HOST + $PLAN_API_PATH
+    # Only the Authorization header. The endpoint identifies the
+    # credential, not the client: a probe without any header, with
+    # "MM-API-Source: Minimax-MCP" and with "MM-API-Source: mcode-island"
+    # all return the same 1004 "Please carry the API secret key in the
+    # 'Authorization' field", so the source header was never read. It
+    # only claimed to be a MiniMax-owned surface, which it is not.
     $headers = @{
       'Authorization' = "Bearer $($script:plan5hToken)"
-      'MM-API-Source' = _s (0x4D,0x69,0x6E,0x69,0x6D,0x61,0x78,0x2D,0x4D,0x43,0x50)  # Minimax-MCP
     }
     $resp = Invoke-RestMethod -Uri $url -Headers $headers -TimeoutSec 8 -Method Get -ErrorAction Stop
     if (-not $resp -or -not $resp.model_remains) { return $null }
@@ -115,10 +122,13 @@ $PLAN_API_TTL = [TimeSpan]::FromSeconds(60)
 
 # Resolve-PlanToken
 #
-#   按优先级解析 token，写进 $script:plan5hToken：
-#     1. $env:MINIMAX_OAUTH_TOKEN
-#     2. $env:MINIMAX_API_KEY
-#     3. %APPDATA%\mcode-island\config.json 里的 planApiToken
+#   解析 token，写进 $script:plan5hToken。优先级：
+#     1. config.json 的 planApiTokenEnc（DPAPI 加密，CurrentUser 作用域）
+#     2. 环境变量 MINIMAX_OAUTH_TOKEN / MINIMAX_API_KEY
+#        —— 只有用户在 config.json 里显式 allowEnvToken=true 时才读。
+#           环境里恰好有变量不等于同意把它发出去。
+#     3. 旧版本留下的明文 config.json:planApiToken
+#        —— 读到的同时就地迁移成加密形式，明文当场删除。
 #
 #   三种来源都没有时保持 $null —— Get-5hUsage 会直接返回 $null，一次
 #   网络请求都不发。
@@ -126,20 +136,46 @@ $PLAN_API_TTL = [TimeSpan]::FromSeconds(60)
 #   放在 lib 里而不是 detector 里，是为了让"要不要用 5h 用量"这件事
 #   完全由 lib 的存在与否决定：lib 不在（Marketplace 上架包就不带它），
 #   detector 既不读 token 也不联网。
+. "$PSScriptRoot/Protect-Token.ps1"
+
 function Resolve-PlanToken {
   $script:plan5hToken = $null
-  if ($env:MINIMAX_OAUTH_TOKEN) { $script:plan5hToken = $env:MINIMAX_OAUTH_TOKEN; return }
-  if ($env:MINIMAX_API_KEY) { $script:plan5hToken = $env:MINIMAX_API_KEY; return }
 
   $cfgPath = Get-Variable -Name 'cfgFile' -ValueOnly -ErrorAction SilentlyContinue
   if (-not $cfgPath) { $cfgPath = Join-Path $env:APPDATA 'mcode-island\config.json' }
-  if (-not (Test-Path $cfgPath)) { return }
-  try {
-    $cfg = [System.IO.File]::ReadAllText($cfgPath) | ConvertFrom-Json
-    if ($cfg.PSObject.Properties['planApiToken'] -and $cfg.planApiToken) {
-      $script:plan5hToken = [string]$cfg.planApiToken
+
+  $cfg = $null
+  if (Test-Path $cfgPath) {
+    try { $cfg = [System.IO.File]::ReadAllText($cfgPath) | ConvertFrom-Json } catch { $cfg = $null }
+  }
+
+  # 1) DPAPI 加密的 token
+  if ($cfg -and $cfg.PSObject.Properties['planApiTokenEnc'] -and $cfg.planApiTokenEnc) {
+    $plain = Unprotect-Token ([string]$cfg.planApiTokenEnc)
+    if ($plain) { $script:plan5hToken = $plain; return }
+  }
+
+  # 2) 环境变量：必须用户显式开过
+  if ($cfg -and $cfg.PSObject.Properties['allowEnvToken'] -and $cfg.allowEnvToken) {
+    if ($env:MINIMAX_OAUTH_TOKEN) { $script:plan5hToken = $env:MINIMAX_OAUTH_TOKEN; return }
+    if ($env:MINIMAX_API_KEY) { $script:plan5hToken = $env:MINIMAX_API_KEY; return }
+  }
+
+  # 3) 旧版明文 token：就地迁移成密文
+  if ($cfg -and $cfg.PSObject.Properties['planApiToken'] -and $cfg.planApiToken) {
+    $legacy = [string]$cfg.planApiToken
+    $script:plan5hToken = $legacy
+    $enc = Protect-Token $legacy
+    if ($enc) {
+      try {
+        $cfg.PSObject.Properties.Remove('planApiToken')
+        $cfg | Add-Member -NotePropertyName 'planApiTokenEnc' -NotePropertyValue $enc -Force
+        # 原子替换：先写新文件，再换名。直接 WriteAllText 的话，中途失败
+        # 会把 config.json 截断，用户的 token 就没了。
+        Write-AtomicText -Path $cfgPath -Content ($cfg | ConvertTo-Json -Depth 10)
+      } catch {}
     }
-  } catch {}
+  }
 }
 
 # Refresh-5hUsage
