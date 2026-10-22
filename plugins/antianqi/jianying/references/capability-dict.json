@@ -279,6 +279,18 @@
         "max-over-frames（不抽单帧）",
         "真草稿 sha 断言"
       ]
+    },
+    "make_film": {
+      "kind": "ours",
+      "ops": [],
+      "guards": [
+        "画面来自官方渲染器（player 域）⇒ ★ 官方预览渲染器自带强度型调色",
+        "可选 3D LUT（--lut）：曲线类调色（官方预览不认 curves/HSL/色轮 ⇒ 我们自己烘 LUT 再叠）",
+        "音频走我们的混音链：volume / fade / 降噪（ffmpeg afftdn 近似，★ 非剪映 SAMI denoise_v2）/ loudnorm 归一",
+        "验收带断言：双流齐备 + 时长对齐官方时间线（容差 1 帧）+ 响度偏离 ≤1 LUFS ⇒ 否则判失败",
+        "草稿无可用音轨 ⇒ 出纯画面片并报出缺失素材数（不判失败）",
+        "★ 官方导出档（ExportService / mojo / 官方编码器）不在我们的可达面上 ⇒ 不走官方导出"
+      ]
     }
   },
   "capabilities": {

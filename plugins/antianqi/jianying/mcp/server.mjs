@@ -446,6 +446,23 @@ const IMPL = {
     return ok(r.stdout);
   },
 
+  // ★ 一条命令出成片：官方渲染器出画面（自带强度型调色）→ 可选我们的 3D LUT（曲线类）
+  //   → 我们的混音链（音量/淡入淡出/降噪/响度归一）→ ffmpeg 编码 → 带断言的验收。
+  //   官方导出档（ExportService / mojo / 官方编码器）不在我们的可达面上（§91.3 / §92.2），
+  //   所以出片走这条自制链；它拿到的画面就是官方渲染器的输出，不是我们自己算的。
+  async make_film(a) {
+    const args = [jyaiTool('jyai-make-film.mjs'), '--draft', a.draft, '--out', a.outDir];
+    if (a.lut) args.push('--lut', a.lut);
+    if (a.denoise) args.push('--denoise', a.denoise);
+    if (a.beautify) args.push('--beautify', a.beautify);
+    if (a.fps) args.push('--fps', String(a.fps));
+    if (a.maxFrames) args.push('--max-frames', String(a.maxFrames));
+    if (a.targetLufs !== undefined) args.push('--target-lufs', String(a.targetLufs));
+    const r = await run(process.execPath, args);
+    if (r.code !== 0) throw new Error(`出片失败：\n${r.stderr || r.stdout}`);
+    return ok(r.stdout);
+  },
+
   async verify_diff(a) {
     // ★ max-over-frames：判据视野必须覆盖被测对象（不抽单帧）
     // ★ 多维度审片（visibility / picture / audio / timeline / draft_integrity）

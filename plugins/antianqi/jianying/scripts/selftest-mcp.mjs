@@ -31,12 +31,29 @@ function which(cmd) {
   return cmd;
 }
 const FFMPEG = which('ffmpeg');
+const FFPROBE = (() => {
+  const d = path.dirname(which('ffmpeg'));
+  const p = path.join(d, process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe');
+  return fs.existsSync(p) ? p : 'ffprobe';
+})();
 function sh(args) {
   return new Promise((resolve) => {
     const c = spawn(FFMPEG, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     let se = '';
     c.stderr.on('data', (d) => { se += d; });
     c.on('close', (code) => resolve({ code, stderr: se }));
+  });
+}
+// 任意可执行文件版本（ffprobe 等）—— sh() 写死了 FFMPEG
+// ★ 注意：ffprobe 的 -show_entries 结果走【stdout】；只有错误信息走 stderr
+//   （2026-10-22 自检抓到的假失败：只收 stderr ⇒ streams 解析成空字符串）
+function shBin(bin, args) {
+  return new Promise((resolve) => {
+    const c = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let so = '', se = '';
+    c.stdout.on('data', (d) => { so += d; });
+    c.stderr.on('data', (d) => { se += d; });
+    c.on('close', (code) => resolve({ code, stdout: so, stderr: se }));
   });
 }
 // 合成一组确定性的帧（纯色 + 亮度偏移）⇒ 噪声基线 / 真改动 / 新增削波 各一组
@@ -120,7 +137,7 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
   check('initialize 握手', init.result?.serverInfo?.name === 'jianying', `serverInfo=${JSON.stringify(init.result?.serverInfo)}`);
   const list = await call('tools/list', {});
   const tools = list.result?.tools || [];
-  check('tools/list 返回 8 个动词', tools.length === 8, `实际 ${tools.length}：${tools.map((t) => t.name).join(', ')}`);
+  check('tools/list 返回 9 个动词', tools.length === 9, `实际 ${tools.length}：${tools.map((t) => t.name).join(', ')}`);
   const noSchema = tools.filter((t) => !t.inputSchema || t.inputSchema.type !== 'object');
   check('每个动词都有 inputSchema', noSchema.length === 0, noSchema.map((t) => t.name).join(',') || '全部有');
   const ga = tools.find((t) => t.name === 'grade_apply');
@@ -225,6 +242,61 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
   // 6. draft_open 护栏：allowReal=true 但 copy 仍为 true ⇒ 拒绝
   const d1 = await call('tools/call', { name: 'draft_open', arguments: { draft: 'x', copy: true, allowReal: true } });
   check('★ draft_open 护栏：allowReal 与 copy 冲突时拒绝', d1.result?.isError === true, textOf(d1).slice(0, 120));
+
+  // 7. ★ make_film：一条命令出成片（官方画面 + 我们的调色/混音 + ffmpeg 编码）
+  //    结构性断言 + 阴性断言永远跑；真 e2e 需要草稿库（env JYAI_DRAFT_LIB）+ 剪映在跑
+  //    ⇒ 没有草稿库时【显式 SKIP 且不计入 PASS】（不做假绿）
+  const FILM_LIB = process.env.JYAI_DRAFT_LIB || '';
+  const FILM_DRAFT = process.env.JYAI_FILM_DRAFT || (FILM_LIB ? path.join(FILM_LIB, 'JYAI明文测试') : '');
+  const FILM_OUT = path.join(OUT, 'film');
+  const mf = tools.find((t) => t.name === 'make_film');
+  check('tools/list 暴露 make_film', !!mf, mf ? Object.keys(mf.inputSchema?.properties || {}).join(',') : '缺失');
+  check('make_film schema 含 draft/outDir/lut/denoise/beautify',
+    !!mf && ['draft', 'outDir', 'lut', 'denoise', 'beautify'].every((k) => k in (mf.inputSchema?.properties || {})),
+    mf ? Object.keys(mf.inputSchema?.properties || {}).join(',') : '');
+
+  const mfBad = await call('tools/call', { name: 'make_film', arguments: { outDir: FILM_OUT } });
+  check('★ make_film 缺必填参数被拒', mfBad.result?.isError === true, textOf(mfBad).replace(/\s+/g, ' ').slice(0, 120));
+
+  const mfNoDraft = await call('tools/call', { name: 'make_film', arguments: { draft: path.join(OUT, '__no_such_draft__'), outDir: FILM_OUT } });
+  check('★ make_film 草稿不存在 ⇒ 报错（证明这个动词不是空壳）',
+    mfNoDraft.result?.isError === true, textOf(mfNoDraft).replace(/\s+/g, ' ').slice(0, 120));
+
+  if (FILM_DRAFT && fs.existsSync(FILM_DRAFT)) {
+    // e2e ①：双流草稿（素材齐全）⇒ 必须出"画面+音轨"，且内建验收（响度/时长断言）判通过
+    //   fps 取 6（帧数减半、时长不变 ⇒ 音画对齐不受影响，只为省时间）
+    const mfRun = await call('tools/call', { name: 'make_film', arguments: { draft: FILM_DRAFT, outDir: FILM_OUT, fps: 6, denoise: 'auto' } });
+    const mfTxt = textOf(mfRun);
+    const mfOk = mfRun.result?.isError !== true;
+    check('★★ make_film 真出片（官方渲染器画面 + 我们的混音链）', mfOk,
+      mfOk ? mfTxt.replace(/\s+/g, ' ').slice(0, 200) : mfTxt.replace(/\s+/g, ' ').slice(0, 200));
+    if (mfOk) {
+      const film = path.join(FILM_OUT, 'film.mp4');
+      const has = fs.existsSync(film);
+      check('make_film 成片文件落盘', has, film);
+      if (has) {
+        const st = await shBin(FFPROBE, ['-v', 'error', '-show_entries', 'stream=codec_type,codec_name,width,height,channels',
+          '-of', 'default=noprint_wrappers=1', film]);
+        const types = [...String(st.stdout || '').matchAll(/codec_type=(\w+)/g)].map((m) => m[1]);
+        check('★★ make_film 成片双流齐备（video+audio）', types.includes('video') && types.includes('audio'),
+          `streams=${types.join(',')} size=${fs.statSync(film).size}B`);
+        check('★★ make_film 内建验收判通过（响度/时长断言）', /验收通过/.test(mfTxt),
+          (mfTxt.match(/整体响度[^\n]*/) || ['(无响度行)'])[0].trim());
+      }
+    }
+    // e2e ②：★ 无音轨草稿（音频素材文件不在磁盘上）⇒ 也必须出片（纯画面），【不能】判失败
+    //   这是 2026-10-22 自检抓到的真缺陷：草稿没音轨被误报成"出片失败"
+    const NOAUDIO_DRAFT = FILM_LIB ? path.join(FILM_LIB, 'JYAI功能矩阵') : '';
+    if (NOAUDIO_DRAFT && fs.existsSync(NOAUDIO_DRAFT)) {
+      const na = await call('tools/call', { name: 'make_film', arguments: { draft: NOAUDIO_DRAFT, outDir: path.join(OUT, 'film-noaudio'), fps: 12, denoise: 'auto' } });
+      const naTxt = textOf(na);
+      check('★★ make_film：草稿无可用音轨 ⇒ 仍出片（纯画面），不判失败',
+        na.result?.isError !== true && /验收通过/.test(naTxt) && /纯画面片/.test(naTxt),
+        naTxt.replace(/\s+/g, ' ').slice(-220));
+    }
+  } else {
+    console.log(`  [SKIP] make_film 真 e2e —— 需要 env JYAI_DRAFT_LIB（草稿库）+ 剪映在跑；本机未提供 ⇒ 【不计入 PASS】`);
+  }
 
   console.log(`\n=== ${PASS} PASS / ${FAIL} FAIL ===`);
   child.kill();

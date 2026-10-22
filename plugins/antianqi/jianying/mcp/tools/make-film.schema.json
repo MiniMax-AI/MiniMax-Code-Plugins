@@ -1,0 +1,52 @@
+{
+  "name": "make_film",
+  "description": "一条命令出成片：官方渲染器出画面（★ 官方预览渲染器自带强度型调色）+ 可选我们的 3D LUT（曲线类调色，官方预览不认）+ 我们的混音链（音量/淡入淡出/降噪/响度归一）+ ffmpeg 编码，并做带断言的验收（双流齐备 / 时长 / 响度偏离 ≤1 LUFS 直接判失败）。",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "draft": {
+        "type": "string",
+        "description": "草稿目录"
+      },
+      "outDir": {
+        "type": "string",
+        "description": "输出目录（成片落在 <outDir>/film.mp4）"
+      },
+      "lut": {
+        "type": "string",
+        "description": "可选：3D LUT 文件（.cube）—— 用于曲线类调色（curves / HSL / 色轮），官方预览渲染器不认这些，必须我们自己烘 LUT 再叠"
+      },
+      "denoise": {
+        "type": "string",
+        "enum": ["auto", "off"],
+        "default": "auto",
+        "description": "降噪：auto = 草稿里有 realtime_denoises 就按强度施加（ffmpeg afftdn 近似，★ 不是剪映的 SAMI denoise_v2）；off = 不施加"
+      },
+      "beautify": {
+        "type": "string",
+        "enum": ["off", "approx"],
+        "default": "off",
+        "description": "人声美化：off = 不做（默认）；approx = 近似 EQ+压缩（★ 剪映的真实算法不可得）"
+      },
+      "fps": {
+        "type": "number",
+        "default": 12
+      },
+      "maxFrames": {
+        "type": "number",
+        "default": 0,
+        "description": "0 = 覆盖整个时间线（⚠️ 非 0 会让画面比音轨短，音画对不齐，只用于调试）"
+      },
+      "targetLufs": {
+        "type": "number",
+        "default": -14,
+        "description": "响度归一目标（LUFS）。验收会断言实际值与之相差 ≤1 LUFS"
+      }
+    },
+    "required": [
+      "draft",
+      "outDir"
+    ],
+    "additionalProperties": false
+  }
+}

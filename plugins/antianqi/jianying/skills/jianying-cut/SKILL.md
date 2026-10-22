@@ -21,6 +21,10 @@ metadata:
 本 skill 只动一个动词：**`grade_apply`**（调色 + 出片）。
 配套两个：**`verify_diff`**（验收改动是否可见）、**`render_frames`**（用官方渲染器出帧）。
 
+★ **另有一个"整条出片链"动词 `make_film`**：给**剪映草稿**，一条命令出成片
+（官方渲染器出画面 → 可选我们的 3D LUT → 我们的混音链（音量/淡入淡出/降噪/响度归一）→ ffmpeg 编码 → 带断言的验收）。
+**画面是官方渲染器出的**（不是我们自己算的），**音频是我们自己混的**。
+
 | 想做的事 | 调哪个动词 | 关键参数 |
 |---|---|---|
 | 调亮度/对比/饱和/色温… | `grade_apply` | `spec.adjustColor.*` |
@@ -29,8 +33,11 @@ metadata:
 | 曲线 / HSL 耦合曲线 | `grade_apply` | `spec.curves.*` / `spec.hsl_curves.*` |
 | 锐化 / 暗角 / 颗粒 | `grade_apply` | `spec.sharpen` / `spec.vignetting` / `spec.particle` |
 | 确认改动看得见 | `verify_diff` | `beforeDir` / `afterDir` |
+| **给剪映草稿出成片（含音轨）** | **`make_film`** | `draft` / `outDir` / `lut` / `denoise` / `beautify` |
+| 官方导出器出片 | —— | 官方 CLI 侧被 −100007 / −100015 挡死，**不绕**；我们用 `make_film` 自己出 |
 
 ★ **参数怎么填** → `references/chain-api.md`（语义在这里）· `mcp/tools/grade-apply.schema.json`（硬校验在这里）
+★ **出片动词** → `mcp/tools/make-film.schema.json`
 ★ **多少算"生效"** → `references/verify-discipline.md`
 ★ **别再踩** → `references/pitfalls.md`
 
@@ -48,6 +55,13 @@ node ${PLUGIN_ROOT}/scripts/run-verb.mjs grade_apply '{
   "outDir": "<输出目录的绝对路径>",
   "frames": 12,
   "spec": { "adjustColor": { "brightness": 0.10, "contrast": 0.12, "saturation": 0.28, "temperature": 0.15 } }
+}'
+
+# ②' 或者：给剪映草稿直接出成片（官方画面 + 我们的混音）
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs make_film '{
+  "draft": "<剪映草稿目录>",
+  "outDir": "<输出目录>",
+  "denoise": "auto"
 }'
 
 # ③ 验收（改动是否在画面上可见）

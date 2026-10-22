@@ -97,7 +97,8 @@ test('MCP declaration uses the stdio transport with a contained working director
 
 test('every verb ships a parsable input schema', async () => {
   const files = (await readdir(path.join(pluginRoot, 'mcp', 'tools'))).filter((f) => f.endsWith('.schema.json'));
-  assert.equal(files.length, 8, `expected 8 verb schemas, found ${files.length}`);
+  // 9 = draft_open/draft_read/draft_patch/draft_commit/render_frames/grade_apply/audio_mix/verify_diff/make_film
+  assert.equal(files.length, 9, `expected 9 verb schemas, found ${files.length}`);
   for (const file of files) {
     const schema = JSON.parse(await read(path.join('mcp', 'tools', file)));
     assert.equal(schema.inputSchema.type, 'object', `${file}: inputSchema must be an object`);
