@@ -16,9 +16,17 @@
         "type": "array",
         "items": {
           "type": "string",
-          "enum": ["visibility", "picture", "audio", "timeline", "draft_integrity"]
+          "enum": [
+            "visibility",
+            "picture",
+            "audio",
+            "timeline",
+            "draft_integrity"
+          ]
         },
-        "default": ["visibility"],
+        "default": [
+          "visibility"
+        ],
         "description": "要查的维度。缺省只查 visibility。"
       },
       "threshold": {
@@ -39,10 +47,22 @@
         "type": "object",
         "description": "★ 期望断言（给 timeline 维度用）。给了就按期望判定，不再用\"什么都没动\"的启发式。",
         "properties": {
-          "segmentsDelta": { "type": "number", "description": "期望的段数变化（如剪掉一段 = -1）" },
-          "durationDeltaUs": { "type": "number", "description": "期望的时长变化（µs）" },
-          "segmentFieldChanged": { "type": "string", "description": "期望某个 segment 字段发生变化（如 volume）" },
-          "segmentFieldUnchanged": { "type": "string", "description": "期望某个 segment 字段【不】变化" }
+          "segmentsDelta": {
+            "type": "number",
+            "description": "期望的段数变化（如剪掉一段 = -1）"
+          },
+          "durationDeltaUs": {
+            "type": "number",
+            "description": "期望的时长变化（µs）"
+          },
+          "segmentFieldChanged": {
+            "type": "string",
+            "description": "期望某个 segment 字段发生变化（如 volume）"
+          },
+          "segmentFieldUnchanged": {
+            "type": "string",
+            "description": "期望某个 segment 字段【不】变化"
+          }
         },
         "additionalProperties": false
       },
@@ -56,11 +76,11 @@
       },
       "beforeDraft": {
         "type": "string",
-        "description": "timeline 维度用：改前草稿 JSON 路径（明文）"
+        "description": "timeline 维度用：改前草稿 JSON 路径（明文）。★ 必须是【裸草稿】——顶层就有 tracks/segments；draft_read 的响应外面还包了一层 draft，直接存响应会读出 tracks:0"
       },
       "afterDraft": {
         "type": "string",
-        "description": "timeline 维度用：改后草稿 JSON 路径（明文）"
+        "description": "timeline 维度用：改后草稿 JSON 路径（明文）。★ 必须是【裸草稿】——顶层就有 tracks/segments；draft_read 的响应外面还包了一层 draft，直接存响应会读出 tracks:0"
       },
       "realDraft": {
         "type": "string",

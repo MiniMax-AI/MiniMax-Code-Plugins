@@ -65,6 +65,8 @@ node ${PLUGIN_ROOT}/scripts/run-verb.mjs verify_diff '{
 
 **★ 结构性改动请用语义判据**（不依赖像素、完全确定）：
 `timeline` 维度会给出**逐段字段差**（`segmentDiffs`：段 id + 变了哪些字段 + 改前改后值），
+> ★ `beforeDraft` / `afterDraft` 要指**裸草稿 JSON**（顶层就有 `tracks`）——
+> `draft_read` 的响应外面包了一层 `draft`，直接存响应会被读成 `tracks: 0`（判据静默失效）。
 配合 `expect` 直接断言：
 
 ```bash

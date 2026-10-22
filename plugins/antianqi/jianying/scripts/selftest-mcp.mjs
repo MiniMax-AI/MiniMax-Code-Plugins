@@ -272,7 +272,20 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
   check('★ make_film 草稿不存在 ⇒ 报错（证明这个动词不是空壳）',
     mfNoDraft.result?.isError === true, textOf(mfNoDraft).replace(/\s+/g, ' ').slice(0, 120));
 
+  // ★ 2026-10-23：剪映【刚启动】时 VE host 还没起来 ⇒ 第一次跑会误报一堆失败
+  //   （实测：刚起的剪映上 37 PASS / 3 FAIL，第二次跑就 43/0 ⇒ 是环境预热，不是代码）
+  //   ⇒ 这里先等 VE 管道就绪（最多 ~30s），就绪才跑 e2e；等不到就整段 SKIP（不计入 PASS）。
+  let veReady = false;
   if (FILM_DRAFT && fs.existsSync(FILM_DRAFT)) {
+    for (let i = 0; i < 12; i++) {
+      const probe = await call('tools/call', { name: 'draft_open', arguments: { draft: FILM_DRAFT, copy: true } });
+      if (probe.result?.isError !== true) { veReady = true; break; }
+      await new Promise((r) => setTimeout(r, 2500));
+    }
+    if (!veReady) console.log('  ★ 剪映 VE 管道 30 秒内没就绪（剪映在跑吗？）');
+  }
+
+  if (FILM_DRAFT && fs.existsSync(FILM_DRAFT) && veReady) {
     // e2e ①：双流草稿（素材齐全）⇒ 必须出"画面+音轨"，且内建验收（响度/时长断言）判通过
     //   fps 取 6（帧数减半、时长不变 ⇒ 音画对齐不受影响，只为省时间）
     const mfRun = await call('tools/call', { name: 'make_film', arguments: { draft: FILM_DRAFT, outDir: FILM_OUT, fps: 6, denoise: 'auto' } });
@@ -467,8 +480,76 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
     check('★★ MCP: audio_mix 在无音轨草稿上明确报输入问题（nothing to mix），不静默出坏片',
       am1.result?.isError === true ? /nothing to mix/.test(amTxt) : fs.existsSync(path.join(SMOKE, 'mix.mp4')),
       amTxt.replace(/\s+/g, ' ').slice(0, 140));
+
+    // ── ★★★ 覆盖度补强（2026-10-23）：verify_diff 的【语义判据】路径 ──
+    //   beforeDraft / afterDraft / expect —— 这是 jianying-draft-edit 文档教的主工作流第⑤步，
+    //   但【从未被任何测试触及】（"未测参数清单"查出来的）⇒ 文档教的流程没人验证过。
+    //   做法：开副本 → 读改前的明文 → patch 改一处音量 → 读改后的明文 → verify_diff 断言字段变了。
+    let semParsed = null;
+    try {
+      const semOpen = await call('tools/call', { name: 'draft_open', arguments: { draft: FILM_DRAFT, copy: true } });
+      const semSid = (textOf(semOpen).match(/ve-session-\d+/) || [])[0];
+      const beforeTxt = textOf(await call('tools/call', { name: 'draft_read', arguments: { sessionId: semSid } }));
+      const beforeObj = JSON.parse(beforeTxt);
+      // ★ draft_read 返回的是【{draft:{...}} 包装】⇒ 先拆包装再找 tracks
+      const d0 = beforeObj?.draft || beforeObj || {};
+      const segs = (d0.tracks || []).flatMap((t) => t.segments || []);
+      const seg = segs[0] || (d0.segments || [])[0] || null;
+      const segId = seg?.id || seg?.segment_id || seg?.segmentId || null;
+      if (!segId) {
+        console.log('  [SKIP] verify_diff 语义判据 —— 草稿里没找到 segmentId（结构变了）⇒ 【不计入 PASS】');
+      } else {
+        // ★ verify_diff 的 readDraft 取的是【顶层 tracks】⇒ 存裸草稿，不是 {draft:{...}} 包装
+        semParsed = { semSid, segId, beforeJson: JSON.stringify(d0, null, 2) };
+      }
+    } catch (e) {
+      console.log(`  [SKIP] verify_diff 语义判据 —— 解析草稿失败（${String(e).slice(0, 90)}）⇒ 【不计入 PASS】`);
+    }
+    if (semParsed) {
+      const { semSid, segId, beforeJson } = semParsed;
+      const beforeFile = path.join(SMOKE, 'before-draft.json');
+      const afterFile = path.join(SMOKE, 'after-draft.json');
+      fs.writeFileSync(beforeFile, beforeJson, 'utf8');
+      const patchRes = await call('tools/call', {
+        name: 'draft_patch',
+        arguments: { op: 'video.setVolume', sessionId: semSid, params: { segmentId: segId, volume: 0.25 } },
+      });
+      const afterTxt = textOf(await call('tools/call', { name: 'draft_read', arguments: { sessionId: semSid } }));
+      let afterJson = afterTxt;
+      try {
+        const afterObj = JSON.parse(afterTxt);
+        afterJson = JSON.stringify(afterObj?.draft || afterObj || {}, null, 2);
+      } catch { /* 保持原样，让 verify_diff 去报"读不出来" */ }
+      fs.writeFileSync(afterFile, afterJson, 'utf8');
+      const sem = await call('tools/call', {
+        name: 'verify_diff',
+        arguments: {
+          checks: ['timeline'],
+          beforeDraft: beforeFile, afterDraft: afterFile,
+          expect: { segmentFieldChanged: 'volume' },
+        },
+      });
+      const semTxt = textOf(sem);
+      check('★★★ MCP: verify_diff 语义判据（beforeDraft/afterDraft/expect）⇒ 判得"volume 变了"',
+        patchRes.result?.isError !== true && sem.result?.isError !== true && /"verdict"\s*:\s*"PASS"/.test(semTxt),
+        semTxt.replace(/\s+/g, ' ').slice(0, 220));
+      // ★ 阴性对照：两份草稿【相同】⇒ 必须判 FAIL（否则这条判据没有区分力）
+      const neg = await call('tools/call', {
+        name: 'verify_diff',
+        arguments: {
+          checks: ['timeline'],
+          beforeDraft: beforeFile, afterDraft: beforeFile,
+          expect: { segmentFieldChanged: 'volume' },
+        },
+      });
+      const negTxt = textOf(neg);
+      check('★★★ MCP: verify_diff 语义判据的阴性对照（没改动 ⇒ 必须判 FAIL）',
+        neg.result?.isError === true && /"verdict"\s*:\s*"FAIL"/.test(negTxt),
+        negTxt.replace(/\s+/g, ' ').slice(0, 200));
+    }
   } else {
-    console.log(`  [SKIP] make_film 真 e2e —— 需要 env JYAI_DRAFT_LIB（草稿库）+ 剪映在跑；本机未提供 ⇒ 【不计入 PASS】`);
+    console.log('  [SKIP] 真 e2e（MCP 层冒烟 + make_film 出片）—— 需要 env JYAI_DRAFT_LIB（草稿库）'
+      + '+ 剪映在跑且 VE 管道就绪；未满足 ⇒ 【不计入 PASS】');
   }
 
   console.log(`\n=== ${PASS} PASS / ${FAIL} FAIL ===`);

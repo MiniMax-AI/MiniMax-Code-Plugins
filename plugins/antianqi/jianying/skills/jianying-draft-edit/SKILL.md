@@ -66,6 +66,10 @@ node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_commit '{"sessionId":"ve-session-
 
 # ⑤ 验收（★ 主判据 = 语义：落盘草稿的逐段字段差）
 #    改前/改后各读一次明文草稿，再让 verify_diff 比"哪个字段变了"
+#    ★ 两份草稿必须是【裸草稿】——顶层就有 tracks/segments；
+#      draft_read 的响应外面还包了一层 draft ⇒ 直接把响应存成文件会读出 tracks:0（判据失效）
+#    ★ 两份草稿必须是【裸草稿】——顶层就有 tracks/segments；
+#      draft_read 的响应外面还包了一层 draft ⇒ 直接把响应存成文件会读出 tracks:0（判据失效）
 node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_read '{"path":"<copy>/draft_content.json"}'
 node ${PLUGIN_ROOT}/scripts/run-verb.mjs verify_diff '{
   "checks": ["timeline"],
