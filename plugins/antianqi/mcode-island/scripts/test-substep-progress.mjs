@@ -11,11 +11,11 @@
 //
 // Exit 0 = all passed. Any failure exits 1.
 
-import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = dirname(HERE);
@@ -65,7 +65,7 @@ const PS_BIN = resolvePs();
 // cannot leave fixtures behind for the next one to read.
 const TMP = mkdtempSync(join(tmpdir(), 'island-substep-'));
 
-function runPs(script) {
+function runPs(script, extraEnv) {
     const file = join(TMP, `run-${Math.random().toString(36).slice(2)}.ps1`);
     // Force UTF-8 on both ends of the pipe. The console code page here is 936
     // (GBK), so a middle dot in a script literal comes back as the two bytes
@@ -77,12 +77,93 @@ function runPs(script) {
     const preamble = '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n';
     writeFileSync(file, '\uFEFF' + preamble + script, 'utf8');
     const out = execFileSync(PS_BIN, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', file],
-        { encoding: 'buffer', stdio: ['ignore', 'pipe', 'pipe'] });
+        {
+            encoding: 'buffer',
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
+        });
     let buf = out;
     if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
         buf = buf.subarray(3);
     }
     return buf.toString('utf8');
+}
+
+/**
+ * Start a PowerShell child and resolve with its exit code and output.
+ * Used where a test needs two processes running at the same time; runPs
+ * is synchronous and cannot express that.
+ */
+function spawnPs(script, extraEnv) {
+    const file = join(TMP, `spawn-${Math.random().toString(36).slice(2)}.ps1`);
+    writeFileSync(file, '\uFEFF' + '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n' + script, 'utf8');
+    const child = spawn(PS_BIN, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', file], {
+        env: { ...process.env, ...(extraEnv || {}) },
+        stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let out = '';
+    let err = '';
+    child.stdout.on('data', (d) => { out += d.toString('utf8'); });
+    child.stderr.on('data', (d) => { err += d.toString('utf8'); });
+    return new Promise((resolve) => {
+        child.on('close', (code) => resolve({ code, out, err }));
+    });
+}
+
+/**
+ * An isolated %APPDATA% so a test can exercise the real code paths that
+ * resolve %APPDATA%\mcode-island\status.json without touching the
+ * developer's live island.
+ */
+function makeIsolatedAppData(tag) {
+    const dir = join(TMP, `appdata-${tag}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(join(dir, 'mcode-island'), { recursive: true });
+    return dir;
+}
+
+/**
+ * Read a JSON file the way the widget reads it.
+ *
+ * status.json is written with [System.Text.Encoding]::UTF8, which emits
+ * a BOM. Every PowerShell reader strips it (ReadAllText detects it,
+ * Get-Content -Encoding UTF8 tolerates it); JSON.parse does not, and
+ * would report a syntax error on a file that is perfectly valid.
+ */
+function readJsonFile(path) {
+    const raw = readFileSync(path, 'utf8');
+    return JSON.parse(raw.replace(/^\uFEFF/, ''));
+}
+
+/**
+ * Strip PowerShell comments so a static check looks at CODE, not at prose.
+ *
+ * The detector documents removed identifiers in its comments; a check for
+ * "this identifier must not appear" would otherwise trip over the
+ * comment that explains why it was removed.
+ */
+function stripPsComments(src) {
+    return src.split('\n').map((l) => l.replace(/#.*$/, '')).join('\n');
+}
+
+/**
+ * Extract a balanced-brace block from PowerShell source, starting at the
+ * first occurrence of `marker`. Returns null when the marker is absent
+ * or the braces do not balance.
+ */
+function detectCodeBlock(src, marker) {
+    const start = src.indexOf(marker);
+    if (start < 0) return null;
+    const open = src.indexOf('{', start);
+    if (open < 0) return null;
+    let depth = 0;
+    for (let i = open; i < src.length; i++) {
+        if (src[i] === '{') depth++;
+        else if (src[i] === '}') {
+            depth--;
+            if (depth === 0) return src.slice(start, i + 1);
+        }
+    }
+    return null;
 }
 
 /** Extract a top-level `function Name(...) { ... }` block from a PowerShell file. */
@@ -296,65 +377,155 @@ Build-DisplayMessage -Message '${msg.replace(/'/g, "''")}' -Step ${step} -Total 
 }
 
 // ---------------------------------------------------------------------------
-// 3. Detector preserves sub-step fields across a rewrite (review #2)
+// 3. The metadata refresh preserves the sub-step fields (round-21 #1)
 // ---------------------------------------------------------------------------
+//
+// This section runs the REAL Write-Status against a REAL status.json in
+// an isolated %APPDATA%, instead of extracting a fragment of the
+// function body and stubbing the reader.
+//
+// The old harness stubbed Read-StatusObj and pasted the decision block
+// into a synthetic script. That could not tell a working implementation
+// from one that read the file twice, because the second read was exactly
+// what the stub hid -- and a second read IS the bug the review named:
+// "Write-Status -KeepSubStep performs a second independent read for
+// step/detail/source before overwriting the file".
+//
+// The contract:
+//   - a metadata refresh restates the current state, preserves the
+//     sub-step fields and preserves the state owner;
+//   - a state-inference write resets the sub-step fields and claims
+//     ownership;
+//   - both take exactly ONE snapshot and write under the shared lock;
+//   - every write advances the monotonic version exactly once.
 
-// Read-StatusObj + the field-preservation block in Write-Status. A behavioral
-// check: start from a status.json carrying sub-step fields, run the real
-// Write-Status payload construction, and confirm the fields survive.
+const storeLibPath = join(PLUGIN_ROOT, 'scripts', 'lib', 'Status-Store.ps1');
+const storeLibRef = storeLibPath.replace(/'/g, "''");
+
 if (PS_BIN) {
     const detectPath = join(PLUGIN_ROOT, 'mcode-status-detect.ps1');
     const detect = readFileSync(detectPath, 'utf8');
-    const detectLines = detect.split('\n');
+    const detectCode = stripPsComments(detect);
+    const lines = detectCode.split('\n');
 
     const writeStatusFn = extractFn(detect, 'Write-Status');
+    const writeStatusUnderLockFn = extractFn(detect, 'Write-StatusUnderLock');
 
-    // Extract the sub-step decision block as a standalone repro of the
-    // logic, so the test does not need the detector's whole environment.
+    check('the status store lib exists', existsSync(storeLibPath), `${storeLibPath} not found`);
+
+    // The lock has to be taken and released around the whole write, and
+    // the snapshot has to be read exactly once. A second read is still a
+    // second read: it can observe a generation the payload was not built
+    // from, and that is what produced the mixed-generation payloads.
+    check('Write-Status takes the cross-process lock',
+        /Enter-StatusLock/.test(writeStatusFn),
+        'Write-Status writes status.json without taking the lock, so a hook write can land between its read and its write');
+    check('Write-Status releases the lock',
+        /Exit-StatusLock/.test(writeStatusFn),
+        'Write-Status takes the lock but never releases it; every later writer would block until the lock timed out');
+
+    const readsInWriter = (writeStatusFn.match(/Read-StatusSnapshot/g) || []).length;
+    const readsInBody = (writeStatusUnderLockFn.match(/Read-StatusSnapshot/g) || []).length;
+    eq('the write path reads status.json exactly once', readsInWriter + readsInBody, 1);
+    eq('the snapshot is not read outside the locked body', readsInWriter, 0);
+    eq('the locked body takes the snapshot once', readsInBody, 1);
+
+    check('the detector no longer has an unlocked reader',
+        !/Read-StatusObj/.test(stripPsComments(detect)),
+        'Read-StatusObj read status.json without the lock; it is the read that made a lost update possible');
+
+    // The two layers have to be bound together. Section 7 proves the
+    // PROTOCOL (two real processes, one file, no lost write) using
+    // hand-written writers, because the deterministic choreography needs
+    // the read to be separable from the write -- and the real code
+    // deliberately does not separate them. These checks are what say
+    // that the real detector code goes through that protocol.
+    const arbitration = detectCodeBlock(detectCode, 'if ($inferred) {');
+    check('the arbitration block takes the lock',
+        !!arbitration && /Enter-StatusLock/.test(arbitration),
+        'the arbitration read and the write it authorises are not one critical section, so a hook push can be judged against a stale snapshot and then overwritten');
+    check('the arbitration block writes through the locked body',
+        !!arbitration && /Write-StatusUnderLock/.test(arbitration),
+        'the arbitration path does not write through Write-StatusUnderLock, so it is not covered by the lock');
+    const unlockedWrites = lines.filter((l) =>
+        /Write-StatusUnderLock/.test(l)
+        && !/^\s*function\s+Write-StatusUnderLock/.test(l)
+        && !/Write-StatusUnderLock\s+\$state/.test(l)
+        && !/Write-StatusUnderLock\s+\$newState/.test(l));
+    eq('every write goes through the locked body', unlockedWrites.length, 0);
+
+    // The call sites must differ. A switch nobody passes is the dead-code
+    // shape this suite exists to catch.
     //
-    // The block is bounded by two stable statements rather than by the
-    // internal ordering of the read-modify-write: round-20 #5 wrapped it
-    // in `if ($KeepSubStep) { ... }`, so a regex anchored on `$prev`
-    // appearing before `$detailField` silently stopped matching. Anchor on
-    // the initialisers and the payload construction instead, and drive the
-    // switch explicitly -- this section pins the PRESERVE half; section 5
-    // pins the reset half and the call-site wiring.
-    const preserveMatch = writeStatusFn.match(/\$stepField\s*=\s*-1[\s\S]*?\$payload\s*=/);
+    // Four call sites exist, and they are three different things:
+    //   - the inference path, which must NOT preserve the sub-step;
+    //   - the two metadata refreshes, which must;
+    //   - the wrapper's own forward, which passes the switch through
+    //     and is not a metadata site.
+    // Counting "3 call sites" the way the old suite did no longer
+    // describes anything, so each kind is pinned separately.
+    const refreshes = lines
+        .map((l, i) => ({ l, n: i + 1 }))
+        .filter(({ l }) => /^\s*Write-Status\s+-MetadataRefresh\s*$/.test(l));
+    const infers = lines
+        .map((l, i) => ({ l, n: i + 1 }))
+        .filter(({ l }) => /^\s*Write-StatusUnderLock\s+\$newState/.test(l));
+    const forwards = lines
+        .map((l, i) => ({ l, n: i + 1 }))
+        .filter(({ l }) => /^\s*Write-StatusUnderLock\s+\$state\s+\$message\s+\$family\s+-MetadataRefresh:/.test(l));
 
-    if (!preserveMatch) {
-        bad('Write-Status preserves sub-step fields',
-            'could not find the step/total/detail decision block in Write-Status');
-    } else {
-        ok('Write-Status preserves sub-step fields');
+    eq('the 5h-usage and todo call sites pass -MetadataRefresh', refreshes.length, 2);
+    check('the state-inference call site does NOT pass -MetadataRefresh',
+        infers.length === 1 && !/-MetadataRefresh/.test(infers[0].l),
+        `inference call site must clear the stale sub-step (found ${infers.length})`);
+    eq('the lock wrapper forwards the switch exactly once', forwards.length, 1);
 
-        const harness = `
+    // The harness: the real functions, the real store lib, an isolated
+    // %APPDATA%. $S_IDLE / $S_DETECTOR are script-scope constants in the
+    // detector; the extracted functions need them to resolve.
+    const buildHarness = (call) => `
 $ErrorActionPreference = 'Stop'
-$statusFile = $env:ISLAND_TEST_STATUS
-$KeepSubStep = $true
-function Read-StatusObj {
-  if (!(Test-Path $statusFile)) { return $null }
-  try { return ([System.IO.File]::ReadAllText($statusFile) | ConvertFrom-Json) } catch { return $null }
-}
-${preserveMatch[0].replace(/\$payload\s*=$/, '')}
-"$stepField|$totalField|$detailField"
+. '${storeLibRef}'
+$S_IDLE = 'idle'
+$S_DETECTOR = 'detector'
+$script:plan5hRemainingPct = $null
+$script:plan5hResetMs = $null
+$script:plan5hTodoData = $null
+${writeStatusFn}
+${writeStatusUnderLockFn}
+${call}
+'DONE'
 `;
-        const statusFile = join(TMP, 'status.json');
-        writeFileSync(statusFile, JSON.stringify({
-            state: 'working', message: 'bash', family: 'shell',
-            step: 4, total: 12, detail: 'running tests', source: 'hook',
-        }), 'utf8');
 
-        const out = runPs(
-            `$env:ISLAND_TEST_STATUS = '${statusFile.replace(/'/g, "''")}'\n` + harness).trim();
-        eq('detector rewrite preserves step/total/detail', out, '4|12|running tests');
+    const appdata = makeIsolatedAppData('write-status');
+    const statusPath = join(appdata, 'mcode-island', 'status.json');
+    const seed = {
+        state: 'working', message: 'bash', family: 'shell',
+        step: 4, total: 12, detail: 'running tests', source: 'agent', version: 3,
+    };
 
-        // And the no-prior case must still default sanely, otherwise a fresh
-        // install would render "step -1/-1".
-        writeFileSync(statusFile, JSON.stringify({ state: 'idle', message: '', source: 'detector' }), 'utf8');
-        const out2 = runPs(
-            `$env:ISLAND_TEST_STATUS = '${statusFile.replace(/'/g, "''")}'\n` + harness).trim();
-        eq('detector rewrite defaults sub-step to unset', out2, '-1|-1|');
-    }
+    writeFileSync(statusPath, JSON.stringify(seed), 'utf8');
+    const refreshOut = runPs(buildHarness('Write-Status -MetadataRefresh'), { APPDATA: appdata });
+    // The marker is what makes this check mean something: without it an
+    // empty output would look exactly like a clean run.
+    check('the metadata refresh ran to completion',
+        /DONE/.test(refreshOut) && !/Exception/i.test(refreshOut),
+        `metadata refresh did not complete: ${JSON.stringify(refreshOut.trim())}`);
+    // The detector calls the write path from inside its main loop, and
+    // the daemon's stdout goes to a log file. A write path that returns
+    // its version therefore echoes a bare number on every write. This
+    // check failed once for exactly that reason.
+    eq('the write path does not echo anything to the caller', refreshOut.trim(), 'DONE');
+
+    const afterRefresh = readJsonFile(statusPath);
+    eq('metadata refresh preserves step', afterRefresh.step, 4);
+    eq('metadata refresh preserves total', afterRefresh.total, 12);
+    eq('metadata refresh preserves detail', afterRefresh.detail, 'running tests');
+    eq('metadata refresh preserves the state owner', afterRefresh.source, 'agent');
+    eq('metadata refresh restates the state', afterRefresh.state, 'working');
+    eq('metadata refresh restates the message', afterRefresh.message, 'bash');
+    eq('metadata refresh preserves the family', afterRefresh.family, 'shell');
+    eq('metadata refresh advances the version exactly once', afterRefresh.version, 4);
 }
 
 // ---------------------------------------------------------------------------
@@ -409,91 +580,61 @@ ${preserveMatch[0].replace(/\$payload\s*=$/, '')}
 //
 // The two write paths must therefore be distinguished explicitly, not by
 // guessing from the message text.
-{
-    const detectPath = join(PLUGIN_ROOT, 'mcode-status-detect.ps1');
-    const detect = readFileSync(detectPath, 'utf8');
-    const writeStatusFn = extractFn(detect, 'Write-Status');
+//
+// Both halves run the real Write-Status against a real status.json in an
+// isolated %APPDATA% -- no extracted fragment, no stubbed reader. The
+// call-site wiring is asserted in section 3.
+if (PS_BIN) {
+    const appdata = makeIsolatedAppData('state-inference');
+    const statusPath = join(appdata, 'mcode-island', 'status.json');
 
-    const hasSwitch = /function\s+Write-Status[\s\S]*?\[switch\]\$KeepSubStep/.test(writeStatusFn);
-    check('Write-Status exposes a -KeepSubStep switch',
-        hasSwitch,
-        'state-inference and metadata-refresh writes are not distinguished, so a stale sub-step can never be cleared');
-
-    // Anchor on the two stable statements either side of the decision so
-    // the extraction survives reformatting inside the block.
-    const block = writeStatusFn.match(/\$stepField\s*=\s*-1[\s\S]*?\$payload\s*=/);
-
-    if (!hasSwitch || !block) {
-        bad('detector state write clears a stale sub-step',
-            'could not extract the sub-step decision block from Write-Status');
-    } else {
-        ok('detector state write clears a stale sub-step');
-
-        const harness = `
+    const buildHarness = (call) => `
 $ErrorActionPreference = 'Stop'
-$statusFile = $env:ISLAND_TEST_STATUS
-$KeepSubStep = [bool]::Parse($env:ISLAND_TEST_KEEP)
-# $S_DETECTOR is a script-scope constant in the detector; the extracted
-# block needs it to resolve the claim-ownership path.
+. '${storeLibRef}'
+$S_IDLE = 'idle'
 $S_DETECTOR = 'detector'
-function Read-StatusObj {
-  if (!(Test-Path $statusFile)) { return $null }
-  try { return ([System.IO.File]::ReadAllText($statusFile) | ConvertFrom-Json) } catch { return $null }
-}
-${block[0].replace(/\$payload\s*=$/, '')}
-"$stepField|$totalField|$detailField|$sourceField"
+$script:plan5hRemainingPct = $null
+$script:plan5hResetMs = $null
+$script:plan5hTodoData = $null
+${extractFn(readFileSync(join(PLUGIN_ROOT, 'mcode-status-detect.ps1'), 'utf8'), 'Write-Status')}
+${extractFn(readFileSync(join(PLUGIN_ROOT, 'mcode-status-detect.ps1'), 'utf8'), 'Write-StatusUnderLock')}
+${call}
+'DONE'
 `;
-        const statusFile = join(TMP, 'status.json');
-        const run = (keep) => runPs(
-            `$env:ISLAND_TEST_STATUS = '${statusFile.replace(/'/g, "''")}'\n` +
-            `$env:ISLAND_TEST_KEEP = '${keep ? 'True' : 'False'}'\n` + harness).trim();
 
-        // Previous status carries a finished sub-step from an agent push.
-        const stale = {
-            state: 'done', message: 'Bash ok', family: 'shell',
-            step: 1, total: 1, detail: 'curl -H "Authorization: Bearer <redacted>"',
-            source: 'agent',
-        };
+    // Previous status carries a finished sub-step from an agent push.
+    const stale = {
+        state: 'done', message: 'Bash ok', family: 'shell',
+        step: 1, total: 1, detail: 'curl -H "Authorization: Bearer <redacted>"',
+        source: 'agent', version: 7,
+    };
 
-        writeFileSync(statusFile, JSON.stringify(stale), 'utf8');
-        eq('state-inference write clears the stale sub-step', run(false).split('|').slice(0, 3).join('|'), '-1|-1|');
+    writeFileSync(statusPath, JSON.stringify(stale), 'utf8');
+    runPs(buildHarness("Write-Status 'done' 'Bash ok' 'shell'"), { APPDATA: appdata });
+    const inferred = readJsonFile(statusPath);
 
-        writeFileSync(statusFile, JSON.stringify(stale), 'utf8');
-        eq('metadata-refresh write (-KeepSubStep) still preserves it',
-            run(true).split('|').slice(0, 3).join('|'), '1|1|curl -H "Authorization: Bearer <redacted>"');
+    eq('state-inference write clears the stale sub-step (step)', inferred.step, -1);
+    eq('state-inference write clears the stale sub-step (total)', inferred.total, -1);
+    eq('state-inference write clears the stale sub-step (detail)', inferred.detail, '');
+    // round-20 #7: a metadata refresh must not change who owns the
+    // state. `source` is the arbitration token -- the detector treats
+    // `source == detector` as "mine to rewrite" -- so a 5h-usage
+    // refresh that stamps `detector` onto an agent-owned state
+    // silently hands write authority back to the detector. The
+    // detector then re-derives `error` from the same stale failed
+    // toolResult on every poll and clobbers the Stop hook's `done`.
+    // That is the observed "pill stopped on Command failed".
+    eq('state-inference write claims ownership', inferred.source, 'detector');
+    eq('state-inference write advances the version exactly once', inferred.version, 8);
+    eq('state-inference write keeps the family it was given', inferred.family, 'shell');
 
-        // round-20 #7: a metadata refresh must not change who owns the
-        // state. `source` is the arbitration token -- the detector treats
-        // `source == detector` as "mine to rewrite" -- so a 5h-usage
-        // refresh that stamps `detector` onto an agent-owned state
-        // silently hands write authority back to the detector. The
-        // detector then re-derives `error` from the same stale failed
-        // toolResult on every poll and clobbers the Stop hook's `done`.
-        // That is the observed "pill stopped on Command failed".
-        writeFileSync(statusFile, JSON.stringify(stale), 'utf8');
-        eq('metadata-refresh write preserves the previous owner',
-            run(true).split('|')[3], 'agent');
-
-        writeFileSync(statusFile, JSON.stringify(stale), 'utf8');
-        eq('state-inference write claims ownership',
-            run(false).split('|')[3], 'detector');
-    }
-
-    // The call sites must actually differ. A switch nobody passes is the
-    // dead-code shape this suite exists to catch.
-    const callSites = detect.split('\n')
-        .map((l, i) => ({ l, n: i + 1 }))
-        .filter(({ l }) => /^\s*Write-Status\s+\$/.test(l));
-    const keeps = callSites.filter(({ l }) => /-KeepSubStep/.test(l));
-    const infers = callSites.filter(({ l }) => /\$inferred\.state/.test(l));
-
-    eq('Write-Status has 3 call sites', callSites.length, 3);
-    check('the state-inference call site does NOT pass -KeepSubStep',
-        infers.length === 1 && !/-KeepSubStep/.test(infers[0].l),
-        `inference call site must clear stale sub-step (line ${infers[0]?.n})`);
-    check('the 5h-usage and todo call sites DO pass -KeepSubStep',
-        keeps.length === 2,
-        `expected 2 -KeepSubStep call sites, found ${keeps.length}`);
+    // The no-prior case must still default sanely, otherwise a fresh
+    // install would render "step -1/-1" and claim a state nobody set.
+    const freshDir = makeIsolatedAppData('state-inference-fresh');
+    runPs(buildHarness("Write-Status 'working' 'bash' 'shell'"), { APPDATA: freshDir });
+    const fresh = readJsonFile(join(freshDir, 'mcode-island', 'status.json'));
+    eq('a fresh install starts at version 1', fresh.version, 1);
+    eq('a fresh install defaults the sub-step to unset', `${fresh.step}|${fresh.total}|${fresh.detail}`, '-1|-1|');
 }
 
 // ---------------------------------------------------------------------------
@@ -622,6 +763,214 @@ foreach ($c in $cases) {
             ok('summary bashMulti skips the assignment preamble');
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// 7. Two writers, one file (round-21 review hetaoBackend #1)
+// ---------------------------------------------------------------------------
+//
+// The review: "The loop reads old state/message, then Write-Status
+// -KeepSubStep performs a second independent read for step/detail/source
+// before overwriting the file. An agent write between the reads produces
+// a mixed-generation payload, or a write after the second read is lost."
+//
+// This is the regression for exactly that sentence, with two real
+// PowerShell processes:
+//
+//   writer A  the detector's metadata refresh -- take the lock, read,
+//             then write a payload merged from that read
+//   writer B  the agent hook's push -- take the lock, write a full
+//             payload
+//
+// The choreography is what makes it deterministic. A signals that it has
+// read, then waits for B to signal that it is ABOUT to write. B's signal
+// is published BEFORE B takes the lock, so:
+//
+//   with the lock    A holds it, B blocks, A writes, B writes last
+//                    -> the file ends up carrying B's values
+//   without the lock B writes immediately, A writes 400 ms later from
+//                    its stale read
+//                    -> the file ends up carrying A's stale values and
+//                       B's write is gone
+//
+// A payload that happens to look plausible is not enough. The version
+// counter is a second, independent witness: both writers derive it from
+// the snapshot they read, so two writers that read the same generation
+// mint the same version. That collision is visible even when the
+// surviving payload reads fine.
+if (PS_BIN) {
+    const appdata = makeIsolatedAppData('two-writers');
+    const storeDir = join(appdata, 'mcode-island');
+    const statusPath = join(storeDir, 'status.json');
+    const markerRead = join(storeDir, 'a-read');
+    const markerAttempt = join(storeDir, 'b-attempt');
+
+    writeFileSync(statusPath, JSON.stringify({
+        state: 'idle', message: '', step: 1, total: 3, detail: 'seed',
+        source: 'agent', version: 0,
+    }), 'utf8');
+
+    const writerA = `
+$ErrorActionPreference = 'Stop'
+. '${storeLibRef}'
+$lock = Enter-StatusLock
+try {
+  $prev = Read-StatusSnapshot
+  Set-Content -Path $env:ISLAND_MARKER_READ -Value 'read' -Encoding ASCII
+  $deadline = (Get-Date).AddSeconds(20)
+  while (-not (Test-Path $env:ISLAND_MARKER_ATTEMPT)) {
+    if ((Get-Date) -ge $deadline) { throw 'writer B never signalled its intent to write' }
+    Start-Sleep -Milliseconds 20
+  }
+  # Without the lock, B's write lands inside this window. With it, B is
+  # blocked and the sleep only makes the test slower.
+  Start-Sleep -Milliseconds 400
+  $payload = [PSCustomObject]@{
+    state = [string]$prev.state
+    message = [string]$prev.message
+    step = [int]$prev.step
+    total = [int]$prev.total
+    detail = [string]$prev.detail
+    source = [string]$prev.source
+    usage5h = 77
+  }
+  Write-StatusSnapshot -Payload $payload -Previous $prev
+} finally {
+  Exit-StatusLock $lock
+}
+'OK-A'
+`;
+
+    const writerB = `
+$ErrorActionPreference = 'Stop'
+. '${storeLibRef}'
+Set-Content -Path $env:ISLAND_MARKER_ATTEMPT -Value 'attempt' -Encoding ASCII
+$lock = Enter-StatusLock
+try {
+  $payload = [PSCustomObject]@{
+    state = 'working'
+    message = 'hook push'
+    step = 5
+    total = 6
+    detail = 'hook detail'
+    source = 'agent'
+  }
+  Write-StatusSnapshot -Payload $payload
+} finally {
+  Exit-StatusLock $lock
+}
+'OK-B'
+`;
+
+    const env = {
+        APPDATA: appdata,
+        ISLAND_MARKER_READ: markerRead,
+        ISLAND_MARKER_ATTEMPT: markerAttempt,
+    };
+
+    // A reader that polls the file while the writers run. The widget
+    // polls status.json every 400 ms with Get-Content, so a reader with
+    // the same habits is the one that has to be protected.
+    let torn = 0;
+    let reads = 0;
+    let polling = true;
+    const poll = (async () => {
+        while (polling) {
+            try {
+                const j = readJsonFile(statusPath);
+                reads++;
+                if (!j.state) torn++;
+            } catch (e) {
+                // A file that is momentarily absent is not a torn read; a
+                // payload that will not parse is.
+                if (e instanceof SyntaxError) torn++;
+            }
+            await new Promise((r) => setTimeout(r, 3));
+        }
+    })();
+
+    const a = spawnPs(writerA, env);
+    // B must not start before A has taken its snapshot, or the ordering
+    // the whole test depends on is never established.
+    //
+    // The wait is BOUNDED. An unbounded spin here turns "writer A died"
+    // into a suite that hangs forever instead of a suite that fails,
+    // and a hanging test is worse than a failing one: it looks like a
+    // stuck CI job rather than a broken contract.
+    const markerDeadline = Date.now() + 30000;
+    while (!existsSync(markerRead)) {
+        if (Date.now() > markerDeadline) {
+            bad('writer A took its snapshot',
+                'writer A never signalled that it had read the file within 30s; it probably died before it could take the lock');
+            break;
+        }
+        await new Promise((r) => setTimeout(r, 10));
+    }
+    const b = spawnPs(writerB, env);
+    // Bounded, for the same reason: a child that never exits must fail
+    // the test, not hang the suite.
+    const timeoutResult = { code: 'TIMEOUT', out: '', err: 'the writer did not finish within 60s' };
+    const [ra, rb] = await Promise.race([
+        Promise.all([a, b]),
+        new Promise((r) => setTimeout(() => r([timeoutResult, timeoutResult]), 60000)),
+    ]);
+    polling = false;
+    await poll;
+
+    check('writer A (detector-style read-modify-write) completed',
+        ra.code === 0,
+        `exit ${ra.code}: ${(ra.err || ra.out).trim()}`);
+    check('writer B (agent-style push) completed',
+        rb.code === 0,
+        `exit ${rb.code}: ${(rb.err || rb.out).trim()}`);
+
+    const final = readJsonFile(statusPath);
+    eq('the later write is not clobbered by a stale read (step)', final.step, 5);
+    eq('the later write is not clobbered by a stale read (detail)', final.detail, 'hook detail');
+    eq('the later write is not clobbered by a stale read (state)', final.state, 'working');
+    eq('every write advances the version exactly once', final.version, 2);
+    eq('a reader never observes a torn payload', torn, 0);
+    check('the reader actually observed the file',
+        reads > 0,
+        'the poll loop never read status.json, so the torn-read check proved nothing');
+}
+
+// ---------------------------------------------------------------------------
+// 8. The agent-side write takes the same lock (round-21 review #1)
+// ---------------------------------------------------------------------------
+//
+// notify-island.ps1 is the other writer. If it staged through its own
+// path without the lock, it could still rename the detector's half-written
+// file into place, and the detector could still clobber it. The static
+// checks below are the cheap ones; the behavioral proof is section 7.
+{
+    const notify = readFileSync(join(PLUGIN_ROOT, 'notify-island.ps1'), 'utf8');
+
+    check('notify-island dot-sources the shared store lib',
+        /Status-Store\.ps1/.test(notify),
+        'notify-island.ps1 writes status.json without the shared protocol, so the two writers are not mutually excluded');
+    check('notify-island takes the cross-process lock',
+        /Enter-StatusLock/.test(notify),
+        'notify-island.ps1 writes status.json without taking the lock');
+    check('notify-island releases the lock',
+        /Exit-StatusLock/.test(notify),
+        'notify-island.ps1 takes the lock but never releases it');
+    check('notify-island no longer stages through a shared status.json.tmp',
+        !/"\$statusFile\.tmp"/.test(notify),
+        'notify-island.ps1 stages through $statusFile.tmp, the same path the detector used, so one could rename the other\'s half-written file into place');
+    // The positive contract, not a spelling. The check above looks for
+    // one literal spelling of the shared path; a rewrite that spells the
+    // same path differently walks right past it, and the suite stays
+    // green while the bug is back. That is not hypothetical -- the
+    // negative-injection pass hit exactly this. So: status.json may
+    // only be written through the shared store.
+    const notifyCode = stripPsComments(notify);
+    check('notify-island writes status.json only through the shared store',
+        !/WriteAllText\([^)]*status/i.test(notifyCode) && !/Move-Item[^\n]*status\.json/i.test(notifyCode),
+        'notify-island.ps1 writes status.json directly; the shared store owns that path, so the staging file and the lock stay in one place');
+    check('notify-island does not write a raw payload with its own ts',
+        !/ts\s*=\s*\$ts[\s\S]{0,400}source\s*=\s*'agent'/.test(notify),
+        'notify-island.ps1 stamps its own ts; the store owns ts and version so both writers agree on the format');
 }
 
 // ---------------------------------------------------------------------------

@@ -1141,7 +1141,110 @@ const main = async () => {
         }
     }
 
-    // 11. Non-ASCII .ps1 files carry a UTF-8 BOM (round-20 #4).
+    // 11. The status.json write path is atomic across processes
+    //     (round-21 review hetaoBackend #1).
+    //
+    // Contract: the detector and the agent hooks are two independent
+    // processes writing the same file. They must share one lock, one
+    // snapshot and one staging path, or a write that lands between a
+    // reader's read and its write is lost.
+    //
+    // These are the static drift locks. The behavioral proof -- two real
+    // PowerShell processes interleaving -- lives in
+    // scripts/test-substep-progress.mjs, section 7, because smoke does
+    // not execute PowerShell.
+    {
+        const storePath = join(PLUGIN_ROOT, 'scripts', 'lib', 'Status-Store.ps1');
+        const detectPath = join(PLUGIN_ROOT, 'mcode-status-detect.ps1');
+        const notifyPath = join(PLUGIN_ROOT, 'notify-island.ps1');
+
+        const storeExists = await exists(storePath);
+        const store = storeExists ? await readFile(storePath, 'utf8') : '';
+        const detect = await readFile(detectPath, 'utf8');
+        const notify = await readFile(notifyPath, 'utf8');
+
+        if (!storeExists) {
+            out('FAIL', 'Status-Store.ps1: the shared status.json protocol lib is missing');
+        } else {
+            // The lock must be a real OS file lock, not a flag file whose
+            // presence we poll: a flag file has the same check-then-act
+            // hole the payload has.
+            if (/FileShare\]::None/.test(store) || /FileShare::None/.test(store)) {
+                out('PASS', 'Status-Store.ps1: the cross-process lock uses an exclusive OS file lock');
+            } else {
+                out('FAIL', 'Status-Store.ps1: the lock does not use FileShare.None, so it is advisory and does not exclude another writer');
+            }
+
+            if (/function\s+Read-StatusSnapshot/.test(store) && /function\s+Write-StatusSnapshot/.test(store)) {
+                out('PASS', 'Status-Store.ps1: exposes the shared read and write primitives');
+            } else {
+                out('FAIL', 'Status-Store.ps1: the shared read/write primitives are missing');
+            }
+
+            // The version counter is what lets a reader tell generations
+            // apart. It has to be stamped on every write.
+            if (/\[ordered\]@\{\}/.test(store) && /\$ordered\['version'\]/.test(store)) {
+                out('PASS', 'Status-Store.ps1: every write stamps the monotonic version');
+            } else {
+                out('FAIL', 'Status-Store.ps1: writes do not stamp a version, so a reader cannot tell generations apart');
+            }
+
+            // The staging path must be shared-but-locked, not per-writer:
+            // two writers staging through the same path is what let one
+            // rename the other's half-written file into place.
+            if (/Move-Item -Path \$tmp -Destination \$file -Force/.test(store)) {
+                out('PASS', 'Status-Store.ps1: the status file is replaced through a staging file');
+            } else {
+                out('FAIL', 'Status-Store.ps1: the status file is not replaced through a staging file');
+            }
+        }
+
+        // The detector must route every write through the shared lib.
+        if (/Status-Store\.ps1/.test(detect)) {
+            out('PASS', 'mcode-status-detect.ps1: dot-sources the shared status store lib');
+        } else {
+            out('FAIL', 'mcode-status-detect.ps1: does not dot-source the shared status store lib');
+        }
+
+        // The whole point: ONE read per write. A second read inside the
+        // locked region can still observe a generation the payload was
+        // not built from.
+        const writeStatusBody = detect.match(/function Write-StatusUnderLock[\s\S]*?\n}\n/);
+        if (!writeStatusBody) {
+            out('FAIL', 'mcode-status-detect.ps1: Write-StatusUnderLock not found');
+        } else {
+            const reads = (writeStatusBody[0].match(/Read-StatusSnapshot/g) || []).length;
+            if (reads === 1) {
+                out('PASS', 'mcode-status-detect.ps1: the write path reads status.json exactly once');
+            } else {
+                out('FAIL', `mcode-status-detect.ps1: the write path reads status.json ${reads} times; a second read can observe a different generation than the payload was built from`);
+            }
+        }
+
+        if (/Enter-StatusLock/.test(detect) && /Exit-StatusLock/.test(detect)) {
+            out('PASS', 'mcode-status-detect.ps1: takes and releases the cross-process lock');
+        } else {
+            out('FAIL', 'mcode-status-detect.ps1: does not take/release the cross-process lock around the write');
+        }
+
+        // Both writers must use the same protocol, or the lock excludes
+        // nobody.
+        if (/Status-Store\.ps1/.test(notify) && /Enter-StatusLock/.test(notify) && /Exit-StatusLock/.test(notify)) {
+            out('PASS', 'notify-island.ps1: the agent-side writer uses the same locked protocol');
+        } else {
+            out('FAIL', 'notify-island.ps1: the agent-side writer does not use the shared locked protocol, so the lock excludes nobody');
+        }
+
+        // A per-writer staging path for the agent side would be a second
+        // protocol; a SHARED one is the bug.
+        if (!/"\$statusFile\.tmp"/.test(notify)) {
+            out('PASS', 'notify-island.ps1: does not stage status.json through a shared path');
+        } else {
+            out('FAIL', 'notify-island.ps1: stages status.json through $statusFile.tmp, the same path the detector used');
+        }
+    }
+
+    // 12. Non-ASCII .ps1 files carry a UTF-8 BOM (round-20 #4).
     //
     // Contract: every hook and every script the plugin spawns with
     // `powershell` (Windows PowerShell 5.1) must survive 5.1's parser.

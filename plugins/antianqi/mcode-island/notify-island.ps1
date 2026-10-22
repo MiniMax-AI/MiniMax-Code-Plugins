@@ -20,9 +20,22 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 chcp 65001 | Out-Null
 
+# status.json 的跨进程协议（round-21 review hetaoBackend #1）。
+#
+# 这个文件和 detector 守护进程是两个独立进程，都会写 status.json。之前
+# 两边完全没有互斥：detector 读了一次 status.json，hook 写了一次，
+# detector 再把基于旧读写回的 payload 盖上去 —— hook 推的
+# step/total/detail 要么被混进一份陈旧 payload，要么直接丢失。两边还
+# 共用同一个 "status.json.tmp" 暂存路径，一个进程可能把另一个进程写到
+# 一半的文件 rename 成正式文件。
+#
+# 共享的 store 库给两边同一把跨进程锁、同一份快照、同一个暂存文件。
+. "$PSScriptRoot/scripts/lib/Status-Store.ps1"
+
 $configDir = Join-Path $env:APPDATA 'mcode-island'
 if (!(Test-Path $configDir)) { New-Item -ItemType Directory -Path $configDir -Force | Out-Null }
-$statusFile = Join-Path $configDir 'status.json'
+# status.json 的路径由 store 库统一解析（Get-StatusFilePath），这里不再
+# 维护第二份，避免两个来源对不上。
 $callerFile = Join-Path $configDir 'caller.json'
 
 # 找当前 console 关联的窗口（这是 Windows Terminal 里那个具体 tab 的 HWND）
@@ -112,6 +125,7 @@ $ts = (Get-Date).ToString('o')
 # 写 status.json（widget 轮询用）
 # 加 source='agent' 让 detector 识别这是 agent 主动推的，保留不被 working/thinking/done
 # 覆盖（detector 推 idle/error 兜底仍然可以接管，符合 takeover 语义）。
+# ts 和 version 由 store 统一盖章，所以这里不写。
 $payload = [PSCustomObject]@{
   state    = $State
   message  = $Message
@@ -119,9 +133,8 @@ $payload = [PSCustomObject]@{
   step     = $Step
   total    = $Total
   detail   = $Detail
-  ts       = $ts
   source   = 'agent'
-} | ConvertTo-Json -Compress
+}
 
 # 写 caller.json（widget 点击切回用）
 $myPid = $PID
@@ -138,13 +151,22 @@ $callerData = [PSCustomObject]@{
 }
 
 # 原子写
-$tmpStatus = "$statusFile.tmp"
+#
+# 两个文件都在同一把跨进程锁里写。caller.json 只有一个归属方（agent 侧），
+# 但两个 hook 进程可能同时跑，所以它的暂存路径之前和 status.json 一样是
+# 共用的 —— 一个 hook 会把另一个写到一半的文件 rename 到位。现在锁把
+# 两个写入方串起来了，固定暂存名也就安全了（不会攒出一堆孤儿文件）。
 $tmpCaller = "$callerFile.tmp"
 try {
-  [System.IO.File]::WriteAllText($tmpStatus, $payload, [System.Text.Encoding]::UTF8)
-  Move-Item -Path $tmpStatus -Destination $statusFile -Force
-  [System.IO.File]::WriteAllText($tmpCaller, ($callerData | ConvertTo-Json -Compress), [System.Text.Encoding]::UTF8)
-  Move-Item -Path $tmpCaller -Destination $callerFile -Force
+  $lock = Enter-StatusLock
+  try {
+    $prev = Read-StatusSnapshot
+    Write-StatusSnapshot -Payload $payload -Previous $prev
+    [System.IO.File]::WriteAllText($tmpCaller, ($callerData | ConvertTo-Json -Compress), [System.Text.Encoding]::UTF8)
+    Move-Item -Path $tmpCaller -Destination $callerFile -Force
+  } finally {
+    Exit-StatusLock $lock
+  }
   Write-Output "OK: $State - $Message"
   if ($focusInfo) {
     Write-Output ("  (caller via " + $focusInfo.source + ": " + $focusInfo.targetExe + " PID=" + $focusInfo.targetPid + " hwnd=" + $focusInfo.targetHwnd + ")")

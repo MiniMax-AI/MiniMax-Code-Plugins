@@ -149,7 +149,8 @@ $V2_SESSIONS_REL = _s (0x2E,0x6D,0x69,0x6E,0x69,0x6D,0x61,0x78,0x5C,0x76,0x32,0x
 
 $configDir = Join-Path $env:APPDATA 'mcode-island'
 if (!(Test-Path $configDir)) { New-Item -ItemType Directory -Path $configDir -Force | Out-Null }
-$statusFile = Join-Path $configDir 'status.json'
+# status.json 的路径由 store 库统一解析（Get-StatusFilePath），这里不再
+# 维护第二份，避免两个来源对不上。
 $logFile    = Join-Path $configDir 'island.log'
 $pidFile    = Join-Path $configDir 'detect.pid'
 $cfgFile    = Join-Path $configDir 'config.json'
@@ -169,6 +170,15 @@ $cfgFile    = Join-Path $configDir 'config.json'
 # than from a hook event, so it needs the same redaction the hook path
 # applies. Wiring only the hook left the raw command in island.log.
 . "$PSScriptRoot/scripts/lib/Protect-Text.ps1"
+# Cross-process status.json protocol (round-21 review #1).
+#
+# The detector and the agent hooks are two independent processes that
+# both write status.json. They had no mutual exclusion: the detector
+# read the file, a hook wrote it, and the detector then overwrote the
+# hook's write with a payload built from the older read. This lib holds
+# the lock, the single snapshot read and the atomic replace, so both
+# sides follow one protocol.
+. "$PSScriptRoot/scripts/lib/Status-Store.ps1"
 $PLAN_API_TTL  = [TimeSpan]::FromSeconds(60)
 $script:plan5hToken = $null
 if ($env:MINIMAX_OAUTH_TOKEN) { $script:plan5hToken = $env:MINIMAX_OAUTH_TOKEN }
@@ -667,8 +677,43 @@ function Infer-State($msg) {
   return $null
 }
 
-function Write-Status($state, $message, $family, [switch]$KeepSubStep) {
-  $tmp = "$statusFile.tmp"
+# Writes status.json.
+#
+# Two write semantics, and they must not be confused (round-20 #5, #7):
+#
+#   - state inference (default): the detector inferred a new state from
+#     the session log and is asserting it. The sub-step counters are
+#     reset: they belong to whatever the hook pushed last and have no
+#     relationship to this message. `source` becomes `detector`, which
+#     is the arbitration token that lets the detector rewrite this
+#     state later.
+#
+#   - metadata refresh (-MetadataRefresh): the 60s 5h-usage refresh and
+#     the todo-progress refresh. They restate the current state and
+#     refresh numbers; they do not claim the state. So state, message,
+#     family, the sub-step counters and `source` all come from the
+#     snapshot taken in this same call.
+#
+# Both run under one exclusive lock and take exactly ONE snapshot
+# (round-21 review hetaoBackend #1). The previous version read the
+# file twice -- once here for the sub-step fields and once at the call
+# site for the state -- and then wrote the result back over the whole
+# file, so a hook write landing between the two reads was either mixed
+# into a stale payload or lost outright.
+function Write-Status($state, $message, $family, [switch]$MetadataRefresh) {
+  $lock = Enter-StatusLock
+  try {
+    Write-StatusUnderLock $state $message $family -MetadataRefresh:$MetadataRefresh
+  } finally {
+    Exit-StatusLock $lock
+  }
+}
+
+# The body of Write-Status, for callers that already hold the lock.
+# Splitting it out is what lets the arbitration path read the snapshot
+# and act on it without taking the lock twice: the lock is not
+# re-entrant, because a nested take would deadlock against itself.
+function Write-StatusUnderLock($state, $message, $family, [switch]$MetadataRefresh) {
   # usage5h：0..100 表示"剩余"百分比（不是已用！）；null = 未知/未拉到
   # usage5hResetMs：距下次刷新的毫秒数；null = 未知
   # todoProgress：0..100 完成百分比（cancelled 不计）；null = 无 todo 列表
@@ -677,13 +722,31 @@ function Write-Status($state, $message, $family, [switch]$KeepSubStep) {
   $resetField  = if ($null -ne $script:plan5hResetMs)     { [int]$script:plan5hResetMs }     else { $null }
   $todoPct     = if ($null -ne $script:plan5hTodoData)    { [int]$script:plan5hTodoData.percent } else { $null }
   $todoCnt     = if ($null -ne $script:plan5hTodoData)    { ("{0}/{1}" -f $script:plan5hTodoData.completed, $script:plan5hTodoData.total) } else { $null }
-  $famField    = if ($family) { [string]$family } else { $null }
+
+  # The one snapshot. Every field below is derived from it, so the
+  # payload is always a single coherent generation.
+  $prev = Read-StatusSnapshot
+
+  $curState = $state
+  $curMsg   = $message
+  $famField = if ($family) { [string]$family } else { $null }
+
+  if ($MetadataRefresh) {
+    $curState = if ($prev) { [string]$prev.state } else { $S_IDLE }
+    $curMsg   = if ($prev) { [string]$prev.message } else { '' }
+    # A null family must stay null, not become an empty string: the
+    # widget asks "is there a family to tint with", and "[string]$null"
+    # would answer with a string that means the same thing to it but
+    # changes the on-disk shape of the payload.
+    $famField = if ($prev -and $prev.PSObject.Properties['family'] -and $null -ne $prev.family) { [string]$prev.family } else { $null }
+  }
+
   # step / total / detail 是 agent（hook）推的 sub-step 状态，不是 detector
   # 推的。detector 重写整个 payload 时，这里怎么处理取决于"为什么写"。
   #
   # 两种写入语义完全不同（round-20 #5）：
   #
-  #   - 元数据刷新（-KeepSubStep）：每 60s 刷 5h 用量、每次刷 todo 进度。
+  #   - 元数据刷新（-MetadataRefresh）：每 60s 刷 5h 用量、每次刷 todo 进度。
   #     这两次的 state/message 是从当前 status.json 读回来原样再写回去的，
   #     不代表"agent 进入了新的一步"，所以必须把已有的 sub-step 合并回来，
   #     否则正常使用中的进度会被静默清零（round-19 #2）。
@@ -711,18 +774,15 @@ function Write-Status($state, $message, $family, [switch]$KeepSubStep) {
   # sat on "Command failed" until the 60s no-event fallback finally
   # dropped it to idle.
   $sourceField = $S_DETECTOR
-  if ($KeepSubStep) {
-    $prev = Read-StatusObj
-    if ($prev) {
-      if ($prev.PSObject.Properties['step'])   { $stepField   = [int]$prev.step }
-      if ($prev.PSObject.Properties['total'])  { $totalField  = [int]$prev.total }
-      if ($prev.PSObject.Properties['detail'] -and $null -ne $prev.detail) { $detailField = [string]$prev.detail }
-      if ($prev.PSObject.Properties['source'] -and $prev.source) { $sourceField = [string]$prev.source }
-    }
+  if ($MetadataRefresh -and $prev) {
+    if ($prev.PSObject.Properties['step'])   { $stepField   = [int]$prev.step }
+    if ($prev.PSObject.Properties['total'])  { $totalField  = [int]$prev.total }
+    if ($prev.PSObject.Properties['detail'] -and $null -ne $prev.detail) { $detailField = [string]$prev.detail }
+    if ($prev.PSObject.Properties['source'] -and $prev.source) { $sourceField = [string]$prev.source }
   }
   $payload = [PSCustomObject]@{
-    state          = $state
-    message        = $message
+    state          = $curState
+    message        = $curMsg
     family         = $famField
     progress       = -1
     usage5h        = $usageField
@@ -732,11 +792,11 @@ function Write-Status($state, $message, $family, [switch]$KeepSubStep) {
     step           = $stepField
     total          = $totalField
     detail         = $detailField
-    ts             = (Get-Date).ToString($FMT_O)
     source         = $sourceField
-  } | ConvertTo-Json -Compress
-  [System.IO.File]::WriteAllText($tmp, $payload, [System.Text.Encoding]::UTF8)
-  Move-Item -Path $tmp -Destination $statusFile -Force
+  }
+  # `ts` and the monotonic `version` are stamped by the store, from the
+  # same snapshot this payload was built from.
+  Write-StatusSnapshot -Payload $payload -Previous $prev
 }
 
 # Get-5hUsage 现在定义在 scripts/lib/Get-5hUsage.ps1（detector 顶部 dot-source 了它）.
@@ -812,10 +872,11 @@ function Get-TodoProgress {
   }
 }
 
-function Read-StatusObj {
-  if (!(Test-Path $statusFile)) { return $null }
-  try { return ([System.IO.File]::ReadAllText($statusFile) | ConvertFrom-Json) } catch { return $null }
-}
+# status.json is read through the store lib now (Read-StatusSnapshot),
+# which resolves the same path but shares the locking protocol with the
+# writers. The local Read-StatusObj is gone: it read the file without
+# the lock, which is what let a caller act on a snapshot that another
+# process had already replaced.
 
 # === 主循环 ===
 if (-not $Once) {
@@ -882,44 +943,59 @@ try {
     }
 
     if ($inferred) {
-      $cur = Read-StatusObj
-      $curSource = if ($cur) { [string]$cur.source } else { '' }
-      $curState  = if ($cur) { [string]$cur.state  } else { '' }
       $newState  = [string]$inferred.state
       $newMsg    = [string]$inferred.message
+      $logLine   = $null
 
-      $isOwn = ($curSource -eq $S_DETECTOR)
-      $stateChanged = ($curState -ne $newState)
-      # waiting 加入 settle 集合：ask_user 触发时，pre-tool-use hook 会先推一条
-      # `working`，detector 随后才从 session log 推出 `waiting`。如果 waiting
-      # 不算 settle，detector 永远抢不回这条 status.json，pill 会一直卡在
-      # "执行中"——正好毁掉这个状态存在的意义。
-      $isSettleNew  = ($newState -eq $S_IDLE) -or ($newState -eq $S_ERROR) -or ($newState -eq $S_WAITING)
+      # The arbitration read and the write it authorises are ONE
+      # critical section (round-21 review hetaoBackend #1). Reading the
+      # current status outside the lock left a window in which a hook
+      # push was judged against a stale snapshot and then overwritten by
+      # the write that stale snapshot had authorised.
+      $lock = Enter-StatusLock
+      try {
+        $cur = Read-StatusSnapshot
+        $curSource = if ($cur) { [string]$cur.source } else { '' }
+        $curState  = if ($cur) { [string]$cur.state  } else { '' }
 
-      $shouldWrite = $false
-      $reason = ''
+        $isOwn = ($curSource -eq $S_DETECTOR)
+        $stateChanged = ($curState -ne $newState)
+        # waiting 加入 settle 集合：ask_user 触发时，pre-tool-use hook 会先推一条
+        # `working`，detector 随后才从 session log 推出 `waiting`。如果 waiting
+        # 不算 settle，detector 永远抢不回这条 status.json，pill 会一直卡在
+        # "执行中"——正好毁掉这个状态存在的意义。
+        $isSettleNew  = ($newState -eq $S_IDLE) -or ($newState -eq $S_ERROR) -or ($newState -eq $S_WAITING)
 
-      if (-not $cur) {
-        $shouldWrite = $true
-        $reason = $R_NO_CURRENT
-      } elseif ($isOwn -and $stateChanged) {
-        $shouldWrite = $true
-        $reason = $R_OWN_CHANGED
-      } elseif ($isOwn -and ($cur.message -ne $newMsg) -and $newMsg) {
-        $shouldWrite = $true
-        $reason = $R_OWN_MSG
-      } elseif (-not $isOwn -and $isSettleNew) {
-        $shouldWrite = $true
-        $reason = $R_TAKEOVER
-      }
+        $shouldWrite = $false
+        $reason = ''
 
-      if ($shouldWrite) {
-        Write-Status $inferred.state $inferred.message $inferred.family
-        if ($script:lastDetectedState -ne $newState) {
-          Log-Line "$newState :: $newMsg ($reason)"
-          $script:lastDetectedState = $newState
+        if (-not $cur) {
+          $shouldWrite = $true
+          $reason = $R_NO_CURRENT
+        } elseif ($isOwn -and $stateChanged) {
+          $shouldWrite = $true
+          $reason = $R_OWN_CHANGED
+        } elseif ($isOwn -and ($cur.message -ne $newMsg) -and $newMsg) {
+          $shouldWrite = $true
+          $reason = $R_OWN_MSG
+        } elseif (-not $isOwn -and $isSettleNew) {
+          $shouldWrite = $true
+          $reason = $R_TAKEOVER
         }
+
+        if ($shouldWrite) {
+          Write-StatusUnderLock $newState $newMsg $inferred.family
+          if ($script:lastDetectedState -ne $newState) {
+            $script:lastDetectedState = $newState
+            $logLine = "$newState :: $newMsg ($reason)"
+          }
+        }
+      } finally {
+        Exit-StatusLock $lock
       }
+      # Appended outside the critical section: the log write must not
+      # hold the lock that the other writer is waiting for.
+      if ($logLine) { Log-Line $logLine }
     }
 
     # 4) 5h 用量：每 60s 刷一次，刷新后若数字变化就写 status.json（让 widget 看到）
@@ -930,12 +1006,15 @@ try {
     $curMs    = $script:plan5hResetMs
     $usageChanged = ($prevPct -ne $curPct) -or ($prevMs -ne $curMs) -and ($null -ne $curPct)
     if ($usageChanged) {
-      $curForUsage = Read-StatusObj
-      $sForU = if ($curForUsage) { [string]$curForUsage.state } else { $S_IDLE }
-      $mForU = if ($curForUsage) { [string]$curForUsage.message } else { '' }
-      $fForU = if ($curForUsage -and $curForUsage.PSObject.Properties['family']) { $curForUsage.family } else { $null }
-      # 元数据刷新：原样写回当前状态，必须保留 sub-step（-KeepSubStep）
-      Write-Status $sForU $mForU $fForU -KeepSubStep
+      # Metadata refresh: restate the current state and refresh the
+      # numbers. The snapshot it restates is read INSIDE Write-Status,
+      # under the same lock as the write, so a hook push landing here
+      # is either fully seen or fully missed -- never half. The old code
+      # read the file here, read it again inside Write-Status, and wrote
+      # the result back over the whole file, so a hook write landing
+      # between the two reads was clobbered with stale values
+      # (round-21 review hetaoBackend #1).
+      Write-Status -MetadataRefresh
       Log-Line ("5h usage refreshed: remaining=" + $curPct + "% resetMs=" + $curMs)
     }
 
@@ -945,12 +1024,7 @@ try {
     $curTodoPct   = if ($null -ne $curTodoData) { $curTodoData.percent } else { $null }
     $todoChanged  = ($prevTodoPct -ne $curTodoPct)
     if ($todoChanged) {
-      $curForTodo = Read-StatusObj
-      $sForT = if ($curForTodo) { [string]$curForTodo.state } else { $S_IDLE }
-      $mForT = if ($curForTodo) { [string]$curForTodo.message } else { '' }
-      $fForT = if ($curForTodo -and $curForTodo.PSObject.Properties['family']) { $curForTodo.family } else { $null }
-      # 元数据刷新：原样写回当前状态，必须保留 sub-step（-KeepSubStep）
-      Write-Status $sForT $mForT $fForT -KeepSubStep
+      Write-Status -MetadataRefresh
       $script:plan5hLastWrittenTodoPct = $curTodoPct
       if ($null -ne $curTodoData) {
         Log-Line ("todo refreshed: " + $curTodoData.completed + "/" + $curTodoData.total + " = " + $curTodoPct + "%")
