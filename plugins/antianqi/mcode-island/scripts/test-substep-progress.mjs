@@ -974,6 +974,106 @@ try {
 }
 
 // ---------------------------------------------------------------------------
+// 9. PostToolUse classifies a structured tool result (round-21 #2)
+// ---------------------------------------------------------------------------
+//
+// The review: "PostToolUse error classification stringifies the result
+// and only recognizes textual error prefixes. A structured
+// {isError:true,...} result can be reported as `done`. Prefer the
+// structured boolean and test object/string/null success and failure
+// payloads through the real hook subprocess."
+//
+// The old code did `$s = [string]$result` and matched a textual prefix.
+// A structured result stringifies to "@{isError=True; content=...}",
+// which matches no prefix -- so a FAILED tool was reported as a
+// SUCCESS and the pill showed green.
+//
+// These cases run the real hook as a real child process, with a real
+// event on stdin, and read back what it wrote to status.json. A
+// function-body test would not prove the hook wires the classification
+// to the state it pushes.
+
+/**
+ * Run a hook script as a real child process with a JSON event on stdin.
+ * The hook reads its event from stdin and pushes the result to
+ * status.json, so the only honest way to test it is to feed it a
+ * payload and read back what it wrote.
+ */
+function runHookWithStdin(hookPath, eventJson, extraEnv) {
+    return new Promise((resolve) => {
+        const child = spawn(PS_BIN, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', hookPath], {
+            env: { ...process.env, ...(extraEnv || {}) },
+            stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        let out = '';
+        let err = '';
+        child.stdout.on('data', (d) => { out += d.toString('utf8'); });
+        child.stderr.on('data', (d) => { err += d.toString('utf8'); });
+        child.on('close', (code) => resolve({ code, out, err }));
+        child.stdin.end(eventJson);
+    });
+}
+
+if (PS_BIN) {
+    const hookPath = join(PLUGIN_ROOT, 'io.minimax.mcode', 'hooks', 'scripts', 'post-tool-use.ps1');
+    const postTool = readFileSync(hookPath, 'utf8');
+
+    check('post-tool-use delegates the classification to the shared helper',
+        /Test-ToolResultError/.test(postTool),
+        'post-tool-use.ps1 still classifies the result inline, so a structured isError flag is ignored');
+    check('post-tool-use no longer stringifies the tool result',
+        !/\[string\]\$result/.test(postTool),
+        'post-tool-use.ps1 stringifies tool_result before classifying it, which is what hid the structured isError flag');
+
+    const cases = [
+        // The two the review named.
+        { n: 'structured failure', result: { isError: true, output: 'command not found' }, want: 'error' },
+        { n: 'structured success', result: { isError: false, output: 'all good' }, want: 'done' },
+        // The flag survives a nested payload.
+        { n: 'structured failure with a nested payload', result: { isError: true, content: { text: 'boom' } }, want: 'error' },
+        { n: 'structured success with a nested payload', result: { isError: false, content: { text: 'ok' } }, want: 'done' },
+        // A bare string falls back to the textual heuristic.
+        { n: 'a string with an error prefix', result: 'Error: command not found', want: 'error' },
+        { n: 'a plain string', result: 'all good', want: 'done' },
+        // A result that is a JSON string still carries the flag.
+        { n: 'a JSON string carrying the failure flag', result: '{"isError":true,"output":"boom"}', want: 'error' },
+        { n: 'a JSON string carrying the success flag', result: '{"isError":false,"output":"ok"}', want: 'done' },
+        // Nothing at all is a failure: the tool produced no result.
+        { n: 'a null result', result: null, want: 'error' },
+        { n: 'an empty string result', result: '', want: 'error' },
+    ];
+
+    for (const c of cases) {
+        // A fresh %APPDATA% per case, so each run writes its own
+        // status.json and the assertion cannot read a previous case.
+        const appdata = makeIsolatedAppData('post-tool-use');
+        const event = {
+            session_id: 'ci-fake-session',
+            transcript_path: 'C:\\fake\\transcript',
+            cwd: 'C:\\fake\\cwd',
+            hook_event_name: 'PostToolUse',
+            tool_name: 'Bash',
+            tool_input: { command: 'npm test' },
+            tool_result: c.result,
+        };
+
+        const r = await runHookWithStdin(hookPath, JSON.stringify(event), { APPDATA: appdata });
+        check(`post-tool-use ${c.n}: the hook exited cleanly`,
+            r.code === 0,
+            `exit ${r.code}: ${(r.err || r.out).trim().slice(0, 300)}`);
+
+        const statusPath = join(appdata, 'mcode-island', 'status.json');
+        if (!existsSync(statusPath)) {
+            bad(`post-tool-use ${c.n}`, `the hook wrote no status.json (exit ${r.code}): ${(r.err || r.out).trim().slice(0, 300)}`);
+            continue;
+        }
+        const status = readJsonFile(statusPath);
+        eq(`post-tool-use ${c.n}: the pushed state`, status.state, c.want);
+        eq(`post-tool-use ${c.n}: the pushed message`, status.message, c.want === 'error' ? 'Bash failed' : 'Bash ok');
+    }
+}
+
+// ---------------------------------------------------------------------------
 // summary
 // ---------------------------------------------------------------------------
 

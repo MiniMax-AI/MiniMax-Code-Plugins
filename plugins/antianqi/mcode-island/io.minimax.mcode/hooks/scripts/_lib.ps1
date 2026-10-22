@@ -85,6 +85,53 @@ function Test-IsSelfPush {
     return ($cmd -match 'notify-island\.ps1|wrap-tool\.ps1|island\\notify|island\\wrap')
 }
 
+function Test-ToolResultError {
+    # Classifies a PostToolUse tool_result as a failure or a success.
+    #
+    # The detector already reads the structured boolean out of the session
+    # log (`$msg.isError -eq $true`). The hook path used to stringify the
+    # result and look for a textual error prefix, so a structured
+    # `{ isError: true }` came out as the string
+    # "@{isError=True; content=...}" -- which matches no prefix, so a
+    # FAILED tool was reported as a success and the pill showed green.
+    #
+    # Order matters. The structured boolean wins, because it is what the
+    # producer actually set. The textual heuristic is only a fallback for
+    # a result that arrives as a bare string.
+    param($Result)
+
+    # No result at all: the tool produced nothing, which is a failure.
+    if ($null -eq $Result) { return $true }
+
+    # A bare boolean is the flag itself.
+    if ($Result -is [bool]) { return $Result }
+
+    # A structured result: read the flag the producer set.
+    if ($Result -isnot [string]) {
+        $flag = $Result.PSObject.Properties['isError']
+        if ($flag) { return [bool]$flag.Value }
+    }
+
+    $s = [string]$Result
+    if ([string]::IsNullOrEmpty($s)) { return $true }
+
+    # A result that is a JSON string may still carry the structured flag.
+    $trimmed = $s.Trim()
+    if ($trimmed.StartsWith('{')) {
+        try {
+            $parsed = $trimmed | ConvertFrom-Json -ErrorAction Stop
+            if ($parsed -and $parsed.PSObject.Properties['isError']) {
+                return [bool]$parsed.isError
+            }
+        } catch {
+            # Not JSON after all. Fall through to the textual heuristic.
+        }
+    }
+
+    if ($s -match '^\s*(Error|ERROR|✕|Error:|\[ERROR\])') { return $true }
+    return $false
+}
+
 function Format-ToolSummary {
     # Compact "<ToolName>: <short input summary>" used in pill messages.
     # Truncated to keep the WPF label single-line.
