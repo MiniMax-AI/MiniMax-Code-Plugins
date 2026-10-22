@@ -446,31 +446,79 @@
           },
           "curves": {
             "type": "object",
-            "description": "曲线（官方 curves，4 条 1D 曲线）。控制点组是官方 A,L,R 布局。",
+            "description": "曲线（官方 curves，4 条 1D 曲线 R/G/B/Y 一起施加）。控制点用官方 [A,L,R] 布局：每控制点 = 3 个 vec2（锚点 A / 两个出向柄 L、R）⇒ 6 个数/控制点。键名：RPoints/GPoints/BPoints/YPoints（官方名）或 red/green/blue/luma（链 API 别名，等价）。★ 缺任一条通道会【直接报错】（不再静默烘成恒等 LUT）。★ 官方语义：Y（亮度）曲线会等量改 R/G/B 三个通道（为保色相）⇒ 只改 R 时 G/B 也会小幅变化。",
             "properties": {
+              "RPoints": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "description": "红通道控制点（官方 [A,L,R] 布局，6 个数/控制点）"
+              },
+              "GPoints": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "description": "绿通道控制点"
+              },
+              "BPoints": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "description": "蓝通道控制点"
+              },
+              "YPoints": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "description": "亮度通道控制点"
+              },
               "red": {
                 "type": "array",
                 "items": {
                   "type": "number"
-                }
+                },
+                "description": "别名（= RPoints）"
               },
               "green": {
                 "type": "array",
                 "items": {
                   "type": "number"
-                }
+                },
+                "description": "别名（= GPoints）"
               },
               "blue": {
                 "type": "array",
                 "items": {
                   "type": "number"
-                }
+                },
+                "description": "别名（= BPoints）"
               },
               "luma": {
                 "type": "array",
                 "items": {
                   "type": "number"
-                }
+                },
+                "description": "别名（= YPoints）"
+              },
+              "intensityR": {
+                "type": "number",
+                "description": "红通道强度 0..1"
+              },
+              "intensityG": {
+                "type": "number",
+                "description": "绿通道强度 0..1"
+              },
+              "intensityB": {
+                "type": "number",
+                "description": "蓝通道强度 0..1"
+              },
+              "intensityY": {
+                "type": "number",
+                "description": "亮度通道强度 0..1"
               }
             },
             "additionalProperties": false

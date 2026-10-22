@@ -18,13 +18,19 @@
       },
       "denoise": {
         "type": "string",
-        "enum": ["auto", "off"],
+        "enum": [
+          "auto",
+          "off"
+        ],
         "default": "auto",
         "description": "降噪：auto = 草稿里有 realtime_denoises 就按强度施加（ffmpeg afftdn 近似，★ 不是剪映的 SAMI denoise_v2）；off = 不施加"
       },
       "beautify": {
         "type": "string",
-        "enum": ["off", "approx"],
+        "enum": [
+          "off",
+          "approx"
+        ],
         "default": "off",
         "description": "人声美化：off = 不做（默认）；approx = 近似 EQ+压缩（★ 剪映的真实算法不可得）"
       },
@@ -41,6 +47,53 @@
         "type": "number",
         "default": -14,
         "description": "响度归一目标（LUFS）。验收会断言实际值与之相差 ≤1 LUFS"
+      },
+      "grade": {
+        "type": "object",
+        "properties": {
+          "adjustColor": {
+            "type": "object",
+            "description": "基础画面调节（亮度/对比/饱和/鲜艳/高光/暗部/黑白/色温…）"
+          },
+          "colorCorrection": {
+            "type": "object",
+            "description": "色彩校正"
+          },
+          "hsl": {
+            "type": "object",
+            "description": "分色调整（HSLRed / 01#ad8a86 这类取色键）"
+          },
+          "logWheel": {
+            "type": "object",
+            "description": "对数轮（shadow/midtone/highlights/offset）"
+          },
+          "primaryWheel": {
+            "type": "object",
+            "description": "三原色轮"
+          },
+          "curves": {
+            "type": "object",
+            "description": "曲线（R/G/B/Y 四条 1D，官方 [A,L,R] 布局，每控制点 6 个数；缺任一条会直接报错）"
+          },
+          "hsl_curves": {
+            "type": "object",
+            "description": "HSL 耦合曲线（6 条，官方 L,A,R 布局）"
+          },
+          "sharpen": {
+            "type": "object",
+            "description": "锐化（渲染期算子，3D LUT 表达不了）"
+          },
+          "vignetting": {
+            "type": "object",
+            "description": "暗角/白角（渲染期算子）"
+          },
+          "particle": {
+            "type": "object",
+            "description": "颗粒/光斑（渲染期算子）"
+          }
+        },
+        "description": "调色 spec（链 API 形态，见 references/chain-api.md）",
+        "additionalProperties": false
       }
     },
     "required": [

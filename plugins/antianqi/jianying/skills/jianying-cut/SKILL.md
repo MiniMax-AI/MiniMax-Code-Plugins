@@ -33,7 +33,7 @@ metadata:
 | 曲线 / HSL 耦合曲线 | `grade_apply` | `spec.curves.*` / `spec.hsl_curves.*` |
 | 锐化 / 暗角 / 颗粒 | `grade_apply` | `spec.sharpen` / `spec.vignetting` / `spec.particle` |
 | 确认改动看得见 | `verify_diff` | `beforeDir` / `afterDir` |
-| **给剪映草稿出成片（含音轨）** | **`make_film`** | `draft` / `outDir` / `lut` / `denoise` / `beautify` |
+| **给剪映草稿出成片（含音轨）** | **`make_film`** | `draft` / `outDir` / `grade` / `lut` / `denoise` / `beautify` / `targetLufs` |
 | 官方导出器出片 | —— | 官方 CLI 侧被 −100007 / −100015 挡死，**不绕**；我们用 `make_film` 自己出 |
 
 ★ **参数怎么填** → `references/chain-api.md`（语义在这里）· `mcp/tools/grade-apply.schema.json`（硬校验在这里）
@@ -57,12 +57,23 @@ node ${PLUGIN_ROOT}/scripts/run-verb.mjs grade_apply '{
   "spec": { "adjustColor": { "brightness": 0.10, "contrast": 0.12, "saturation": 0.28, "temperature": 0.15 } }
 }'
 
-# ②' 或者：给剪映草稿直接出成片（官方画面 + 我们的混音）
+# ②' 或者：给剪映草稿直接出成片（官方画面 + 我们的调色 + 我们的混音）
 node ${PLUGIN_ROOT}/scripts/run-verb.mjs make_film '{
   "draft": "<剪映草稿目录>",
   "outDir": "<输出目录>",
-  "denoise": "auto"
+  "denoise": "auto",
+  "grade": { "curves": {
+    "red":   [0,0, 0.1,0.0533, 0.2,0.1067, 0.3,0.16, 0.4067,0.3933, 0.5133,0.6267, 0.62,0.86, 0.7467,0.9067, 0.8733,0.9533, 1,1, 1,1, 1,1],
+    "green": [0,0, 0.1,0.0533, 0.2,0.1067, 0.3,0.16, 0.4067,0.3933, 0.5133,0.6267, 0.62,0.86, 0.7467,0.9067, 0.8733,0.9533, 1,1, 1,1, 1,1],
+    "blue":  [0,0, 0.1,0.0533, 0.2,0.1067, 0.3,0.16, 0.4067,0.3933, 0.5133,0.6267, 0.62,0.86, 0.7467,0.9067, 0.8733,0.9533, 1,1, 1,1, 1,1],
+    "luma":  [0,0, 0.1,0.0533, 0.2,0.1067, 0.3,0.16, 0.4067,0.3933, 0.5133,0.6267, 0.62,0.86, 0.7467,0.9067, 0.8733,0.9533, 1,1, 1,1, 1,1]
+  } }
 }'
+```
+
+★ **`grade` 的曲线参数格式见 `references/chain-api.md` 的 `curves` 段**（官方 A,L,R 布局，每控制点 6 个数；
+R/G/B/Y **四条必须一起给**，缺一条会直接报错，不会静默烘成恒等）。
+★ **不需要**在剪映里存带曲线的草稿 —— 曲线参数由我们自己的接口给。
 
 # ③ 验收（改动是否在画面上可见）
 node ${PLUGIN_ROOT}/scripts/run-verb.mjs verify_diff '{

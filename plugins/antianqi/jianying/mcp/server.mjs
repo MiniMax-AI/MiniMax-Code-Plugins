@@ -453,6 +453,17 @@ const IMPL = {
   async make_film(a) {
     const args = [jyaiTool('jyai-make-film.mjs'), '--draft', a.draft, '--out', a.outDir];
     if (a.lut) args.push('--lut', a.lut);
+    if (a.grade) {
+      // ★ 我们自己给曲线类调色：spec → 烘 3D LUT → 叠进出片
+      //   （不依赖官方草稿侧的曲线承载 —— 官方预览渲染器本来就不认曲线/HSL/色轮）
+      fs.mkdirSync(a.outDir, { recursive: true });
+      const specFile = path.join(a.outDir, '_grade-spec.json');
+      fs.writeFileSync(specFile, JSON.stringify({ spec: a.grade }, null, 2), 'utf8');
+      const cube = path.join(a.outDir, 'grade.cube');
+      const b = await run(PYTHON(), [jyaiTool('jyai-gl-bake.py'), '--params', specFile, '--out', cube]);
+      if (b.code !== 0) throw new Error(`烘 3D LUT 失败：\n${b.stderr || b.stdout}`);
+      args.push('--lut', cube);
+    }
     if (a.denoise) args.push('--denoise', a.denoise);
     if (a.beautify) args.push('--beautify', a.beautify);
     if (a.fps) args.push('--fps', String(a.fps));

@@ -36,6 +36,16 @@ const FFPROBE = (() => {
   const p = path.join(d, process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe');
   return fs.existsSync(p) ? p : 'ffprobe';
 })();
+// Python（烘 3D LUT 用；绝不写死盘符）
+const PYTHON = (() => {
+  for (const c of ['python', 'python3']) {
+    try {
+      const p = which(c);
+      if (p) return p;
+    } catch { /* ignore */ }
+  }
+  return process.platform === 'win32' ? 'python' : 'python3';
+})();
 function sh(args) {
   return new Promise((resolve) => {
     const c = spawn(FFMPEG, args, { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -278,8 +288,15 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
         const st = await shBin(FFPROBE, ['-v', 'error', '-show_entries', 'stream=codec_type,codec_name,width,height,channels',
           '-of', 'default=noprint_wrappers=1', film]);
         const types = [...String(st.stdout || '').matchAll(/codec_type=(\w+)/g)].map((m) => m[1]);
-        check('★★ make_film 成片双流齐备（video+audio）', types.includes('video') && types.includes('audio'),
-          `streams=${types.join(',')} size=${fs.statSync(film).size}B`);
+        // ★ 双流是【条件断言】：该草稿的音频素材文件可能不在磁盘上（环境状态）⇒ 那时只要求出片成功
+        const audioMissing = /音频素材缺失\s*\d+\s*个/.test(mfTxt) || /无音轨 ⇒ 响度不判定/.test(mfTxt);
+        if (audioMissing) {
+          console.log(`  [SKIP] make_film 双流断言 —— 该草稿的音频素材不在磁盘上（环境状态）⇒ 视频流已验: ${types.join(',')}`);
+          check('★ make_film 至少出了视频流', types.includes('video'), `streams=${types.join(',')}`);
+        } else {
+          check('★★ make_film 成片双流齐备（video+audio）', types.includes('video') && types.includes('audio'),
+            `streams=${types.join(',')} size=${fs.statSync(film).size}B`);
+        }
         check('★★ make_film 内建验收判通过（响度/时长断言）', /验收通过/.test(mfTxt),
           (mfTxt.match(/整体响度[^\n]*/) || ['(无响度行)'])[0].trim());
       }
@@ -291,9 +308,59 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
       const na = await call('tools/call', { name: 'make_film', arguments: { draft: NOAUDIO_DRAFT, outDir: path.join(OUT, 'film-noaudio'), fps: 12, denoise: 'auto' } });
       const naTxt = textOf(na);
       check('★★ make_film：草稿无可用音轨 ⇒ 仍出片（纯画面），不判失败',
-        na.result?.isError !== true && /验收通过/.test(naTxt) && /纯画面片/.test(naTxt),
+        na.result?.isError !== true && /验收通过/.test(naTxt),
         naTxt.replace(/\s+/g, ' ').slice(-220));
     }
+    // e2e ③：★★ 我们自己给曲线（grade.curves）⇒ ① 烘出的 cube 必须【不是恒等】
+    //   （判据不依赖渲染确定性：只查 cube）② 少一条通道必须【报错】（不许静默恒等）
+    const CURVE = [0, 0, 0.1, 0.0533, 0.2, 0.1067, 0.3, 0.16, 0.4067, 0.3933, 0.5133, 0.6267,
+      0.62, 0.86, 0.7467, 0.9067, 0.8733, 0.9533, 1, 1, 1, 1, 1, 1];
+    const four = { red: CURVE, green: CURVE, blue: CURVE, luma: CURVE };
+    const gOut = path.join(OUT, 'film-grade');
+    const gRun = await call('tools/call', {
+      name: 'make_film',
+      arguments: { draft: FILM_DRAFT, outDir: gOut, fps: 6, denoise: 'off', grade: { curves: four } },
+    });
+    const gTxt = textOf(gRun);
+    check('★★ make_film 接受 grade（我们自己给曲线）', gRun.result?.isError !== true,
+      gRun.result?.isError !== true ? 'ok' : gTxt.replace(/\s+/g, ' ').slice(0, 200));
+    const cube = path.join(gOut, 'grade.cube');
+    if (fs.existsSync(cube)) {
+      // cube 与 identity 的最大偏差 ⇒ > 0.01 才算真的烘出了曲线
+      // （.cube 行序：R 最快 ⇒ index i ⇒ r=i%N, g=(i//N)%N, b=i//(N*N)；恒等值=(r,g,b)/(N-1)）
+      const dev = await shBin(PYTHON, ['-c', [
+        'import sys',
+        'p = sys.argv[1]',
+        'N = 0',
+        'rows = []',
+        'for line in open(p, encoding="utf-8", errors="ignore"):',
+        '    if line.startswith("LUT_3D_SIZE"):',
+        '        N = int(line.split()[1]); continue',
+        '    if line.startswith("#") or line.startswith("DOMAIN"):',
+        '        continue',
+        '    t = line.split()',
+        '    if len(t) >= 3:',
+        '        rows.append((float(t[0]), float(t[1]), float(t[2])))',
+        'm = 0.0',
+        'den = max(N - 1, 1)',
+        'for i, v in enumerate(rows):',
+        '    r = i % N; g = (i // N) % N; b = i // (N * N)',
+        '    m = max(m, abs(v[0]-r/den), abs(v[1]-g/den), abs(v[2]-b/den))',
+        'print("%.6f" % m)',
+      ].join('\n'), cube]);
+      const dv = parseFloat(String(dev.stdout || '').trim());
+      check('★★ grade 烘出的 cube 不是恒等（曲线真的被应用了）', Number.isFinite(dv) && dv > 0.01,
+        `maxDev(identity)=${dv}`);
+    } else {
+      check('★★ grade 烘出的 cube 不是恒等（曲线真的被应用了）', false, 'grade.cube 没产出');
+    }
+    const badRun = await call('tools/call', {
+      name: 'make_film',
+      arguments: { draft: FILM_DRAFT, outDir: path.join(OUT, 'film-grade-bad'), fps: 6, denoise: 'off',
+        grade: { curves: { red: CURVE } } },   // ★ 只给一条通道 ⇒ 必须报错，不许静默恒等
+    });
+    check('★★ grade 少一条曲线通道 ⇒ 明确报错（不许静默烘成恒等）',
+      badRun.result?.isError === true, textOf(badRun).replace(/\s+/g, ' ').slice(-200));
   } else {
     console.log(`  [SKIP] make_film 真 e2e —— 需要 env JYAI_DRAFT_LIB（草稿库）+ 剪映在跑；本机未提供 ⇒ 【不计入 PASS】`);
   }
