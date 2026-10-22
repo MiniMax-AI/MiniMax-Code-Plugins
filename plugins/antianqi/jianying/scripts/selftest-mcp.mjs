@@ -361,6 +361,15 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
     });
     check('★★ grade 少一条曲线通道 ⇒ 明确报错（不许静默烘成恒等）',
       badRun.result?.isError === true, textOf(badRun).replace(/\s+/g, ' ').slice(-200));
+    // ★ 渲染期算子（sharpen/vignetting/particle）3D LUT 表达不了 ⇒ 写进来必须报错（不许静默忽略）
+    const rnRun = await call('tools/call', {
+      name: 'make_film',
+      arguments: { draft: FILM_DRAFT, outDir: path.join(OUT, 'film-grade-rn'), fps: 6, denoise: 'off',
+        grade: { sharpen: { intensity: 0.6 } } },
+    });
+    check('★★ grade 含渲染期算子(sharpen) ⇒ 明确报错（指向 grade_apply），不许静默忽略',
+      rnRun.result?.isError === true && /grade_apply|渲染期/.test(textOf(rnRun)),
+      textOf(rnRun).replace(/\s+/g, ' ').slice(-200));
   } else {
     console.log(`  [SKIP] make_film 真 e2e —— 需要 env JYAI_DRAFT_LIB（草稿库）+ 剪映在跑；本机未提供 ⇒ 【不计入 PASS】`);
   }

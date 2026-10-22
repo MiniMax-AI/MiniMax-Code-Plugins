@@ -26,6 +26,18 @@
 
 ★ **邻域 / uv 依赖的三个节点不能烘 3D LUT**（3D LUT 只能表达"逐点函数"）⇒ 只能在渲染期算。
 
+### 哪个动词用哪条链（★ 别混用）
+
+| 节点 | `grade_apply`（逐点直算） | `make_film --grade`（3D LUT） |
+|---|---|---|
+| `adjustColor` `colorCorrection` `hsl` `logWheel` `primaryWheel` `curves` `hsl_curves` | ✅ | ✅ |
+| `sharpen` `vignetting` `particle`（渲染期算子：邻域 / uv0 依赖） | ✅ | ❌ **写进来直接报错**（3D LUT 表达不了 ⇒ 会静默变恒等） |
+| `smartColorAdjustment` | ❌ 未实现（会报错） | ❌ 会报错 |
+
+⇒ ★ **两条链都不许"静默失效"**：
+- 3D LUT 路径：缺曲线通道 / 含渲染期算子 / 含未实现节点 ⇒ **抛异常**，不烘恒等
+- 逐点直算路径：带**逐节点生效探针**（单节点 vs 零，必须非零），并输出 "★ 无效果（参数形态可能不对）"
+
 ### `adjustColor`（含两个"子参数"，不是独立节点）
 
 | 参数 | 含义 |

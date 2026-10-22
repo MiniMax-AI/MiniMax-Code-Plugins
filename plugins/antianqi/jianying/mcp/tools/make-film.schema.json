@@ -81,18 +81,18 @@
           },
           "sharpen": {
             "type": "object",
-            "description": "锐化（渲染期算子，3D LUT 表达不了）"
+            "description": "锐化（渲染期算子，3D LUT 表达不了）⇒ 写进来会明确报错并指向 grade_apply"
           },
           "vignetting": {
             "type": "object",
-            "description": "暗角/白角（渲染期算子）"
+            "description": "暗角/白角（渲染期算子，3D LUT 表达不了）⇒ 同上"
           },
           "particle": {
             "type": "object",
-            "description": "颗粒/光斑（渲染期算子）"
+            "description": "颗粒/光斑（渲染期算子，3D LUT 表达不了）⇒ 同上"
           }
         },
-        "description": "调色 spec（链 API 形态，见 references/chain-api.md）",
+        "description": "调色 spec（链 API 形态，见 references/chain-api.md）。★ 只支持【逐点函数类】节点（adjustColor/colorCorrection/hsl/logWheel/primaryWheel/curves/hsl_curves）—— 它们能烘成 3D LUT。★ 渲染期算子（sharpen/vignetting/particle，依赖邻域/uv0）3D LUT 表达不了：写进来会【直接报错】，请改用 grade_apply 动词（逐点直算路径，支持全部节点）。",
         "additionalProperties": false
       }
     },
