@@ -1,4 +1,4 @@
-# scripts/lib/Get-5hUsage.ps1
+﻿# scripts/lib/Get-5hUsage.ps1
 #
 # Self-contained 5h usage API client. Exposes one function:
 #
@@ -107,5 +107,55 @@ function Get-5hUsage {
     # want to log a fetch failure can wrap the call in their
     # own try/catch.
     return $null
+  }
+}
+
+# 5h usage API 节流窗口
+$PLAN_API_TTL = [TimeSpan]::FromSeconds(60)
+
+# Resolve-PlanToken
+#
+#   按优先级解析 token，写进 $script:plan5hToken：
+#     1. $env:MINIMAX_OAUTH_TOKEN
+#     2. $env:MINIMAX_API_KEY
+#     3. %APPDATA%\mcode-island\config.json 里的 planApiToken
+#
+#   三种来源都没有时保持 $null —— Get-5hUsage 会直接返回 $null，一次
+#   网络请求都不发。
+#
+#   放在 lib 里而不是 detector 里，是为了让"要不要用 5h 用量"这件事
+#   完全由 lib 的存在与否决定：lib 不在（Marketplace 上架包就不带它），
+#   detector 既不读 token 也不联网。
+function Resolve-PlanToken {
+  $script:plan5hToken = $null
+  if ($env:MINIMAX_OAUTH_TOKEN) { $script:plan5hToken = $env:MINIMAX_OAUTH_TOKEN; return }
+  if ($env:MINIMAX_API_KEY) { $script:plan5hToken = $env:MINIMAX_API_KEY; return }
+
+  $cfgPath = Get-Variable -Name 'cfgFile' -ValueOnly -ErrorAction SilentlyContinue
+  if (-not $cfgPath) { $cfgPath = Join-Path $env:APPDATA 'mcode-island\config.json' }
+  if (-not (Test-Path $cfgPath)) { return }
+  try {
+    $cfg = [System.IO.File]::ReadAllText($cfgPath) | ConvertFrom-Json
+    if ($cfg.PSObject.Properties['planApiToken'] -and $cfg.planApiToken) {
+      $script:plan5hToken = [string]$cfg.planApiToken
+    }
+  } catch {}
+}
+
+# Refresh-5hUsage
+#
+#   主循环里每 60s 调一次（TTL 守门，单线程安全），结果写进
+#   $script:plan5hRemainingPct / $script:plan5hResetMs。
+function Refresh-5hUsage {
+  $now = Get-Date
+  if (($now - $script:plan5hLastCallAt) -lt $PLAN_API_TTL) { return }
+  $script:plan5hLastCallAt = $now
+  $data = Get-5hUsage
+  if ($null -eq $data) {
+    $script:plan5hRemainingPct = $null
+    $script:plan5hResetMs = $null
+  } else {
+    $script:plan5hRemainingPct = [int]$data.remainingPct
+    $script:plan5hResetMs = [int]$data.resetMs
   }
 }

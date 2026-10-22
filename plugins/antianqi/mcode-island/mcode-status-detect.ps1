@@ -3,14 +3,13 @@
 # 让 widget 不依赖 agent 主动调 notify-island.ps1 也能跟着动
 #
 # 路径解析（顺序）：
-#   1. 从 mcode node 进程 cmdline 提取 <userprofile>/.minimax-code
-#   2. 探测 $env:USERPROFILE/.minimax-code
-#   3. 探测 $env:USERPROFILE/AppData/Roaming/minimax-code/.minimax-code
-#   4. 探测 <cwd>/.minimax-code
+#   1. 用户显式 -Root 覆盖
+#   2. 桌面端数据目录 $env:MINIMAX_DATA_DIR（没有则用 <userprofile>/.minimax）
+#   3. <userprofile>
 #
 # session log（顺序）：
-#   1. <root>/.minimax/v2/sessions/<date>/*/ledger.jsonl（首选，mcode v2 事件流）
-#   2. <root>/.minimax/v2/sessions/<date>/*/messages.jsonl（fallback）
+#   1. <dataDir>/v2/sessions/<date>/*/ledger.jsonl（首选，mcode v2 事件流）
+#   2. <dataDir>/v2/sessions/<date>/*/messages.jsonl（fallback）
 #
 # 状态映射：
 #   role=user                  → idle     (等用户)
@@ -33,7 +32,7 @@
 
 param(
   [switch]$Once,
-  [string]$Root = ''    # override: <root>/.minimax-code and <root>/.minimax/v2/...
+  [string]$Root = ''    # override: the directory that holds .minimax/v2/sessions
 )
 
 $ErrorActionPreference = 'Stop'
@@ -80,8 +79,7 @@ $S_DETECTOR  = _s (0x64,0x65,0x74,0x65,0x63,0x74,0x6F,0x72)
 $MSG_USER_WAIT  = _s (0xE7,0xAD,0x89,0xE7,0x94,0xA8,0xE6,0x88,0xB7)              # 等用户
 $MSG_AGENT_DONE = _s (0x61,0x67,0x65,0x6E,0x74,0x20,0xE5,0x88,0x9A,0xE5,0x9B,0x9E,0xE5,0xA4,0x8D,0xEF,0xBC,0x8C,0xE7,0xAD,0x89,0xE7,0x94,0xA8,0xE6,0x88,0xB7)  # agent 刚回复，等用户
 $MSG_COMPACT    = _s (0x73,0x65,0x73,0x73,0x69,0x6F,0x6E,0x20,0xE5,0x8E,0x8B,0xE7,0xBC,0xA9)  # session 压缩
-$MSG_MCODE_EXIT = _s (0x6D,0x63,0x6F,0x64,0x65,0x20,0xE8,0xBF,0x9B,0xE7,0xA8,0x8B,0xE5,0xB7,0xB2,0xE9,0x80,0x80,0xE5,0x87,0xBA)  # mcode 进程已退出
-$MSG_IDLE_FMT   = _s (0xE5,0xB7,0xB2,0xE9,0x9D,0x99,0xE9,0x9C,0xA8,0x20,0x7B,0x30,0x7D,0x73)  # 已静默 {0}s
+$MSG_IDLE_FMT   = _s (0xE5,0xB7,0xB2,0xE9,0x9D,0x99,0xE9,0xBB,0x98,0x20,0x7B,0x30,0x7D,0x73)  # 已静默 {0}s
 $DOTS            = _s (0x2E,0x2E,0x2E)                                                # ...
 $FMT_O           = _s (0x6F)                                                           # 'o' (ISO 8601 timestamp)
 $FMT_O_FULL      = _s (0x4F)                                                           # 'O' (ISO 8601 full)
@@ -138,12 +136,6 @@ $TOOL_FAMILIES = @{
 # default for tools not in the table (kept lowercase so it reads like a name)
 $TOOL_FALLBACK_RUNNING = _s (0x55,0x73,0x69,0x6E,0x67)   # Using
 $TOOL_FALLBACK_DONE    = _s (0x55,0x73,0x65,0x64)         # Used
-# mcode node cli.js path fragment for cmdline match
-$CLI_FRAGMENT    = _s (0x40,0x6D,0x69,0x6E,0x69,0x6D,0x61,0x78,0x2D,0x61,0x69,0x2F,0x63,0x6F,0x64,0x65,0x2F,0x63,0x6C,0x69,0x2E,0x6A,0x73)  # @minimax-ai/code/cli.js
-# .mcode-active directory name
-$ACTIVE_DIR      = _s (0x2E,0x6D,0x63,0x6F,0x64,0x65,0x2D,0x61,0x63,0x74,0x69,0x76,0x65)  # .mcode-active
-# .minimax-code directory name (parent of .mcode-active)
-$MINIMAX_CODE    = _s (0x2E,0x6D,0x69,0x6E,0x69,0x6D,0x61,0x78,0x2D,0x63,0x6F,0x64,0x65)  # .minimax-code
 # v2 sessions relative to user profile
 $V2_SESSIONS_REL = _s (0x2E,0x6D,0x69,0x6E,0x69,0x6D,0x61,0x78,0x5C,0x76,0x32,0x5C,0x73,0x65,0x73,0x73,0x69,0x6F,0x6E,0x73)  # .minimax\v2\sessions
 
@@ -156,15 +148,18 @@ $pidFile    = Join-Path $configDir 'detect.pid'
 $cfgFile    = Join-Path $configDir 'config.json'
 
 # 5h 用量 API：每 60s 调一次 minimax /v1/coding_plan/remains，写进 status.json 的 usage5h 字段
-# token 来源：env MINIMAX_OAUTH_TOKEN 优先；fallback 到 config.json 的 planApiToken
 #
-# The actual API call (Get-5hUsage) and the URL/host constants live
-# in scripts/lib/Get-5hUsage.ps1. They are extracted into a lib so
-# the windows-latest CI job (and the local runner) can exercise the
-# 5h usage path against a mocked listener without requiring a real
-# mcode install on the runner. Dot-source the lib here so the
-# main loop's Refresh-5hUsage can call Get-5hUsage directly.
-. "$PSScriptRoot/scripts/lib/Get-5hUsage.ps1"
+# 这是一个**可选**能力。真正干活的代码（URL、请求头、token 解析、刷新逻辑）
+# 全部在 scripts/lib/Get-5hUsage.ps1 里，detector 这里只判断"这个 lib 在不在"。
+#
+# lib 不在时（MiniMax Marketplace 的上架包就不携带它），整条 5h 链路直接关闭：
+# 不读任何 token、不发任何网络请求、status.json 里也没有 usage5h 字段。
+$script:plan5hAvailable = $false
+if (Test-Path "$PSScriptRoot/scripts/lib/Get-5hUsage.ps1") {
+  . "$PSScriptRoot/scripts/lib/Get-5hUsage.ps1"
+  $script:plan5hAvailable = $true
+  Resolve-PlanToken
+}
 # Shared redaction helper (round-20). The detector is the SECOND producer
 # of tool text -- it re-derives messages from mcode's session log rather
 # than from a hook event, so it needs the same redaction the hook path
@@ -179,18 +174,6 @@ $cfgFile    = Join-Path $configDir 'config.json'
 # the lock, the single snapshot read and the atomic replace, so both
 # sides follow one protocol.
 . "$PSScriptRoot/scripts/lib/Status-Store.ps1"
-$PLAN_API_TTL  = [TimeSpan]::FromSeconds(60)
-$script:plan5hToken = $null
-if ($env:MINIMAX_OAUTH_TOKEN) { $script:plan5hToken = $env:MINIMAX_OAUTH_TOKEN }
-elseif ($env:MINIMAX_API_KEY) { $script:plan5hToken = $env:MINIMAX_API_KEY }
-elseif (Test-Path $cfgFile) {
-  try {
-    $cfg = [System.IO.File]::ReadAllText($cfgFile) | ConvertFrom-Json
-    if ($cfg.PSObject.Properties['planApiToken'] -and $cfg.planApiToken) {
-      $script:plan5hToken = [string]$cfg.planApiToken
-    }
-  } catch {}
-}
 $script:plan5hLastCallAt = [DateTime]::MinValue
 $script:plan5hRemainingPct = $null  # 0..100，剩余百分比（不再是已用！）
 $script:plan5hResetMs = $null       # 距下次刷新的毫秒数
@@ -200,84 +183,82 @@ $script:plan5hTodoData = $null      # @{ percent; currentTodo; completed; total 
 $script:plan5hTodoCacheMtime = [DateTime]::MinValue
 $script:plan5hLastWrittenTodoPct = $null  # 上次写到 status.json 的 todoProgress（用来检测变化）
 
-# 解析 mcode 安装根目录（<userprofile>/.minimax-code）
+# 解析 MiniMax Code 的数据根目录
+#
+# 投放目标是桌面端（MiniMax Code app），所以优先按桌面端的数据目录找：
+#   会话流固定在 <dataDir>/v2/sessions，根目录取 <dataDir> 的父目录。
+#   MINIMAX_DATA_DIR 是官方支持的数据目录覆盖环境变量。
+#
+# 之前这里只认 MiniMax Code CLI 的安装目录，而且是从 CLI 的 node 进程
+# cmdline 里反查出来的。桌面端用户没有装 CLI，于是这个函数返回 null，
+# detector 直接 exit 2 —— 状态检测在桌面端根本跑不起来。
 function Find-McodeRoot {
   # 1) 用户显式 -Root 覆盖
   if ($script:optRoot -and (Test-Path $script:optRoot)) { return $script:optRoot }
 
-  # 2) 从 mcode node 进程 cmdline 提取
-  $procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -and $_.CommandLine.Contains($CLI_FRAGMENT) }
-  foreach ($p in $procs) {
-    try {
-      $m = [regex]::Match($p.CommandLine, '([A-Za-z]:\\[^"'']*?)\.minimax-code\\')
-      if ($m.Success) {
-        $root = $m.Groups[1].Value + $MINIMAX_CODE
-        if (Test-Path $root) { return $root }
-      }
-    } catch {}
+  # 2) 桌面端数据目录
+  foreach ($dataDir in Get-DataDirs) {
+    if (Test-Path (Join-Path $dataDir 'v2\sessions')) {
+      $parent = Split-Path -Parent $dataDir
+      if ($parent) { return $parent }
+    }
   }
 
-  # 3) 探测 $env:USERPROFILE/.minimax-code
-  if ($env:USERPROFILE) {
-    $candidate = Join-Path $env:USERPROFILE $MINIMAX_CODE
-    if (Test-Path $candidate) { return $candidate }
-  }
-
-  # 4) 探测 $env:USERPROFILE/AppData/Roaming/minimax-code/.minimax-code
-  if ($env:APPDATA) {
-    $candidate = Join-Path (Join-Path $env:APPDATA 'minimax-code') $MINIMAX_CODE
-    if (Test-Path $candidate) { return $candidate }
-  }
-
-  # 5) 探测 <cwd>/.minimax-code
-  try {
-    $cwd = (Get-Location).Path
-    $candidate = Join-Path $cwd $MINIMAX_CODE
-    if (Test-Path $candidate) { return $candidate }
-  } catch {}
+  # 3) 兜底：用户主目录
+  if ($env:USERPROFILE) { return $env:USERPROFILE }
 
   return $null
 }
 
-# sessions 根目录（优先 mcode 安装目录上一级，再 fallback userprofile）
+# 桌面端的数据目录候选（按优先级）
+function Get-DataDirs {
+  $dirs = @()
+  if ($env:MINIMAX_DATA_DIR) { $dirs += $env:MINIMAX_DATA_DIR }
+  if ($env:USERPROFILE) { $dirs += (Join-Path $env:USERPROFILE '.minimax') }
+  return $dirs
+}
+
+# sessions 根目录（桌面端优先）
 function Get-SessionsRoot($mcodeRoot) {
-  if ($mcodeRoot) {
-    # .minimax-code 和 .minimax 平级，都在 <userprofile> 下
-    $parent = Split-Path -Parent $mcodeRoot
-    $candidate = Join-Path $parent (Join-Path '.minimax' (Join-Path 'v2' 'sessions'))
+  # 1) 桌面端：<dataDir>/v2/sessions
+  foreach ($dataDir in Get-DataDirs) {
+    $candidate = Join-Path $dataDir 'v2\sessions'
     if (Test-Path $candidate) { return $candidate }
   }
+
+  # 2) <userprofile>/.minimax/v2/sessions
   if ($env:USERPROFILE) {
     $candidate = Join-Path $env:USERPROFILE $V2_SESSIONS_REL
     if (Test-Path $candidate) { return $candidate }
   }
+
+  # 3) 兜底：根目录的上一级里找 .minimax/v2/sessions
+  if ($mcodeRoot) {
+    $parent = Split-Path -Parent $mcodeRoot
+    $candidate = Join-Path $parent (Join-Path '.minimax' (Join-Path 'v2' 'sessions'))
+    if (Test-Path $candidate) { return $candidate }
+  }
+
   return $null
 }
 
 $script:optRoot = $Root
 $mcodeRoot = Find-McodeRoot
-if (-not $mcodeRoot) {
-  Write-Error "Cannot find mcode install root (.minimax-code). Pass -Root or ensure mcode is running."
-  exit 2
-}
-$mcodeActiveDir = Join-Path $mcodeRoot $ACTIVE_DIR
 $sessionsRoot   = Get-SessionsRoot $mcodeRoot
-if (-not (Test-Path $mcodeActiveDir)) {
-  Write-Warning ".mcode-active not found at $mcodeActiveDir — mcode not running or different layout"
+if (-not $sessionsRoot) {
+  Write-Error "Cannot find the MiniMax Code session store (~/.minimax/v2/sessions). Set MINIMAX_DATA_DIR or pass -Root."
+  exit 2
 }
 
 # 全局状态
 $script:lastDetectedState = ''
 $script:lastMsgsSnapshot  = @{ mtime = ''; lastInferred = $null }
 
-# 5s 缓存：mcode 进程 PID + 最新 session log 路径
-# 避免每秒调 Get-McodePid / Get-LatestSessionFile（每次都涉及 Get-ChildItem
+# 5s 缓存：最新 session log 路径
+# 避免每秒调 Get-LatestSessionFile（每次都涉及 Get-ChildItem
 # 之类的 cmdlet，PS 5.1 hidden window 下会累积 Runspace 线程，9 小时后
 # 池子被占满 → poll 不再前进 → widget 卡死）。
 $CACHE_TTL = [TimeSpan]::FromSeconds(5)
-$script:lastMcodePid     = $null
-$script:lastMcodePidAt   = [DateTime]::MinValue
 $script:lastLatestFile   = $null
 $script:lastLatestFileAt = [DateTime]::MinValue
 
@@ -313,34 +294,6 @@ function Log-Line($msg) {
     }
   }
   if (-not $Once) { Write-Output $line }
-}
-
-function Get-McodePid {
-  if (-not (Test-Path $mcodeActiveDir)) { return $null }
-  # Use [System.IO.Directory]::EnumerateFiles instead of Get-ChildItem + foreach
-  # to avoid the PS 5.1 pipeline-thread leak that built up over multi-hour
-  # runs and eventually stalled the detector. See: ~30k leaked threads
-  # observed after 9h of polling.
-  $bestPid = $null
-  $bestMtime = [DateTime]::MinValue
-  foreach ($f in [System.IO.Directory]::EnumerateFiles($mcodeActiveDir, '*.json')) {
-    try {
-      $raw = [System.IO.File]::ReadAllText($f)
-      $j = $raw | ConvertFrom-Json
-      $targetPid = [int]$j.pid
-      $proc = [System.Diagnostics.Process]::GetProcessById($targetPid)
-      if ($proc -and -not $proc.HasExited) {
-        # .mcode-active dir is tiny (one or two .json files); prefer the most
-        # recently started one if multiple happen to exist.
-        $mtime = [System.IO.File]::GetLastWriteTime($f)
-        if ($mtime -gt $bestMtime) {
-          $bestMtime = $mtime
-          $bestPid = $targetPid
-        }
-      }
-    } catch {}
-  }
-  return $bestPid
 }
 
 function Get-LatestSessionFile {
@@ -799,29 +752,11 @@ function Write-StatusUnderLock($state, $message, $family, [switch]$MetadataRefre
   Write-StatusSnapshot -Payload $payload -Previous $prev
 }
 
-# Get-5hUsage 现在定义在 scripts/lib/Get-5hUsage.ps1（detector 顶部 dot-source 了它）.
-# 抽到 lib 是为了让 windows-latest CI 能在不装 mcode 的 runner 上跑 5h usage
-# 路径（之前 round-9 直接 dot-source 本文件，主循环 init 的 install-root 检查
-# 会在 CI 上炸 "Cannot find mcode install root"）。
-#
+# 5h 用量的取值与刷新都在 scripts/lib/Get-5hUsage.ps1 里（lib 不在时整条
+# 链路关闭，detector 这边不碰 token、不联网）。
 # 字段名契约：fixture 用 model_name / current_interval_remaining_percent /
 # remains_time（与 lib 的实现一致）。如果实现字段回归，CI step 4 会因为
 # Get-5hUsage 返 null 而 fail。
-
-# 在主循环里每 60s 调一次（用 TTL 守门，单线程安全）
-function Refresh-5hUsage {
-  $now = Get-Date
-  if (($now - $script:plan5hLastCallAt) -lt $PLAN_API_TTL) { return }
-  $script:plan5hLastCallAt = $now
-  $data = Get-5hUsage
-  if ($null -eq $data) {
-    $script:plan5hRemainingPct = $null
-    $script:plan5hResetMs = $null
-  } else {
-    $script:plan5hRemainingPct = [int]$data.remainingPct
-    $script:plan5hResetMs = [int]$data.resetMs
-  }
-}
 
 # 读最新一次 todowrite 的 todos，计算完成百分比
 # 缓存：mtime 不变就复用上次结果（典型场景：mcode 跑 1 分钟才动一次 todo）
@@ -900,30 +835,24 @@ try {
     $inferred = $null
     $latestFile = $null
 
-    # 1) mcode 进程健康：5s 缓存（避免每秒 Get-ChildItem + Get-Process）
-    if (($now - $script:lastMcodePidAt) -lt $CACHE_TTL) {
-      $mcodePid = $script:lastMcodePid
+    # 1) 最新 session log：5s 缓存（避免每秒 EnumerateFiles 几千个 .jsonl）
+    #
+    #    之前这里先查 mcode 进程（读的是 CLI 专属的活动会话目录），
+    #    查不到就直接判 "mcode 已退出" 并且完全不读 session log。桌面端
+    #    没有那个目录，于是状态检测在桌面端永远显示 error。
+    #    现在直接以会话流为准；应用真的不在了，由下面"60s 无活动 → idle"
+    #    的兜底逻辑收尾。
+    if (($now - $script:lastLatestFileAt) -lt $CACHE_TTL) {
+      $latestFile = $script:lastLatestFile
     } else {
-      $mcodePid = Get-McodePid
-      $script:lastMcodePid = $mcodePid
-      $script:lastMcodePidAt = $now
+      $latestFile = Get-LatestSessionFile
+      $script:lastLatestFile = $latestFile
+      $script:lastLatestFileAt = $now
     }
-    if (-not $mcodePid) {
-      $inferred = @{ state=$S_ERROR; message=$MSG_MCODE_EXIT }
-    } else {
-      # 2) 最新 session log：5s 缓存（避免每秒 EnumerateFiles 几千个 .jsonl）
-      if (($now - $script:lastLatestFileAt) -lt $CACHE_TTL) {
-        $latestFile = $script:lastLatestFile
-      } else {
-        $latestFile = Get-LatestSessionFile
-        $script:lastLatestFile = $latestFile
-        $script:lastLatestFileAt = $now
-      }
-      if ($latestFile) {
-        $msg = Read-LastMessage $latestFile
-        if ($msg) {
-          $inferred = Infer-State $msg
-        }
+    if ($latestFile) {
+      $msg = Read-LastMessage $latestFile
+      if ($msg) {
+        $inferred = Infer-State $msg
       }
     }
 
@@ -1001,7 +930,7 @@ try {
     # 4) 5h 用量：每 60s 刷一次，刷新后若数字变化就写 status.json（让 widget 看到）
     $prevPct  = $script:plan5hRemainingPct
     $prevMs   = $script:plan5hResetMs
-    Refresh-5hUsage
+    if ($script:plan5hAvailable) { Refresh-5hUsage }
     $curPct   = $script:plan5hRemainingPct
     $curMs    = $script:plan5hResetMs
     $usageChanged = ($prevPct -ne $curPct) -or ($prevMs -ne $curMs) -and ($null -ne $curPct)
