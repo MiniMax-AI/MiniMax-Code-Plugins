@@ -1,4 +1,4 @@
-# mcode 灵动岛 v1 - WPF + PowerShell
+﻿# mcode 灵动岛 v1 - WPF + PowerShell
 # 用法：右键 → 用 PowerShell 运行；或通过 start-island.ps1 启动
 
 $ErrorActionPreference = 'Stop'
@@ -810,26 +810,91 @@ $window.Add_MouseRightButtonDown({
 })
 
 # 点击 vs 拖动
+#
+# 为什么不用 DragMove()。
+#
+# DragMove() 会 SendMessage(WM_SYSCOMMAND, SC_MOVE) 进入 Win32 的模态移动
+# 循环。那个循环里 WPF 的渲染线程不参与合成：DWM 不再把分层窗口
+# （AllowsTransparency=True 的 per-pixel alpha 表面）重新合成出来，屏幕上
+# 剩下的就是那块没被绘制过的表面 —— 一块白框，尺寸正好是窗口的 320x60。
+# 窗口上的 DropShadowEffect 让它更明显：效果本身是软件渲染的，模态循环
+# 期间那一帧根本没画出来。
+#
+# 所以这里自己实现拖动：正常消息泵里改 Left/Top，WPF 每帧照常合成，
+# 白框不会出现。代价是失去 DragMove() 的系统级移动手感（边缘吸附等），
+# 这个 pill 用不上那些。
+#
+# 另一个坑：MouseMove 里的 GetPosition($window) 是相对窗口的，而窗口正在
+# 跟着鼠标走，所以相对位移恒为 0，直接用它算 delta 窗口永远不动。必须拿
+# 屏幕坐标（PointToScreen）做差，再按 DPI 缩放换回 Left/Top 用的 DIP。
 $script:dragStart = $null
 $script:didDrag = $false
+$script:dragOriginLeft = 0.0
+$script:dragOriginTop = 0.0
+$script:dragAnchorX = 0.0
+$script:dragAnchorY = 0.0
 $script:pill.RenderTransform = New-Object System.Windows.Media.ScaleTransform(1, 1)
 $script:pill.RenderTransformOrigin = New-Object System.Windows.Point(0.5, 0.5)
+
+# 屏幕像素 -> DIP 的换算系数。PointToScreen 给的是设备像素，Window.Left/Top
+# 用的是设备无关单位，缩放不是 100% 时两者不等。
+function Get-DragScale {
+  $sx = 1.0
+  $sy = 1.0
+  try {
+    $src = [System.Windows.PresentationSource]::FromVisual($window)
+    if ($src -and $src.CompositionTarget) {
+      $m = $src.CompositionTarget.TransformToDevice
+      if ($m.M11 -gt 0) { $sx = [double]$m.M11 }
+      if ($m.M22 -gt 0) { $sy = [double]$m.M22 }
+    }
+  } catch {}
+  return @{ X = $sx; Y = $sy }
+}
+
 $window.Add_MouseLeftButtonDown({
   $script:dragStart = $_.GetPosition($window)
   $script:didDrag = $false
+  $script:dragOriginLeft = $window.Left
+  $script:dragOriginTop = $window.Top
+  try {
+    $anchor = $window.PointToScreen($script:dragStart)
+    $script:dragAnchorX = $anchor.X
+    $script:dragAnchorY = $anchor.Y
+  } catch {
+    $script:dragAnchorX = $script:dragStart.X
+    $script:dragAnchorY = $script:dragStart.Y
+  }
+  # 抓住鼠标，否则指针一移出 320x60 的窗口 MouseMove 就不再来，拖动会"粘住"。
+  try { $window.CaptureMouse() } catch {}
 })
 $window.Add_MouseMove({
-  if ($script:dragStart -and -not $script:didDrag) {
-    $cur = $_.GetPosition($window)
+  if ($null -eq $script:dragStart) { return }
+  # The position is read EVERY event, not only before the threshold is
+  # crossed: the window is moving, so a position read during an earlier
+  # event is stale relative to where the window is now.
+  $cur = $_.GetPosition($window)
+  # The threshold gates the START of the drag, not the movement. The
+  # previous guard returned as soon as didDrag was set, so the pill
+  # followed the cursor for exactly one event and then stopped --
+  # measured at 14% of the cursor movement.
+  if (-not $script:didDrag) {
     $dx = [Math]::Abs($cur.X - $script:dragStart.X)
     $dy = [Math]::Abs($cur.Y - $script:dragStart.Y)
-    if ($dx + $dy -gt 5) {
-      $script:didDrag = $true
-      try { $window.DragMove() } catch {}
-    }
+    if ($dx + $dy -le 5) { return }
+    $script:didDrag = $true
+  }
+  try {
+    $now = $window.PointToScreen($cur)
+    $scale = Get-DragScale
+    $window.Left = $script:dragOriginLeft + (($now.X - $script:dragAnchorX) / $scale.X)
+    $window.Top  = $script:dragOriginTop  + (($now.Y - $script:dragAnchorY) / $scale.Y)
+  } catch {
+    Dbg "DRAG FAIL: $($_.Exception.Message)"
   }
 })
 $window.Add_MouseLeftButtonUp({
+  try { $window.ReleaseMouseCapture() } catch {}
   try {
     if ($script:dragStart -and -not $script:didDrag) {
       Dbg 'CLICK detected'
