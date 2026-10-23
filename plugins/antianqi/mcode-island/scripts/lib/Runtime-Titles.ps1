@@ -42,6 +42,15 @@ $script:RUNTIME_TITLES_TTL_MS = 60 * 1000
 # 节点脚本跑多久算超时。1.9GB 的库打开要读页，1.5s 足够；超了就当没有。
 $script:RUNTIME_TITLES_TIMEOUT_MS = 1500
 
+# 用户主目录。Windows 是 USERPROFILE，Linux/macOS 是 HOME —— CI 的 ubuntu
+# job 没有 USERPROFILE，Join-Path $null 会抛异常，所以这里必须自己兜住。
+function Get-UserHome {
+  foreach ($v in @($env:USERPROFILE, $env:HOME)) {
+    if ($v) { return [string]$v }
+  }
+  return ''
+}
+
 # 找一个能用的 node。
 #
 # 顺序有讲究：
@@ -50,26 +59,35 @@ $script:RUNTIME_TITLES_TIMEOUT_MS = 1500
 #   3. 桌面端 app 当 node 用  —— ELECTRON_RUN_AS_NODE=1
 #
 # 第 3 条是给上架版用的：桌面端用户不一定装了 node，但一定跑着 app。
+#
+# **这个函数不许抛异常**：没有 node 就是没有标题，不是错误。
 function Get-NodeCommand {
-  $c = Get-Command node -ErrorAction SilentlyContinue
-  if ($c) { return @{ Exe = $c.Source; Env = $null } }
+  try {
+    $c = Get-Command node -ErrorAction SilentlyContinue
+    if ($c) { return @{ Exe = $c.Source; Env = $null } }
 
-  # CLI 自带：~/.minimax-code/runtime/node-vXX.Y.Z-win-x64/node.exe
-  $runtimeRoot = Join-Path $env:USERPROFILE '.minimax-code\runtime'
-  if (Test-Path -LiteralPath $runtimeRoot) {
-    $nodeExe = Get-ChildItem -LiteralPath $runtimeRoot -Recurse -Depth 2 -File -Filter 'node.exe' -ErrorAction SilentlyContinue |
-      Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if ($nodeExe) { return @{ Exe = $nodeExe.FullName; Env = $null } }
-  }
+    # CLI 自带：~/.minimax-code/runtime/node-vXX.Y.Z-win-x64/node.exe
+    $home = Get-UserHome
+    if ($home) {
+      $runtimeRoot = Join-Path $home '.minimax-code\runtime'
+      if (Test-Path -LiteralPath $runtimeRoot) {
+        $nodeExe = Get-ChildItem -LiteralPath $runtimeRoot -Recurse -Depth 2 -File -Filter 'node.exe' -ErrorAction SilentlyContinue |
+          Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($nodeExe) { return @{ Exe = $nodeExe.FullName; Env = $null } }
+      }
+    }
 
-  # 桌面端 app：ELECTRON_RUN_AS_NODE=1 之后 Electron 就是 node。
-  #
-  # 从已经在跑的进程里拿 exe 路径，比去 Program Files 里猜安装位置可靠：
-  # 装在哪、怎么升级都不会失配。
-  $names = @('MiniMax Inside Code', 'MiniMax Code', 'Mavis')
-  foreach ($n in $names) {
-    $proc = Get-Process -Name $n -ErrorAction SilentlyContinue | Where-Object { $_.Path } | Select-Object -First 1
-    if ($proc) { return @{ Exe = $proc.Path; Env = 'ELECTRON_RUN_AS_NODE=1' } }
+    # 桌面端 app：ELECTRON_RUN_AS_NODE=1 之后 Electron 就是 node。
+    #
+    # 从已经在跑的进程里拿 exe 路径，比去 Program Files 里猜安装位置可靠：
+    # 装在哪、怎么升级都不会失配。
+    $names = @('MiniMax Inside Code', 'MiniMax Code', 'Mavis')
+    foreach ($n in $names) {
+      $proc = Get-Process -Name $n -ErrorAction SilentlyContinue | Where-Object { $_.Path } | Select-Object -First 1
+      if ($proc) { return @{ Exe = $proc.Path; Env = 'ELECTRON_RUN_AS_NODE=1' } }
+    }
+  } catch {
+    # 找不到就是找不到。
   }
   return $null
 }
@@ -78,27 +96,36 @@ function Get-NodeCommand {
 #
 # 返回 @{ id -> title }，读不到就返回空表。**任何失败都只是少一个标题**，
 # 不该把 detector 带崩：所以这里只吞异常，不往上抛。
+#
+# 整个函数体都在 try 里，包括路径拼接 —— CI 的 ubuntu job 没有
+# USERPROFILE，Join-Path $null 会抛，那次失败就是这么来的。
 function Read-RuntimeTitles {
   $result = @{}
-  # MCODE_RUNTIME_STATE_DB 可以指向别的库。测试要用一个自己建的临时库，
-  # 不然就只能读开发机上那个 1.9GB 的真库。
-  $db = $env:MCODE_RUNTIME_STATE_DB
-  if (-not $db) { $db = Join-Path $env:USERPROFILE '.minimax\v2\sqlite\runtime-state.sqlite' }
-  if (-not (Test-Path -LiteralPath $db)) { return $result }
+  $tmp = $null
+  try {
+    # MCODE_RUNTIME_STATE_DB 可以指向别的库。测试要用一个自己建的临时库，
+    # 不然就只能读开发机上那个 1.9GB 的真库。
+    $db = $env:MCODE_RUNTIME_STATE_DB
+    if (-not $db) {
+      $home = Get-UserHome
+      if (-not $home) { return $result }
+      $db = Join-Path $home '.minimax\v2\sqlite\runtime-state.sqlite'
+    }
+    if (-not (Test-Path -LiteralPath $db)) { return $result }
 
-  $node = Get-NodeCommand
-  if (-not $node) { return $result }
+    $node = Get-NodeCommand
+    if (-not $node) { return $result }
 
-  # 内联脚本：node:sqlite 是内置模块，只读打开，把 id -> title 打成 JSON。
-  #
-  # 全表取而不是按 id 取：表只有几百行，一次读完比拼 IN 子句省事得多，
-  # 而且以后多了字段也不用改。
-  #
-  # argv[1] 是脚本自己的路径，argv[2] 才是传进来的库路径。
-  #
-  # 扩展名必须是 .cjs：用户目录下的 package.json 里可能有 "type": "module"，
-  # 那会让 .js 按 ES module 加载，require() 直接报 "require is not defined"。
-  $js = @'
+    # 内联脚本：node:sqlite 是内置模块，只读打开，把 id -> title 打成 JSON。
+    #
+    # 全表取而不是按 id 取：表只有几百行，一次读完比拼 IN 子句省事得多，
+    # 而且以后多了字段也不用改。
+    #
+    # argv[1] 是脚本自己的路径，argv[2] 才是传进来的库路径。
+    #
+    # 扩展名必须是 .cjs：用户目录下的 package.json 里可能有 "type": "module"，
+    # 那会让 .js 按 ES module 加载，require() 直接报 "require is not defined"。
+    $js = @'
 const {DatabaseSync} = require("node:sqlite");
 const db = new DatabaseSync(process.argv[2], {readOnly: true});
 const out = {};
@@ -110,8 +137,12 @@ try {
 process.stdout.write(JSON.stringify(out));
 '@
 
-  $tmp = Join-Path $env:TEMP ('island-titles-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.cjs')
-  try {
+    # 临时目录走 .NET 的 GetTempPath()，不用 $env:TEMP。
+    #
+    # Linux 上的 PowerShell 没有 TEMP（那里叫 TMPDIR），Join-Path $null 会
+    # 抛；异常被吞掉之后标题就读不出来了 —— ubuntu CI 上就是这么挂的，
+    # 而且失败信息离原因很远。
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('island-titles-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.cjs')
     [System.IO.File]::WriteAllText($tmp, $js, (New-Object System.Text.UTF8Encoding($false)))
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $node.Exe
@@ -135,7 +166,7 @@ process.stdout.write(JSON.stringify(out));
   } catch {
     # 读不到就没有标题，列表退回首条提问。
   } finally {
-    if (Test-Path -LiteralPath $tmp) {
+    if ($tmp -and (Test-Path -LiteralPath $tmp)) {
       try { [System.IO.File]::Delete($tmp) } catch {}
     }
   }
@@ -145,13 +176,20 @@ process.stdout.write(JSON.stringify(out));
 # 取某个 session 的标题。
 #
 # 有缓存：标题很少变，60s 内直接用旧的。
+#
+# 和读表一样，这里也不许抛：这个函数在 detector 的主循环里被调用，
+# 一次异常就是整个列表停摆。
 function Get-RuntimeSessionTitle([string]$id) {
-  if (-not $id) { return '' }
-  $now = Get-Date
-  if (($now - $script:runtimeTitlesAt).TotalMilliseconds -ge $script:RUNTIME_TITLES_TTL_MS) {
-    $script:runtimeTitles = Read-RuntimeTitles
-    $script:runtimeTitlesAt = $now
+  try {
+    if (-not $id) { return '' }
+    $now = Get-Date
+    if (($now - $script:runtimeTitlesAt).TotalMilliseconds -ge $script:RUNTIME_TITLES_TTL_MS) {
+      $script:runtimeTitles = Read-RuntimeTitles
+      $script:runtimeTitlesAt = $now
+    }
+    if ($script:runtimeTitles.ContainsKey($id)) { return [string]$script:runtimeTitles[$id] }
+  } catch {
+    # 没有标题就是没有标题。
   }
-  if ($script:runtimeTitles.ContainsKey($id)) { return [string]$script:runtimeTitles[$id] }
   return ''
 }

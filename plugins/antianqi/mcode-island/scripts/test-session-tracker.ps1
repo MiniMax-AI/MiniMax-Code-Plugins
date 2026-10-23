@@ -326,7 +326,58 @@ db.close();
   $script:runtimeTitles = @{}
   $fMissing = New-Session 'sess-nodb' @((Line-User '首条提问是另外一句话'))
   Check '库不存在时退回首条提问' ((Get-SessionDisplayTitle 'sess-nodb' $fMissing) -eq '首条提问是另外一句话') ("得到: '" + (Get-SessionDisplayTitle 'sess-nodb' $fMissing) + "'")
+
+  # $env:TEMP 在 Linux 的 PowerShell 上不存在（那里叫 TMPDIR）。
+  #
+  # 临时目录必须走 .NET 的 GetTempPath()。用 $env:TEMP 的话，Join-Path
+  # $null 会抛，异常又被吞掉，标题就读不出来了 —— ubuntu CI 上第一次
+  # 挂掉就是这个，而失败信息离原因很远。
+  $oldTemp = $env:TEMP
+  try {
+    $env:TEMP = $null
+    $env:MCODE_RUNTIME_STATE_DB = $tmpDb
+    $script:runtimeTitlesAt = [DateTime]::MinValue
+    $script:runtimeTitles = @{}
+    $tNoTemp = Get-RuntimeSessionTitle 'sess-titled'
+    Check '没有 $env:TEMP 时也能取到标题' ($tNoTemp -eq '这个会话有一个像样的名字') ("得到: '" + $tNoTemp + "'")
+  } finally {
+    $env:TEMP = $oldTemp
+  }
+
   $env:MCODE_RUNTIME_STATE_DB = $null
+}
+
+# 没有主目录的环境不能抛异常。
+#
+# CI 的 ubuntu job 没有 USERPROFILE，Join-Path $null 会抛。那一次 ubuntu
+# 失败就是这么来的：标题是可选功能，它不该把整个 tracker 带崩。
+#
+# 这条不依赖 node，所以放在 sqliteOk 的分支外面 —— 出问题最多的恰恰是
+# 那个没有 node、也没有主目录的环境。
+$oldProfile = $env:USERPROFILE
+$oldHome = $env:HOME
+$oldDb = $env:MCODE_RUNTIME_STATE_DB
+try {
+  $env:USERPROFILE = $null
+  $env:HOME = $null
+  $env:MCODE_RUNTIME_STATE_DB = $null
+  $script:runtimeTitlesAt = [DateTime]::MinValue
+  $script:runtimeTitles = @{}
+  $survived = $true
+  try {
+    $null = Get-NodeCommand
+    $null = Read-RuntimeTitles
+    $null = Get-RuntimeSessionTitle 'sess-anything'
+  } catch {
+    $survived = $false
+  }
+  Check '没有主目录时取标题不抛异常' $survived 'Get-NodeCommand / Read-RuntimeTitles / Get-RuntimeSessionTitle 抛了异常'
+} finally {
+  $env:USERPROFILE = $oldProfile
+  $env:HOME = $oldHome
+  $env:MCODE_RUNTIME_STATE_DB = $oldDb
+  $script:runtimeTitlesAt = [DateTime]::MinValue
+  $script:runtimeTitles = @{}
 }
 
 Write-Output "1..$script:n"
