@@ -211,7 +211,14 @@ $xaml = @'
         Topmost="True" ShowInTaskbar="False" ResizeMode="NoResize"
         WindowStartupLocation="Manual" UseLayoutRounding="True" SnapsToDevicePixels="True"
         Focusable="False" ShowActivated="False">
-  <Border x:Name="Pill" CornerRadius="30"
+  <Grid>
+    <Grid.RowDefinitions>
+      <!-- row 0 是药丸本体，高度在运行时按 config 的 height 设置（默认 70） -->
+      <RowDefinition x:Name="PillRow" Height="70"/>
+      <!-- row 1 是 session 列表，收起时高度为 0 -->
+      <RowDefinition x:Name="SessionListRow" Height="0"/>
+    </Grid.RowDefinitions>
+  <Border x:Name="Pill" Grid.Row="0" CornerRadius="30"
           Background="#CC1A1A20" BorderBrush="#33FFFFFF" BorderThickness="1"
           Padding="22,6" Margin="0">
     <Border.Effect>
@@ -297,6 +304,23 @@ $xaml = @'
                  VerticalAlignment="Center"/>
     </Grid>
   </Border>
+
+  <!--
+    session 列表。画在 pill 自己的窗口里，不另开一个 HWND：
+    独立窗口方案实测过 —— 窗口能创建、能命中（WindowFromPoint 返回它），
+    却不画出来（1053 个采样点里只有 39 个是面板色），被前台窗口整个盖住。
+    同一个窗口就没有这个问题：置顶、合成、命中测试全都走 pill 已经
+    验证过的那一套。
+
+    代价是窗口要变高。row 0 的高度锁死为药丸高度，所以展开时药丸本身
+    一动不动，列表在它下面长出来。
+  -->
+  <Border x:Name="SessionPanel" Grid.Row="1" Visibility="Collapsed"
+          CornerRadius="12" Background="#F21A1A20" BorderBrush="#33FFFFFF"
+          BorderThickness="1" Padding="10,6" Margin="0,14,0,0">
+    <StackPanel x:Name="SessionRows"/>
+  </Border>
+  </Grid>
 </Window>
 '@
 
@@ -327,6 +351,12 @@ $progressShimmer      = $window.FindName('ProgressShimmer')
 $progressShimmerTransform = $window.FindName('ProgressShimmerTransform')
 $elapsedText          = $window.FindName('ElapsedText')
 $usage5hText          = $window.FindName('Usage5hText')
+# 多 session 列表（画在 pill 自己的窗口里）
+$script:sessionRowsPanel = $window.FindName('SessionPanel')
+$script:sessionRows      = $window.FindName('SessionRows')
+$script:sessionListRow  = $window.FindName('SessionListRow')
+$script:pillHeight      = 70
+$script:listHideTimer   = $null
 
 # 状态配色
 $stateMap = @{
@@ -336,6 +366,220 @@ $stateMap = @{
   waiting  = @{ dot='#FFF59E0B'; ring='#FFF59E0B'; label='mcode · 等待审批';  icon='?' }
   done     = @{ dot='#FF22C55E'; ring='#FF22C55E'; label='mcode · 已完成';     icon='✓' }
   error    = @{ dot='#FFEF4444'; ring='#FFEF4444'; label='mcode · 出错';       icon='✕' }
+}
+
+# ---------------------------------------------------------------------------
+# 多 session 列表（v0.5.0）
+#
+# 鼠标停在灵动岛上时弹出一个列表：每个 session 一行，状态点 + 首条提问 +
+# 运行中/待回复。点一行 = 消掉它（写 ack.signal，detector 收走）并把这个
+# session 切过去（mcode --session <id>）。
+#
+# 为什么是独立窗口而不是 WPF Popup：
+#   - Popup 是独立 HWND，不继承 owner 的 always-on-top。这个 pill 靠
+#     Assert-Topmost 维持置顶，Popup 不在那套机制里，会被别的置顶窗口盖住。
+#   - 独立窗口可以自己 Topmost=True / ShowActivated=False，接管完全在我们手里。
+#   - pill 本体的 XAML 一个字都不用动 —— 它的视觉被反复调过，动它风险最大。
+#
+# 代价：鼠标从 pill 移到列表窗口会离开 pill（两个 HWND），所以收起有一个
+# 宽限期，鼠标进列表窗口就取消。
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 多 session 列表（v0.5.0）
+#
+# 鼠标停在灵动岛上时，在药丸下方展开一个列表：每个 session 一行，状态点 +
+# 首条提问 + 运行中/待回复。点一行 = 消掉它（写 ack.signal，detector 收走）
+# 并把这个 session 切过去（mcode --session <id>）。
+#
+# 为什么画在 pill 自己的窗口里，而不是另开一个窗口：
+#   独立窗口方案实测过 —— 窗口能创建、位置正确、能被命中
+#   （WindowFromPoint 返回它），却一个像素都不画：它自己矩形里 1053 个
+#   采样点只有 39 个是面板色，其余全是它背后的东西。隔离环境里同样的
+#   代码却能画出来，所以问题出在 widget 的上下文里。
+#   同一个窗口就没有这个问题：置顶、合成、命中测试全都走 pill 已经验证
+#   过的��一套。
+#
+# 代价是窗口要变高。row 0 的高度锁死为药丸高度，所以展开时药丸本身一动
+# 不动，列表在它下面长出来。鼠标从药丸移到列表不用离开窗口，也没有那个
+# "两个窗口之间的空档"。
+# ---------------------------------------------------------------------------
+
+function Read-SessionsFile {
+  $file = Join-Path $configDir 'sessions.json'
+  if (!(Test-Path -LiteralPath $file)) { return @() }
+  try {
+    $raw = [System.IO.File]::ReadAllText($file)
+    $j = $raw | ConvertFrom-Json
+    return @($j.sessions)
+  } catch {
+    return @()
+  }
+}
+
+function Clear-SessionRows {
+  if (-not $script:sessionRows) { return }
+  $script:sessionRows.Children.Clear()
+}
+
+function Add-SessionRow([string]$id, [string]$title, [string]$phase) {
+  if (-not $script:sessionRows) { return }
+  $isRunning = ($phase -eq 'running')
+  $dotHex = if ($isRunning) { '#FF3B82F6' } else { '#FFF59E0B' }
+  $phaseText = if ($isRunning) { '运行中' } else { '待回复' }
+
+  $grid = New-Object System.Windows.Controls.Grid
+  $grid.Margin = New-Object System.Windows.Thickness(0,1,0,1)
+  $grid.Cursor = [System.Windows.Input.Cursor]::Hand
+
+  # 三列：状态点(自适应) | 标题(占满剩余) | 状态标签(自适应)。
+  #
+  # 不给列定义的话三个子元素会叠在一起 —— 标题一长就压住右边的
+  # "运行中/待回复"。标题列必须用 * 才能被裁剪（TextTrimming 只在有
+  # 有限宽度时才生效）。
+  $colDot = New-Object System.Windows.Controls.ColumnDefinition
+  $colDot.Width = New-Object System.Windows.GridLength(1, [System.Windows.GridUnitType]::Auto)
+  $colTitle = New-Object System.Windows.Controls.ColumnDefinition
+  $colTitle.Width = New-Object System.Windows.GridLength(1, [System.Windows.GridUnitType]::Star)
+  $colTag = New-Object System.Windows.Controls.ColumnDefinition
+  $colTag.Width = New-Object System.Windows.GridLength(1, [System.Windows.GridUnitType]::Auto)
+  $grid.ColumnDefinitions.Add($colDot) | Out-Null
+  $grid.ColumnDefinitions.Add($colTitle) | Out-Null
+  $grid.ColumnDefinitions.Add($colTag) | Out-Null
+
+  $dot = New-Object System.Windows.Shapes.Ellipse
+  $dot.Width = 8; $dot.Height = 8
+  $dot.Fill = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString($dotHex)))
+  $dot.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+  $dot.Margin = New-Object System.Windows.Thickness(0,0,9,0)
+
+  $txt = New-Object System.Windows.Controls.TextBlock
+  $txt.Text = if ($title) { $title } else { $id }
+  $txt.Foreground = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#FFF5F5F7')))
+  $txt.FontSize = 12
+  $txt.TextTrimming = [System.Windows.TextTrimming]::CharacterEllipsis
+  $txt.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+  $txt.ToolTip = $txt.Text
+
+  $tag = New-Object System.Windows.Controls.TextBlock
+  $tag.Text = $phaseText
+  $tag.Foreground = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#FF9CA3AF')))
+  $tag.FontSize = 10
+  $tag.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Right
+  $tag.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+  $tag.Margin = New-Object System.Windows.Thickness(8,0,0,0)
+
+  # 事件冒泡：只挂在子元素上，Grid 和 StackPanel 都不挂，避免一次点击
+  # 触发两次。
+  #
+  # Handled=true 是必须的：窗口上挂了拖拽处理器（MouseLeftButtonDown），
+  # 列表在同一个窗口里，不拦住的话点一行会被当成"开始拖药丸"。
+  foreach ($el in @($dot, $txt, $tag)) {
+    $el.Add_MouseLeftButtonDown({
+      $args[1].Handled = $true
+      Invoke-SessionClick $id
+    }.GetNewClosure())
+  }
+
+  $grid.Children.Add($dot)  | Out-Null
+  $grid.Children.Add($txt)  | Out-Null
+  $grid.Children.Add($tag)  | Out-Null
+  [System.Windows.Controls.Grid]::SetColumn($dot, 0)
+  [System.Windows.Controls.Grid]::SetColumn($txt, 1)
+  [System.Windows.Controls.Grid]::SetColumn($tag, 2)
+  $script:sessionRows.Children.Add($grid) | Out-Null
+}
+
+function Show-SessionList {
+  if (-not $script:sessionRows) { return }
+  # 取消待收起的定时器。
+  #
+  # 这一步不能只放在 MouseEnter 里：展开有三个入口（MouseEnter、
+  # MouseMove 兜底、手动调用），少一个就可能出现"展开后 300ms 立刻收起"
+  # 的闪烁 —— 展开把窗口撑高，收起又把高度改回去，窗口反复跳。
+  if ($script:listHideTimer) {
+    try { $script:listHideTimer.Stop() } catch {}
+    $script:listHideTimer = $null
+  }
+  $items = Read-SessionsFile
+  if (-not $items -or $items.Count -eq 0) { Hide-SessionList; return }
+  Clear-SessionRows
+  # 运行中的排前面，其余按"最后一次动静"倒序
+  $sorted = @($items | Sort-Object @{ Expression = { if ($_.phase -eq 'running') { 0 } else { 1 } } }, @{ Expression = { $_.sinceMs }; Descending = $true })
+  foreach ($s in $sorted) {
+    Add-SessionRow ([string]$s.id) ([string]$s.title) ([string]$s.phase)
+  }
+  # 列表高度 = 行数 * 行高 + 上下 padding；再给药丸的投影留一点余量
+  $listH = ($sorted.Count * 24) + 12
+  $script:sessionRowsPanel.Visibility = [System.Windows.Visibility]::Visible
+  $script:sessionListRow.Height = New-Object System.Windows.GridLength($listH)
+  $window.Height = $script:pillHeight + $listH + 14
+  Dbg ("session list shown: " + $sorted.Count + " winH=" + $window.Height + " listH=" + $listH)
+}
+
+function Hide-SessionList {
+  if ($script:listHideTimer) {
+    try { $script:listHideTimer.Stop() } catch {}
+    $script:listHideTimer = $null
+  }
+  if ($script:sessionRowsPanel) {
+    $script:sessionRowsPanel.Visibility = [System.Windows.Visibility]::Collapsed
+  }
+  if ($script:sessionListRow) {
+    $script:sessionListRow.Height = New-Object System.Windows.GridLength(0)
+  }
+  if ($window) { $window.Height = $script:pillHeight }
+}
+
+# 宽限期之后才收起。鼠标从药丸移到列表会经过一段"两个窗口都不是"的地带，
+# 没有宽限期列表会在鼠标到达之前就消失。
+function Schedule-SessionListHide {
+  if (-not $script:sessionRowsPanel) { return }
+  if ($script:listHideTimer) { try { $script:listHideTimer.Stop() } catch {} }
+  $script:listHideTimer = New-Object System.Windows.Threading.DispatcherTimer
+  $script:listHideTimer.Interval = [TimeSpan]::FromMilliseconds(300)
+  $script:listHideTimer.Add_Tick({
+    try { $script:listHideTimer.Stop() } catch {}
+    Hide-SessionList
+  })
+  $script:listHideTimer.Start()
+}
+
+# 点一行：消掉它 + 切过去。
+function Invoke-SessionClick([string]$id) {
+  if (-not $id) { return }
+  # 消掉：写 ack.signal，detector 收走（它会从列表里删掉这一条，并且
+  # 在这个 session 跑完下一轮之前不再把它收回来）。
+  try {
+    $ackFile = Join-Path $configDir 'ack.signal'
+    [System.IO.File]::WriteAllText($ackFile, $id, [System.Text.Encoding]::UTF8)
+    Dbg "session ack written: $id"
+  } catch {
+    Dbg "SESSION ACK FAIL: $($_.Exception.Message)"
+  }
+  Hide-SessionList
+  Start-SessionTerminal $id
+}
+
+# 切到这个 session：mcode --session <id>
+#
+# 优先 Windows Terminal（wt.exe）；它不在 PATH 时退回 conhost 的 start。
+# mcode 是个 .ps1 包装器，cmd 认不出来，所以两条路都经由 powershell 跑。
+function Start-SessionTerminal([string]$id) {
+  $inner = "mcode --session $id"
+  try {
+    $wt = Get-Command wt.exe -ErrorAction SilentlyContinue
+    if ($wt) {
+      Start-Process -FilePath $wt.Source -ArgumentList @(
+        '-w', '0', 'new-tab', '--title', 'mcode',
+        'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $inner)
+    } else {
+      Start-Process -FilePath 'cmd.exe' -ArgumentList @(
+        '/c', 'start', '', 'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $inner)
+    }
+    Dbg "session jumped: $id"
+  } catch {
+    Dbg "SESSION JUMP FAIL: $($_.Exception.Message)"
+  }
 }
 
 # 工具家族配色：working 态下用 family 色盖掉 state 色，一眼分辨"在读"和"在改"。
@@ -1039,6 +1283,13 @@ if ($cfg.x -lt 0) {
 }
 $window.Width  = $cfg.width
 $window.Height = $cfg.height
+# 药丸高度锚点。row 0 锁死成这个高度，所以展开 session 列表时窗口变高、
+# 药丸本身一动不动，列表在它下面长出来。
+$script:pillHeight = $window.Height
+try {
+  $pillRow = $window.FindName('PillRow')
+  if ($pillRow) { $pillRow.Height = New-Object System.Windows.GridLength($script:pillHeight) }
+} catch {}
 $window.Opacity = $cfg.opacity
 
 # 右键被禁用（用 CLI 'mcode-island pin' 替代，更稳）
@@ -1107,6 +1358,15 @@ $window.Add_MouseLeftButtonDown({
   try { $window.CaptureMouse() } catch {}
 })
 $window.Add_MouseMove({
+  # 列表没开、而鼠标就在药丸上：补开一次。
+  #
+  # MouseEnter 只在"鼠标进入窗口"时触发。widget 恰好在光标底下启动的话
+  # （启动后光标没动过），MouseEnter 永远不会来，列表就再也不会出现。
+  # 拖拽中不弹（dragStart 非空）。
+  if ($null -eq $script:dragStart -and $script:sessionRowsPanel -and
+      $script:sessionRowsPanel.Visibility -ne [System.Windows.Visibility]::Visible) {
+    try { Show-SessionList } catch { Dbg "SESSION LIST SHOW FAIL: $($_.Exception.Message)" }
+  }
   if ($null -eq $script:dragStart) { return }
   # The position is read EVERY event, not only before the threshold is
   # crossed: the window is moving, so a position read during an earlier
@@ -1144,6 +1404,19 @@ $window.Add_MouseLeftButtonUp({
   }
   $script:dragStart = $null
   $script:didDrag = $false
+})
+
+# 多 session 列表的展开/收起。
+#
+# 鼠标停在 pill 上 -> 展开；离开 -> 宽限期后收起。列表是独立窗口，鼠标从
+# pill 走到列表会经过一段"两个窗口都不在"的地带，所以要留宽限期，鼠标
+# 进列表窗口就取消。
+$window.Add_MouseEnter({
+  if ($script:listHideTimer) { try { $script:listHideTimer.Stop() } catch {} ; $script:listHideTimer = $null }
+  try { Show-SessionList } catch { Dbg "SESSION LIST SHOW FAIL: $($_.Exception.Message)" }
+})
+$window.Add_MouseLeave({
+  Schedule-SessionListHide
 })
 
 
@@ -1240,6 +1513,8 @@ $script:realQuit = $false
 $window.Add_Closing({
   $args[1].Cancel = $true
   Dbg 'Closing event -> hide'
+  # pill 藏起来时列表也得跟着藏，否则鼠标一移开就剩一个空框在屏幕上。
+  try { Hide-SessionList } catch {}
   try {
     $cur = Get-Content $script:configFile -Raw -Encoding UTF8 | ConvertFrom-Json
     $cur.x = $window.Left
