@@ -135,14 +135,27 @@ jobs:
           $cfgFile = Join-Path $apphome.FullName 'mcode-island\config.json'
           if (-not (Test-Path $cfgFile)) { throw "set: $cfgFile not written" }
           $cfg = Get-Content $cfgFile -Raw | ConvertFrom-Json
-          if ($cfg.planApiToken -ne $env:FAKE_TOKEN) {
-            throw "set: config.json planApiToken mismatch (got: $($cfg.planApiToken))"
+          # The token is stored DPAPI-encrypted (planApiTokenEnc), not as
+          # plaintext. Asserting the plaintext field here was a leftover
+          # from before the token handling changed; the local runner
+          # (scripts/test-windows-workflow-local.ps1) already asserts
+          # the encrypted contract, and this step is the CI mirror of it.
+          if ($cfg.PSObject.Properties['planApiToken']) {
+            throw "set: config.json still has a plaintext planApiToken"
+          }
+          if (-not $cfg.PSObject.Properties['planApiTokenEnc']) {
+            throw "set: config.json has no planApiTokenEnc"
+          }
+          . 'plugins/antianqi/mcode-island/scripts/lib/Protect-Token.ps1'
+          $decrypted = Unprotect-Token ([string]$cfg.planApiTokenEnc)
+          if ($decrypted -ne $env:FAKE_TOKEN) {
+            throw "set: planApiTokenEnc does not decrypt back to the token"
           }
 
           # 2b) show: verify it reports the config.json source + masked prefix
           $r2 = (& $set -Show | Out-String).Trim()
-          if ($r2 -notmatch 'config\.json planApiToken') {
-            throw "show after set: expected 'config.json planApiToken', got: $r2"
+          if ($r2 -notmatch 'config\.json planApiTokenEnc') {
+            throw "show after set: expected 'config.json planApiTokenEnc', got: $r2"
           }
           $expectedMask = ($env:FAKE_TOKEN).Substring(0, [Math]::Min(10, $env:FAKE_TOKEN.Length)) + '\.\.\.'
           if ($r2 -notmatch $expectedMask) {
@@ -153,6 +166,9 @@ jobs:
           $r3 = (& $set -Clear | Out-String).Trim()
           if ($r3 -notmatch '已从 config\.json 删除') { throw "clear: expected '已从 config.json 删除', got: $r3" }
           $cfgAfter = Get-Content $cfgFile -Raw | ConvertFrom-Json
+          if ($cfgAfter.PSObject.Properties['planApiTokenEnc']) {
+            throw "clear: planApiTokenEnc still present in config.json"
+          }
           if ($cfgAfter.PSObject.Properties['planApiToken']) {
             throw "clear: planApiToken still present in config.json"
           }
