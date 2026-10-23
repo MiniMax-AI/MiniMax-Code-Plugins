@@ -178,6 +178,16 @@ if (Test-Path "$PSScriptRoot/scripts/lib/Get-5hUsage.ps1") {
 # the lock, the single snapshot read and the atomic replace, so both
 # sides follow one protocol.
 . "$PSScriptRoot/scripts/lib/Status-Store.ps1"
+# 多 session 跟踪（v0.5.0）。
+#
+# 以前 pill 只显示一个 session：Get-LatestSessionFile 取最近被改的那个日志，
+# 所以"谁最后动了日志就显示谁"，后台会话能把前台的 pill 抢走。这个 lib
+# 维护一份有生命周期的 session 列表（运行中 / 待回复 / 点掉消除），写到
+# sessions.json —— 不是 status.json，因为那个文件 agent 侧会整份覆盖。
+#
+# $script: 在 dot-source 之后就是本脚本的作用域，所以 lib 里的状态变量和
+# 这里的状态变量是同一份。
+. "$PSScriptRoot/scripts/lib/Session-Tracker.ps1"
 $script:plan5hLastCallAt = [DateTime]::MinValue
 $script:plan5hRemainingPct = $null  # 0..100，剩余百分比（不再是已用！）
 $script:plan5hResetMs = $null       # 距下次刷新的毫秒数
@@ -866,6 +876,22 @@ if (-not $Once) {
   Log-Line "detector started (PID $PID) mcodeRoot=$mcodeRoot"
 }
 
+# 多 session 列表的恢复与补录。
+#
+# detector 经常重启（per-tick guard、autostart、崩溃）。如果列表只在内存里，
+# 重启就把用户手上那些"待回复"清零了 —— 那个信号恰好是最不能丢的。
+# 所以列表存在 sessions.json，启动时读回来。
+#
+# 补录是唯一一处还看时间的地方：把最近 30 分钟内还有动静的 session 收进来。
+# 运行期完全靠状态机，不看时间。
+try {
+  Restore-SessionTracker
+  Seed-SessionTracker
+  Write-SessionsFile -Force
+} catch {
+  Log-Line "SESSIONS INIT FAIL: $($_.Exception.Message)"
+}
+
 try {
   while ($true) {
    # --- per-tick guard -------------------------------------------------------
@@ -881,6 +907,18 @@ try {
     $now = Get-Date
     $inferred = $null
     $latestFile = $null
+
+    # 0) 多 session 列表：状态机 + 写盘
+    #
+    # 放在最前面：它决定"哪些 session 有活动"。主线状态推断读的是"最近
+    # 被改的那个日志"，两者不是一回事——后台会话在跑时，主线应该还是你
+    # 前台那个会话的状态。
+    try {
+      Update-SessionTracker
+      Write-SessionsFile
+    } catch {
+      Log-Line "SESSIONS UPDATE FAIL: $($_.Exception.Message)"
+    }
 
     # 1) 最新 session log：5s 缓存（避免每秒 EnumerateFiles 几千个 .jsonl）
     #

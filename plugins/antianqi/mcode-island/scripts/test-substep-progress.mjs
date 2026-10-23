@@ -15,7 +15,7 @@ import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync, mkdirSync
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = dirname(HERE);
@@ -69,7 +69,7 @@ const PS_BIN = resolvePs();
 // cannot leave fixtures behind for the next one to read.
 const TMP = mkdtempSync(join(tmpdir(), 'island-substep-'));
 
-function runPs(script, extraEnv) {
+function runPs(script, extraEnv, allowFail) {
     const file = join(TMP, `run-${Math.random().toString(36).slice(2)}.ps1`);
     // Force UTF-8 on both ends of the pipe. The console code page here is 936
     // (GBK), so a middle dot in a script literal comes back as the two bytes
@@ -80,17 +80,29 @@ function runPs(script, extraEnv) {
     // it PowerShell 5.1 reads the .ps1 as ANSI and mangles the literal.
     const preamble = '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n';
     writeFileSync(file, '\uFEFF' + preamble + script, 'utf8');
-    const out = execFileSync(PS_BIN, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', file],
-        {
-            encoding: 'buffer',
-            stdio: ['ignore', 'pipe', 'pipe'],
-            env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
-        });
-    let buf = out;
+    const r = spawnSync(PS_BIN, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', file], {
+        encoding: 'buffer',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
+    });
+    // The child's stderr is kept: a harness that dies before its first
+    // check otherwise reports "0 passed", which reads like "there was
+    // nothing to test" rather than "the harness is broken".
+    const errText = (r.stderr || Buffer.alloc(0)).toString('utf8');
+    if (r.status !== 0 && !allowFail) {
+        throw new Error(`PS harness failed (exit ${r.status}): ${errText || (r.stdout || '').toString('utf8')}`);
+    }
+    let buf = r.stdout || Buffer.alloc(0);
     if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
         buf = buf.subarray(3);
     }
-    return buf.toString('utf8');
+    let text = buf.toString('utf8');
+    if (errText) {
+        // Tagged so the TAP parser ignores it, but it is still in the
+        // output the caller reads.
+        text += `\n# stderr: ${errText.replace(/\r?\n/g, ' | ')}`;
+    }
+    return text;
 }
 
 /**
@@ -1267,6 +1279,44 @@ Write-Output ("ORIGIN=" + $t.Origin + " MODE=" + $t.Mode)
             eq('the Marketplace package resolves the click to the app window', pkg.origin, 'desktop-app');
             eq('the Marketplace package focuses instead of hiding', pkg.mode, 'focus');
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 10. The multi-session tracker (v0.5.0)
+// ---------------------------------------------------------------------------
+//
+// The tracker is a separate PowerShell harness: it assembles the scope
+// the tracker lib expects (the detector's constants, Get-LastJsonLine,
+// Test-IsAskUser, the store lock) against a FIXTURE session tree, and
+// asserts the state machine, the entry rule, the title extraction, the
+// persistence and the dismissal. It emits TAP-ish lines.
+//
+// It runs in its own process because the tracker lib keeps state in
+// $script: variables, and dot-sourcing it into this process would mix
+// the fixture's state with the detector's.
+if (PS_BIN) {
+    const trackerSuite = join(PLUGIN_ROOT, 'scripts', 'test-session-tracker.ps1');
+    check('the session tracker suite exists', existsSync(trackerSuite), `${trackerSuite} not found`);
+
+    if (existsSync(trackerSuite)) {
+        const out = runPs(`& '${trackerSuite.replace(/'/g, "''")}'`, undefined, true);
+        const lines = out.split(/\r?\n/);
+        let okCount = 0;
+        let badCount = 0;
+        const bad = [];
+        for (const l of lines) {
+            if (/^ok \d+ - /.test(l)) { okCount++; }
+            else if (/^not ok \d+ - /.test(l)) { badCount++; bad.push(l.replace(/^not ok \d+ - /, '')); }
+        }
+        check('the session tracker suite passes', badCount === 0 && okCount > 0,
+            `${okCount} passed, ${badCount} failed: ${bad.join(' | ')}`);
+        for (const b of bad) {
+            console.log(`    FAIL ${b}`);
+        }
+        // The count is pinned so a silently empty harness cannot pass.
+        check('the session tracker suite ran its full set of checks', okCount >= 20,
+            `only ${okCount} checks ran`);
     }
 }
 
