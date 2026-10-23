@@ -16,7 +16,7 @@
    自己出片。
 
 ⇒ 本插件走第 2 条：**MCP 提供 9 个原子动词**（草稿读写 / 调色 / 出片 / 混音 / 渲染 / 验收），
-**Skill 提供 6 条"有自己中间思路 + 门禁"的剪辑链路**。
+**Skill 提供 7 条"有自己中间思路 + 门禁"的剪辑链路**（含一条跨链流水线：一件事做完时按它串联）。
 
 ## 试一下
 
@@ -68,7 +68,7 @@ node scripts/run-verb.mjs grade_apply '{"src":"<源视频.mp4>","outDir":"<输�
 | `verify_diff` | 多维度验收：画面可见性 / 画质 / 响度 / 时间线 / 草稿完整性 |
 | **`make_film`** | **给剪映草稿一条命令出成片**（官方渲染器出画面 + 我们的调色/混音/编码 + 带断言的验收） |
 
-## 6 个 Skill
+## 7 个 Skill
 
 | Skill | 干什么 |
 |---|---|
@@ -78,6 +78,7 @@ node scripts/run-verb.mjs grade_apply '{"src":"<源视频.mp4>","outDir":"<输�
 | `jianying-talk-cut` | 剪口播（SRT 规划器 + 水词/停顿/重复判定 + 落刀） |
 | `jianying-verify`（库） | 验收判据纪律（**仅被引用时用**） |
 | `jianying-grade-chain`（库） | 调色链 API 语义（10 节点 × 参数）（**仅被引用时用**） |
+| `jianying-pipeline` | **跨链流水线**：一句话做完一件事（改完→审→出片），一份副本走到底 |
 
 ## 精度
 
@@ -105,7 +106,8 @@ plugin-root/
 │   ├── jianying-review/SKILL.md
 │   ├── jianying-talk-cut/SKILL.md
 │   ├── jianying-verify/SKILL.md
-│   └── jianying-grade-chain/SKILL.md
+│   ├── jianying-grade-chain/SKILL.md
+│   └── jianying-pipeline/SKILL.md
 ├── references/                 # 共享知识（按需引用）
 │   ├── chain-api.md            #   链 API 语义（10 节点 × 参数）
 │   ├── official-ops.md         #   官方 op 全集（18 域 199 个，逐个打桥的结果）

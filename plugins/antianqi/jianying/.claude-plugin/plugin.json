@@ -7,20 +7,30 @@
     "url": "https://github.com/antianqi"
   },
   "license": "Apache-2.0",
-  "keywords": ["mcode", "jianying", "video-editing", "color-grading", "10bit", "mcp"],
+  "keywords": [
+    "mcode",
+    "jianying",
+    "video-editing",
+    "color-grading",
+    "10bit",
+    "mcp"
+  ],
   "skills": [
     "./skills/jianying-cut/SKILL.md",
     "./skills/jianying-draft-edit/SKILL.md",
     "./skills/jianying-review/SKILL.md",
     "./skills/jianying-talk-cut/SKILL.md",
     "./skills/jianying-verify/SKILL.md",
-    "./skills/jianying-grade-chain/SKILL.md"
+    "./skills/jianying-grade-chain/SKILL.md",
+    "./skills/jianying-pipeline/SKILL.md"
   ],
   "mcpServers": {
     "jianying": {
       "type": "stdio",
       "command": "node",
-      "args": ["./mcp/server.mjs"],
+      "args": [
+        "./mcp/server.mjs"
+      ],
       "cwd": "./mcp"
     }
   }

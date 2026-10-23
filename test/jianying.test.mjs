@@ -17,14 +17,18 @@ const exists = async (relative) => {
   try { await stat(path.join(pluginRoot, relative)); return true; } catch { return false; }
 };
 
-const SKILL_NAMES = [
-  'jianying-cut',
-  'jianying-draft-edit',
-  'jianying-review',
-  'jianying-talk-cut',
-  'jianying-verify',
-  'jianying-grade-chain',
-];
+// ★ Skill 名单【动态扫描】，不硬编码
+//   （硬编码过一次：新增 jianying-pipeline 时两个用例直接红了 ——
+//     "新增 skill 要改两处"本身就是缺陷 ⇒ 改成扫目录，此后新增 skill 不用改测试）
+const skillNames = async () => {
+  const entries = await readdir(path.join(pluginRoot, 'skills'), { withFileTypes: true });
+  return entries.filter((e) => e.isDirectory()).map((e) => e.name).sort();
+};
+// ★ manifest 里的路径 "./skills/<dir>/SKILL.md" ⇒ 归一到目录名（这个归一化错过两次，单独一个函数）
+const skillDirFromPath = (p) => String(p)
+  .replace(/^\.\//, '')
+  .replace(/\/SKILL\.md$/, '')
+  .replace(/^skills\//, '');
 
 const frontmatter = (text) => {
   const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
@@ -51,7 +55,10 @@ test('both runtime layouts ship and agree on the Plugin identity', async () => {
 test('v0.4 manifest lists every Skill at a path that resolves and whose frontmatter name matches its directory', async () => {
   const v04 = JSON.parse(await read('.claude-plugin/plugin.json'));
   assert.ok(Array.isArray(v04.skills), 'skills must be an array of paths');
-  assert.deepEqual([...v04.skills].sort(), SKILL_NAMES.map((n) => `./skills/${n}/SKILL.md`).sort());
+  // ★ manifest 列的必须与磁盘上的 skill 目录一一对应（不硬编码名单）
+  const dirs = await skillNames();
+  const listed = v04.skills.map(skillDirFromPath).sort();
+  assert.deepEqual(listed, dirs, 'manifest skills[] must match the skills/ directories exactly');
 
   for (const relative of v04.skills) {
     // A path into a subdirectory whose name does not match the frontmatter
@@ -72,7 +79,7 @@ test('v0.4 manifest lists every Skill at a path that resolves and whose frontmat
 test('portable layout exposes the same Skills under skills/<name>/SKILL.md', async () => {
   const entries = await readdir(path.join(pluginRoot, 'skills'), { withFileTypes: true });
   const dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name).sort();
-  assert.deepEqual(dirs, [...SKILL_NAMES].sort());
+  assert.ok(dirs.length > 0, 'there must be at least one Skill');
   for (const name of dirs) {
     const fm = frontmatter(await read(path.join('skills', name, 'SKILL.md')));
     assert.equal(fm.name, name);
@@ -106,7 +113,7 @@ test('every verb ships a parsable input schema', async () => {
 });
 
 test('runnable script invocations in the Skills are anchored to ${PLUGIN_ROOT}', async () => {
-  for (const name of SKILL_NAMES) {
+  for (const name of await skillNames()) {
     const text = await read(path.join('skills', name, 'SKILL.md'));
     for (const line of text.split(/\r?\n/)) {
       if (!/node\s+\S*scripts\//u.test(line)) continue;
@@ -117,7 +124,7 @@ test('runnable script invocations in the Skills are anchored to ${PLUGIN_ROOT}',
 });
 
 test('referenced scripts and references exist', async () => {
-  for (const name of SKILL_NAMES) {
+  for (const name of await skillNames()) {
     const text = await read(path.join('skills', name, 'SKILL.md'));
     for (const m of text.matchAll(/\$\{PLUGIN_ROOT\}\/(scripts|references)\/([A-Za-z0-9._-]+)/gu)) {
       assert.ok(await exists(`${m[1]}/${m[2]}`), `skills/${name}/SKILL.md references missing ${m[1]}/${m[2]}`);
