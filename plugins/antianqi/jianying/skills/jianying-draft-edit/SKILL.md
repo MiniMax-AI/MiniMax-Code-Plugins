@@ -1,6 +1,6 @@
 ---
 name: jianying-draft-edit
-description: 'Use when: 改剪映草稿 / 给草稿加素材或音轨 / 移动裁剪片段 / 调某段的音量 / 加文字 / 加轨道 / 撤销重做 / 改完落盘并验证生效. 触发词: 给这个草稿加个片段 / 把这段剪短 / 把这轨静音 / 加个文字 / 改完存一下 / 撤销刚才那步 / 看看改动生效没有.'
+description: 'Use when: 改剪映草稿 / 给草稿加素材或音轨 / 移动裁剪片段 / 调某段的音量 / 加文字 / 加轨道 / 撤销重做 / 改完落盘并回读草稿字段确认. 触发词: 给这个草稿加个片段 / 把这条素材剪短 / 把这轨静音 / 加个文字 / 改完存一下 / 撤销刚才那步 / 改完回读草稿字段对不对.'
 displayNames:
   zh-Hans: 剪映·改草稿（官方行为操作全集 · 加字幕 · 落盘不动真草稿）
 license: Apache-2.0
@@ -90,6 +90,9 @@ node ${PLUGIN_ROOT}/scripts/run-verb.mjs verify_diff '{
 
 ## 常见诉求 → op
 
+> ★ **机器可读版**：`references/intent-map.json`（21 条"人话 → 参数"映射）
+> ★ 里面的参数名由机械审计**按 schema 校验** ⇒ 拼错会被当场抓出来（不会静默失效）。
+
 | 用户说 | op + params |
 |---|---|
 | 把这轨静音 | `track.mute` `{trackId}` |
@@ -105,7 +108,7 @@ node ${PLUGIN_ROOT}/scripts/run-verb.mjs verify_diff '{
 | 挪到别的位置 | `segment.move` `{segmentId, ...}`（★ 需要先有 snapshot） |
 | 改这段的时间范围 | `segment.setTimeRange` `{segmentId, …}` ⚠️ **参数名尚未确证**：传 `startUs/durationUs` 官方回 `accepted` 但回读时码被清零 ⇒ 判据必须是"回读后字段真的变了" |
 | 撤销上一步 | `undoRedo.undo` `{}` |
-| 一次做多步 | `invokeBatch` `{operations:[...]}` |
+| 一次做多步 | ★ **官方没有批量 op**（实测 199 个里没有 `invokeBatch`）⇒ 连着调多次 `draft_patch`（每次 `baseRevision` 会递增） |
 
 > ★ **官方行为操作是带命名空间的**（`segment.move` 不是 `move`）—— 历史上"白名单 0/150"就是命名错造成的。
 > ★ **剪"中间一段"的正确链**：`split(t1)` → `split(前半, t0)` → `delete(中段)`；
