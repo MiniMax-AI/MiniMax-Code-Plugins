@@ -55,6 +55,10 @@ metadata:
 
 ## 意图路由表：综合诉求 → 步骤序列
 
+> ★ **机器可读版**：`references/pipeline-profiles.json`（4 条路线 / 18 个步骤）
+> ★ 每一步的动词、参数、变量都由机械审计**按 schema 校验** ⇒ 写错会当场报出来。
+> 下面的四条路径是它的人读展开（两边必须一致，审计 7k 会查）。
+
 ### 路径 A：调色并出成片（"把这个草稿调暖再出片"）
 
 ```bash
@@ -153,6 +157,7 @@ node ${PLUGIN_ROOT}/scripts/run-verb.mjs make_film '{"draft":"<①的 dir>","out
 ## 参考
 
 - **参数怎么填**（人话 → 参数，机器可读 21 条）：`references/intent-map.json`
+- **跨链路线**（4 条路线的机器可读定义）：`references/pipeline-profiles.json`
 - **判据怎么定**（视野 / 噪声底 / 负向注入 / 语义优先）：`references/verify-discipline.md`
 - **单链条的细节**：`jianying-cut` · `jianying-draft-edit` · `jianying-review` · `jianying-talk-cut`
 - **官方 op 全集**（18 域 199 个）：`references/official-ops.md`

@@ -1,0 +1,99 @@
+{
+  "schema": "jianying.pipeline-profiles.v1",
+  "note": "跨链路线的【机器可读】定义。★ 每一步的动词必须在 mcp/tools/*.schema.json 里，参数必须在该动词的 properties 里 ⇒ 由机械审计 7k 校验（拼错的动词/参数当场报出来）。★ $ 开头的是【变量】：$draft/$outDir/$grade 由调用者给，$sessionId/$dir 由前一步的返回带下来。",
+  "variables": {
+    "$draft": "调用者给的剪映草稿目录（真草稿，只读）",
+    "$outDir": "调用者给的输出目录",
+    "$grade": "调色 spec（形状同 grade_apply 的 spec；也可用 references/intent-map.json 里的映射）",
+    "$sessionId": "draft_open 返回的 sessionId（ve-session-N）",
+    "$dir": "draft_open 返回的副本目录（★ 草稿动词与出片动词之间的交接点）",
+    "$segmentId": "draft_read 里读到的段 id",
+    "$beforeDraft": "改前的裸草稿 JSON 路径（顶层有 tracks）",
+    "$afterDraft": "改后的裸草稿 JSON 路径（顶层有 tracks）",
+    "$srt": "用户提供的转写稿（SRT）★ 官方 ASR 拿不到，不能自己编"
+  },
+  "profiles": [
+    {
+      "id": "grade-and-render",
+      "when": "调色并出成片（'把这个草稿调暖再出片'）",
+      "requires": ["剪映在跑", "素材在盘上"],
+      "steps": [
+        {
+          "verb": "draft_open",
+          "args": { "draft": "$draft", "copy": true },
+          "yields": ["$sessionId", "$dir"],
+          "note": "开副本；copy 默认 true ⇒ 真草稿只读"
+        },
+        {
+          "verb": "make_film",
+          "args": { "draft": "$dir", "outDir": "$outDir", "grade": "$grade", "denoise": "auto" },
+          "note": "官方渲染器出画面 + 我们的调色/混音 + ffmpeg 编码；★ 内建验收（双流/时长/响度）失败会直接判失败"
+        }
+      ]
+    },
+    {
+      "id": "edit-and-verify",
+      "when": "改草稿并用语义判据验收（'把这段音量调到 25%，改完确认一下'）",
+      "requires": ["剪映在跑", "素材在盘上"],
+      "steps": [
+        { "verb": "draft_open", "args": { "draft": "$draft", "copy": true }, "yields": ["$sessionId", "$dir"] },
+        { "verb": "draft_read", "args": { "sessionId": "$sessionId" }, "yields": ["$segmentId"] },
+        {
+          "verb": "draft_patch",
+          "args": { "op": "video.setVolume", "sessionId": "$sessionId", "params": { "segmentId": "$segmentId", "volume": 0.25 } },
+          "note": "可多次；每次 baseRevision 会递增"
+        },
+        {
+          "verb": "draft_commit",
+          "args": { "sessionId": "$sessionId", "realDraft": "$draft" },
+          "note": "素材路径重定位 + 真草稿 sha 断言（真草稿被改动就判失败）"
+        },
+        {
+          "verb": "verify_diff",
+          "args": { "checks": ["timeline"], "beforeDraft": "$beforeDraft", "afterDraft": "$afterDraft", "expect": { "segmentFieldChanged": "volume" } },
+          "note": "★ 主判据 = 语义（逐段字段差），完全确定；两份草稿必须是【裸草稿】"
+        }
+      ]
+    },
+    {
+      "id": "edit-then-render",
+      "when": "改完直接出片（'改完直接出个片'）= edit-and-verify 的前半 + grade-and-render 的出片",
+      "requires": ["剪映在跑", "素材在盘上"],
+      "steps": [
+        { "verb": "draft_open", "args": { "draft": "$draft", "copy": true }, "yields": ["$sessionId", "$dir"] },
+        { "verb": "draft_read", "args": { "sessionId": "$sessionId" }, "yields": ["$segmentId"] },
+        {
+          "verb": "draft_patch",
+          "args": { "op": "video.setVolume", "sessionId": "$sessionId", "params": { "segmentId": "$segmentId", "volume": 0.25 } }
+        },
+        { "verb": "draft_commit", "args": { "sessionId": "$sessionId", "realDraft": "$draft" } },
+        {
+          "verb": "make_film",
+          "args": { "draft": "$dir", "outDir": "$outDir", "grade": "$grade", "denoise": "auto" },
+          "note": "★ draft 用同一个 $dir ⇒ 全程一份副本"
+        }
+      ]
+    },
+    {
+      "id": "talk-cut-then-render",
+      "when": "剪口播再出片（'把口播的废话剪了再出片'）",
+      "requires": ["剪映在跑", "素材在盘上", "★ 用户提供 SRT（官方 ASR 拿不到，不能自己编）", "★ 保留区间表必须先给用户确认"],
+      "steps": [
+        { "verb": "draft_open", "args": { "draft": "$draft", "copy": true }, "yields": ["$sessionId", "$dir"] },
+        { "verb": "draft_read", "args": { "sessionId": "$sessionId" } },
+        {
+          "script": "talk-cut-plan.mjs",
+          "args": { "srt": "$srt", "draft": "$dir" },
+          "note": "产出保留/删除区间表 ⇒ ★ 必须给用户确认后才能落刀"
+        },
+        {
+          "script": "talk-cut-apply.mjs",
+          "args": { "plan": "$plan", "sessionId": "$sessionId" },
+          "note": "走 27 个官方 op 落草稿"
+        },
+        { "verb": "draft_commit", "args": { "sessionId": "$sessionId", "realDraft": "$draft" } },
+        { "verb": "make_film", "args": { "draft": "$dir", "outDir": "$outDir", "denoise": "auto" } }
+      ]
+    }
+  ]
+}
