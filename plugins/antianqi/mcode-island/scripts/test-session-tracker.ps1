@@ -94,6 +94,17 @@ function Line-Assistant([string]$text) {
 function Line-ToolCall([string]$tool) {
     return '{"message":{"role":"assistant","content":[{"type":"toolCall","name":"' + $tool + '","arguments":{}}],"timestamp":3}}'
 }
+# ledger 事件格式：{kind, phase, action, ...}
+#
+# 真实环境里大多数 session 没有 ledger.jsonl（417 个里只有 1 个），但
+# detector 的 Infer-State 有这个分支，列表也得跟着有 —— 不然同一个会话
+# 在两边的状态会不一样。
+function Line-LedgerToolResult {
+    return '{"kind":"toolResult","toolName":"bash","ts":1234}'
+}
+function Line-LedgerToolCall {
+    return '{"kind":"toolCall","toolName":"bash","action":"doing it","ts":1234}'
+}
 # A tool that failed. The detector reports these as `error`, so the list
 # has to be able to say it too.
 function Line-ToolResultFailed {
@@ -135,12 +146,22 @@ Check 'assistant 文本结尾 = 待回复' ((Get-SessionState (Get-LastJsonLine 
 Check 'ask_user 结尾 = 等待审批' ((Get-SessionState (Get-LastJsonLine $fAsk)) -eq 'waiting') (Get-SessionState (Get-LastJsonLine $fAsk))
 Check 'user 刚说完 = 待回复' ((Get-SessionState (Get-LastJsonLine $fUser)) -eq 'idle') (Get-SessionState (Get-LastJsonLine $fUser))
 
-# 工具跑完 / 炸了 / 只想不动手：pill 有这几档，列表以前一个都没有。
+# 工具跑完 / 炸了 / 只想不动手。
+#
+# 工具跑完（成不成都一样）仍然是"运行中"：agent 还在这一轮里，只是刚跑完
+# 一个工具。pill 会闪一下"已完成 + Read"，那是瞬时反馈；列表说的是会话
+# 级的状态，说"已完成"会被读成"这个会话做完了"。
 $fRes = New-Session 'sess-toolresult' @((Line-ToolResult))
 $fResErr = New-Session 'sess-toolerror' @((Line-ToolResultFailed))
 $fThink = New-Session 'sess-thinking' @((Line-ThinkingOnly))
-Check 'toolResult 结尾 = 已完成' ((Get-SessionState (Get-LastJsonLine $fRes)) -eq 'done') (Get-SessionState (Get-LastJsonLine $fRes))
-Check '工具失败 = 出错' ((Get-SessionState (Get-LastJsonLine $fResErr)) -eq 'error') (Get-SessionState (Get-LastJsonLine $fResErr))
+Check 'toolResult 结尾 = 运行中(这一轮还没完)' ((Get-SessionState (Get-LastJsonLine $fRes)) -eq 'working') (Get-SessionState (Get-LastJsonLine $fRes))
+Check '工具失败也是运行中(agent 会接着处理)' ((Get-SessionState (Get-LastJsonLine $fResErr)) -eq 'working') (Get-SessionState (Get-LastJsonLine $fResErr))
+
+# ledger 事件格式走的是另一个分支，规则一样：工具跑完了，这一轮还没完。
+$fLedgerRes = New-Session 'sess-ledger-result' @((Line-LedgerToolResult))
+$fLedgerCall = New-Session 'sess-ledger-call' @((Line-LedgerToolCall))
+Check 'ledger 的 toolResult 也是运行中' ((Get-SessionState (Get-LastJsonLine $fLedgerRes)) -eq 'working') (Get-SessionState (Get-LastJsonLine $fLedgerRes))
+Check 'ledger 的 toolCall 是运行中' ((Get-SessionState (Get-LastJsonLine $fLedgerCall)) -eq 'working') (Get-SessionState (Get-LastJsonLine $fLedgerCall))
 Check 'assistant 只想不动手 = 思考中' ((Get-SessionState (Get-LastJsonLine $fThink)) -eq 'thinking') (Get-SessionState (Get-LastJsonLine $fThink))
 
 # --- 2. 标题提取 ---------------------------------------------------------

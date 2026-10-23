@@ -190,12 +190,15 @@ function Get-SessionTitle($file) {
 #
 # 所以这里直接产出 pill 那套状态：
 #
-#   working  agent 在干活（跑工具）
+#   working  agent 在干活（跑工具，或者刚跑完一个工具、还要接着干）
 #   thinking agent 在想
 #   waiting  agent 在等审批（ask_user）—— 球在用户那边
 #   idle     agent 说完了，或者用户刚说完 —— 球在用户那边
-#   done     工具跑完了
-#   error    工具炸了
+#
+# 注意这里**没有** done 和 error：pill 上的"已完成""出错"是"刚刚跑完
+# 一个工具""这个工具炸了"的瞬时反馈，后面还跟着具体动词；放进列表会被
+# 读成"这个会话做完了"，而工具跑完之后 agent 还在这一轮里。列表只说
+# 会话级的状态。
 #
 # 只产出状态，不产出 message 和 family —— 那两个是 pill 的活（"Ran"、
 # "Read" 这些动词），列表不需要。
@@ -205,10 +208,9 @@ function Get-SessionState($msg) {
   if (-not $m) {
     # ledger 事件格式：{kind, phase, action, ...}
     $kind = [string]$msg.kind
-    if ($kind -eq $S_TOOLRESULT) {
-      if ($msg.isError -eq $true) { return 'error' }
-      return 'done'
-    }
+    # 一个工具跑完了，**这一轮还没结束**：agent 还要接着说话或调下一个
+    # 工具。所以这里是 working，不是 done。
+    if ($kind -eq $S_TOOLRESULT) { return 'working' }
     if ($kind -eq 'toolCall' -or $kind -eq $S_TOOLCALL) {
       if (Test-IsAskUser ([string]$msg.toolName)) { return 'waiting' }
       return 'working'
@@ -240,10 +242,12 @@ function Get-SessionState($msg) {
     if ($hasText) { return 'idle' }
     return 'idle'
   }
-  if ($role -eq $S_TOOLRESULT) {
-    if ($m.isError -eq $true) { return 'error' }
-    return 'done'
-  }
+  # 同上：工具跑完了（成不成都一样），这一轮还在继续。
+  #
+  # 成功和失败都不改状态 —— 工具级的成败是 pill 的事（它绿点/红点一闪，
+  # 后面还跟着"Read""Edited"这类动词，是瞬时反馈）。会话级的状态是
+  # "这一轮还在跑"，工具失败也一样：agent 会重试、或者换个办法。
+  if ($role -eq $S_TOOLRESULT) { return 'working' }
   return ''
 }
 
