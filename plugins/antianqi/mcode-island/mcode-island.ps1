@@ -458,8 +458,14 @@ function Format-RelativeTime([int64]$tsMs) {
 function Add-SessionRow([string]$id, [string]$title, [string]$phase, [string]$preview, [string]$lastTool, [int64]$lastAtMs, [bool]$isLast) {
   if (-not $script:sessionRows) { return }
   $isRunning = ($phase -eq 'running')
-  $dotHex = if ($isRunning) { '#FF3B82F6' } else { '#FFF59E0B' }
-  $phaseText = if ($isRunning) { '运行中' } else { '待回复' }
+  $isStopped = ($phase -eq 'stopped')
+  # 蓝=在跑，橙=在等你，灰=停了。
+  #
+  # 灰色这一档是给"停了"用的：agent 跑完一个工具之后，最后一条消息
+  # 永远是 toolCall，消息类型说它"在跑"。要是只看消息类型，一个停了
+  # 快一小时的会话会一直显示"运行中"。
+  $dotHex = if ($isRunning) { '#FF3B82F6' } elseif ($isStopped) { '#FF6B7280' } else { '#FFF59E0B' }
+  $phaseText = if ($isRunning) { '运行中' } elseif ($isStopped) { '已停止' } else { '待回复' }
 
   # 第二行：正文优先。没有正文（最后一条恰好是 toolCall）就退到"正在
   # 调用的工具名"，总比空着强。
@@ -599,7 +605,9 @@ function Show-SessionList {
   #
   # 排序用 lastAtMs（最后活动时间），不是 sinceMs（进列表的时间）：
   # 进列表的时间只说明"我什么时候看见它"，说明不了"它现在有多活跃"。
-  $sorted = @($items | Sort-Object @{ Expression = { if ($_.phase -eq 'running') { 0 } else { 1 } } }, @{ Expression = { if ($_.lastAtMs) { [int64]$_.lastAtMs } else { [int64]$_.sinceMs } }; Descending = $true })
+  #
+  # 三档顺序：在跑的排最前，在等你的排中间，停了的排最后。
+  $sorted = @($items | Sort-Object @{ Expression = { if ($_.phase -eq 'running') { 0 } elseif ($_.phase -eq 'waiting') { 1 } else { 2 } } }, @{ Expression = { if ($_.lastAtMs) { [int64]$_.lastAtMs } else { [int64]$_.sinceMs } }; Descending = $true })
   $i = 0
   foreach ($s in $sorted) {
     Add-SessionRow ([string]$s.id) ([string]$s.title) ([string]$s.phase) ([string]$s.preview) ([string]$s.lastTool) ([int64]$s.lastAtMs) ($i -lt ($sorted.Count - 1))

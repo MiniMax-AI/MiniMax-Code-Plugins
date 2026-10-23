@@ -62,6 +62,22 @@ if (Test-Path (Join-Path $PSScriptRoot 'Runtime-Titles.ps1')) {
 # 60 秒足够覆盖 detector 的一次卡顿（它每秒轮询一次）。
 $script:ACTIVE_WINDOW_MS = 60 * 1000
 
+# "运行中" 的活性窗口。
+#
+# 状态不能只由消息类型定。agent 跑完一个工具之后，它的最后一条消息
+# 永远是 toolCall 或 toolResult —— 消息类型说它"在跑"，其实它可能早就
+# 停了。而日志不再变之后，更新循环会直接跳过，状态会**冻结**在最后
+# 一个值：一个停了快一小时的会话会一直显示"运行中"。
+#
+# 所以"在跑"必须有一份活性支撑：超过这个窗口没动，就不是"在跑"，是
+# "停了"。
+#
+# 5 分钟：长工具（一次几分钟的构建、大文件处理）和长时间的模型推理都
+# 不会误伤，用户也不必等一个小时才看到状态变了。
+#
+# "待回复"不看这个窗口：球在用户那边，用户半小时不回，它还是待回复。
+$script:STALE_RUNNING_MS = 5 * 60 * 1000
+
 function Get-SessionIdFromDir($dir) {
   $name = [System.IO.Path]::GetFileName($dir)
   $i = $name.IndexOf('session_')
@@ -312,7 +328,25 @@ function Update-SessionTracker {
   foreach ($id in @($groups.Keys)) {
     $g = $groups[$id]
     $entry = $script:trackedSessions[$id]
-    if ($entry -and $entry.MTime -eq $g.MTime) { continue }   # 没变就不用重读
+    if ($entry -and $entry.MTime -eq $g.MTime) {
+      # 日志没变：消息没变，状态也不该变。
+      #
+      # 但"运行中"需要一份活性支撑。agent 跑完一个工具之后，它的最后
+      # 一条消息永远是 toolCall 或 toolResult —— 消息类型说它"在跑"，
+      # 其实它可能早就停了。而这一行原本直接 continue，状态会冻结在
+      # 最后一个值：一个停了快一小时的会话会一直显示"运行中"。
+      #
+      # 所以在这里降级一次：超过窗口没动就不是"在跑"，是"停了"。
+      if ($entry.Phase -eq 'running') {
+        $ageMs = ($now - $g.MTime).TotalMilliseconds
+        if ($ageMs -gt $script:STALE_RUNNING_MS) {
+          $entry.Phase = 'stopped'
+          $script:sessionsDirty = $true
+          Log-Line ("session stopped: " + $id + " (quiet for " + [int]($ageMs / 1000) + "s)")
+        }
+      }
+      continue
+    }
 
     $msg = Get-LastJsonLine $g.Log
     if (-not $msg) { continue }
@@ -330,9 +364,9 @@ function Update-SessionTracker {
       $cycle = 1
       if ($script:dismissedSessions.ContainsKey($id)) {
         $d = $script:dismissedSessions[$id]
-        # 被点掉过。上次看到它是"待回复"，现在又"运行中" -> 它跑完了一轮
-        # 又开始，是新的一轮，可以重新进来。
-        if ($d.Phase -eq 'waiting' -and $phase -eq 'running') {
+        # 被点掉过。上次看到它是"待回复"或"已停止"，现在又"运行中" ->
+        # 它跑完了一轮又开始，是新的一轮，可以重新进来。
+        if (($d.Phase -eq 'waiting' -or $d.Phase -eq 'stopped') -and $phase -eq 'running') {
           $cycle = $d.Cycle + 1
           $script:dismissedSessions.Remove($id)
           $script:sessionsDirty = $true
@@ -366,7 +400,10 @@ function Update-SessionTracker {
     }
 
     # 已跟踪的：状态变了就更新
-    if ($entry.Phase -eq 'waiting' -and $phase -eq 'running') {
+    #
+    # "已停止"和"待回复"一样，是一轮的终点：agent 停了，或者它说完了。
+    # 之后又变成"运行中"，说明新一轮开始了，之前被点掉的约束失效。
+    if (($entry.Phase -eq 'waiting' -or $entry.Phase -eq 'stopped') -and $phase -eq 'running') {
       # 一轮结束了，agent 又开始 -> 新的一轮，之前被点掉的约束失效
       $entry.Cycle = $entry.Cycle + 1
       if ($script:dismissedSessions.ContainsKey($id)) {

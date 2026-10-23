@@ -380,6 +380,46 @@ try {
   $script:runtimeTitles = @{}
 }
 
+# --- 10. 停了的会话不该一直显示"运行中" -----------------------------------
+#
+# agent 跑完一个工具之后，它的最后一条消息永远是 toolCall 或 toolResult
+# —— 消息类型说它"在跑"。而日志不再变之后，更新循环第一行就跳过了，
+# 状态冻结在最后一个值：一个停了快一小时的会话会一直显示"运行中"。
+#
+# 所以"在跑"必须有一份活性支撑：超过窗口没动，就不是"在跑"，是"停了"。
+$fStale = New-Session 'sess-stale' @((Line-ToolCall 'Bash'))
+Update-SessionTracker
+Check '刚动过的 toolCall 会话是运行中' ($script:trackedSessions['sess-stale'].Phase -eq 'running') ("得到: " + $script:trackedSessions['sess-stale'].Phase)
+
+# 停 10 分钟：文件 mtime 变了，先重读一次（消息没变，状态也没变）
+[System.IO.File]::SetLastWriteTimeUtc($fStale, [DateTime]::UtcNow.AddMinutes(-10))
+Update-SessionTracker
+# 第二轮：mtime 不会再变了，这一轮走的是"没变就跳过"那条路
+Update-SessionTracker
+Check '停了 10 分钟的会话不再显示运行中' ($script:trackedSessions['sess-stale'].Phase -ne 'running') ("得到: " + $script:trackedSessions['sess-stale'].Phase)
+Check '停了以后标成已停止' ($script:trackedSessions['sess-stale'].Phase -eq 'stopped') ("得到: " + $script:trackedSessions['sess-stale'].Phase)
+
+# "待回复"不看活性：球在用户那边，用户半小时不回也是待回复。
+$fWaitStale = New-Session 'sess-waitstale' @((Line-Assistant '说完了，等你'))
+Update-SessionTracker
+[System.IO.File]::SetLastWriteTimeUtc($fWaitStale, [DateTime]::UtcNow.AddMinutes(-10))
+Update-SessionTracker
+Update-SessionTracker
+Check '停了 10 分钟的待回复会话仍然是待回复' ($script:trackedSessions['sess-waitstale'].Phase -eq 'waiting') ("得到: " + $script:trackedSessions['sess-waitstale'].Phase)
+
+# "已停止"和"待回复"一样，是一轮的终点。之后又变成"运行中"，说明
+# 新一轮开始了 —— 被点掉的约束失效，cycle +1。
+$fStopCycle = New-Session 'sess-stopcycle' @((Line-ToolCall 'Bash'))
+Update-SessionTracker
+[System.IO.File]::SetLastWriteTimeUtc($fStopCycle, [DateTime]::UtcNow.AddMinutes(-10))
+Update-SessionTracker
+Update-SessionTracker
+Check '停了以后是已停止' ($script:trackedSessions['sess-stopcycle'].Phase -eq 'stopped') ("得到: " + $script:trackedSessions['sess-stopcycle'].Phase)
+$cycleBefore = $script:trackedSessions['sess-stopcycle'].Cycle
+[System.IO.File]::WriteAllText($fStopCycle, ((Line-ToolCall 'Bash') + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+Update-SessionTracker
+Check '停了以后又跑起来算新一轮' ($script:trackedSessions['sess-stopcycle'].Cycle -eq ($cycleBefore + 1)) ("得到: " + $script:trackedSessions['sess-stopcycle'].Cycle + ", 之前 " + $cycleBefore)
+
 Write-Output "1..$script:n"
 Write-Output "# pass $script:n  fail $script:fail"
 if ($script:fail -gt 0) { exit 1 }
