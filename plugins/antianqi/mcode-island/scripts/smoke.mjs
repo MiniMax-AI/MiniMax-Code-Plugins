@@ -863,6 +863,47 @@ const main = async () => {
         } else {
             out('FAIL', "mcode-status-detect.ps1: ask_user is still mapped to the 'task' family, so a blocked agent wears the delegation color");
         }
+
+        // (h) The session-log reader must survive a fat last line.
+        //
+        // One session-log line can be hundreds of KB (a screenshot read
+        // writes the base64 image into a single line). A reader that looks at
+        // a fixed 64 KB tail window sees nothing but a fragment of that
+        // line, fails to parse it, and answers with the previously cached
+        // inference -- which belongs to an EARLIER session. The pill then
+        // shows the previous task's state for the whole new conversation.
+        // This is the reported bug; the behavioral proof lives in
+        // test-substep-progress.mjs, these are the cheap guards.
+        if (/function Get-LastJsonLine\b/.test(detect)) {
+            out('PASS', 'mcode-status-detect.ps1: the session-log reader has a dedicated tail-line reader');
+        } else {
+            out('FAIL', 'mcode-status-detect.ps1: no Get-LastJsonLine -- the reader is still the fixed 64 KB window that drops a fat last line');
+        }
+        if (/\$window\s*\*\s*2/.test(detect)) {
+            out('PASS', 'mcode-status-detect.ps1: the tail window grows until a line parses');
+        } else {
+            out('FAIL', 'mcode-status-detect.ps1: the tail window never grows -- a last line bigger than the window can never be read');
+        }
+        // The cache must be keyed on the path as well as the mtime: a
+        // session switch must never answer with the previous file's message.
+        if (/\$script:lastMsgsSnapshot\.path\s*-eq\s*\$file/.test(detect)) {
+            out('PASS', 'mcode-status-detect.ps1: the message cache is keyed on path AND mtime');
+        } else {
+            out('FAIL', 'mcode-status-detect.ps1: the message cache is keyed on the mtime alone -- a session switch can return the previous file\'s message');
+        }
+        // A read failure must answer "no information", never another
+        // session's message.
+        const readLastBody = (detect.match(/function Read-LastMessage[\s\S]*?\n\}\n/) || [''])[0];
+        if (!readLastBody) {
+            out('FAIL', 'mcode-status-detect.ps1: Read-LastMessage body not found (fat-line drift lock skipped)');
+        } else {
+            const catchBlock = (readLastBody.match(/catch\s*\{[\s\S]*?\n\s{2,}\}/) || [''])[0];
+            if (/lastInferred/.test(catchBlock)) {
+                out('FAIL', 'mcode-status-detect.ps1: a read failure answers with the cached inference -- that inference belongs to an earlier file, so the pill shows the previous conversation');
+            } else {
+                out('PASS', "mcode-status-detect.ps1: a read failure never answers with another session's message");
+            }
+        }
     }
 
     // 5e. Drift lock: the widget must consume `family` and apply it ONLY to

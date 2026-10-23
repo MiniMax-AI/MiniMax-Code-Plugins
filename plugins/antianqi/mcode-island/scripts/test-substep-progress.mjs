@@ -1093,6 +1093,106 @@ if (process.platform !== 'win32') {
 }
 
 // ---------------------------------------------------------------------------
+// 9. The detector follows the NEW session even when its last line is fat
+// ---------------------------------------------------------------------------
+//
+// The reported bug: "after the first test the state is fine, but in a new
+// conversation the pill stops updating and keeps showing the previous
+// task's finished state".
+//
+// The mechanism: a session-log line can be far bigger than the tail window
+// the reader used to look at. An agent that reads a screenshot writes the
+// base64 image into ONE line (200 KB - 560 KB in the wild), so the 64 KB
+// window held nothing but a fragment of that line. The fragment did not
+// parse, and the catch-all answered with the PREVIOUSLY cached inference
+// -- a message that belonged to an earlier session. The pill then showed
+// the previous task's state for the whole new conversation.
+//
+// The regression is behavioral on purpose: the real functions are extracted
+// from the real detector and run against a synthetic session tree, so a
+// text-shaped lock cannot pass while the behaviour is broken.
+{
+    const detectPath = join(PLUGIN_ROOT, 'mcode-status-detect.ps1');
+    const detect = readFileSync(detectPath, 'utf8');
+
+    let readLastMessage;
+    let getLastJsonLine;
+    try {
+        readLastMessage = extractFn(detect, 'Read-LastMessage');
+        getLastJsonLine = extractFn(detect, 'Get-LastJsonLine');
+    } catch (e) {
+        bad('the session-log reader is extractable', e.message);
+    }
+
+    if (!readLastMessage || !getLastJsonLine) {
+        bad('the tail reader handles a fat last line',
+            'Get-LastJsonLine / Read-LastMessage not found: the reader is still the 64 KB window that drops a fat line');
+    } else {
+        ok('the session-log reader is extractable');
+
+        const sessions = join(TMP, 'sessions');
+        const oldDir = join(sessions, '2026', '10', '23', '09-00-00-000-session_old');
+        const newDir = join(sessions, '2026', '10', '23', '10-00-00-000-session_new');
+        mkdirSync(oldDir, { recursive: true });
+        mkdirSync(newDir, { recursive: true });
+
+        const oldFile = join(oldDir, 'messages.jsonl');
+        const newFile = join(newDir, 'messages.jsonl');
+
+        // The previous task: its last line is a `read` toolResult.
+        const oldLine = JSON.stringify({
+            message_id: 'msg-old',
+            turn_id: 'turn-old',
+            message: {
+                role: 'toolResult',
+                toolName: 'read',
+                content: [{ type: 'text', text: 'old task done' }],
+            },
+        });
+        writeFileSync(oldFile, oldLine + '\n', 'utf8');
+
+        // The new conversation: ONE line of 200 KB, exactly the shape a
+        // screenshot read produces.
+        const fatLine = JSON.stringify({
+            message_id: 'msg-new',
+            turn_id: 'turn-new',
+            message: {
+                role: 'toolResult',
+                toolName: 'bash',
+                content: [{ type: 'text', text: 'x'.repeat(200000) }],
+            },
+        });
+        writeFileSync(newFile, fatLine, 'utf8');
+
+        const script = `
+$ErrorActionPreference = 'Stop'
+$FMT_O_FULL = 'O'
+$script:lastMsgsSnapshot = @{ path = ''; mtime = ''; lastInferred = $null }
+${getLastJsonLine}
+${readLastMessage}
+$old = Read-LastMessage '${oldFile.replace(/'/g, "''")}'
+$new = Read-LastMessage '${newFile.replace(/'/g, "''")}'
+Write-Output ("OLD=" + [string]$old.message.toolName)
+Write-Output ("NEW=" + [string]$new.message.toolName)
+`;
+
+        let out = '';
+        try {
+            out = runPs(script);
+        } catch (e) {
+            bad('the tail reader handles a fat last line',
+                `the extracted reader threw: ${(e.stdout || e.message || '').toString().slice(0, 300)}`);
+        }
+
+        const oldTool = (out.match(/OLD=(\S*)/) || [])[1];
+        const newTool = (out.match(/NEW=(\S*)/) || [])[1];
+
+        eq('the reader returns the previous session\'s last message', oldTool, 'read');
+        eq('the reader follows the new session whose last line is 200 KB', newTool, 'bash');
+    }
+}
+
+// ---------------------------------------------------------------------------
 // summary
 // ---------------------------------------------------------------------------
 

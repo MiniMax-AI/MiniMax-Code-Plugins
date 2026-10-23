@@ -256,7 +256,7 @@ if (-not $sessionsRoot) {
 
 # 全局状态
 $script:lastDetectedState = ''
-$script:lastMsgsSnapshot  = @{ mtime = ''; lastInferred = $null }
+$script:lastMsgsSnapshot  = @{ path = ''; mtime = ''; lastInferred = $null }
 
 # 5s 缓存：最新 session log 路径
 # 避免每秒调 Get-LatestSessionFile（每次都涉及 Get-ChildItem
@@ -331,42 +331,85 @@ function Get-LatestSessionFile {
   return $best
 }
 
+# Reads the last COMPLETE json line of a session log.
+#
+# The old implementation read a fixed 64 KB tail window and parsed the
+# fragments backwards. One session-log line can be far bigger than that: an
+# agent that reads a screenshot writes the base64 image into a single line
+# (200 KB - 560 KB in the wild), and a big file read is just as fat. The
+# window then held nothing but a fragment of that line, ConvertFrom-Json
+# threw on it, and the catch-all returned the previously cached inference --
+# which belonged to an earlier file, often an earlier conversation. The pill
+# then showed the previous task's state for the whole new conversation.
+#
+# So the window grows until a line actually parses. Reading one fat line is
+# cheap (a few hundred KB, once per change); reporting another session's
+# state is not.
+function Get-LastJsonLine($file) {
+  $fi = [System.IO.FileInfo]::new($file)
+  $len = $fi.Length
+  if ($len -le 0) { return $null }
+  # A single line is never allowed to pull more than 8 MB into memory.
+  $cap = [Math]::Min($len, 8MB)
+  $window = [Math]::Min($len, 65536)
+  while ($window -le $cap) {
+    $fs = $null
+    try {
+      $fs = [System.IO.File]::Open($fi.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+      [void]$fs.Seek(-$window, [System.IO.SeekOrigin]::End)
+      $buf = New-Object byte[] $window
+      [void]$fs.Read($buf, 0, $window)
+    } catch {
+      return $null
+    } finally {
+      if ($fs) { $fs.Close() }
+    }
+    $text = [System.Text.Encoding]::UTF8.GetString($buf)
+    $parts = $text -split "`n"
+    # Walk backwards. Index 0 is the fragment the window cut into, so it is
+    # only trustworthy when the whole file is inside the window.
+    for ($i = $parts.Length - 1; $i -ge 1; $i--) {
+      $line = $parts[$i].TrimEnd("`r")
+      if (-not $line -or $line.Length -le 10) { continue }
+      try { return ($line | ConvertFrom-Json) } catch { continue }
+    }
+    if ($window -ge $len) {
+      # The whole file is here: the first fragment is a complete line too.
+      $line = $parts[0].TrimEnd("`r")
+      if ($line.Length -gt 10) {
+        try { return ($line | ConvertFrom-Json) } catch { return $null }
+      }
+    }
+    $next = $window * 2
+    if ($next -gt $cap) { $next = $cap }
+    if ($next -eq $window) { break }
+    $window = $next
+  }
+  return $null
+}
+
 function Read-LastMessage($file) {
   if (-not $file) { return $null }
   try {
     $fi = [System.IO.FileInfo]::new($file)
     $mtime = $fi.LastWriteTime.ToString($FMT_O_FULL)
-    if ($script:lastMsgsSnapshot.mtime -eq $mtime) {
+    # The cache is keyed on path AND mtime. Keying it on the mtime alone
+    # let a session switch return the previous file's message, because two
+    # files touched in the same tick share an mtime.
+    if ($script:lastMsgsSnapshot.path -eq $file -and $script:lastMsgsSnapshot.mtime -eq $mtime) {
       # mtime 没变：返回上次推断结果（保持 idle 兜底可达）
       return $script:lastMsgsSnapshot.lastInferred
     }
+    $msg = Get-LastJsonLine $file
+    $script:lastMsgsSnapshot.path = $file
     $script:lastMsgsSnapshot.mtime = $mtime
-    $fs = [System.IO.File]::Open($fi.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
-    try {
-      $len = $fs.Length
-      if ($len -eq 0) { return $null }
-      $lookback = [Math]::Min($len, 65536)
-      $fs.Seek(-$lookback, [System.IO.SeekOrigin]::End) | Out-Null
-      $buf = New-Object byte[] $lookback
-      $fs.Read($buf, 0, $lookback) | Out-Null
-      $text = [System.Text.Encoding]::UTF8.GetString($buf)
-      $parts = $text -split "`n"
-      for ($i = $parts.Length - 1; $i -ge 0; $i--) {
-        $line = $parts[$i].TrimEnd("`r")
-        if ($line -and $line.Length -gt 10) {
-          # ConvertFrom-Json is gated by the mtime cache above, so this
-          # pipeline only fires when the file actually grew. Acceptable.
-          $msg = ($line | ConvertFrom-Json)
-          $script:lastMsgsSnapshot.lastInferred = $msg
-          return $msg
-        }
-      }
-      return $null
-    } finally {
-      $fs.Close()
-    }
+    $script:lastMsgsSnapshot.lastInferred = $msg
+    return $msg
   } catch {
-    return $script:lastMsgsSnapshot.lastInferred
+    # A file we cannot read right now (locked, mid-write) must not make us
+    # report another session's state. Returning $null leaves the current
+    # status untouched, which is the honest answer: "no new information".
+    return $null
   }
 }
 
