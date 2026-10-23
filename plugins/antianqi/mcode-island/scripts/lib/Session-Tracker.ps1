@@ -180,44 +180,93 @@ function Get-SessionTitle($file) {
   return $title
 }
 
-# 这个 session 现在是"运行中"还是"待回复"。
+# 这个 session 现在是什么状态。
 #
-#   running  agent 还在干：toolCall / toolResult / thinking / 用户刚说完
-#   waiting  agent 停了，在等用户：它说完了，或者它在提问（ask_user）
+# **和 detector 的 Infer-State 同源**：同一套状态词表、同一套判定规则。
 #
-# ask_user 归到 waiting：球在用户这边，agent 在等答案。
-function Get-SessionPhase($msg) {
-  if (-not $msg) { return 'running' }
+# 之前这里自己写了一套 running/waiting/stopped，两边越走越远："用户刚
+# 说完"在 pill 上是 idle（等用户），在列表里却是 running；pill 有的
+# "已完成"（工具跑完）列表里根本没有。同一个会话在两个地方显示成两回事。
+#
+# 所以这里直接产出 pill 那套状态：
+#
+#   working  agent 在干活（跑工具）
+#   thinking agent 在想
+#   waiting  agent 在等审批（ask_user）—— 球在用户那边
+#   idle     agent 说完了，或者用户刚说完 —— 球在用户那边
+#   done     工具跑完了
+#   error    工具炸了
+#
+# 只产出状态，不产出 message 和 family —— 那两个是 pill 的活（"Ran"、
+# "Read" 这些动词），列表不需要。
+function Get-SessionState($msg) {
+  if (-not $msg) { return '' }
   $m = $msg.message
   if (-not $m) {
     # ledger 事件格式：{kind, phase, action, ...}
     $kind = [string]$msg.kind
-    if ($kind -eq $S_TOOLRESULT) { return 'running' }
+    if ($kind -eq $S_TOOLRESULT) {
+      if ($msg.isError -eq $true) { return 'error' }
+      return 'done'
+    }
     if ($kind -eq 'toolCall' -or $kind -eq $S_TOOLCALL) {
       if (Test-IsAskUser ([string]$msg.toolName)) { return 'waiting' }
-      return 'running'
+      return 'working'
     }
-    return 'running'
+    if ($kind -eq $S_ASSISTANT -and [string]$msg.phase -eq $S_THINKING) { return 'thinking' }
+    return ''
   }
   $role = [string]$m.role
-  if ($role -eq $S_USER) { return 'running' }      # 用户刚说完，agent 要动
-  if ($role -eq $S_TOOLRESULT) { return 'running' }
+  # 用户刚说完：球在用户那边，agent 马上要动。pill 也判 idle（"等用户"）。
+  if ($role -eq $S_USER) { return 'idle' }
   if ($role -eq $S_ASSISTANT) {
-    foreach ($c in @($m.content)) {
-      if ($c.type -eq $S_TOOLCALL) {
-        if (Test-IsAskUser ([string]$c.name)) { return 'waiting' }
-        return 'running'
+    # 和 detector 一样扫一遍 content：toolCall 优先，命中就停。
+    $hasTool = $null
+    $hasThink = $null
+    $hasText = $null
+    if ($m.content) {
+      foreach ($c in @($m.content)) {
+        if     ($hasTool  -eq $null -and $c.type -eq $S_TOOLCALL)  { $hasTool  = $c }
+        elseif ($hasThink -eq $null -and $c.type -eq $S_THINK_BLK) { $hasThink = $c }
+        elseif ($hasText  -eq $null -and $c.type -eq $S_TEXT)      { $hasText  = $c }
+        if ($hasTool) { break }
       }
     }
-    return 'waiting'                              # assistant 纯文本 = 说完了
+    if ($hasTool) {
+      if (Test-IsAskUser ([string]$hasTool.name)) { return 'waiting' }
+      return 'working'
+    }
+    if ($hasThink -and -not $hasText) { return 'thinking' }
+    if ($hasText) { return 'idle' }
+    return 'idle'
   }
-  return 'running'
+  if ($role -eq $S_TOOLRESULT) {
+    if ($m.isError -eq $true) { return 'error' }
+    return 'done'
+  }
+  return ''
 }
+
+# 哪些状态算"一轮的终点"：球不在 agent 那边了。
+#
+#   idle    agent 说完了，或者用户刚说完
+#   waiting agent 在等审批（ask_user）
+#   done    工具跑完了
+#   stopped agent 挂了
+#   error   工具炸了
+#
+# 这些状态之后又变成 working/thinking，说明新一轮开始了，被点掉的约束
+# 该失效。
+$script:ROUND_END_STATES = @('idle', 'waiting', 'done', 'stopped', 'error')
+
+# 哪些状态算"在跑"（agent 那边有活）。活性兜底只对它们生效：最后一条
+# 消息说它在跑，但太久没动静了，那它不是"在跑"，是"停了"。
+$script:ACTIVE_STATES = @('working', 'thinking')
 
 # 最后一条消息的正文摘要（列表的第二行）。
 #
 # 从同一条消息里取，零额外 IO：Get-LastJsonLine 已经把它读进内存了，
-# Get-SessionPhase 也已经解析过 $m.content，只是没取正文。
+# Get-SessionState 也已经解析过 $m.content，只是没取正文。
 #
 # 这里只负责"把原文取出来"，不负责怎么排版：摘要的格式（截断长度、
 # "执行 <tool>" 这种前缀）归 widget 管，detector 只给原始数据。这样
@@ -337,7 +386,7 @@ function Update-SessionTracker {
       # 最后一个值：一个停了快一小时的会话会一直显示"运行中"。
       #
       # 所以在这里降级一次：超过窗口没动就不是"在跑"，是"停了"。
-      if ($entry.Phase -eq 'running') {
+      if ($entry.Phase -in $script:ACTIVE_STATES) {
         $ageMs = ($now - $g.MTime).TotalMilliseconds
         if ($ageMs -gt $script:STALE_RUNNING_MS) {
           $entry.Phase = 'stopped'
@@ -350,7 +399,7 @@ function Update-SessionTracker {
 
     $msg = Get-LastJsonLine $g.Log
     if (-not $msg) { continue }
-    $phase = Get-SessionPhase $msg
+    $phase = Get-SessionState $msg
 
     if (-not $entry) {
       # 新 session：只有"刚动过"才进列表。
@@ -364,9 +413,9 @@ function Update-SessionTracker {
       $cycle = 1
       if ($script:dismissedSessions.ContainsKey($id)) {
         $d = $script:dismissedSessions[$id]
-        # 被点掉过。上次看到它是"待回复"或"已停止"，现在又"运行中" ->
+        # 被点掉过。上次看到它是一轮的终点，现在又在跑 ->
         # 它跑完了一轮又开始，是新的一轮，可以重新进来。
-        if (($d.Phase -eq 'waiting' -or $d.Phase -eq 'stopped') -and $phase -eq 'running') {
+        if (($d.Phase -in $script:ROUND_END_STATES) -and ($phase -in $script:ACTIVE_STATES)) {
           $cycle = $d.Cycle + 1
           $script:dismissedSessions.Remove($id)
           $script:sessionsDirty = $true
@@ -401,9 +450,9 @@ function Update-SessionTracker {
 
     # 已跟踪的：状态变了就更新
     #
-    # "已停止"和"待回复"一样，是一轮的终点：agent 停了，或者它说完了。
-    # 之后又变成"运行中"，说明新一轮开始了，之前被点掉的约束失效。
-    if (($entry.Phase -eq 'waiting' -or $entry.Phase -eq 'stopped') -and $phase -eq 'running') {
+    # 一轮的终点（idle/waiting/done/stopped/error）之后又变成在跑
+    # （working/thinking），说明新一轮开始了，之前被点掉的约束失效。
+    if (($entry.Phase -in $script:ROUND_END_STATES) -and ($phase -in $script:ACTIVE_STATES)) {
       # 一轮结束了，agent 又开始 -> 新的一轮，之前被点掉的约束失效
       $entry.Cycle = $entry.Cycle + 1
       if ($script:dismissedSessions.ContainsKey($id)) {
@@ -517,7 +566,7 @@ function Restore-SessionTracker {
         # 老格式是一个整数（cycle）。当成"消掉时正在跑"，于是它要等
         # 跑完一轮又开始才回来。
         if ($v -is [int] -or $v -is [long] -or $v -is [double]) {
-          $v = @{ Cycle = [int]$v; Phase = 'running' }
+          $v = @{ Cycle = [int]$v; Phase = 'working' }
         }
         $script:dismissedSessions[$p.Name] = $v
       }
@@ -553,7 +602,7 @@ function Seed-SessionTracker {
 
     $msg = Get-LastJsonLine $g.Log
     if (-not $msg) { continue }
-    $phase = Get-SessionPhase $msg
+    $phase = Get-SessionState $msg
 
     # 两种补录：
     #   - 刚动过（60 秒内）：它此刻真的在跑
@@ -561,7 +610,7 @@ function Seed-SessionTracker {
     #     重启前它刚说完，那次"从运行中变成待回复"的转换我们没看见，
     #     不补录的话这个"待回复"就永远等不到了
     $isActive = ($g.MTime -ge $activeCut)
-    $isFinishedWaiting = ($g.MTime -ge $seedCut) -and ($phase -eq 'waiting')
+    $isFinishedWaiting = ($g.MTime -ge $seedCut) -and ($phase -in $script:ROUND_END_STATES)
     if (-not $isActive -and -not $isFinishedWaiting) { continue }
 
     $script:trackedSessions[$id] = @{

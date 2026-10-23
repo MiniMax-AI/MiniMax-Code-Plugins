@@ -457,15 +457,30 @@ function Format-RelativeTime([int64]$tsMs) {
 # 状态点跨两行、垂直居中；标题和摘要都在中间列，所以天然左对齐。
 function Add-SessionRow([string]$id, [string]$title, [string]$phase, [string]$preview, [string]$lastTool, [int64]$lastAtMs, [bool]$isLast) {
   if (-not $script:sessionRows) { return }
-  $isRunning = ($phase -eq 'running')
-  $isStopped = ($phase -eq 'stopped')
-  # 蓝=在跑，橙=在等你，灰=停了。
+  # 状态 -> 文案 + 颜色。
   #
-  # 灰色这一档是给"停了"用的：agent 跑完一个工具之后，最后一条消息
-  # 永远是 toolCall，消息类型说它"在跑"。要是只看消息类型，一个停了
-  # 快一小时的会话会一直显示"运行中"。
-  $dotHex = if ($isRunning) { '#FF3B82F6' } elseif ($isStopped) { '#FF6B7280' } else { '#FFF59E0B' }
-  $phaseText = if ($isRunning) { '运行中' } elseif ($isStopped) { '已停止' } else { '待回复' }
+  # 用的是 pill 那套状态词表（working/thinking/waiting/idle/done/error），
+  # 颜色也跟着 pill 走：同一个状态在两个地方就是同一个颜色、同一句话。
+  # 之前这里自己写了一套 running/waiting/stopped，于是同一个会话在 pill
+  # 上显示"等用户"、在列表里显示"运行中"，pill 有的"已完成"列表里更是
+  # 根本没有。
+  #
+  # "running" 是旧词表的值，留着当兼容：过渡期里 sessions.json 可能还是
+  # 旧的。
+  $stateTextMap = @{
+    'working'  = @{ text = '运行中';   dot = '#FF3B82F6' }
+    'thinking' = @{ text = '思考中';   dot = '#FFEAB308' }
+    'waiting'  = @{ text = '等待审批'; dot = '#FFF59E0B' }
+    'idle'     = @{ text = '待回复';   dot = '#FF6B7280' }
+    'done'     = @{ text = '已完成';   dot = '#FF22C55E' }
+    'error'    = @{ text = '出错';     dot = '#FFEF4444' }
+    'stopped'  = @{ text = '已停止';   dot = '#FF4B5563' }
+    'running'  = @{ text = '运行中';   dot = '#FF3B82F6' }
+  }
+  $stateInfo = $stateTextMap[[string]$phase]
+  if (-not $stateInfo) { $stateInfo = $stateTextMap['idle'] }
+  $dotHex = $stateInfo.dot
+  $phaseText = $stateInfo.text
 
   # 第二行：正文优先。没有正文（最后一条恰好是 toolCall）就退到"正在
   # 调用的工具名"，总比空着强。
@@ -606,8 +621,12 @@ function Show-SessionList {
   # 排序用 lastAtMs（最后活动时间），不是 sinceMs（进列表的时间）：
   # 进列表的时间只说明"我什么时候看见它"，说明不了"它现在有多活跃"。
   #
-  # 三档顺序：在跑的排最前，在等你的排中间，停了的排最后。
-  $sorted = @($items | Sort-Object @{ Expression = { if ($_.phase -eq 'running') { 0 } elseif ($_.phase -eq 'waiting') { 1 } else { 2 } } }, @{ Expression = { if ($_.lastAtMs) { [int64]$_.lastAtMs } else { [int64]$_.sinceMs } }; Descending = $true })
+  # 顺序：在跑的排最前，然后是等你的、再是等完了的，停了的排最后。
+  $stateOrder = @{
+    'working' = 0; 'thinking' = 0; 'waiting' = 1; 'idle' = 2
+    'done' = 3; 'error' = 4; 'stopped' = 5; 'running' = 0
+  }
+  $sorted = @($items | Sort-Object @{ Expression = { $k = [string]$_.phase; if ($stateOrder.ContainsKey($k)) { $stateOrder[$k] } else { 2 } } }, @{ Expression = { if ($_.lastAtMs) { [int64]$_.lastAtMs } else { [int64]$_.sinceMs } }; Descending = $true })
   $i = 0
   foreach ($s in $sorted) {
     Add-SessionRow ([string]$s.id) ([string]$s.title) ([string]$s.phase) ([string]$s.preview) ([string]$s.lastTool) ([int64]$s.lastAtMs) ($i -lt ($sorted.Count - 1))

@@ -35,6 +35,10 @@ New-Item -ItemType Directory -Path $env:APPDATA -Force | Out-Null
 $S_USER = 'user'; $S_ASSISTANT = 'assistant'; $S_TOOLRESULT = 'toolResult'
 $S_TOOLCALL = 'toolCall'; $FNAME_LEDGER = 'ledger.jsonl'; $FNAME_MESSAGES = 'messages.jsonl'
 $S_THINKING = 'thinking'
+# The tracker reads content blocks by type now, exactly like the
+# detector's Infer-State does. Without these two the text/thinking blocks
+# are never recognised -- and the state comes out wrong.
+$S_TEXT = 'text'; $S_THINK_BLK = 'thinking'
 function Log-Line($msg) { }
 function Test-IsAskUser($name) { return ([string]$name) -eq 'AskUserQuestion' }
 
@@ -90,6 +94,16 @@ function Line-Assistant([string]$text) {
 function Line-ToolCall([string]$tool) {
     return '{"message":{"role":"assistant","content":[{"type":"toolCall","name":"' + $tool + '","arguments":{}}],"timestamp":3}}'
 }
+# A tool that failed. The detector reports these as `error`, so the list
+# has to be able to say it too.
+function Line-ToolResultFailed {
+    return '{"message":{"role":"toolResult","isError":true,"content":[{"type":"text","text":"boom"}],"timestamp":4}}'
+}
+# An assistant message with only a thinking block: it is thinking, not
+# done and not working.
+function Line-ThinkingOnly {
+    return '{"message":{"role":"assistant","content":[{"type":"thinking","thinking":"hmm"}],"timestamp":4}}'
+}
 function Line-ToolResult {
     return '{"message":{"role":"toolResult","content":[{"type":"text","text":"ok"}],"timestamp":4}}'
 }
@@ -106,10 +120,28 @@ $fDone = New-Session 'sess-waiting' @((Line-Assistant '我先去做点别的'))
 $fAsk = New-Session 'sess-asking' @((Line-ToolCall 'ask_user'))
 $fUser = New-Session 'sess-userjust' @((Line-User '帮我看下这个'))
 
-Check 'toolCall 结尾 = 运行中' ((Get-SessionPhase (Get-LastJsonLine $fTool)) -eq 'running') (Get-SessionPhase (Get-LastJsonLine $fTool))
-Check 'assistant 文本结尾 = 待回复' ((Get-SessionPhase (Get-LastJsonLine $fDone)) -eq 'waiting') (Get-SessionPhase (Get-LastJsonLine $fDone))
-Check 'ask_user 结尾 = 待回复' ((Get-SessionPhase (Get-LastJsonLine $fAsk)) -eq 'waiting') (Get-SessionPhase (Get-LastJsonLine $fAsk))
-Check 'user 刚说完 = 运行中' ((Get-SessionPhase (Get-LastJsonLine $fUser)) -eq 'running') (Get-SessionPhase (Get-LastJsonLine $fUser))
+# 这些状态词表和 pill（detector 的 Infer-State）是同一套：同一个会话在
+# 两个地方不能一个说"等用户"、一个说"运行中"。
+#
+#   toolCall 结尾        -> working  （在跑）
+#   assistant 纯文本结尾 -> idle     （说完了，等你）
+#   ask_user 结尾        -> waiting  （在等审批）
+#   user 刚说完          -> idle     （球在你那边，agent 马上要动）
+#   toolResult 成功      -> done     （工具跑完了）
+#   toolResult 失败      -> error
+#   assistant 只有 thinking -> thinking（在想）
+Check 'toolCall 结尾 = 运行中' ((Get-SessionState (Get-LastJsonLine $fTool)) -eq 'working') (Get-SessionState (Get-LastJsonLine $fTool))
+Check 'assistant 文本结尾 = 待回复' ((Get-SessionState (Get-LastJsonLine $fDone)) -eq 'idle') (Get-SessionState (Get-LastJsonLine $fDone))
+Check 'ask_user 结尾 = 等待审批' ((Get-SessionState (Get-LastJsonLine $fAsk)) -eq 'waiting') (Get-SessionState (Get-LastJsonLine $fAsk))
+Check 'user 刚说完 = 待回复' ((Get-SessionState (Get-LastJsonLine $fUser)) -eq 'idle') (Get-SessionState (Get-LastJsonLine $fUser))
+
+# 工具跑完 / 炸了 / 只想不动手：pill 有这几档，列表以前一个都没有。
+$fRes = New-Session 'sess-toolresult' @((Line-ToolResult))
+$fResErr = New-Session 'sess-toolerror' @((Line-ToolResultFailed))
+$fThink = New-Session 'sess-thinking' @((Line-ThinkingOnly))
+Check 'toolResult 结尾 = 已完成' ((Get-SessionState (Get-LastJsonLine $fRes)) -eq 'done') (Get-SessionState (Get-LastJsonLine $fRes))
+Check '工具失败 = 出错' ((Get-SessionState (Get-LastJsonLine $fResErr)) -eq 'error') (Get-SessionState (Get-LastJsonLine $fResErr))
+Check 'assistant 只想不动手 = 思考中' ((Get-SessionState (Get-LastJsonLine $fThink)) -eq 'thinking') (Get-SessionState (Get-LastJsonLine $fThink))
 
 # --- 2. 标题提取 ---------------------------------------------------------
 $reminder = "<system-reminder>`n<agent-context>xxx</agent-context>`n</system-reminder>`n帮我把 PR 看一下"
@@ -140,7 +172,7 @@ $before = $script:trackedSessions['sess-flip'].Phase
 [System.IO.File]::WriteAllText($fNew2, ((Line-Assistant '做完了') + "`n"), (New-Object System.Text.UTF8Encoding($false)))
 Update-SessionTracker
 $after = $script:trackedSessions['sess-flip'].Phase
-Check '运行中 -> 待回复 的状态转换' (($before -eq 'running') -and ($after -eq 'waiting')) ("$before -> $after")
+Check '运行中 -> 待回复 的状态转换' (($before -eq 'working') -and ($after -eq 'idle')) ("$before -> $after")
 
 # --- 5. 消除:ack.signal ----------------------------------------------------
 [System.IO.File]::WriteAllText((Join-Path $configDir 'ack.signal'), 'sess-flip', (New-Object System.Text.UTF8Encoding($false)))
@@ -389,14 +421,14 @@ try {
 # 所以"在跑"必须有一份活性支撑：超过窗口没动，就不是"在跑"，是"停了"。
 $fStale = New-Session 'sess-stale' @((Line-ToolCall 'Bash'))
 Update-SessionTracker
-Check '刚动过的 toolCall 会话是运行中' ($script:trackedSessions['sess-stale'].Phase -eq 'running') ("得到: " + $script:trackedSessions['sess-stale'].Phase)
+Check '刚动过的 toolCall 会话是运行中' ($script:trackedSessions['sess-stale'].Phase -eq 'working') ("得到: " + $script:trackedSessions['sess-stale'].Phase)
 
 # 停 10 分钟：文件 mtime 变了，先重读一次（消息没变，状态也没变）
 [System.IO.File]::SetLastWriteTimeUtc($fStale, [DateTime]::UtcNow.AddMinutes(-10))
 Update-SessionTracker
 # 第二轮：mtime 不会再变了，这一轮走的是"没变就跳过"那条路
 Update-SessionTracker
-Check '停了 10 分钟的会话不再显示运行中' ($script:trackedSessions['sess-stale'].Phase -ne 'running') ("得到: " + $script:trackedSessions['sess-stale'].Phase)
+Check '停了 10 分钟的会话不再显示运行中' ($script:trackedSessions['sess-stale'].Phase -ne 'working') ("得到: " + $script:trackedSessions['sess-stale'].Phase)
 Check '停了以后标成已停止' ($script:trackedSessions['sess-stale'].Phase -eq 'stopped') ("得到: " + $script:trackedSessions['sess-stale'].Phase)
 
 # "待回复"不看活性：球在用户那边，用户半小时不回也是待回复。
@@ -405,7 +437,20 @@ Update-SessionTracker
 [System.IO.File]::SetLastWriteTimeUtc($fWaitStale, [DateTime]::UtcNow.AddMinutes(-10))
 Update-SessionTracker
 Update-SessionTracker
-Check '停了 10 分钟的待回复会话仍然是待回复' ($script:trackedSessions['sess-waitstale'].Phase -eq 'waiting') ("得到: " + $script:trackedSessions['sess-waitstale'].Phase)
+Check '停了 10 分钟的待回复会话仍然是待回复' ($script:trackedSessions['sess-waitstale'].Phase -eq 'idle') ("得到: " + $script:trackedSessions['sess-waitstale'].Phase)
+
+# thinking 也是"在跑"：agent 正在想。停住了一样要降级成"已停止"。
+#
+# 这条盯的是 ACTIVE_STATES 是不是完整 —— 只写 working 的话，一个卡在
+# 思考里的会话会永远显示"思考中"，和当初那个"停了还显示运行中"是同
+# 一类毛病。
+$fThinkStale = New-Session 'sess-thinkstale' @((Line-ThinkingOnly))
+Update-SessionTracker
+Check '刚动过的 thinking 会话是思考中' ($script:trackedSessions['sess-thinkstale'].Phase -eq 'thinking') ("得到: " + $script:trackedSessions['sess-thinkstale'].Phase)
+[System.IO.File]::SetLastWriteTimeUtc($fThinkStale, [DateTime]::UtcNow.AddMinutes(-10))
+Update-SessionTracker
+Update-SessionTracker
+Check '停了 10 分钟的思考中会话降级成已停止' ($script:trackedSessions['sess-thinkstale'].Phase -eq 'stopped') ("得到: " + $script:trackedSessions['sess-thinkstale'].Phase)
 
 # "已停止"和"待回复"一样，是一轮的终点。之后又变成"运行中"，说明
 # 新一轮开始了 —— 被点掉的约束失效，cycle +1。
