@@ -262,6 +262,73 @@ $afterSame = Get-Content (Join-Path $configDir 'sessions.json') -Raw | ConvertFr
 $rowAfter = @($afterSame.sessions | Where-Object { $_.id -eq 'sess-samephase' })[0]
 Check 'Phase 没变但工具名变了也要落盘' ($rowAfter.lastTool -eq 'Read') ("得到: '" + $rowAfter.lastTool + "'")
 
+# --- 9. 会话标题：运行时 SQLite 优先，首条提问兜底 ------------------------
+#
+# 列表第一行要显示"会话标题"。真正的标题在运行时的 SQLite 里
+# (local_runtime_sessions.title)，是提炼过的主题句；首条提问常常是半个
+# URL 或者一句长话，截断之后既不好看也认不出是哪个会话。
+#
+# 这里用**自建的临时库**验证，不碰开发机上那个 1.9GB 的真库：
+# MCODE_RUNTIME_STATE_DB 可以指向别的库。
+#
+# 需要 node:sqlite（Node 22.5+ 内置）。没有 node 的环境整节跳过，
+# 不是静默通过 —— 跳过要在摘要里看得见。
+$nodeExe = (Get-Command node -ErrorAction SilentlyContinue)
+$sqliteOk = $false
+if ($nodeExe) {
+  $probe = Join-Path $fixture 'sqlite-probe.cjs'
+  [System.IO.File]::WriteAllText($probe, 'require("node:sqlite");', (New-Object System.Text.UTF8Encoding($false)))
+  try {
+    $null = & $nodeExe.Source $probe 2>&1
+    $sqliteOk = ($LASTEXITCODE -eq 0)
+  } catch { $sqliteOk = $false }
+}
+
+if (-not $sqliteOk) {
+  Write-Output "# skip the runtime-title checks: node:sqlite is not available here"
+} else {
+  # 建一个只有一条标题的临时库。
+  $tmpDb = Join-Path $fixture 'runtime-state.sqlite'
+  $build = Join-Path $fixture 'build-db.cjs'
+  $buildJs = @'
+const {DatabaseSync} = require("node:sqlite");
+const db = new DatabaseSync(process.argv[2]);
+db.exec("CREATE TABLE local_runtime_sessions (session_id TEXT, title TEXT)");
+const ins = db.prepare("INSERT INTO local_runtime_sessions (session_id, title) VALUES (?, ?)");
+ins.run("sess-titled", "这个会话有一个像样的名字");
+ins.run("sess-untitled", null);
+db.close();
+'@
+  [System.IO.File]::WriteAllText($build, $buildJs, (New-Object System.Text.UTF8Encoding($false)))
+  & $nodeExe.Source $build $tmpDb | Out-Null
+  Check '临时库建好了' (Test-Path -LiteralPath $tmpDb) ('没有生成: ' + $tmpDb)
+
+  # 指过去，并强制下一次读缓存真的去读库。
+  $env:MCODE_RUNTIME_STATE_DB = $tmpDb
+  $script:runtimeTitlesAt = [DateTime]::MinValue
+  $script:runtimeTitles = @{}
+
+  Check '能从运行时库取到标题' ((Get-RuntimeSessionTitle 'sess-titled') -eq '这个会话有一个像样的名字') ("得到: '" + (Get-RuntimeSessionTitle 'sess-titled') + "'")
+  Check '运行时库里没有的会话没有标题' ([string]::IsNullOrEmpty((Get-RuntimeSessionTitle 'sess-nope'))) '不该有标题'
+  Check '标题为空的会话返回空' ([string]::IsNullOrEmpty((Get-RuntimeSessionTitle 'sess-untitled'))) '不该有标题'
+
+  # 列表里显示的名字：运行时标题优先
+  $fTitled = New-Session 'sess-titled' @((Line-User '首条提问是另外一句话'))
+  Check '显示用运行时标题而不是首条提问' ((Get-SessionDisplayTitle 'sess-titled' $fTitled) -eq '这个会话有一个像样的名字') ("得到: '" + (Get-SessionDisplayTitle 'sess-titled' $fTitled) + "'")
+
+  # 运行时没有标题时，退回首条提问
+  $fPlain = New-Session 'sess-plain' @((Line-User '首条提问是另外一句话'))
+  Check '运行时没有标题时退回首条提问' ((Get-SessionDisplayTitle 'sess-plain' $fPlain) -eq '首条提问是另外一句话') ("得到: '" + (Get-SessionDisplayTitle 'sess-plain' $fPlain) + "'")
+
+  # 库不存在时也不能出事
+  $env:MCODE_RUNTIME_STATE_DB = Join-Path $fixture 'no-such-db.sqlite'
+  $script:runtimeTitlesAt = [DateTime]::MinValue
+  $script:runtimeTitles = @{}
+  $fMissing = New-Session 'sess-nodb' @((Line-User '首条提问是另外一句话'))
+  Check '库不存在时退回首条提问' ((Get-SessionDisplayTitle 'sess-nodb' $fMissing) -eq '首条提问是另外一句话') ("得到: '" + (Get-SessionDisplayTitle 'sess-nodb' $fMissing) + "'")
+  $env:MCODE_RUNTIME_STATE_DB = $null
+}
+
 Write-Output "1..$script:n"
 Write-Output "# pass $script:n  fail $script:fail"
 if ($script:fail -gt 0) { exit 1 }

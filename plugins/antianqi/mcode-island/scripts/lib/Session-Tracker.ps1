@@ -37,6 +37,16 @@ $script:lastGroups = @{}
 # 运行期间完全靠状态机，不看时间。
 $script:SEED_WINDOW_MS = 30 * 60 * 1000
 
+# 会话标题（运行时的 SQLite）。
+#
+# lib 不在时整条链路关闭，列表退回"首条提问"—— 也就是这个能力上线之前的
+# 样子。跟 scripts/lib/Get-5hUsage.ps1 同一个套路：可选能力，可有可无。
+$script:runtimeTitlesAvailable = $false
+if (Test-Path (Join-Path $PSScriptRoot 'Runtime-Titles.ps1')) {
+  . (Join-Path $PSScriptRoot 'Runtime-Titles.ps1')
+  $script:runtimeTitlesAvailable = $true
+}
+
 # 活动窗口：日志刚被写过，session 才算"有活动"。
 #
 # 这个窗口只决定"能不能进列表"，不决定进列表之后显示什么：
@@ -245,6 +255,19 @@ function Get-SessionLastTool($msg) {
   return ''
 }
 
+# 这个 session 在列表里显示的名字。
+#
+# 优先用运行时的会话标题（SQLite 里那个提炼过的主题句："修复 MCode 0.6.13
+# 更新失败"）。拿不到就用首条提问 —— 首条提问常常是半个 URL 或者一句
+# 长话，截断之后既不好看，也认不出是哪个会话。
+function Get-SessionDisplayTitle([string]$id, [string]$log) {
+  if ($script:runtimeTitlesAvailable) {
+    $t = Get-RuntimeSessionTitle $id
+    if ($t) { return $t }
+  }
+  return (Get-SessionTitle $log)
+}
+
 # 消掉一个 session（用户点了）。
 # 记下被点掉时的 cycle：同一个 cycle 内不会再冒出来；agent 跑完一轮再
 # 开始（waiting -> running）算新的一轮，那时它可以重新进来。
@@ -322,7 +345,7 @@ function Update-SessionTracker {
       }
       $script:trackedSessions[$id] = @{
         Id = $id
-        Title = (Get-SessionTitle $g.Log)
+        Title = (Get-SessionDisplayTitle $id $g.Log)
         Phase = $phase
         Cycle = $cycle
         MTime = $g.MTime
@@ -370,6 +393,16 @@ function Update-SessionTracker {
     $entry.Preview = $newPreview
     $entry.LastTool = $newTool
     $entry.LastAtMs = $newAtMs
+    # 运行时标题可能比列表出现得晚（node 装好了、库能读了）。所以每次更新
+    # 都再问一次，拿到更好的名字就升级。Get-RuntimeSessionTitle 内部有 60s
+    # 缓存，所以每秒问一次并不会每秒起进程。
+    if ($script:runtimeTitlesAvailable) {
+      $rt = Get-RuntimeSessionTitle $id
+      if ($rt -and $rt -ne $entry.Title) {
+        $entry.Title = $rt
+        $script:sessionsDirty = $true
+      }
+    }
     if (-not $entry.Title) { $entry.Title = (Get-SessionTitle $g.Log) }
   }
 }
