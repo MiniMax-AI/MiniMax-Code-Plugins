@@ -1193,6 +1193,84 @@ Write-Output ("NEW=" + [string]$new.message.toolName)
 }
 
 // ---------------------------------------------------------------------------
+// 10. The CLI install and the Marketplace package resolve the click target
+//     differently, and each build says so in the code
+// ---------------------------------------------------------------------------
+//
+// The two are different products. The CLI runtime loads the
+// io.minimax.mcode hooks, so the agent pushes the state itself and a click
+// keeps the CLI habit of hiding the terminal and bringing it back. The
+// Marketplace package ships no Hook material, the agent is hosted by the
+// desktop app, and there the click has to focus the app window.
+//
+// So the source carries ONE switch and the package builder flips it. Both
+// sides are checked behaviorally here: the resolver is extracted from the
+// real file, the two lookups are stubbed so that BOTH a desktop app and a
+// caller terminal exist, and the resolution has to pick the right one.
+{
+    const sourcePath = join(PLUGIN_ROOT, 'mcode-island.ps1');
+    // The Marketplace package is only present on the branch that ships it.
+    const packagePath = join(PLUGIN_ROOT, '..', '..', '..', 'marketplace', 'mcode-island', 'mcode-island.ps1');
+
+    /**
+     * Resolve the click target against one file, with both a desktop app
+     * window and a caller terminal available.
+     */
+    function resolveClickTarget(file) {
+        const src = readFileSync(file, 'utf8');
+        const pref = (src.match(/\$script:clickPrefers\s*=\s*'([a-z]+)'/) || [])[1];
+        if (!pref) throw new Error('the file does not declare $script:clickPrefers');
+        const fn = extractFn(src, 'Resolve-ClickTarget');
+        const script = `
+$ErrorActionPreference = 'Stop'
+# Both targets exist, so the preference decides.
+function Resolve-PinnedWindow { return $null }
+function Find-DesktopAppWindow { return [PSCustomObject]@{ Hwnd = 1; Pid = 2; Exe = 'fake-app' } }
+function Resolve-CallerWindow { return [PSCustomObject]@{ Hwnd = 3; Pid = 4; Exe = 'fake-caller'; Source = 'console-window' } }
+$script:clickPrefers = '${pref}'
+${fn}
+$t = Resolve-ClickTarget
+Write-Output ("ORIGIN=" + $t.Origin + " MODE=" + $t.Mode)
+`;
+        const out = runPs(script);
+        const origin = (out.match(/ORIGIN=(\S*)/) || [])[1];
+        const mode = (out.match(/MODE=(\S*)/) || [])[1];
+        return { pref, origin, mode };
+    }
+
+    // (a) the CLI install: the terminal wins, and the click keeps toggling
+    let cli;
+    try {
+        cli = resolveClickTarget(sourcePath);
+    } catch (e) {
+        bad('the CLI click target is extractable', e.message);
+    }
+    if (cli) {
+        eq('the CLI install prefers the caller terminal', cli.pref, 'terminal');
+        eq('the CLI install resolves the click to the terminal', cli.origin, 'caller');
+        eq('the CLI install keeps the show/hide toggle', cli.mode, 'toggle');
+    }
+
+    // (b) the Marketplace package: the desktop app wins, and it is focused
+    if (!existsSync(packagePath)) {
+        skipped++;
+        console.log('[skip] the Marketplace package is not on this branch (the CLI install was checked)');
+    } else {
+        let pkg;
+        try {
+            pkg = resolveClickTarget(packagePath);
+        } catch (e) {
+            bad('the package click target is extractable', e.message);
+        }
+        if (pkg) {
+            eq('the Marketplace package prefers the desktop app', pkg.pref, 'app');
+            eq('the Marketplace package resolves the click to the app window', pkg.origin, 'desktop-app');
+            eq('the Marketplace package focuses instead of hiding', pkg.mode, 'focus');
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // summary
 // ---------------------------------------------------------------------------
 

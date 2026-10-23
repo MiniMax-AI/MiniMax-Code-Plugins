@@ -776,23 +776,47 @@ function Find-DesktopAppWindow {
   return $null
 }
 
+# Which target a click prefers when both are available.
+#
+#   'terminal' -- the caller's terminal first. The CLI habit: one click
+#                 hides it, the next brings it back.
+#   'app'      -- the desktop app window first. The Marketplace build ships
+#                 this one: in the desktop app the agent is hosted by the
+#                 app and the terminal belongs to the app session, so hiding
+#                 that terminal leaves a static pill behind.
+#
+# The Marketplace package is built with 'app'. The builder flips this one
+# line and FAILS the build when it cannot find it, so a renamed switch can
+# never silently ship the CLI behaviour to the desktop users.
+$script:clickPrefers = 'terminal'
+
 # Resolve the click target. Mode = focus (raise and activate only) /
 # toggle (show / hide).
 function Resolve-ClickTarget {
-  # 1) the manual pin
+  # 1) the manual pin -- the user's explicit choice, it always wins
   $pin = Resolve-PinnedWindow
   if ($pin) {
     return [PSCustomObject]@{ Hwnd = $pin.Hwnd; Pid = $pin.Pid; Exe = $pin.Exe; Mode = 'focus'; Origin = 'pin' }
   }
-  # 2) the desktop app main window
-  $app = Find-DesktopAppWindow
-  if ($app) {
-    return [PSCustomObject]@{ Hwnd = $app.Hwnd; Pid = $app.Pid; Exe = $app.Exe; Mode = 'focus'; Origin = 'desktop-app' }
-  }
-  # 3) the caller's terminal (old behaviour: show / hide)
-  $caller = Resolve-CallerWindow
-  if ($caller) {
-    return [PSCustomObject]@{ Hwnd = $caller.Hwnd; Pid = $caller.Pid; Exe = $caller.Exe; Mode = 'toggle'; Origin = 'caller' }
+  # 2) the preferred target, then the other one
+  if ($script:clickPrefers -eq 'app') {
+    $app = Find-DesktopAppWindow
+    if ($app) {
+      return [PSCustomObject]@{ Hwnd = $app.Hwnd; Pid = $app.Pid; Exe = $app.Exe; Mode = 'focus'; Origin = 'desktop-app' }
+    }
+    $caller = Resolve-CallerWindow
+    if ($caller) {
+      return [PSCustomObject]@{ Hwnd = $caller.Hwnd; Pid = $caller.Pid; Exe = $caller.Exe; Mode = 'toggle'; Origin = 'caller' }
+    }
+  } else {
+    $caller = Resolve-CallerWindow
+    if ($caller) {
+      return [PSCustomObject]@{ Hwnd = $caller.Hwnd; Pid = $caller.Pid; Exe = $caller.Exe; Mode = 'toggle'; Origin = 'caller' }
+    }
+    $app = Find-DesktopAppWindow
+    if ($app) {
+      return [PSCustomObject]@{ Hwnd = $app.Hwnd; Pid = $app.Pid; Exe = $app.Exe; Mode = 'focus'; Origin = 'desktop-app' }
+    }
   }
   return $null
 }

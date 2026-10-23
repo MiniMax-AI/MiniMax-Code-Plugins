@@ -578,6 +578,22 @@ const main = async () => {
             }
         }
 
+        // (j) the CLI install and the Marketplace package resolve the click
+        // target differently, and the source says which one it is. The
+        // Marketplace builder flips this ONE line to 'app' and fails the
+        // build when it cannot find it, so a renamed switch cannot silently
+        // ship the CLI behaviour to the desktop users.
+        if (/\$script:clickPrefers\s*=\s*'terminal'/.test(widget)) {
+            out('PASS', 'mcode-island.ps1: the CLI install prefers the caller terminal');
+        } else {
+            out('FAIL', "mcode-island.ps1: the CLI install does not declare $script:clickPrefers = 'terminal' -- the Marketplace builder flips that exact line");
+        }
+        if (/\$script:clickPrefers\s+-eq\s+'app'/.test(widget)) {
+            out('PASS', 'mcode-island.ps1: Resolve-ClickTarget branches on the preference');
+        } else {
+            out('FAIL', 'mcode-island.ps1: Resolve-ClickTarget does not branch on $script:clickPrefers, so the two builds cannot differ');
+        }
+
         // Round-15: Toggle's restore branch must call SW_MAXIMIZE (3), not
         // SW_SHOW (5) / SW_RESTORE (9). SW_HIDE preserves the window's
         // "non-maximized size"; if the WT window got accidentally resized
