@@ -1271,6 +1271,137 @@ Write-Output ("ORIGIN=" + $t.Origin + " MODE=" + $t.Mode)
 }
 
 // ---------------------------------------------------------------------------
+// 11. The 5h usage survives a tick (the blank-badge regression)
+// ---------------------------------------------------------------------------
+//
+// Symptom: the pill's 5h badge was blank almost all the time, while the
+// detector's own log said "5h usage refreshed: remaining=94%". The
+// number WAS arriving -- and was being dropped again on the very next
+// write.
+//
+// Mechanism, confirmed against the live status.json with a 25ms
+// watcher: the detector's step 4 calls Get-PlanUsage on every tick, and
+// that lib used to clear $script:plan5hRemainingPct /
+// $script:plan5hResetMs on the way in. The only thing that refills them
+// is Refresh-5hUsage, whose 60s TTL gate returns early WITHOUT
+// touching them. So the value survived exactly two writes -- the
+// refresh itself and the state inference right after it -- and was
+// $null for the remaining ~58 seconds of every minute.
+//
+// The contract pinned here: a value that has been fetched must still be
+// on the next write, even though no runtime usage file exists and the
+// credentialed refill is TTL-blocked.
+//
+// 11a is the unit half: the lib must not wipe a value it has no
+// replacement for. 11b is the end-to-end half: two detector ticks
+// against a real status.json, the second write still carrying it.
+//
+// 11b needs TWO ticks on purpose. The regression was invisible on the
+// first tick -- the refresh wrote the number, and the write right
+// after it still had it. The number only went missing on the tick
+// AFTER the one that cleared the cache, so a single-tick test would
+// have passed against the broken code.
+if (PS_BIN) {
+    const planUsageLibRef = join(PLUGIN_ROOT, 'scripts', 'lib', 'Plan-Usage.ps1');
+    const get5hLibRef = join(PLUGIN_ROOT, 'scripts', 'lib', 'Get-5hUsage.ps1');
+    const detectorSrc = readFileSync(join(PLUGIN_ROOT, 'mcode-status-detect.ps1'), 'utf8');
+
+    // The environment the usage lib resolves its candidates from.
+    // APPDATA and USERPROFILE are both set because the lib builds that
+    // candidate list with Join-Path at load time, and Join-Path throws
+    // on an empty path -- which is exactly what a Linux CI runner
+    // hands it. MCODE_PLAN_USAGE_FILE is pointed at a path that does
+    // not exist, so the "there is no runtime usage file" precondition
+    // cannot be broken by whatever the developer's own machine has.
+    const usageEnv = (appdata) => ({
+        APPDATA: appdata,
+        USERPROFILE: appdata,
+        MCODE_PLAN_USAGE_FILE: join(appdata, 'no-such-usage.json'),
+    });
+
+    // --- 11a: the lib must not clear a value it cannot replace ------
+    {
+        const appdata = makeIsolatedAppData('plan-usage');
+        const out = runPs(`
+$ErrorActionPreference = 'Stop'
+. '${planUsageLibRef}'
+$script:plan5hRemainingPct = 94
+$script:plan5hResetMs = 15496790
+$ret = Get-PlanUsage
+"PCT=$($script:plan5hRemainingPct)"
+"MS=$($script:plan5hResetMs)"
+"FROMRUNTIME=$($script:plan5hFromRuntime)"
+"RET=$ret"
+`, usageEnv(appdata));
+
+        check('the usage lib found no runtime file',
+            /FROMRUNTIME=False/.test(out) && /RET=False/.test(out),
+            `expected FROMRUNTIME=False and RET=False, got ${JSON.stringify(out.trim())}`);
+        check('the usage lib did not wipe the cached percentage',
+            /PCT=94(\s|$)/m.test(out),
+            `the cached percentage was cleared: ${JSON.stringify(out.trim())}`);
+        check('the usage lib did not wipe the cached reset countdown',
+            /MS=15496790(\s|$)/m.test(out),
+            `the cached reset countdown was cleared: ${JSON.stringify(out.trim())}`);
+    }
+
+    // --- 11b: two detector ticks, the number still there -----------
+    {
+        const appdata = makeIsolatedAppData('usage-survives');
+        const statusPath = join(appdata, 'mcode-island', 'status.json');
+
+        // The detector's step 4, in the order the real loop runs it.
+        const step4 = `
+$prevPct  = $script:plan5hRemainingPct
+$prevMs   = $script:plan5hResetMs
+Get-PlanUsage | Out-Null
+if (-not $script:plan5hFromRuntime -and $script:plan5hAvailable) { Refresh-5hUsage }
+$curPct   = $script:plan5hRemainingPct
+$curMs    = $script:plan5hResetMs
+`;
+
+        const harness = `
+$ErrorActionPreference = 'Stop'
+. '${storeLibRef}'
+. '${planUsageLibRef}'
+. '${get5hLibRef}'
+$S_IDLE = 'idle'
+$S_DETECTOR = 'detector'
+$script:plan5hTodoData = $null
+$script:plan5hAvailable = $true
+# What the credentialed fetch produced a moment ago.
+$script:plan5hRemainingPct = 94
+$script:plan5hResetMs = 15496790
+# ... and the TTL gate that keeps the next refill from happening.
+$script:plan5hLastCallAt = Get-Date
+${extractFn(detectorSrc, 'Write-Status')}
+${extractFn(detectorSrc, 'Write-StatusUnderLock')}
+# tick 1: the state inference writes, then step 4 refreshes.
+Write-Status 'working' 'Reading' 'read'
+${step4}
+# tick 2: the state inference writes again. The number must still be
+# there -- step 4 found no runtime file and the credentialed refill was
+# TTL-blocked, so nothing replaced it, and nothing may have wiped it.
+Write-Status 'done' 'Read' 'read'
+'DONE'
+`;
+        const out = runPs(harness, usageEnv(appdata));
+        check('the two-tick harness ran to completion',
+            /DONE/.test(out) && !/Exception/i.test(out),
+            `harness did not complete: ${JSON.stringify(out.trim())}`);
+
+        const final = readJsonFile(statusPath);
+        eq('the 5h usage survived the tick that had no runtime file', final.usage5h, 94);
+        eq('the 5h reset countdown survived too', final.usage5hResetMs, 15496790);
+        // Both writes have to have happened. Otherwise "the number is
+        // still 94" could just be the FIRST write's payload, with the
+        // second write never landing at all.
+        eq('both ticks wrote', final.version, 2);
+        eq('the second write carried the state', final.state, 'done');
+    }
+}
+
+// ---------------------------------------------------------------------------
 // summary
 // ---------------------------------------------------------------------------
 
