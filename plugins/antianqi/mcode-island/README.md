@@ -92,6 +92,35 @@ optional `-Message`. A separate `mcode-status-detect.ps1` polls the runtime's
 pill still moves even when the agent forgets to push. See
 [`SKILL.md`](skills/mcode-island/SKILL.md) for the agent-side call patterns.
 
+#### Which session the detector follows
+
+**The session that wrote its log most recently.** The detector scans every
+session log under the runtime's session store and picks the file with the
+newest mtime, then infers the state from that file's last complete line.
+
+This is a deliberate decision, not an accident. The conversation the user is
+looking at is the one writing to the log, so "whoever wrote last" is the
+active conversation. Anything smarter — pinning a session id, asking the
+runtime which window is focused — needs a signal the runtime does not expose
+to a plugin, and guessing one would make the pill wrong in the common case
+to make it right in the rare one.
+
+**Known boundary.** When several conversations run at the same time (a
+desktop session plus a CLI session, or two desktop windows), the detector
+follows whichever wrote last, so the pill can briefly show a neighbouring
+conversation's state. The detector deliberately does not try to disambiguate
+this. Two guards keep the damage small:
+
+- the state is re-derived on every change, so the pill corrects itself as
+  soon as the followed session writes again;
+- a log line that cannot be parsed never falls back to another session's
+  message (the reader grows its window until a complete line is found, and
+  a read failure reports "no new information" instead of a foreign state).
+
+This is also why the Marketplace build needs the detector: its package ships
+no Hook material, so the detector is the only source of state that does not
+depend on the agent cooperating.
+
 ## Copyable example
 
 ### One-line install and run
