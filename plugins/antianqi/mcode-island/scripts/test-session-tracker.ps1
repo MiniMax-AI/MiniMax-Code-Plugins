@@ -93,6 +93,12 @@ function Line-ToolCall([string]$tool) {
 function Line-ToolResult {
     return '{"message":{"role":"toolResult","content":[{"type":"text","text":"ok"}],"timestamp":4}}'
 }
+# A toolResult that names its tool. The real log puts the tool name on
+# message.toolName, not in the content array -- and a toolResult is what
+# the last line usually is once a tool has run.
+function Line-ToolResultNamed([string]$tool) {
+    return '{"message":{"role":"toolResult","toolName":"' + $tool + '","content":[{"type":"text","text":"ok"}],"timestamp":4}}'
+}
 
 # --- 1. 状态机 -----------------------------------------------------------
 $fTool = New-Session 'sess-running' @((Line-ToolCall 'Bash'))
@@ -171,6 +177,90 @@ Update-SessionTracker
 Update-SessionTracker
 Check '新一轮开始后 session 重新进列表' ($script:trackedSessions.Contains('sess-cycle')) '没回来'
 Check '新一轮清掉了 dismissed 记录' (-not $script:dismissedSessions.Contains('sess-cycle')) ($script:dismissedSessions | ConvertTo-Json -Compress)
+
+# --- 8. 摘要与时间戳:列表的第二行和右侧那一列 ---------------------------
+#
+# 布局参考小红书的展开态之后，列表的一行有两行字和一个时间戳：
+# 第一行是首条提问，第二行是"最后说了什么"，右边是最后活动时间。
+#
+# 这三条断言盯的就是那条数据链：
+#   preview   = 最后一条消息的正文（agent 或用户说的）
+#   lastTool  = 最后一条消息恰好是 toolCall 时的工具名
+#   lastAtMs  = 最后一次活动时间（日志 mtime）
+#
+# 少任何一条，第二行就会空着，或者时间戳变成"进列表的时间"（那是很久
+# 以前，排序和显示都不对）。
+
+$fPrev = New-Session 'sess-preview' @((Line-Assistant '我改完了，你看一下'))
+Update-SessionTracker
+$ePrev = $script:trackedSessions['sess-preview']
+Check 'assistant 的正文进 preview' ($ePrev.Preview -eq '我改完了，你看一下') ("得到: '" + $ePrev.Preview + "'")
+Check '最后活动时间有值' ($ePrev.LastAtMs -gt 0) ("得到: " + $ePrev.LastAtMs)
+Check '最后活动时间接近现在' ([math]::Abs(([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - [int64]$ePrev.LastAtMs)) -lt 60000) ("得到: " + $ePrev.LastAtMs)
+
+# toolCall 结尾：没有正文，preview 空，但工具名要留着给 widget 兜底。
+$fToolPrev = New-Session 'sess-toolpreview' @((Line-ToolCall 'Bash'))
+Update-SessionTracker
+$eToolPrev = $script:trackedSessions['sess-toolpreview']
+Check 'toolCall 结尾时 preview 为空' ([string]::IsNullOrEmpty($eToolPrev.Preview)) ("得到: '" + $eToolPrev.Preview + "'")
+Check 'toolCall 结尾时工具名被记下来' ($eToolPrev.LastTool -eq 'Bash') ("得到: '" + $eToolPrev.LastTool + "'")
+
+# toolResult 结尾：正文是工具输出（代码、日志），不当摘要。
+$fResPrev = New-Session 'sess-resultpreview' @((Line-ToolResult))
+Update-SessionTracker
+$eResPrev = $script:trackedSessions['sess-resultpreview']
+Check 'toolResult 的正文不进 preview' ([string]::IsNullOrEmpty($eResPrev.Preview)) ("得到: '" + $eResPrev.Preview + "'")
+
+# toolResult 带 toolName：工具名在 message.toolName 上，不在 content 里。
+# agent 跑完工具后最后一条往往就是 toolResult，这时 preview 是空的，
+# 工具名是唯一能让第二行不空的东西。
+$fResNamed = New-Session 'sess-resultnamed' @((Line-ToolResultNamed 'Bash'))
+Update-SessionTracker
+$eResNamed = $script:trackedSessions['sess-resultnamed']
+Check 'toolResult 的工具名被记下来' ($eResNamed.LastTool -eq 'Bash') ("得到: '" + $eResNamed.LastTool + "'")
+Check 'toolResult 的正文仍然不进 preview' ([string]::IsNullOrEmpty($eResNamed.Preview)) ("得到: '" + $eResNamed.Preview + "'")
+
+# 换了最后一条消息，preview 必须跟着换（不是只在新 session 时取一次）。
+[System.IO.File]::WriteAllText($fPrev, ((Line-Assistant '改完了' ) + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+Update-SessionTracker
+Check '最后一条消息变了 preview 跟着变' ($script:trackedSessions['sess-preview'].Preview -eq '改完了') ("得到: '" + $script:trackedSessions['sess-preview'].Preview + "'")
+
+# 落盘：三个字段都得在文件里，widget 只读这个文件。
+Write-SessionsFile -Force
+$saved2 = Get-Content (Join-Path $configDir 'sessions.json') -Raw | ConvertFrom-Json
+$row2 = @($saved2.sessions | Where-Object { $_.id -eq 'sess-preview' })[0]
+Check 'sessions.json 里有一行' ($null -ne $row2) '没有 sess-preview 这一行'
+Check 'sessions.json 带 preview' ($null -ne $row2 -and $row2.preview -eq '改完了') ("得到: '" + $row2.preview + "'")
+Check 'sessions.json 带 lastTool' ($null -ne $row2 -and $null -ne $row2.lastTool) ("得到: '" + $row2.lastTool + "'")
+Check 'sessions.json 带 lastAtMs' ($null -ne $row2 -and [int64]$row2.lastAtMs -gt 0) ("得到: " + $row2.lastAtMs)
+
+# 重启恢复：detector 重启到下一次刷新之间，widget 读的就是这个文件，
+# 第二行不能白屏。
+$script:trackedSessions = [ordered]@{}
+Restore-SessionTracker
+$eRestored = $script:trackedSessions['sess-preview']
+Check '重启后 preview 恢复了' ($eRestored.Preview -eq '改完了') ("得到: '" + $eRestored.Preview + "'")
+Check '重启后 lastAtMs 恢复了' ([int64]$eRestored.LastAtMs -gt 0) ("得到: " + $eRestored.LastAtMs)
+
+# Phase 没变但内容变了，也要落盘。
+#
+# agent 连着跑两个工具时 Phase 一直是 running，摘要和最后活动时间却在变。
+# 只看 Phase 变没变来决定写不写盘，磁盘上的 sessions.json 就会一直停在
+# 旧值：列表第二行空着、右侧的时间戳不动。内存里是对的，落到文件上丢了。
+$fSame = New-Session 'sess-samephase' @((Line-ToolCall 'Bash'))
+Update-SessionTracker
+Write-SessionsFile -Force
+$beforeSame = Get-Content (Join-Path $configDir 'sessions.json') -Raw | ConvertFrom-Json
+$rowBefore = @($beforeSame.sessions | Where-Object { $_.id -eq 'sess-samephase' })[0]
+Check '同 Phase 的 session 带上了工具名' ($rowBefore.lastTool -eq 'Bash') ("得到: '" + $rowBefore.lastTool + "'")
+
+# 换一个工具名。Phase 仍然是 running（toolCall -> toolCall）。
+[System.IO.File]::WriteAllText($fSame, ((Line-ToolCall 'Read') + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+Update-SessionTracker
+Write-SessionsFile   # 故意不加 -Force: 该由 dirty 标志决定写不写
+$afterSame = Get-Content (Join-Path $configDir 'sessions.json') -Raw | ConvertFrom-Json
+$rowAfter = @($afterSame.sessions | Where-Object { $_.id -eq 'sess-samephase' })[0]
+Check 'Phase 没变但工具名变了也要落盘' ($rowAfter.lastTool -eq 'Read') ("得到: '" + $rowAfter.lastTool + "'")
 
 Write-Output "1..$script:n"
 Write-Output "# pass $script:n  fail $script:fail"

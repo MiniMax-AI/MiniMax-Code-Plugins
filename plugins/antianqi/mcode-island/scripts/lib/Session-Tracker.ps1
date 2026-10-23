@@ -188,6 +188,63 @@ function Get-SessionPhase($msg) {
   return 'running'
 }
 
+# 最后一条消息的正文摘要（列表的第二行）。
+#
+# 从同一条消息里取，零额外 IO：Get-LastJsonLine 已经把它读进内存了，
+# Get-SessionPhase 也已经解析过 $m.content，只是没取正文。
+#
+# 这里只负责"把原文取出来"，不负责怎么排版：摘要的格式（截断长度、
+# "执行 <tool>" 这种前缀）归 widget 管，detector 只给原始数据。这样
+# 换一种排版不用动 detector。
+#
+# 取什么，按"用户想看到什么"来定：
+#
+#   assistant 的正文 -> agent 最后说了什么。这是"待回复"会话里最该看到的
+#                      一句话：它到底说了什么、要我干什么。
+#   user 的正文      -> 用户最后说了什么。
+#   toolCall         -> 只留工具名，widget 拼成"执行 xxx"。agent 正在干活
+#                      时最后一条往往就是 toolCall，没有正文可显示，给个
+#                      动作名比留空好。
+#   toolResult       -> 不取。它的正文是工具输出（代码、日志），不是对话
+#                      内容，塞进摘要只会把列表变成日志窗口。
+function Get-SessionPreview($msg) {
+  if (-not $msg) { return '' }
+  $m = $msg.message
+  if (-not $m) { return '' }
+  $role = [string]$m.role
+  # toolResult 的正文是工具输出（代码、日志、文件内容），不是对话内容。
+  # 当摘要用会把列表变成日志窗口，所以整条排除。
+  if ($role -eq $S_TOOLRESULT) { return '' }
+  $text = ''
+  foreach ($c in @($m.content)) {
+    if ($c.type -eq 'text' -and $c.text -and -not $text) { $text = [string]$c.text; break }
+  }
+  if (-not $text) { return '' }
+  $text = $text -replace '(?s)<system-reminder>.*?</system-reminder>', ''
+  $text = ($text -replace '\s+', ' ').Trim()
+  return $text
+}
+
+# 最后一条消息里的工具名（toolCall）。
+#
+# 和摘要分开放，因为它们的来源不同：摘要是正文，工具名只在最后一条
+# 恰好是 toolCall 时才有。widget 先用摘要，没有再用它兜底。
+#
+# toolResult 消息也带工具名，但不在 content 里，而在 message.toolName
+# 上。agent 跑完一个工具之后，最后一条往往正是 toolResult —— 实测下来
+# 那样 preview 是空的（工具输出不当摘要），content 里也没有 toolCall，
+# 工具名就漏了，第二行会整个空着。所以这里要认 message.toolName。
+function Get-SessionLastTool($msg) {
+  if (-not $msg) { return '' }
+  $m = $msg.message
+  if (-not $m) { return '' }
+  foreach ($c in @($m.content)) {
+    if ($c.type -eq 'toolCall' -and $c.name) { return [string]$c.name }
+  }
+  if ($m.PSObject.Properties['toolName'] -and $m.toolName) { return [string]$m.toolName }
+  return ''
+}
+
 # 消掉一个 session（用户点了）。
 # 记下被点掉时的 cycle：同一个 cycle 内不会再冒出来；agent 跑完一轮再
 # 开始（waiting -> running）算新的一轮，那时它可以重新进来。
@@ -270,6 +327,14 @@ function Update-SessionTracker {
         Cycle = $cycle
         MTime = $g.MTime
         SinceMs = [int64]([DateTimeOffset]::new($g.MTime).ToUnixTimeMilliseconds())
+        # 列表的第二行和右侧时间戳。
+        #   Preview  = 最后一条消息的正文（agent 或用户说的）
+        #   LastTool = 最后一条消息恰好是 toolCall 时的工具名
+        #   LastAtMs = 最后一次活动时间（日志 mtime）。不是"进列表的时间"，
+        #              那是 SinceMs；列表右侧显示的是这个。
+        Preview = (Get-SessionPreview $msg)
+        LastTool = (Get-SessionLastTool $msg)
+        LastAtMs = [int64]([DateTimeOffset]::new($g.MTime).ToUnixTimeMilliseconds())
         Dir = $g.Dir
       }
       $script:sessionsDirty = $true
@@ -290,6 +355,21 @@ function Update-SessionTracker {
     if ($entry.Phase -ne $phase) { $script:sessionsDirty = $true }
     $entry.Phase = $phase
     $entry.MTime = $g.MTime
+    # 第二行和右侧时间戳跟着最后一条消息走。
+    #
+    # 变了就置 dirty。这里原来只看 Phase 变没变：agent 连着跑几个工具时
+    # Phase 一直是 running，摘要和最后活动时间却在变，不置 dirty 的话
+    # 磁盘上的 sessions.json 会一直停在旧值 —— 列表第二行空着、右侧的
+    # 时间戳也不动。内存里是对的，落到文件上却丢了。
+    $newPreview = (Get-SessionPreview $msg)
+    $newTool    = (Get-SessionLastTool $msg)
+    $newAtMs    = [int64]([DateTimeOffset]::new($g.MTime).ToUnixTimeMilliseconds())
+    if ($entry.Preview -ne $newPreview -or $entry.LastTool -ne $newTool -or $entry.LastAtMs -ne $newAtMs) {
+      $script:sessionsDirty = $true
+    }
+    $entry.Preview = $newPreview
+    $entry.LastTool = $newTool
+    $entry.LastAtMs = $newAtMs
     if (-not $entry.Title) { $entry.Title = (Get-SessionTitle $g.Log) }
   }
 }
@@ -311,6 +391,11 @@ function Write-SessionsFile {
       phase = $e.Phase
       sinceMs = $e.SinceMs
       cycle = $e.Cycle
+      # 列表第二行 / 右侧时间戳。缺字段的旧条目补空串，不要 null：
+      # widget 那边按字符串处理，null 会多一层判空。
+      preview = $(if ($e.Preview) { [string]$e.Preview } else { '' })
+      lastTool = $(if ($e.LastTool) { [string]$e.LastTool } else { '' })
+      lastAtMs = $(if ($e.LastAtMs) { [int64]$e.LastAtMs } else { 0 })
     }
   }
   $payload = [PSCustomObject]@{
@@ -348,6 +433,11 @@ function Restore-SessionTracker {
         Cycle = $(if ($s.cycle) { [int]$s.cycle } else { 1 })
         MTime = [DateTime]::MinValue
         SinceMs = [int64]$s.sinceMs
+        # 第二行和右侧时间戳也要恢复：detector 重启到下一次刷新之间，
+        # widget 读的就是这个文件，不能白屏一行。
+        Preview = $(if ($s.preview) { [string]$s.preview } else { '' })
+        LastTool = $(if ($s.lastTool) { [string]$s.lastTool } else { '' })
+        LastAtMs = $(if ($s.lastAtMs) { [int64]$s.lastAtMs } else { 0 })
         Dir = ''
       }
     }

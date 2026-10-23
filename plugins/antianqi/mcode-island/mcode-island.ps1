@@ -421,21 +421,59 @@ function Clear-SessionRows {
   $script:sessionRows.Children.Clear()
 }
 
-function Add-SessionRow([string]$id, [string]$title, [string]$phase) {
+# 列表里每一项的高度（含内边距和分隔线）。
+#
+# 两行（标题 + 摘要）加上下各 7px 的内边距，约 48px。写成一个常量，
+# 是因为 Show-SessionList 要用它算窗口高度，而这里的内容一改就得重算。
+# 实测校准：标题 12.5px 行高约 17 + 摘要 11px 行高约 15 + 行距 2
+#           + 上下内边距 14 + 分隔线 1 = 49。留一点余量取 48。
+$script:sessionRowHeight = 48
+
+# 相对时间：近的给"多久之前"，远的给钟点。
+#
+# 和小红书那种消息列表一个路子：60 分钟以内说"3 分钟前"（精确到分钟就
+# 够了），再早就给 HH:mm（"3 小时前"不如"13:09"精确）。
+function Format-RelativeTime([int64]$tsMs) {
+  if ($tsMs -le 0) { return '' }
+  $diff = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $tsMs
+  if ($diff -lt 0) { $diff = 0 }
+  if ($diff -lt 60000) { return '刚刚' }
+  if ($diff -lt 3600000) { return ([int][math]::Floor($diff / 60000)).ToString() + ' 分钟前' }
+  $t = [DateTimeOffset]::FromUnixTimeMilliseconds($tsMs).ToLocalTime()
+  return $t.ToString('HH:mm')
+}
+
+# 列表的一行。
+#
+# 布局参考小红书的展开态：左边一个状态点，中间两行字（标题 + 摘要），
+# 右边时间戳。
+#
+# 摘要那行是它比原来多出来的东西：光看首条提问，分不清"正在跑"和"卡在
+# 某个工具上"；看最后一句才知道它现在在说什么、要不要我回。
+#
+#   [●]  标题…………………………          3 分钟前
+#        摘要…………………………          运行中
+#
+# 状态点跨两行、垂直居中；标题和摘要都在中间列，所以天然左对齐。
+function Add-SessionRow([string]$id, [string]$title, [string]$phase, [string]$preview, [string]$lastTool, [int64]$lastAtMs, [bool]$isLast) {
   if (-not $script:sessionRows) { return }
   $isRunning = ($phase -eq 'running')
   $dotHex = if ($isRunning) { '#FF3B82F6' } else { '#FFF59E0B' }
   $phaseText = if ($isRunning) { '运行中' } else { '待回复' }
 
+  # 第二行：正文优先。没有正文（最后一条恰好是 toolCall）就退到"正在
+  # 调用的工具名"，总比空着强。
+  $subText = ''
+  if ($preview) { $subText = $preview }
+  elseif ($lastTool) { $subText = '执行 ' + $lastTool }
+  if ($subText.Length -gt 48) { $subText = $subText.Substring(0, 48) + '…' }
+
   $grid = New-Object System.Windows.Controls.Grid
-  $grid.Margin = New-Object System.Windows.Thickness(0,1,0,1)
   $grid.Cursor = [System.Windows.Input.Cursor]::Hand
 
-  # 三列：状态点(自适应) | 标题(占满剩余) | 状态标签(自适应)。
+  # 三列：状态点(自适应) | 文字(占满剩余) | 右侧时间(自适应)。
   #
-  # 不给列定义的话三个子元素会叠在一起 —— 标题一长就压住右边的
-  # "运行中/待回复"。标题列必须用 * 才能被裁剪（TextTrimming 只在有
-  # 有限宽度时才生效）。
+  # 中间列必须是 * 才能被裁剪（TextTrimming 只在有有限宽度时才生效）。
   $colDot = New-Object System.Windows.Controls.ColumnDefinition
   $colDot.Width = New-Object System.Windows.GridLength(1, [System.Windows.GridUnitType]::Auto)
   $colTitle = New-Object System.Windows.Controls.ColumnDefinition
@@ -446,8 +484,16 @@ function Add-SessionRow([string]$id, [string]$title, [string]$phase) {
   $grid.ColumnDefinitions.Add($colTitle) | Out-Null
   $grid.ColumnDefinitions.Add($colTag) | Out-Null
 
+  # 两行：标题 / 摘要。
+  $rowTop = New-Object System.Windows.Controls.RowDefinition
+  $rowTop.Height = New-Object System.Windows.GridLength(1, [System.Windows.GridUnitType]::Auto)
+  $rowBot = New-Object System.Windows.Controls.RowDefinition
+  $rowBot.Height = New-Object System.Windows.GridLength(1, [System.Windows.GridUnitType]::Auto)
+  $grid.RowDefinitions.Add($rowTop) | Out-Null
+  $grid.RowDefinitions.Add($rowBot) | Out-Null
+
   $dot = New-Object System.Windows.Shapes.Ellipse
-  $dot.Width = 8; $dot.Height = 8
+  $dot.Width = 7; $dot.Height = 7
   $dot.Fill = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString($dotHex)))
   $dot.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
   $dot.Margin = New-Object System.Windows.Thickness(0,0,9,0)
@@ -455,38 +501,84 @@ function Add-SessionRow([string]$id, [string]$title, [string]$phase) {
   $txt = New-Object System.Windows.Controls.TextBlock
   $txt.Text = if ($title) { $title } else { $id }
   $txt.Foreground = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#FFF5F5F7')))
-  $txt.FontSize = 12
+  $txt.FontSize = 12.5
   $txt.TextTrimming = [System.Windows.TextTrimming]::CharacterEllipsis
   $txt.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
-  $txt.ToolTip = $txt.Text
+
+  $sub = New-Object System.Windows.Controls.TextBlock
+  $sub.Text = $subText
+  $sub.Foreground = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#FF8B93A1')))
+  $sub.FontSize = 11
+  $sub.TextTrimming = [System.Windows.TextTrimming]::CharacterEllipsis
+  $sub.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+  $sub.Margin = New-Object System.Windows.Thickness(0,2,0,0)
+
+  # 右列：时间戳 + 状态文字，整块垂直居中于两行（和小红书那个时间戳的
+  # 位置一样）。
+  $right = New-Object System.Windows.Controls.StackPanel
+  $right.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+  $right.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Right
+  $right.Margin = New-Object System.Windows.Thickness(8,0,0,0)
+
+  $time = New-Object System.Windows.Controls.TextBlock
+  $time.Text = (Format-RelativeTime $lastAtMs)
+  $time.Foreground = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#FF9CA3AF')))
+  $time.FontSize = 10
+  $time.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Right
 
   $tag = New-Object System.Windows.Controls.TextBlock
   $tag.Text = $phaseText
-  $tag.Foreground = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#FF9CA3AF')))
+  $tag.Foreground = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString($dotHex)))
   $tag.FontSize = 10
   $tag.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Right
-  $tag.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
-  $tag.Margin = New-Object System.Windows.Thickness(8,0,0,0)
 
-  # 事件冒泡：只挂在子元素上，Grid 和 StackPanel 都不挂，避免一次点击
-  # 触发两次。
+  $right.Children.Add($time) | Out-Null
+  $right.Children.Add($tag) | Out-Null
+
+  $grid.Children.Add($dot)   | Out-Null
+  $grid.Children.Add($txt)   | Out-Null
+  $grid.Children.Add($right) | Out-Null
+  $grid.Children.Add($sub)   | Out-Null
+  [System.Windows.Controls.Grid]::SetColumn($dot, 0)
+  [System.Windows.Controls.Grid]::SetColumn($txt, 1)
+  [System.Windows.Controls.Grid]::SetColumn($right, 2)
+  [System.Windows.Controls.Grid]::SetColumn($sub, 1)
+  [System.Windows.Controls.Grid]::SetRow($dot, 0)
+  [System.Windows.Controls.Grid]::SetRow($txt, 0)
+  [System.Windows.Controls.Grid]::SetRow($right, 0)
+  [System.Windows.Controls.Grid]::SetRow($sub, 1)
+  # 状态点和右列各跨两行：状态点在整块左边居中，时间戳在整块右边居中。
+  $dot.SetValue([System.Windows.Controls.Grid]::RowSpanProperty, 2)
+  $right.SetValue([System.Windows.Controls.Grid]::RowSpanProperty, 2)
+
+  # 项之间的分隔线。最后一项不带线（下面就是面板底边）。
+  $border = New-Object System.Windows.Controls.Border
+  $border.BorderBrush = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#1FFFFFFF')))
+  $border.BorderThickness = $(if ($isLast) { New-Object System.Windows.Thickness(0) } else { New-Object System.Windows.Thickness(0,0,0,1) })
+  $border.Padding = New-Object System.Windows.Thickness(0,7,0,7)
+  $border.Child = $grid
+
+  # 提示框：标题 + 摘要 + 状态 + 时间，一次说全。
+  $tip = if ($title) { $title } else { $id }
+  if ($subText) { $tip = $tip + "`n" + $subText }
+  $rel = Format-RelativeTime $lastAtMs
+  if ($rel) { $tip = $tip + "`n" + $phaseText + ' · ' + $rel } else { $tip = $tip + "`n" + $phaseText }
+  $border.ToolTip = $tip
+
+  # 点击挂在最外层的 Border 上，子元素不再挂：
+  #
+  # MouseLeftButtonDown 会冒泡。挂子元素时，Border + Grid + TextBlock 各挂
+  # 一份就会一次点击触发多次消掉。现在只有最外层一个 handler，点整行任何
+  # 位置都算点这一行。
   #
   # Handled=true 是必须的：窗口上挂了拖拽处理器（MouseLeftButtonDown），
   # 列表在同一个窗口里，不拦住的话点一行会被当成"开始拖药丸"。
-  foreach ($el in @($dot, $txt, $tag)) {
-    $el.Add_MouseLeftButtonDown({
-      $args[1].Handled = $true
-      Invoke-SessionClick $id
-    }.GetNewClosure())
-  }
+  $border.Add_MouseLeftButtonDown({
+    $args[1].Handled = $true
+    Invoke-SessionClick $id
+  }.GetNewClosure())
 
-  $grid.Children.Add($dot)  | Out-Null
-  $grid.Children.Add($txt)  | Out-Null
-  $grid.Children.Add($tag)  | Out-Null
-  [System.Windows.Controls.Grid]::SetColumn($dot, 0)
-  [System.Windows.Controls.Grid]::SetColumn($txt, 1)
-  [System.Windows.Controls.Grid]::SetColumn($tag, 2)
-  $script:sessionRows.Children.Add($grid) | Out-Null
+  $script:sessionRows.Children.Add($border) | Out-Null
 }
 
 function Show-SessionList {
@@ -503,13 +595,19 @@ function Show-SessionList {
   $items = Read-SessionsFile
   if (-not $items -or $items.Count -eq 0) { Hide-SessionList; return }
   Clear-SessionRows
-  # 运行中的排前面，其余按"最后一次动静"倒序
-  $sorted = @($items | Sort-Object @{ Expression = { if ($_.phase -eq 'running') { 0 } else { 1 } } }, @{ Expression = { $_.sinceMs }; Descending = $true })
+  # 运行中的排前面，其余按"最后一次动静"倒序。
+  #
+  # 排序用 lastAtMs（最后活动时间），不是 sinceMs（进列表的时间）：
+  # 进列表的时间只说明"我什么时候看见它"，说明不了"它现在有多活跃"。
+  $sorted = @($items | Sort-Object @{ Expression = { if ($_.phase -eq 'running') { 0 } else { 1 } } }, @{ Expression = { if ($_.lastAtMs) { [int64]$_.lastAtMs } else { [int64]$_.sinceMs } }; Descending = $true })
+  $i = 0
   foreach ($s in $sorted) {
-    Add-SessionRow ([string]$s.id) ([string]$s.title) ([string]$s.phase)
+    Add-SessionRow ([string]$s.id) ([string]$s.title) ([string]$s.phase) ([string]$s.preview) ([string]$s.lastTool) ([int64]$s.lastAtMs) ($i -lt ($sorted.Count - 1))
+    $i++
   }
-  # 列表高度 = 行数 * 行高 + 上下 padding；再给药丸的投影留一点余量
-  $listH = ($sorted.Count * 24) + 12
+  # 列表高度 = 行数 * 行高 + 上下 padding；再给药丸的投影留一点余量。
+  # 行高是两项（标题 + 摘要）加内边距，不是原来单行的那 24。
+  $listH = ($sorted.Count * $script:sessionRowHeight) + 12
   $script:sessionRowsPanel.Visibility = [System.Windows.Visibility]::Visible
   $script:sessionListRow.Height = New-Object System.Windows.GridLength($listH)
   $window.Height = $script:pillHeight + $listH + 14
