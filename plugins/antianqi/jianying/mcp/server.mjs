@@ -145,11 +145,77 @@ function validateCrossVerb(name, args) {
 function stateDir() {
   return process.env.PLUGIN_DATA || path.join(os.tmpdir(), 'jianying-plugin-state');
 }
-function stateFile(sid) { return path.join(stateDir(), `session-${sid}.json`); }
-function snapshotFile(sid) { return path.join(stateDir(), `snapshot-${sid}.json`); }
+
+/* ★★ 路径穿越防线（2026-10-23，PR review 抓到的合并阻塞项）
+   原先 sessionId 被原样拼进文件名（`session-${sid}.json`），而 schema 只要求它是个字符串
+   ⇒ `x/../../../../tmp/canary` 经 path.join 归一化后落到 PLUGIN_DATA 之外
+   ⇒ draft_read 能读出任意本地 JSON，draft_patch 能往那里写快照。
+   现在三层挡住：
+     ① 形态：sessionId 必须是服务器签发的 `ve-session-<数字>`（不含分隔符、不含 `..`）
+     ② 规范包含：拼出来的路径必须严格位于状态目录之内（sibling-prefix 也要拒）
+     ③ 符号链接：状态目录解 realpath；已存在的符号链接文件一律拒绝（读与写都拒） */
+const SESSION_ID_RE = /^ve-session-\d+$/;
+function assertSessionId(sid) {
+  if (sid === undefined || sid === null || sid === '') {
+    throw new Error('缺少 sessionId（先调 draft_open 拿）');
+  }
+  if (typeof sid !== 'string' || !SESSION_ID_RE.test(sid)) {
+    throw new Error(
+      `sessionId 格式非法（只接受 draft_open 签发的 ve-session-<数字>）：${String(sid).slice(0, 60)}`);
+  }
+  return sid;
+}
+/** p 必须严格位于 dir 之内：相等、sibling-prefix（dir2 与 dir 同前缀）都要拒 */
+function isInside(dir, p) {
+  const rel = path.relative(path.resolve(dir), path.resolve(p));
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+/** 状态目录：先建再解符号链接 ⇒ 后面拼的都是真实路径（review 要求覆盖 symlinked state dir） */
+function stateDirReal() {
+  const d = stateDir();
+  try { fs.mkdirSync(d, { recursive: true }); } catch { /* 已存在或不可建 ⇒ 后面会报错 */ }
+  try { return fs.realpathSync(d); } catch { return path.resolve(d); }
+}
+/** 已存在的文件若是符号链接 ⇒ 拒绝（否则 realpath 会把读/写引到目录外） */
+function rejectSymlink(p) {
+  try {
+    if (fs.lstatSync(p).isSymbolicLink()) {
+      throw new Error('状态文件是符号链接，拒绝（防止指向状态目录之外）');
+    }
+  } catch (e) {
+    if (e && e.message && e.message.includes('符号链接')) throw e;
+    /* 文件不存在 ⇒ 正常 */
+  }
+}
+function statePathOf(sid, prefix) {
+  assertSessionId(sid);
+  const dir = stateDirReal();
+  const p = path.join(dir, `${prefix}-${sid}.json`);
+  if (!isInside(dir, p)) throw new Error('状态文件路径逃出了状态目录');
+  return { dir, p };
+}
+function stateFile(sid) {
+  const { dir, p } = statePathOf(sid, 'session');
+  if (fs.existsSync(p)) {
+    rejectSymlink(p);
+    const real = fs.realpathSync(p);
+    if (!isInside(dir, real)) throw new Error('状态文件解析后位于状态目录之外');
+  }
+  return p;
+}
+function snapshotFile(sid) {
+  const { dir, p } = statePathOf(sid, 'snapshot');
+  if (fs.existsSync(p)) {
+    rejectSymlink(p);
+    const real = fs.realpathSync(p);
+    if (!isInside(dir, real)) throw new Error('快照文件解析后位于状态目录之外');
+  }
+  return p;
+}
 function writeState(sid, obj) {
-  fs.mkdirSync(stateDir(), { recursive: true });
-  fs.writeFileSync(stateFile(sid), JSON.stringify(obj), 'utf8');
+  const p = stateFile(sid);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify(obj), 'utf8');
 }
 function readState(sid) {
   const p = stateFile(sid);
@@ -328,20 +394,30 @@ const IMPL = {
     //   否则会出现：patch 改了会话内存，read 却读到没落盘的磁盘 ⇒ 回读拿到旧草稿 ⇒ 编排全错。
     let parsed = null, source = 'disk';
     if (a.sessionId) {
+      // ★ 给了 sessionId 就必须是服务器签发的形态（路径穿越防线，见 assertSessionId）
+      assertSessionId(a.sessionId);
       const snapP = snapshotFile(a.sessionId);
       if (fs.existsSync(snapP)) {
         try { parsed = JSON.parse(fs.readFileSync(snapP, 'utf8')); source = 'session'; } catch { /* ignore */ }
       }
     }
     if (!parsed) {
-      const args = ['read', '--json'];
-      if (a.path) {
-        args.push('--path', a.path);
-        // ★ 必须带 --root：不带的话官方 readFile 解析不出 workspace ⇒ 静默返回空
-        //   （2026-10-21 实测：exists=undefined chars=0）⇒ 根目录默认取 path 的上级目录
-        const root = a.root || path.dirname(a.path);
-        if (root) args.push('--root', root);
+      // ★ 没有可用的会话快照 ⇒ 回落到【会话里记着的那个草稿】（draft_open 存进 state 的路径）
+      //   ★★ 原实现是回落去 `jyai-live read`（不带 --path）⇒ 读到【某个默认草稿】：
+      //      一个无效的 sessionId 也能换回一份草稿内容 —— 既是不必要的暴露，也是假的"成功"。
+      //      现在回落只用"调用者给的 path"或"这个会话自己记着的草稿"，两者都没有就报错。
+      const st = a.sessionId ? readState(a.sessionId) : null;
+      const fallbackPath = a.path || st?.draftPath || null;
+      if (!fallbackPath) {
+        throw new Error(a.sessionId
+          ? `找不到 session ${a.sessionId} 对应的草稿（先调 draft_open，或直接给 path）`
+          : '缺少可读目标：给 sessionId（draft_open 签发的 ve-session-<数字>）或 path（草稿 json 的路径）');
       }
+      const args = ['read', '--json', '--path', fallbackPath];
+      // ★ 必须带 --root：不带的话官方 readFile 解析不出 workspace ⇒ 静默返回空
+      //   （2026-10-21 实测：exists=undefined chars=0）⇒ 根目录默认取 path 的上级目录
+      const root = a.root || st?.draftDir || path.dirname(fallbackPath);
+      if (root) args.push('--root', root);
       const r = await run(process.execPath, [jyaiTool('jyai-live.mjs'), ...args]);
       if (r.code !== 0) throw new Error(`读取草稿失败：\n${r.stderr || r.stdout}`);
       // jyai-live read 会在 JSON 之前打一行状态（exists=... encrypted=... cipherType=...）⇒ 剥掉
@@ -369,7 +445,8 @@ const IMPL = {
       const miss = need.filter((k) => p[k] === undefined || p[k] === null || p[k] === '');
       if (miss.length) throw new Error(`op "${a.op}" 缺少必填参数：${miss.join(', ')}（放在 params 里）`);
     }
-    if (!a.sessionId) throw new Error('缺少 sessionId（先调 draft_open 拿 session）');
+    // ★ 入口就校验 sessionId 形态（路径穿越防线）：缺失与格式非法分开说
+    assertSessionId(a.sessionId);
     const res = await editCall(a.op, a.params || {}, a.sessionId);
     // ★ 官方 edit 响应里的 diff.operations[0].value = 【改后的完整草稿】
     //   ⇒ 存成快照，供 draft_commit 落盘（动词之间靠插件状态目录共享状态）
@@ -378,9 +455,10 @@ const IMPL = {
       || ops.find((o) => o.value && typeof o.value === 'object' && o.value.tracks)?.value;
     let snapshot = null;
     if (full) {
-      fs.mkdirSync(stateDir(), { recursive: true });
-      fs.writeFileSync(snapshotFile(a.sessionId), JSON.stringify(full), 'utf8');
-      snapshot = snapshotFile(a.sessionId);
+      const snapP = snapshotFile(a.sessionId);   // ★ 内含包含性 + 符号链接检查
+      fs.mkdirSync(path.dirname(snapP), { recursive: true });
+      fs.writeFileSync(snapP, JSON.stringify(full), 'utf8');
+      snapshot = snapP;
     }
     return ok({
       op: a.op,
@@ -394,7 +472,8 @@ const IMPL = {
 
   async draft_commit(a) {
     const sid = a.sessionId;
-    if (!sid) throw new Error('缺少 sessionId（先调 draft_open）');
+    // ★ 入口就校验形态（路径穿越防线）：缺失与格式非法要分开说
+    assertSessionId(sid);
     const st = readState(sid);
     if (!st) throw new Error(`找不到 session ${sid} 的状态（先调 draft_open）`);
     const snapP = snapshotFile(sid);

@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // The Plugin lives either under plugins/<owner>/<name>/ (the hosted layout of
@@ -171,4 +171,20 @@ test('the README discloses the platform, the example prompt, the expected result
   assert.match(readme, /无遥测/u, 'README must disclose telemetry behaviour');
   assert.match(readme, /无第三方服务/u, 'README must disclose third-party service behaviour');
   assert.match(readme, /不需要任何账号/u, 'README must disclose account and paid-service requirements');
+});
+
+
+// ★★★ 会话状态不得越界（PR #72 review 的合并阻塞项：sessionId 路径穿越）
+//   server.mjs 原来把 sessionId 原样拼进状态文件名 ⇒ "x/../../canary" 经 path.join
+//   归一化后落到 PLUGIN_DATA 之外 ⇒ draft_read 读出任意本地 JSON、draft_patch 往那里写。
+//   这里跑插件自带的探针：9 种恶意 sessionId × 3 个动词 + 写路径检查 + 阳性对照。
+test('session state cannot read or write outside PLUGIN_DATA', async () => {
+  const mod = await import(pathToFileURL(path.join(pluginRoot, 'scripts', 'security-probe.mjs')).href);
+  const r = await mod.runSecurityProbe();
+  const failed = r.cases.filter((c) => !c.ok);
+  assert.equal(failed.length, 0,
+    'session-state containment failures:\n'
+    + failed.map((f) => `  - ${f.name}: ${f.detail}`).join('\n'));
+  // ★ 探针本身要有区分力：必须覆盖足够的形态（9 种恶意 × 3 动词 + 写路径 + 阳性对照）
+  assert.ok(r.total >= 30, `expected at least 30 containment checks, got ${r.total}`);
 });

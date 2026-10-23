@@ -149,6 +149,14 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
   const tools = list.result?.tools || [];
   check('tools/list 返回 9 个动词', tools.length === 9, `实际 ${tools.length}：${tools.map((t) => t.name).join(', ')}`);
   const noSchema = tools.filter((t) => !t.inputSchema || t.inputSchema.type !== 'object');
+
+  // ★★★ 安全：会话状态不得读/写 PLUGIN_DATA 之外（PR #72 review 的合并阻塞项）
+  //   9 种恶意 sessionId × 3 个动词 + 写路径检查 + 阳性对照（证明探针有区分力）
+  const secMod = await import('./security-probe.mjs');
+  const sec = await secMod.runSecurityProbe();
+  const secBad = sec.cases.filter((c) => !c.ok);
+  check('★★★ 会话状态越界探针（读/写 PLUGIN_DATA 之外全被拒）', sec.fail === 0,
+    secBad.length ? secBad.map((c) => c.name).join(' | ') : `${sec.pass} PASS / ${sec.fail} FAIL`);
   check('每个动词都有 inputSchema', noSchema.length === 0, noSchema.map((t) => t.name).join(',') || '全部有');
   const ga = tools.find((t) => t.name === 'grade_apply');
   const nodeKeys = Object.keys(ga?.inputSchema?.properties?.spec?.properties || {});
