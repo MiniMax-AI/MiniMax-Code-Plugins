@@ -409,25 +409,33 @@ invoke `.ps1` more easily than `.cmd`.
 
 ## How click-to-focus works
 
-The click target is resolved on every click, in this order:
+The click target is resolved on every click. **This install prefers the
+caller's terminal**, the way the CLI has always behaved:
 
 | # | target              | how it is found                        | what the click does              |
 | - | ------------------- | -------------------------------------- | -------------------------------- |
 | 1 | a manual pin        | `pin.json` (written by `mcode-island pin`) | focuses that window        |
-| 2 | the desktop app     | a process named `MiniMax Inside Code` / `MiniMax Code` / `Mavis` in the widget's own session | focuses the app window |
-| 3 | the caller's terminal | `caller.json` (written by `notify-island.ps1`) | shows it, or hides it if it is already visible |
+| 2 | the caller's terminal | `caller.json` (written by `notify-island.ps1`) | shows it, or hides it if it is already visible |
+| 3 | the desktop app     | a process named `MiniMax Inside Code` / `MiniMax Code` / `Mavis` in the widget's own session | focuses the app window (only when there is no caller window) |
 
-**Why the desktop app wins over the terminal.** In the desktop app the agent
-is hosted by the app and runs in a terminal the app opened. Hiding that
-terminal does not stop the agent — it just leaves the user looking at a static
-pill. "Take me back to the app window" is the action that matches the
-intent, so the app window is focused and never hidden.
+**The two builds prefer different targets, on purpose.** The CLI runtime
+loads the `io.minimax.mcode` hooks, so the agent pushes the state itself and
+the click keeps the CLI habit: one click hides the terminal, the next brings
+it back. The Marketplace package ships no Hook material, the agent is hosted
+by the desktop app, and there the terminal belongs to the app session — hiding
+it leaves a static pill behind — so that build focuses the app window instead.
 
-**Why the pin still wins.** `mcode-island pin` stores the foreground window in
-`pin.json`, a separate file from `caller.json`: `caller.json` is rewritten on
-every status transition, so a pin stored there would not survive the next
-push. The pin is the escape hatch for the case where the desktop app is open
-next to a CLI session and the user wants the click to go to their terminal.
+Both are the same code: the source carries one switch,
+`$script:clickPrefers`, and the Marketplace builder flips that exact line to
+`'app'` (and fails the build when it cannot find it). The pin still wins in
+both builds — an explicit `mcode-island pin` is the user's own choice and
+outranks the preference.
+
+`mcode-island pin` stores the foreground window in `pin.json`, a separate file
+from `caller.json`: `caller.json` is rewritten on every status transition, so
+a pin stored there would not survive the next push. The pin is the escape
+hatch for the case where the desktop app is open next to a CLI session and the
+user wants the click to go to their terminal.
 
 When the auto-detected HWND is wrong (common on Windows Terminal with
 multiple tabs), run `mcode-island pin` from inside the tab you want to return

@@ -30,13 +30,17 @@ Click the pill to go back to where the work happens. The target is resolved on
 every click, in this order:
 
 1. **A manual pin** (`mcode-island pin`) — that window is focused.
-2. **The desktop app window** (`MiniMax Inside Code` / `MiniMax Code` /
-   `Mavis`) — it is focused, never hidden. In the desktop app the agent runs
-   inside the app, so hiding the terminal behind it would leave the user
-   staring at a static pill while the agent keeps running.
-3. **The originating terminal** (`caller.json`) — the original behaviour: one
-   click hides the terminal, the next brings it back maximized.
+2. **The originating terminal** (`caller.json`) — one click hides it, the next
+   brings it back maximized. This is the CLI habit, and this install keeps it.
+3. **The desktop app window** (`MiniMax Inside Code` / `MiniMax Code` /
+   `Mavis`) — focused, never hidden, and only when there is no caller window
+   to go back to.
 
+The Marketplace build ships the other order: there the agent is hosted by the
+desktop app, so hiding the terminal behind it would leave the user staring at
+a static pill, and the click focuses the app window instead. Both builds are
+the same code — the source carries one switch, `$script:clickPrefers`, and the
+Marketplace builder flips it.
 Run `mcode-island pin` from inside a terminal to override the target
 explicitly (useful when the auto-detected HWND is wrong, e.g. Windows Terminal
 multi-tab, or when the desktop app is open next to a CLI session).
@@ -177,8 +181,8 @@ deliberately avoids hard-coded paths so any user / any install location works.
 
 After each push (or after each hook fires), the widget on the user's primary
 display updates within ~400 ms (one polling cycle). On click, the widget
-focuses the desktop app window (or the pinned window, or the originating
-terminal tab — see the click-target order above). The widget is intentionally
+focuses the pinned window, or the originating terminal tab (which it hides
+and restores — see the click-target order above). The widget is intentionally
 hard to kill: Alt+F4 hides it, not closes it, and `mcode-island show` re-raises
 the hidden window in under 1 second.
 
