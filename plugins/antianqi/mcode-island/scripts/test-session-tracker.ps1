@@ -327,11 +327,11 @@ $noiseMsg = Get-LastJsonLine $fNoise
 Check '系统注入的消息不进 preview' ([string]::IsNullOrEmpty((Get-SessionPreview $noiseMsg))) ("得到: '" + (Get-SessionPreview $noiseMsg) + "'")
 Check '标题也不取系统注入的那条' (-not ((Get-SessionTitle $fNoise) -match 'background-task')) ("得到: '" + (Get-SessionTitle $fNoise) + "'")
 
-# 审核要求：上架版不能借用 MiniMax Code 自己的程序（ELECTRON_RUN_AS_NODE=1）
-# 当 node 用，也不能读它自己的 SQLite。所以那条链路整个不存在了 ——
-# 标题只有首条用户提问这一个来源。
+# 审核要求：上架版不能借用 MiniMax Code 自己的程序（设一个环境变量让它以
+# node 模式启动）当 node 用，也不能读它自己的 SQLite。所以那条链路整个不存在
+# 了 —— 标题只有首条用户提问这一个来源。
 $trackerSrc = [System.IO.File]::ReadAllText((Join-Path (Join-Path $PSScriptRoot 'lib') 'Session-Tracker.ps1'))
-Check 'tracker 不使用 ELECTRON_RUN_AS_NODE' (-not ($trackerSrc -match '\$env:ELECTRON_RUN_AS_NODE')) '源码里又用了 ELECTRON_RUN_AS_NODE'
+Check 'tracker 不使用那个 node 环境变量' (-not ($trackerSrc -match '\$env:ELECTRON_RUN_AS_NODE')) '源码里又用了它'
 Check 'tracker 不读运行时的 sqlite' (-not ($trackerSrc -match '(?i)runtime-state\.sqlite|runtime_titles|Runtime-Titles')) '源码里又出现了运行时的 sqlite'
 Check 'Runtime-Titles.ps1 已经不在仓库里' (-not (Test-Path (Join-Path (Join-Path $PSScriptRoot 'lib') 'Runtime-Titles.ps1'))) 'Runtime-Titles.ps1 还在'
 
