@@ -602,6 +602,38 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
       + ` 噪声底=${revChecks.visibility?.noiseMad} 响度=${lufs === undefined ? '未测' : lufs}`
       + ` 段数=${revChecks.timeline?.after?.segments}`);
 
+    // ── ★★★ 两版对照审片（2026-10-24 新增）："把改前改后对着看一遍" ──
+    //   ★ 用两份夹具当改前/改后（纯视频 vs 带音轨）⇒ 两版【画面一样、音轨不同】
+    //   ⇒ 正期望：画面判"不可见"（证明判据不是恒真）+ 时间线段数差 1 + 响度两版都量到
+    const AUDIO_DRAFT = FILM_LIB ? path.join(FILM_LIB, 'JYAI能力批测-带音轨夹具') : '';
+    if (!AUDIO_DRAFT || !fs.existsSync(AUDIO_DRAFT)) {
+      check('★★★ run_pipeline：两版对照审片（review-compare）⇒ 需要第二份草稿',
+        false, `没找到第二份草稿（${AUDIO_DRAFT || '(没有 JYAI_DRAFT_LIB)'}）`);
+    } else {
+      const cmpRp = await call('tools/call', {
+        name: 'run_pipeline',
+        arguments: {
+          profile: 'review-compare', draft: FILM_DRAFT, draftAfter: AUDIO_DRAFT,
+          outDir: path.join(SMOKE, 'pipeline-compare'),
+        },
+      });
+      const cmpTxt = textOf(cmpRp);
+      const cmpObj = (() => { try { return JSON.parse(cmpTxt); } catch { return null; } })();
+      const cmpStep = (cmpObj?.steps || []).find((s) => s.verb === 'verify_diff');
+      const cc = cmpStep?.result?.checks || {};
+      // ★ 断言：① 跑完了（verify_diff 步骤执行了）② 画面判"不可见"（两版画面确实一样 ⇒ 判据有区分力）
+      //        ③ 时间线段数差 = 1（两版结构不同 ⇒ 逐段对照生效）④ 两版响度都量到了
+      check('★★★ run_pipeline：两版对照审片（review-compare）⇒ 画面判"不可见"（判据有区分力）+ 段数差 1 + 响度两版都测到',
+        !!cmpStep && cc.visibility && /不可见/.test(cc.visibility.verdict || '')
+        && cc.timeline?.segmentsDelta === 1
+        && typeof cc.audio?.before?.integratedLufs === 'number'
+        && typeof cc.audio?.after?.integratedLufs === 'number',
+        `画面=${cc.visibility?.verdict} 噪声底=${cc.visibility?.noiseMad}`
+        + ` 段数Δ=${cc.timeline?.segmentsDelta}`
+        + ` 响度 ${cc.audio?.before?.integratedLufs}→${cc.audio?.after?.integratedLufs}`
+        + ` problems=${JSON.stringify(cmpStep?.result?.problems || []).slice(0, 80)}`);
+    }
+
     // ── ★★★ 第二条【脚本步骤】路线：加字幕并出片（2026-10-24 新增）──
     //   ★ 价值有两个：① 字幕是高频真实需求 ② 这是【第二个脚本步骤】⇒ 证明脚本步骤机制不是
     //     只为 talk-cut 打的补丁；③ 字幕脚本自己会按 ±1 帧核对时码 ⇒ 它自证"字幕真的落进去了"

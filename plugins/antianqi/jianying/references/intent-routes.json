@@ -926,6 +926,23 @@
         "这版体检"
       ],
       "source": "pipeline-profiles.json（★ 只带该路线独有的组合特征；★ 不抢 jianying-review 的常用说法——\"审一下这版\"那种仍归 skill，那是【怎么审】的方法问题）"
+    },
+    {
+      "id": "route:review-compare",
+      "kind": "route",
+      "route": "review-compare",
+      "skill": "jianying-pipeline",
+      "utterance": "两版对照审片（'把改前改后对着看一遍'）",
+      "keywords": [
+        "review-compare",
+        "改前改后",
+        "两版对照",
+        "两版对比",
+        "对着看一遍",
+        "跟上一版比",
+        "和上一版比"
+      ],
+      "source": "pipeline-profiles.json（★ 只带该路线独有的组合特征）"
     }
   ]
 }

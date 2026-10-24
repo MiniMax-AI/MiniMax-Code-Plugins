@@ -16,7 +16,18 @@
     "$mixed": "★ 混音后的成片（相对 $outDir）⇒ 由步骤的 produces 声明",
     "$draftJson": "★ 这一版的裸草稿 JSON（由 draft_read 步骤写出）⇒ 单版审片用它看结构",
     "$reviewDir": "★ 审片帧目录的父目录（相对 $outDir）⇒ 由步骤的 produces 声明",
-    "$noiseDir": "★ 噪声底帧目录的父目录（相对 $outDir）⇒ 同一状态再渲一次"
+    "$noiseDir": "★ 噪声底帧目录的父目录（相对 $outDir）⇒ 同一状态再渲一次",
+    "$draftAfter": "★ 第二份草稿（改后那一版）⇒ 两版对照审片用",
+    "$sidBefore": "★ 改前那一版的会话 id（由 setVars 从 $sessionId 存下来）",
+    "$dirBefore": "★ 改前那一版的副本目录",
+    "$beforeDraftJson": "★ 改前那一版的裸草稿 JSON",
+    "$sidAfter": "★ 改后那一版的会话 id",
+    "$dirAfter": "★ 改后那一版的副本目录",
+    "$afterDraftJson": "★ 改后那一版的裸草稿 JSON",
+    "$beforeOut": "★ 改前那一版的成片输出目录",
+    "$afterOut": "★ 改后那一版的成片输出目录",
+    "$filmBefore": "★ 改前那一版的成片（相对 $outDir）",
+    "$filmAfter": "★ 改后那一版的成片（相对 $outDir）"
   },
   "profiles": [
     {
@@ -177,6 +188,48 @@
           },
           "note": "★ 单版审片：没有改前 ⇒ visibility 判不了（会明说 skipped 并给出噪声底）、picture 只给绝对值不判失败；audio/timeline/draft_integrity 是这一版的真实体检"
         }
+      ]
+    },
+    {
+      "id": "review-compare",
+      "when": "两版对照审片（'把改前改后对着看一遍' / '这版比上一版改了什么'）",
+      "requires": ["剪映在跑", "★ 两份草稿：改前 $draft + 改后 $draftAfter", "★ 审片只读不改（不授权动草稿）"],
+      "steps": [
+        { "verb": "draft_open", "args": { "draft": "$draft", "copy": true },
+          "setVars": { "$sidBefore": "$sessionId", "$dirBefore": "$dir" },
+          "note": "★ 先把改前的会话/副本存下来（否则第二次开草稿会覆盖 $sessionId / $dir）" },
+        { "verb": "draft_read", "args": { "sessionId": "$sidBefore" },
+          "setVars": { "$beforeDraftJson": "$draftJson" } },
+        { "verb": "draft_open", "args": { "draft": "$draftAfter", "copy": true },
+          "setVars": { "$sidAfter": "$sessionId", "$dirAfter": "$dir" } },
+        { "verb": "draft_read", "args": { "sessionId": "$sidAfter" },
+          "setVars": { "$afterDraftJson": "$draftJson" } },
+        { "verb": "render_frames", "args": { "draft": "$dirBefore", "outDir": "$reviewDir/before" },
+          "produces": { "$reviewDir": "review" },
+          "setVars": { "$beforeOut": "$outDir/before", "$afterOut": "$outDir/after" },
+          "note": "★ 改前的帧；同时定下两版的成片输出目录（后面 make_film 用）" },
+        { "verb": "render_frames", "args": { "draft": "$dirAfter", "outDir": "$reviewDir/after" } },
+        { "verb": "render_frames", "args": { "draft": "$dirAfter", "outDir": "$reviewDir/noise" },
+          "note": "★ ★ 同一状态【再渲一次】（改后那一版）⇒ 差异就是官方渲染器的噪声底" },
+        { "verb": "make_film", "args": { "draft": "$dirBefore", "outDir": "$beforeOut" },
+          "produces": { "$filmBefore": "before/film.mp4" },
+          "note": "★ 改前的成片（音频维度要它）" },
+        { "verb": "make_film", "args": { "draft": "$dirAfter", "outDir": "$afterOut" },
+          "produces": { "$filmAfter": "after/film.mp4" },
+          "note": "★ 改后的成片" },
+        { "verb": "verify_diff",
+          "args": {
+            "beforeDir": "$reviewDir/before/frames",
+            "afterDir": "$reviewDir/after/frames",
+            "noiseDir": "$reviewDir/noise/frames",
+            "beforeVideo": "$filmBefore",
+            "afterVideo": "$filmAfter",
+            "beforeDraft": "$beforeDraftJson",
+            "afterDraft": "$afterDraftJson",
+            "realDraft": "$draftAfter",
+            "checks": ["visibility", "picture", "audio", "timeline", "draft_integrity"]
+          },
+          "note": "★ 两版对照：像素（带噪声底校准）+ 画质 + 响度 + 逐段字段差 + 真草稿 sha" }
       ]
     }
   ]

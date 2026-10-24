@@ -67,7 +67,7 @@ node scripts/run-verb.mjs grade_apply '{"src":"<源视频.mp4>","outDir":"<输�
 | `audio_mix` | 混音 + 响度归一到 −14 LUFS |
 | `verify_diff` | 多维度验收：画面可见性 / 画质 / 响度 / 时间线 / 草稿完整性 |
 | **`make_film`** | **给剪映草稿一条命令出成片**（官方渲染器出画面 + 我们的调色/混音/编码 + 带断言的验收） |
-| **`run_pipeline`** | **按预置路线编排多条动词**（开副本 → 改草稿 → 落盘 → 语义验收 → 出成片；**7 条路线**，定义在 `references/pipeline-profiles.json`）★ 支持**脚本步骤**、**产物传递**（上一步的成片喂给下一步）与**人工确认点**（跑一半停下来等人确认，确认后带 token 续跑） |
+| **`run_pipeline`** | **按预置路线编排多条动词**（开副本 → 改草稿 → 落盘 → 语义验收 → 出成片；**8 条路线**，定义在 `references/pipeline-profiles.json`）★ 支持**脚本步骤**、**产物传递**（上一步的成片喂给下一步）、**变量改名**（一份路线里开两份草稿）与**人工确认点**（跑一半停下来等人确认，确认后带 token 续跑） |
 
 ## 7 个 Skill
 
@@ -122,7 +122,7 @@ plugin-root/
     ├── classify-intent.mjs     # 意图路由建议（一句人话 ⇒ 候选链/路线 + 命中词 + 置信度）
     ├── selftest-intent.mjs     # 意图路由准确率自检（带标注测试集 ⇒ 低于阈值就红）
     ├── check-env.mjs           # 环境自检
-    ├── selftest-mcp.mjs        # MCP 动词自检（59 项断言，含 MCP 层冒烟 / 参数覆盖 / 意图路由准确率 / 编排器确认点与新路线）
+    ├── selftest-mcp.mjs        # MCP 动词自检（60 项断言，含 MCP 层冒烟 / 参数覆盖 / 意图路由准确率 / 编排器确认点与新路线）
     ├── selftest-draft-edit.mjs # 改草稿链路端到端自检（17 项）
     ├── selftest-talk-cut.mjs   # 剪口播自检（11 项；没有草稿时落稿链显式 SKIP）
     ├── talk-cut-plan.mjs       # 口播保留区间规划器

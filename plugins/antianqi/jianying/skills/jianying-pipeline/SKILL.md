@@ -64,10 +64,10 @@ metadata:
 
 ## 意图路由表：综合诉求 → 步骤序列
 
-> ★ **机器可读版**：`references/pipeline-profiles.json`（**7 条路线 / 32 个步骤**）
+> ★ **机器可读版**：`references/pipeline-profiles.json`（**8 条路线 / 42 个步骤**）
 > ★ 每一步的动词、参数、变量都由机械审计**按 schema 校验** ⇒ 写错会当场报出来。
 > 下面的路径是它的人读展开（两边必须一致，审计 7k 会查）。
-> ★ **7 条路线**：调色并出片 / 改草稿并语义验收 / 改完直接出片 / 剪口播再出片 / 加字幕并出片 / 出片并重做混音 / 审这一版。
+> ★ **8 条路线**：调色并出片 / 改草稿并语义验收 / 改完直接出片 / 剪口播再出片 / 加字幕并出片 / 出片并重做混音 / 审这一版 / 两版对照审片。
 
 ### 路径 A：调色并出成片（"把这个草稿调暖再出片"）
 
@@ -192,6 +192,31 @@ node ${PLUGIN_ROOT}/scripts/run-verb.mjs verify_diff '{
 > | `draft_integrity` | **能判** | 真草稿的 sha |
 >
 > ⇒ ★ 结果里有 **`undetermined`** 字段列出没判的维度 ⇒ **PASS 不等于"全查过了"**。
+
+### 路径 H：两版对照审片（"把改前改后对着看一遍"）
+
+> ★ 这是 `jianying-review` 的**主工作流**（改前/改后对照）——
+> `run_pipeline {profile: "review-compare", draft: <改前>, draftAfter: <改后>}` 一次跑完。
+
+```bash
+# ① 开两份草稿的副本（★ 编排器用 setVars 把改前的会话/副本存成 $sidBefore / $dirBefore）
+#    —— 不存的话，第二次 draft_open 会把 $sessionId / $dir 覆盖掉
+# ② 两边各渲一遍帧 + 改后再渲一遍（噪声底）
+# ③ 两边各出一支成片（音频维度要它们）
+# ④ 一次 verify_diff 全维度对照：
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs verify_diff '{
+  "beforeDir":"<输出>/review/before/frames", "afterDir":"<输出>/review/after/frames",
+  "noiseDir":"<输出>/review/noise/frames",
+  "beforeVideo":"<输出>/before/film.mp4", "afterVideo":"<输出>/after/film.mp4",
+  "beforeDraft":"<改前的裸草稿.json>", "afterDraft":"<改后的裸草稿.json>",
+  "realDraft":"<改后那一版的真草稿>",
+  "checks":["visibility","picture","audio","timeline","draft_integrity"]
+}'
+```
+
+> ★ 一次对照能同时回答四件事：
+> **画面**变没变（带噪声底校准）· **画质**新增了多少削波/死黑 · **响度**两版各是多少 ·
+> **时间线**改了什么（逐段字段差）· **真草稿**有没有被误改。
 
 ## ★ 两段式：人工确认点（`run_pipeline` 怎么做"先给人看，再落刀"）
 

@@ -693,7 +693,8 @@ async function execSteps(prof, vars, workDir, startIdx, stepsIn) {
       if (st.verb === 'draft_read') {
         const seg = ((obj.draft?.tracks) || []).flatMap((t) => t.segments || [])[0];
         if (seg?.id) vars.$segmentId = seg.id;
-        const f = path.join(workDir, 'before-draft.json');
+        // ★ 文件名带步骤号 ⇒ 一份路线里读多份草稿时不会互相覆盖
+        const f = path.join(workDir, `draft-${n}.json`);
         fs.writeFileSync(f, JSON.stringify(obj.draft ?? obj, null, 2), 'utf8');
         vars.$beforeDraft = f;
         // ★ 中性别名：同一个文件也叫 $draftJson ⇒ "这一版的草稿 JSON"（审片路线用它，
@@ -712,6 +713,18 @@ async function execSteps(prof, vars, workDir, startIdx, stepsIn) {
         // ★ verify_diff 的结论就是【这条路线要产出的东西】⇒ 必须留在报告里（紧凑版）
         result: st.verb === 'verify_diff' ? summarizeVerify(obj) : summarizeStep(obj),
       });
+      // ★ setVars：给变量起别名 / 派生新变量（值可以含 $变量 ⇒ 走模板替换）
+      //   ★ 时机在【这一步之后】⇒ 它抓的就是这一步的产出（例：draft_open 的 $sessionId / $dir）
+      //   为什么需要：一份路线里开两次草稿 ⇒ $dir / $sessionId 会被第二次覆盖
+      //   ⇒ 必须先把第一个的产出"存"到别的名字下（例：$dirBefore / $sidBefore）
+      for (const [vn, tmpl] of Object.entries(st.setVars || {})) {
+        const v = substVars(String(tmpl), vars);
+        const leftover = String(v).match(/\$[A-Za-z_][A-Za-z0-9_]*/g) || [];
+        if (leftover.length) {
+          throw new Error(`路线 "${prof.id}" 第 ${n} 步的 setVars ${vn} 缺少变量：${[...new Set(leftover)].join(', ')}`);
+        }
+        vars[vn] = v;
+      }
     } catch (e) {
       const msg = String(e?.message || e);
       steps.push({ n, verb: st.verb || st.script || '?', ok: false, error: msg.slice(0, 400) });
@@ -1142,6 +1155,8 @@ const IMPL = {
       $draft: a.draft, $outDir: a.outDir, $grade: a.grade, $srt: a.srt,
       $segmentId: a.segmentId, $fps: a.fps, $denoise: a.denoise,
       $targetLufs: a.targetLufs, $beautify: a.beautify,
+      // ★ 第二份草稿（两版对照审片用）⇒ 没有它就不给，不是空串
+      ...(a.draftAfter ? { $draftAfter: a.draftAfter } : {}),
     };
     // ★ 产物路径由编排器分配（放在流水线工作目录里 ⇒ 关卡前后都能用）
     for (const [vn, fname] of Object.entries(prof.alloc || {})) {
@@ -1395,14 +1410,25 @@ const IMPL = {
         const c = await meas(a.afterVideo);
         const res2 = { after: c };
         // ★ 单版：没有改前视频也能测响度（绝对目标 −14 LUFS ⇒ 可判），只是没有增量可比
-        if (a.beforeVideo) res2.before = await meas(a.beforeVideo);
-        else res2.note = '单版审片：没有改前视频 ⇒ 只测了【这一版】的响度（没有比增量）';
+        if (a.beforeVideo) {
+          res2.before = await meas(a.beforeVideo);
+          // ★ 改前也测不出来 ⇒ 同样点名（不能拿"改前没音轨"当成"响度没变"）
+          if (res2.before.integratedLufs === null) {
+            res2.undeterminedReason = (res2.undeterminedReason ? res2.undeterminedReason + '；' : '')
+              + '改前那版没有可测的音频 ⇒ 响度【无法比对】（不是"响度没变"）';
+          }
+        } else res2.note = '单版审片：没有改前视频 ⇒ 只测了【这一版】的响度（没有比增量）';
         // ★★ 测不出来 ≠ "响度正常"：成片里没有音频流时必须点名"未判定"
         if (c.integratedLufs === null) {
           res2.undeterminedReason = '这一版的成片里没有可测的音频（无音轨 / 纯画面片）'
             + ' ⇒ 响度【未判定】（不是"响度正常"）';
-        } else if (Math.abs(c.integratedLufs) > 0.5) {
-          res2.note = (res2.note ? res2.note + '；' : '') + '响度未归一到 −14 LUFS（见 jianying-audio-mix）';
+        } else if (Math.abs(c.integratedLufs - (-14)) > 0.5) {
+          // ★ 判的是【偏离 −14 LUFS 的量】，不是响度值本身
+          //   （原来写成 Math.abs(lufs) > 0.5 ⇒ 任何正常归一的 −14 LUFS 都会被说成"未归一"，
+          //     报告里自相矛盾："integratedLufs: -14" + "响度未归一到 −14 LUFS"）
+          res2.note = (res2.note ? res2.note + '；' : '')
+            + `响度偏离 −14 LUFS ${(c.integratedLufs + 14).toFixed(2)} LU（>0.5）`
+            + '（见 jianying-audio-mix）';
         }
         res.checks.audio = res2;
       }

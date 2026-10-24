@@ -13,13 +13,22 @@
           "talk-cut-then-render",
           "subtitle-then-render",
           "render-and-mix",
-          "review-only"
+          "review-only",
+          "review-compare"
         ],
-        "description": "要走的路线：调色并出片 / 改草稿并语义验收 / 改完直接出片 / 剪口播再出片 / 加字幕并出片 / 出片并按草稿重做混音 / 审这一版（只读不改）"
+        "description": "要走的路线：调色并出片 / 改草稿并语义验收 / 改完直接出片 / 剪口播再出片 / 加字幕并出片 / 出片并按草稿重做混音 / 审这一版（只读不改） / 两版对照审片（只读不改）"
+      },
+      "draftAfter": {
+        "type": "string",
+        "description": "★ 第二份草稿目录（改后那一版）—— 只有【两版对照审片】路线要它（review-compare）；不给就用 $draft"
       },
       "draft": {
         "type": "string",
         "description": "要编排的剪映草稿目录（真草稿，插件只读它、写它的副本）★ 续跑时不用给（已经存在流水线状态里了）"
+      },
+      "draftAfter": {
+        "type": "string",
+        "description": "★ 第二份草稿目录（改后那一版）—— 只有【两版对照审片】路线要它（review-compare）；不给就用 $draft"
       },
       "outDir": {
         "type": "string",
