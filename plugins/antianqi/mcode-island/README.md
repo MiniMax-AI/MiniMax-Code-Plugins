@@ -294,6 +294,7 @@ binary, no symlink, no `node_modules`.
 | data             | location                              | lifetime                  | purpose                              |
 | ---------------- | ------------------------------------- | ------------------------- | ------------------------------------ |
 | `status.json`    | `%APPDATA%\mcode-island\`             | rewritten every transition | widget polling                       |
+| `sessions.json`  | `%APPDATA%\mcode-island\`             | rewritten every second    | the session list (titles, previews, states) |
 | `caller.json`    | `%APPDATA%\mcode-island\`             | rewritten every transition | originating terminal HWND (click fallback) |
 | `pin.json`       | `%APPDATA%\mcode-island\`             | until `mcode-island unpin` | manually pinned click target        |
 | `config.json`    | `%APPDATA%\mcode-island\`             | rewritten on drag         | pill position, size, opacity         |
@@ -307,6 +308,14 @@ binary, no symlink, no `node_modules`.
 **Telemetry: none.** **No data is sent off-machine unless a token is
 configured (see "Network access" below).** The widget itself is offline
 and never reads or writes anything outside `%APPDATA%\mcode-island\`.
+
+**The session list reads the session logs the runtime already writes on
+this machine** (`<dataDir>/v2/sessions/**/messages.jsonl`): the first user
+message of a session for its title, the last message for its preview and
+state, and the log's mtime for its liveness. Titles and previews are
+truncated and redacted before they are written to `sessions.json` or drawn
+on screen. The runtime's own database is not read, and the MiniMax Code
+programme is not used to run anything.
 
 ## Network access
 
@@ -465,15 +474,28 @@ Each row carries four things:
 | part      | where it comes from |
 | --------- | ------------------- |
 | status dot | the same state vocabulary the pill uses, same color |
-| title     | the session's real name, read from the runtime's own SQLite store (`local_runtime_sessions.title`) |
-| preview   | the last thing that session said, so you can tell "running" from "stuck on one tool" |
+| title     | the first thing the user said in that session, truncated to 40 characters |
+| preview   | the last thing that session said, truncated to 120 characters |
 | timestamp | how long ago that session last moved, plus its state word |
 
-**The title is the session's name, not a summary.** The widget reads it
-from `~/.minimax/v2/sqlite/runtime-state.sqlite`, which is the same
-source the runtime itself uses. When that store is unavailable (a host
-without the usual paths), the widget falls back to the first thing the
-user said in that session — so the row is never blank.
+**What is read, and what is not.** The list is fed by the detector, which
+reads the session logs the runtime already writes on this machine:
+
+- **the first user message** of a session — its title;
+- **the last message** of a session — its preview and its state;
+- **the log's mtime** — how long ago the session moved, and whether it is
+  still alive.
+
+Nothing else is read. In particular the widget does **not** read the
+runtime's own database, and it does **not** borrow the MiniMax Code
+programme to run anything: the title is simply the first thing the user
+said, which is what the app itself shows in its own sidebar.
+
+**Truncated and redacted before it is stored or shown.** A title and a
+preview are things a user said — they can contain a key. Both are cut to a
+fixed length and passed through the same secret redactor the plugin uses
+for log output **before** they are written to `sessions.json` and before
+they are drawn on screen.
 
 **The state words are the pill's words.** The list does not invent its
 own vocabulary: `working` / `thinking` / `waiting` / `idle` / `done` /
@@ -483,15 +505,23 @@ pill, so the two places never disagree. The one addition is **已停止**
 session that has not moved for five minutes is no longer "running",
 even though nothing said otherwise.
 
+**The list is cleaned up.** The list is "the sessions that are alive
+now", not a history. A session that has not moved for 30 minutes is
+dropped from the list and from `sessions.json`; a session that moves
+again comes back. Without that, a morning of twenty conversations would
+leave twenty rows on the pill and twenty conversations' worth of text in
+the state file.
+
 **Clicking a row goes back to that session — it never opens a second
-one.** The widget enumerates the Windows Terminal tabs, matches the
-session name against the title history the session has had, selects that
-tab, and brings the terminal window to the front. If no tab matches
-(e.g. the terminal was renamed, or the session runs inside the desktop
-app instead of Windows Terminal), the widget still raises the terminal
-window rather than starting a new `mcode --session <id>`. A second
-terminal for the same session is exactly the bug this feature is meant
-to avoid.
+one.** The widget first looks for the Windows Terminal tab that runs it
+and selects that tab. If the session lives in the desktop app instead,
+the widget switches the app to that conversation: the app's sidebar row
+is a button whose accessible name is the session name, so the widget
+finds the sidebar's conversation list and invokes the row there (the
+search is scoped to that list, not to the whole window). If neither
+matches, the widget raises the terminal window rather than starting a new
+`mcode --session <id>`. A second terminal for the same session is exactly
+the bug this feature is meant to avoid.
 
 Clicking a row also dismisses it: the session leaves the list and stays
 out of it until it starts its next round.

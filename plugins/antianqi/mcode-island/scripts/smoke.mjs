@@ -635,6 +635,26 @@ const main = async () => {
             out('PASS', 'mcode-island.ps1: the app conversation lookup filters by name (no full-tree scan)');
         }
 
+        // (l) The click must be scoped to the sidebar's conversation list.
+        //
+        // "Any button in the window with that name" is not a conversation
+        // click: the same name can be a heading, a label or a button in
+        // another panel. The list container is found first -- the one
+        // element that holds SEVERAL known session titles -- and the target
+        // is looked up only inside it.
+        if (/function Get-AppConversationList\b/.test(widget)) {
+            out('PASS', 'mcode-island.ps1: the app conversation lookup resolves the sidebar list first');
+        } else {
+            out('FAIL', 'mcode-island.ps1: no Get-AppConversationList -- the click would look for a button by name across the whole window');
+        }
+        if (!/Get-AppConversationList\s+\$hwnd/.test(lookupBody)) {
+            out('FAIL', 'mcode-island.ps1: the button lookup does not go through the conversation list');
+        } else if (/AutomationElement\]::FromHandle/.test(lookupBody)) {
+            out('FAIL', 'mcode-island.ps1: the button lookup still starts from the window root instead of the conversation list');
+        } else {
+            out('PASS', 'mcode-island.ps1: the button lookup is scoped to the conversation list');
+        }
+
         // Round-15: Toggle's restore branch must call SW_MAXIMIZE (3), not
         // SW_SHOW (5) / SW_RESTORE (9). SW_HIDE preserves the window's
         // "non-maximized size"; if the WT window got accidentally resized

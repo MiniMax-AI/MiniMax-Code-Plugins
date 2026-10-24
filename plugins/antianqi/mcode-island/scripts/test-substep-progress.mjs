@@ -1493,7 +1493,8 @@ function Dbg([string]$m) { }
 
 # The app is running and its sidebar has a row named 'target-session'.
 function Find-DesktopAppWindow { return [PSCustomObject]@{ Hwnd = [IntPtr]1234; Pid = 42; Exe = 'fake-app' } }
-function Get-AppConversationButton([IntPtr]$h, [string]$n) {
+function Get-AppConversationButton([IntPtr]$h, [string]$n, [string[]]$known) {
+    $global:knownSeen = @($known)
     if ($n -eq 'target-session') {
         $el = [PSCustomObject]@{}
         $el | Add-Member -MemberType ScriptMethod -Name GetCurrentPattern -Value { param($p) return $global:pattern }
@@ -1501,10 +1502,19 @@ function Get-AppConversationButton([IntPtr]$h, [string]$n) {
     }
     return $null
 }
+# the session list the widget reads: two known titles, so the lookup can
+# resolve the sidebar's conversation list
+function Read-SessionsFile {
+    return @(
+        [PSCustomObject]@{ id = 'a'; title = 'target-session'; titles = @('target-session') },
+        [PSCustomObject]@{ id = 'b'; title = 'other-session';  titles = @('other-session') }
+    )
+}
 ${switchFn}
 
 $r1 = Switch-ToAppConversation @('target-session')
 Write-Output ("HIT=" + [string]$r1 + " INVOKED=" + [string]$global:invoked)
+Write-Output ("KNOWN=" + [string]$global:knownSeen.Count)
 
 $r2 = Switch-ToAppConversation @('another-session')
 Write-Output ("MISS=" + [string]$r2)
@@ -1527,6 +1537,12 @@ Write-Output ("NOAPP=" + [string]$r3)
         eq('the matching row is actually invoked', hit[2], 'True');
         eq('a session that is not in the sidebar falls through', (out.match(/MISS=(\S*)/) || [])[1], 'False');
         eq('no app running falls through', (out.match(/NOAPP=(\S*)/) || [])[1], 'False');
+        // The lookup is scoped to the sidebar's conversation list, which is
+        // found by the known titles -- so the titles have to be handed over.
+        const known = (out.match(/KNOWN=(\S*)/) || [])[1];
+        check('the lookup is handed the known titles to locate the conversation list',
+            Number(known) >= 2,
+            `the lookup only got ${known} known title(s)`);
     }
 }
 

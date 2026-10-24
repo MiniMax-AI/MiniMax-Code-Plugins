@@ -740,12 +740,16 @@ function Invoke-SessionClick([string]$id) {
   Start-SessionTerminal $id
 }
 
-# 找到 app 侧边栏里那个名字等于会话标题的按钮。
+# 找到 app 侧边栏里的**会话列表容器**。
 #
-# 单独一个函数是为了能测：返回的元素可以被测试替身换掉，不用真的开着
-# app 也能验证"找到就切、切不到就返回 false"这条契约。
-function Get-AppConversationButton([IntPtr]$hwnd, [string]$name) {
-  if (-not $name) { return $null }
+# 不能在整个窗口里按名字找按钮：窗口里别的地方也可能有一个同名的按钮
+# （标题栏、别的面板），点错了就不是"切到那个会话"。所以先找到**装着
+# 多个会话标题**的那个容器 —— 侧边栏的会话列表 —— 再只在里面找目标。
+#
+# 会话标题是已知的（会话列表自己就是），所以判据很硬：容器里至少要有
+# 两个已知的会话标题。整扇窗口不会满足这个条件。
+function Get-AppConversationList([IntPtr]$hwnd, [string[]]$knownTitles) {
+  if (-not $knownTitles -or $knownTitles.Count -eq 0) { return $null }
   try {
     if (-not $script:uiaReady) {
       Add-Type -AssemblyName UIAutomationClient -ErrorAction Stop
@@ -754,15 +758,80 @@ function Get-AppConversationButton([IntPtr]$hwnd, [string]$name) {
     }
     $root = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
     if (-not $root) { return $null }
-    # 用条件过滤而不是把整棵树读一遍：全扫 2000 多个元素要 500ms 出头，
-    # 点击处理在 UI 线程上，那样会卡住药丸；条件过滤实测 47ms。
+
+    # 第一步：把窗口里所有"名字是某个会话标题"的元素收起来。
+    $candidates = New-Object System.Collections.Generic.List[object]
+    foreach ($n in $knownTitles) {
+      $nn = ([string]$n).Trim()
+      if (-not $nn) { continue }
+      $cond = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::NameProperty, $nn)
+      $hits = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)
+      for ($i = 0; $i -lt $hits.Count; $i++) { $candidates.Add($hits.Item($i)) }
+    }
+    if ($candidates.Count -lt 2) {
+      Dbg ("app conversation list: only " + $candidates.Count + " candidate(s) for " + $knownTitles.Count + " known title(s)")
+      return $null
+    }
+
+    # 第二步：从候选往上走，找到**装着至少两个候选的最浅的那一层祖先**
+    # —— 那就是会话列表本身。
+    #
+    # 为什么要"最浅"：往上走是往窗口根走，越浅的祖先装的东西越少。候选
+    # 按钮自己的祖先里，第一个装着多个会话的，就是侧边栏的会话列表；再往
+    # 上就变成整扇窗口了（那等于没限定）。
+    $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+    $best = $null
+    $bestDepth = 99
+    foreach ($c in $candidates) {
+      $node = $c
+      $depth = 0
+      while ($node -ne $null -and $depth -lt 12) {
+        $inside = 0
+        try {
+          $sub = $node.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+                  [System.Windows.Automation.Condition]::TrueCondition)
+          foreach ($e in $sub) {
+            try {
+              $nm = $e.Current.Name
+              if ($knownTitles -contains $nm) { $inside++ }
+            } catch {}
+          }
+        } catch { $inside = 0 }
+        if ($inside -ge 2 -and $depth -lt $bestDepth) { $best = $node; $bestDepth = $depth }
+        try { $node = $walker.GetParent($node) } catch { break }
+        $depth++
+      }
+    }
+    Dbg ("app conversation list: " + $candidates.Count + " candidate(s), container depth=" + $bestDepth)
+    return $best
+  } catch {
+    Dbg ("APP CONVERSATION LIST FAIL: " + $_.Exception.Message)
+    return $null
+  }
+}
+
+# 在侧边栏的会话列表里找那个名字等于会话标题的行。
+#
+# 查找范围由 Get-AppConversationList 限定在会话列表容器内，不再是整扇
+# 窗口。找不到就返回 null，让调用方走自己的兜底。
+function Get-AppConversationButton([IntPtr]$hwnd, [string]$name, [string[]]$knownTitles) {
+  if (-not $name) { return $null }
+  try {
+    if (-not $script:uiaReady) {
+      Add-Type -AssemblyName UIAutomationClient -ErrorAction Stop
+      Add-Type -AssemblyName UIAutomationTypes -ErrorAction Stop
+      $script:uiaReady = $true
+    }
+    $list = Get-AppConversationList $hwnd $knownTitles
+    if (-not $list) { Dbg 'app conversation list not found'; return $null }
     $cond = New-Object System.Windows.Automation.AndCondition(
       (New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::NameProperty, $name)),
       (New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
         [System.Windows.Automation.ControlType]::Button)))
-    $hits = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)
+    $hits = $list.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)
     for ($i = 0; $i -lt $hits.Count; $i++) {
       try {
         $el = $hits.Item($i)
@@ -794,6 +863,17 @@ function Switch-ToAppConversation([string[]]$names) {
   if (-not $names -or $names.Count -eq 0) { return $false }
   $app = Find-DesktopAppWindow
   if (-not $app) { return $false }
+  # 已知标题全集：侧边栏的会话列表容器靠"装着至少两个已知标题"来认。
+  # 只用这一个会话的标题的话，列表里只有一个会话时认不出容器。
+  $known = @()
+  try {
+    foreach ($s in @(Read-SessionsFile)) {
+      if ($s.title) { $known += [string]$s.title }
+      foreach ($x in @($s.titles)) { if ($x) { $known += [string]$x } }
+    }
+  } catch {}
+  $known = @($known | Select-Object -Unique)
+  if ($known.Count -lt 2) { return $false }
   # 名字候选有上限：每个候选一次 UIA 查询（实测 47ms），历史名字太多会把
   # 点击处理拖长，而最近的那几个名字才是对得上的。
   $tried = 0
@@ -802,7 +882,7 @@ function Switch-ToAppConversation([string[]]$names) {
     $nn = ([string]$n).Trim()
     if (-not $nn) { continue }
     $tried++
-    $el = Get-AppConversationButton ([IntPtr]$app.Hwnd) $nn
+    $el = Get-AppConversationButton ([IntPtr]$app.Hwnd) $nn $known
     if (-not $el) { continue }
     try {
       $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()

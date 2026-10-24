@@ -37,15 +37,17 @@ $script:lastGroups = @{}
 # 运行期间完全靠状态机，不看时间。
 $script:SEED_WINDOW_MS = 30 * 60 * 1000
 
-# 会话标题（运行时的 SQLite）。
+# 会话标题：只用会话日志里的首条用户提问。
 #
-# lib 不在时整条链路关闭，列表退回"首条提问"—— 也就是这个能力上线之前的
-# 样子。跟 scripts/lib/Get-5hUsage.ps1 同一个套路：可选能力，可有可无。
-$script:runtimeTitlesAvailable = $false
-if (Test-Path (Join-Path $PSScriptRoot 'Runtime-Titles.ps1')) {
-  . (Join-Path $PSScriptRoot 'Runtime-Titles.ps1')
-  $script:runtimeTitlesAvailable = $true
-}
+# 之前这里会绕到运行时的 SQLite 里去读它提炼过的标题，代价是借用 MiniMax
+# Code 自己的程序（ELECTRON_RUN_AS_NODE=1）当 node 用。审核明确不允许上架
+# 版借用那个程序、也不允许读它自己的数据库，所以这条链路整个去掉：标题就是
+# 首条提问，截断和脱敏之后照旧能用。
+#
+# 脱敏用的 Protect-SecretText 在 scripts/lib/Protect-Text.ps1 里，由
+# detector 在 dot-source 本文件之前加载。lib 被单独 dot-source 时没有它，
+# 那就不脱敏（而不是崩）。
+$script:canRedact = [bool](Get-Command Protect-SecretText -ErrorAction SilentlyContinue)
 
 # 活动窗口：日志刚被写过，session 才算"有活动"。
 #
@@ -61,6 +63,16 @@ if (Test-Path (Join-Path $PSScriptRoot 'Runtime-Titles.ps1')) {
 #
 # 60 秒足够覆盖 detector 的一次卡顿（它每秒轮询一次）。
 $script:ACTIVE_WINDOW_MS = 60 * 1000
+
+# 清理窗口：多久没动的会话从列表里去掉。
+#
+# 列表是"现在还活着的会话"，不是历史记录。没有清理的话，一上午开二十个
+# 会话，列表就一直挂二十条，sessions.json 也一直长 —— 里面还存着每个会话
+# 说过的话。
+#
+# 30 分钟：够覆盖"用户去泡杯茶回来接着聊"，又不会把一整个上午的会话
+# 全留在屏幕上。
+$script:PRUNE_AFTER_MS = 30 * 60 * 1000
 
 # "运行中" 的活性窗口。
 #
@@ -190,6 +202,7 @@ function Get-SessionTitle($file) {
     $title = ''
   }
   if ($title.Length -gt 40) { $title = $title.Substring(0, 40) + '…' }
+  $title = Protect-SessionText $title
   $script:sessionTitleCache[$file] = $title
   return $title
 }
@@ -320,7 +333,10 @@ function Get-SessionPreview($msg) {
     break
   }
   if (-not $text) { return '' }
-  return $text
+  # 截断 + 脱敏：预览也是"会话里说过的话"，会写进 sessions.json，也会画在
+  # 屏幕上。超过 120 个字截断，敏感串脱敏。
+  if ($text.Length -gt 120) { $text = $text.Substring(0, 120) + '…' }
+  return (Protect-SessionText $text)
 }
 
 # 最后一条消息里的工具名（toolCall）。
@@ -343,16 +359,26 @@ function Get-SessionLastTool($msg) {
   return ''
 }
 
+# 脱敏：写盘和显示之前都要过一遍。
+#
+# 标题和预览都是**会话里说过的话**，里面可能有 token、密码、身份证号这种
+# 东西 —— 列表把它们写进 sessions.json，还画在屏幕上。所以两处都先脱敏。
+function Protect-SessionText([string]$text) {
+  if (-not $text) { return '' }
+  if (-not $script:canRedact) {
+    # 第一次调用时再确认一次：lib 被谁、在什么顺序 dot-source 都会变，
+    # 脱敏函数晚到也不该让它永远失效。
+    $script:canRedact = [bool](Get-Command Protect-SecretText -ErrorAction SilentlyContinue)
+  }
+  if (-not $script:canRedact) { return $text }
+  try { return [string](Protect-SecretText -Text $text) } catch { return $text }
+}
+
 # 这个 session 在列表里显示的名字。
 #
-# 优先用运行时的会话标题（SQLite 里那个提炼过的主题句："修复 MCode 0.6.13
-# 更新失败"）。拿不到就用首条提问 —— 首条提问常常是半个 URL 或者一句
-# 长话，截断之后既不好看，也认不出是哪个会话。
-function Get-SessionDisplayTitle([string]$id, [string]$log) {
-  if ($script:runtimeTitlesAvailable) {
-    $t = Get-RuntimeSessionTitle $id
-    if ($t) { return $t }
-  }
+# 只有首条用户提问这一个来源：运行时自己的 SQLite 上架版不许读，借用
+# MiniMax Code 的程序当 node 用也不许。
+function Get-SessionDisplayTitle([string]$log) {
   return (Get-SessionTitle $log)
 }
 
@@ -396,6 +422,7 @@ function Update-SessionTracker {
 
   $groups = Get-SessionLogGroups $sessionsRoot
   $now = [DateTime]::UtcNow
+  $nowMs = [int64]([DateTimeOffset]::new($now).ToUnixTimeMilliseconds())
 
   foreach ($id in @($groups.Keys)) {
     $g = $groups[$id]
@@ -420,6 +447,16 @@ function Update-SessionTracker {
       continue
     }
 
+    # 先判断过期,再读日志。
+    #
+    # 之前是先 Get-LastJsonLine 再判过期：本机 400 多个历史会话的日志每秒
+    # 都被读一遍，读完再丢掉（日志动过才需要重读，没动过的那 400 个根本
+    # 不该被碰）。审核指出这个顺序反了。
+    if (-not $entry) {
+      $ageMs = ($now - $g.MTime).TotalMilliseconds
+      if ($ageMs -gt $script:ACTIVE_WINDOW_MS) { continue }
+    }
+
     $msg = Get-LastJsonLine $g.Log
     if (-not $msg) { continue }
     $phase = Get-SessionState $msg
@@ -430,9 +467,6 @@ function Update-SessionTracker {
       # 活动与否看日志 mtime，不看最后一条消息的类型——一个几周前卡在
       # toolCall 上的老对话，最后一条仍然是 toolCall，消息类型说它
       # "在跑"，它其实早就不动了。
-      $ageMs = ($now - $g.MTime).TotalMilliseconds
-      if ($ageMs -gt $script:ACTIVE_WINDOW_MS) { continue }
-
       $cycle = 1
       if ($script:dismissedSessions.ContainsKey($id)) {
         $d = $script:dismissedSessions[$id]
@@ -451,7 +485,7 @@ function Update-SessionTracker {
       }
       $script:trackedSessions[$id] = @{
         Id = $id
-        Title = (Get-SessionDisplayTitle $id $g.Log)
+        Title = (Get-SessionDisplayTitle $g.Log)
         Phase = $phase
         Cycle = $cycle
         MTime = $g.MTime
@@ -468,7 +502,7 @@ function Update-SessionTracker {
         #
         # 首条用户消息也要放进去：tab 上的名字通常就是会话刚起时那个
         # 名字，而运行时那个标题是后来变的。
-        Titles = @(@((Get-SessionDisplayTitle $id $g.Log), (Get-SessionTitle $g.Log)) | Where-Object { $_ } | Select-Object -Unique)
+        Titles = @(@((Get-SessionDisplayTitle $g.Log)) | Where-Object { $_ } | Select-Object -Unique)
         LastAtMs = [int64]([DateTimeOffset]::new($g.MTime).ToUnixTimeMilliseconds())
         Dir = $g.Dir
       }
@@ -512,24 +546,39 @@ function Update-SessionTracker {
     #
     # 无条件并入当前标题：detector 重启后条目是从 sessions.json 恢复的，
     # 恢复出来的标题和当前标题一样，光靠"变了才记"会一个都记不上。
-    $newTitle = (Get-SessionDisplayTitle $id $g.Log)
+    $newTitle = (Get-SessionDisplayTitle $g.Log)
     if ($newTitle) {
       # 首条用户消息一起并进来：tab 名多半是会话刚起时的那个名字。
-      $hist = @(@($entry.Titles) + @($newTitle) + @((Get-SessionTitle $g.Log)) | Where-Object { $_ } | Select-Object -Unique)
+      $hist = @(@($entry.Titles) + @($newTitle) | Where-Object { $_ } | Select-Object -Unique)
       if ($hist.Count -gt 8) { $hist = @($hist | Select-Object -Last 8) }
       $entry.Titles = $hist
     }
-    # 运行时标题可能比列表出现得晚（node 装好了、库能读了）。所以每次更新
-    # 都再问一次，拿到更好的名字就升级。Get-RuntimeSessionTitle 内部有 60s
-    # 缓存，所以每秒问一次并不会每秒起进程。
-    if ($script:runtimeTitlesAvailable) {
-      $rt = Get-RuntimeSessionTitle $id
-      if ($rt -and $rt -ne $entry.Title) {
-        $entry.Title = $rt
-        $script:sessionsDirty = $true
-      }
-    }
     if (-not $entry.Title) { $entry.Title = (Get-SessionTitle $g.Log) }
+  }
+
+  # 清理：太久没动的会话从列表里去掉。
+  #
+  # 列表是"现在还活着的会话"，不是历史记录。没有清理的话，一个上午开了
+  # 二十个会话，列表就一直挂二十条，sessions.json 也一直长 —— 而且里面
+  # 存着每个会话说过的话。
+  #
+  # 判定用最后活动时间（LastAtMs）：还在动的会话不会被清掉。30 分钟不动
+  # 就当成"已经不活了"，从内存和文件里一起删掉。
+  $pruned = 0
+  foreach ($id in @($script:trackedSessions.Keys)) {
+    $e = $script:trackedSessions[$id]
+    $lastMs = $e.LastAtMs
+    if (-not $lastMs) { $lastMs = $e.SinceMs }
+    if (-not $lastMs) { continue }
+    if (($nowMs - [int64]$lastMs) -gt $script:PRUNE_AFTER_MS) {
+      $script:trackedSessions.Remove($id)
+      $script:dismissedSessions.Remove($id)
+      $pruned++
+    }
+  }
+  if ($pruned -gt 0) {
+    $script:sessionsDirty = $true
+    Log-Line ("sessions pruned: " + $pruned)
   }
 }
 

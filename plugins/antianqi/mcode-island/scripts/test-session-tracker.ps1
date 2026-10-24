@@ -57,6 +57,24 @@ Invoke-Expression (Extract-Function $detect 'Test-IsAskUser')
 . (Join-Path (Join-Path $pluginRoot 'scripts') (Join-Path 'lib' 'Status-Store.ps1'))
 . (Join-Path (Join-Path $pluginRoot 'scripts') (Join-Path 'lib' 'Session-Tracker.ps1'))
 
+# 脱敏的替身：真实的 Protect-SecretText 在 scripts/lib/Protect-Text.ps1 里，
+# 由 detector 在 dot-source tracker 之前加载。测试里先装一个只认一种形状
+# 的假货，好断言"标题和预览都过了脱敏"。
+function Protect-SecretText {
+  param([string]$Text)
+  if (-not $Text) { return $Text }
+  return ($Text -replace 'sk-[A-Za-z0-9]{6,}', 'sk-***')
+}
+
+# 读日志的计数器：审核第 1 条要断言"过期的会话的日志一次都没被读"。
+# tracker 调 Get-LastJsonLine 是运行期解析，所以这里重新定义一遍就会生效。
+$script:readFiles = New-Object System.Collections.Generic.List[string]
+$script:realGetLastJsonLine = ${function:Get-LastJsonLine}
+function Get-LastJsonLine($file) {
+  $script:readFiles.Add([string]$file)
+  return (& $script:realGetLastJsonLine $file)
+}
+
 # --- assertions ----------------------------------------------------------
 $script:pass = 0; $script:fail = 0; $script:n = 0
 function Check([string]$name, [bool]$cond, [string]$why = '') {
@@ -309,18 +327,13 @@ $noiseMsg = Get-LastJsonLine $fNoise
 Check '系统注入的消息不进 preview' ([string]::IsNullOrEmpty((Get-SessionPreview $noiseMsg))) ("得到: '" + (Get-SessionPreview $noiseMsg) + "'")
 Check '标题也不取系统注入的那条' (-not ((Get-SessionTitle $fNoise) -match 'background-task')) ("得到: '" + (Get-SessionTitle $fNoise) + "'")
 
-# $HOME 是 PowerShell 的只读自动变量，而变量名**不区分大小写**：写
-# "$home = ..." 会直接抛 "VariableNotWritable"。那个异常被读标题的
-# try/catch 吞掉之后，运行时标题就读不出来了 —— 列表里显示成首条消息的
-# 摘要，而不是会话名（用户报的就是这个）。
-#
-# 这条断言照着这个坑写的：源码里不许再出现 $home。
-$rtSrcPath = Join-Path $PSScriptRoot 'lib\Runtime-Titles.ps1'
-if (Test-Path $rtSrcPath) {
-  $rtSrc = [System.IO.File]::ReadAllText($rtSrcPath)
-  Check 'Runtime-Titles 没有用 $home 撞只读的 $HOME' (-not ($rtSrc -match '(?i)\$home\b')) '源码里又出现了 $home'
-}
-Check 'Get-UserHome 能拿到主目录' ((Get-UserHome) -ne '') '拿不到主目录'
+# 审核要求：上架版不能借用 MiniMax Code 自己的程序（ELECTRON_RUN_AS_NODE=1）
+# 当 node 用，也不能读它自己的 SQLite。所以那条链路整个不存在了 ——
+# 标题只有首条用户提问这一个来源。
+$trackerSrc = [System.IO.File]::ReadAllText((Join-Path (Join-Path $PSScriptRoot 'lib') 'Session-Tracker.ps1'))
+Check 'tracker 不使用 ELECTRON_RUN_AS_NODE' (-not ($trackerSrc -match '\$env:ELECTRON_RUN_AS_NODE')) '源码里又用了 ELECTRON_RUN_AS_NODE'
+Check 'tracker 不读运行时的 sqlite' (-not ($trackerSrc -match '(?i)runtime-state\.sqlite|runtime_titles|Runtime-Titles')) '源码里又出现了运行时的 sqlite'
+Check 'Runtime-Titles.ps1 已经不在仓库里' (-not (Test-Path (Join-Path (Join-Path $PSScriptRoot 'lib') 'Runtime-Titles.ps1'))) 'Runtime-Titles.ps1 还在'
 
 # 标题历史。
 #
@@ -355,124 +368,70 @@ $afterSame = Get-Content (Join-Path $configDir 'sessions.json') -Raw | ConvertFr
 $rowAfter = @($afterSame.sessions | Where-Object { $_.id -eq 'sess-samephase' })[0]
 Check 'Phase 没变但工具名变了也要落盘' ($rowAfter.lastTool -eq 'Read') ("得到: '" + $rowAfter.lastTool + "'")
 
-# --- 9. 会话标题：运行时 SQLite 优先，首条提问兜底 ------------------------
+# --- 9. 会话标题：只有首条用户提问一个来源 ---------------------------------
 #
-# 列表第一行要显示"会话标题"。真正的标题在运行时的 SQLite 里
-# (local_runtime_sessions.title)，是提炼过的主题句；首条提问常常是半个
-# URL 或者一句长话，截断之后既不好看也认不出是哪个会话。
-#
-# 这里用**自建的临时库**验证，不碰开发机上那个 1.9GB 的真库：
-# MCODE_RUNTIME_STATE_DB 可以指向别的库。
-#
-# 需要 node:sqlite（Node 22.5+ 内置）。没有 node 的环境整节跳过，
-# 不是静默通过 —— 跳过要在摘要里看得见。
-$nodeExe = (Get-Command node -ErrorAction SilentlyContinue)
-$sqliteOk = $false
-if ($nodeExe) {
-  $probe = Join-Path $fixture 'sqlite-probe.cjs'
-  [System.IO.File]::WriteAllText($probe, 'require("node:sqlite");', (New-Object System.Text.UTF8Encoding($false)))
-  try {
-    $null = & $nodeExe.Source $probe 2>&1
-    $sqliteOk = ($LASTEXITCODE -eq 0)
-  } catch { $sqliteOk = $false }
-}
+# 审核要求：上架版不能借用 MiniMax Code 自己的程序（ELECTRON_RUN_AS_NODE=1）
+# 当 node 用，也不能读它自己的 SQLite。所以标题只有首条提问这一个来源。
+$fTitled = New-Session 'sess-titled' @((Line-User '首条提问是另外一句话'))
+Check '显示用首条提问' ((Get-SessionDisplayTitle $fTitled) -eq '首条提问是另外一句话') ("得到: '" + (Get-SessionDisplayTitle $fTitled) + "'")
 
-if (-not $sqliteOk) {
-  Write-Output "# skip the runtime-title checks: node:sqlite is not available here"
+# --- 10. 标题和预览：先截断、先脱敏，再写盘和显示 --------------------------
+#
+# 审核第 4 条。标题和预览都是"会话里说过的话"，里面可能有 token。写进
+# sessions.json 的是它们，画在屏幕上的也是它们。
+$fSecret = New-Session 'sess-secret' @((Line-User '我的 key 是 sk-abcdef123456 谢谢'))
+$secretTitle = (Get-SessionTitle $fSecret)
+Check '标题里的密钥被脱敏' ($secretTitle -notmatch 'sk-abcdef123456') ("得到: '" + $secretTitle + "'")
+Check '标题仍然可读' ($secretTitle -match '我的 key') ("得到: '" + $secretTitle + "'")
+
+$longLine = 'x' * 400
+$fLong = New-Session 'sess-long' @((Line-User $longLine))
+Check '标题被截断到 40 字以内' ((Get-SessionTitle $fLong).Length -le 41) ("得到 " + (Get-SessionTitle $fLong).Length + " 字")
+
+$previewMsg = Get-LastJsonLine (New-Session 'sess-prev' @((Line-User ('预览里也有 sk-abcdef123456 和 ' + ('y' * 300)))))
+$preview = (Get-SessionPreview $previewMsg)
+Check '预览里的密钥被脱敏' ($preview -notmatch 'sk-abcdef123456') ("得到: '" + $preview + "'")
+Check '预览被截断' ($preview.Length -le 121) ("得到 " + $preview.Length + " 字")
+
+# 写盘的那一份也必须已经是脱敏 + 截断过的
+$fDisk = New-Session 'sess-disk' @((Line-User '写盘测试 sk-abcdef123456'))
+Update-SessionTracker
+Write-SessionsFile -Force
+$diskJson = Get-Content (Join-Path $configDir 'sessions.json') -Raw | ConvertFrom-Json
+$diskRow = @($diskJson.sessions | Where-Object { $_.id -eq 'sess-disk' })[0]
+if ($diskRow) {
+  Check 'sessions.json 里的标题是脱敏过的' ([string]$diskRow.title -notmatch 'sk-abcdef123456') ("得到: '" + $diskRow.title + "'")
+  Check 'sessions.json 里的预览也是脱敏过的' ([string]$diskRow.preview -notmatch 'sk-abcdef123456') ("得到: '" + $diskRow.preview + "'")
 } else {
-  # 建一个只有一条标题的临时库。
-  $tmpDb = Join-Path $fixture 'runtime-state.sqlite'
-  $build = Join-Path $fixture 'build-db.cjs'
-  $buildJs = @'
-const {DatabaseSync} = require("node:sqlite");
-const db = new DatabaseSync(process.argv[2]);
-db.exec("CREATE TABLE local_runtime_sessions (session_id TEXT, title TEXT)");
-const ins = db.prepare("INSERT INTO local_runtime_sessions (session_id, title) VALUES (?, ?)");
-ins.run("sess-titled", "这个会话有一个像样的名字");
-ins.run("sess-untitled", null);
-db.close();
-'@
-  [System.IO.File]::WriteAllText($build, $buildJs, (New-Object System.Text.UTF8Encoding($false)))
-  & $nodeExe.Source $build $tmpDb | Out-Null
-  Check '临时库建好了' (Test-Path -LiteralPath $tmpDb) ('没有生成: ' + $tmpDb)
-
-  # 指过去，并强制下一次读缓存真的去读库。
-  $env:MCODE_RUNTIME_STATE_DB = $tmpDb
-  $script:runtimeTitlesAt = [DateTime]::MinValue
-  $script:runtimeTitles = @{}
-
-  Check '能从运行时库取到标题' ((Get-RuntimeSessionTitle 'sess-titled') -eq '这个会话有一个像样的名字') ("得到: '" + (Get-RuntimeSessionTitle 'sess-titled') + "'")
-  Check '运行时库里没有的会话没有标题' ([string]::IsNullOrEmpty((Get-RuntimeSessionTitle 'sess-nope'))) '不该有标题'
-  Check '标题为空的会话返回空' ([string]::IsNullOrEmpty((Get-RuntimeSessionTitle 'sess-untitled'))) '不该有标题'
-
-  # 列表里显示的名字：运行时标题优先
-  $fTitled = New-Session 'sess-titled' @((Line-User '首条提问是另外一句话'))
-  Check '显示用运行时标题而不是首条提问' ((Get-SessionDisplayTitle 'sess-titled' $fTitled) -eq '这个会话有一个像样的名字') ("得到: '" + (Get-SessionDisplayTitle 'sess-titled' $fTitled) + "'")
-
-  # 运行时没有标题时，退回首条提问
-  $fPlain = New-Session 'sess-plain' @((Line-User '首条提问是另外一句话'))
-  Check '运行时没有标题时退回首条提问' ((Get-SessionDisplayTitle 'sess-plain' $fPlain) -eq '首条提问是另外一句话') ("得到: '" + (Get-SessionDisplayTitle 'sess-plain' $fPlain) + "'")
-
-  # 库不存在时也不能出事
-  $env:MCODE_RUNTIME_STATE_DB = Join-Path $fixture 'no-such-db.sqlite'
-  $script:runtimeTitlesAt = [DateTime]::MinValue
-  $script:runtimeTitles = @{}
-  $fMissing = New-Session 'sess-nodb' @((Line-User '首条提问是另外一句话'))
-  Check '库不存在时退回首条提问' ((Get-SessionDisplayTitle 'sess-nodb' $fMissing) -eq '首条提问是另外一句话') ("得到: '" + (Get-SessionDisplayTitle 'sess-nodb' $fMissing) + "'")
-
-  # $env:TEMP 在 Linux 的 PowerShell 上不存在（那里叫 TMPDIR）。
-  #
-  # 临时目录必须走 .NET 的 GetTempPath()。用 $env:TEMP 的话，Join-Path
-  # $null 会抛，异常又被吞掉，标题就读不出来了 —— ubuntu CI 上第一次
-  # 挂掉就是这个，而失败信息离原因很远。
-  $oldTemp = $env:TEMP
-  try {
-    $env:TEMP = $null
-    $env:MCODE_RUNTIME_STATE_DB = $tmpDb
-    $script:runtimeTitlesAt = [DateTime]::MinValue
-    $script:runtimeTitles = @{}
-    $tNoTemp = Get-RuntimeSessionTitle 'sess-titled'
-    Check '没有 $env:TEMP 时也能取到标题' ($tNoTemp -eq '这个会话有一个像样的名字') ("得到: '" + $tNoTemp + "'")
-  } finally {
-    $env:TEMP = $oldTemp
-  }
-
-  $env:MCODE_RUNTIME_STATE_DB = $null
+  Check 'sessions.json 里有这一条' $false '磁盘上找不到 sess-disk'
 }
 
-# 没有主目录的环境不能抛异常。
+# --- 11. 过期会话的日志一次都不该被读 --------------------------------------
 #
-# CI 的 ubuntu job 没有 USERPROFILE，Join-Path $null 会抛。那一次 ubuntu
-# 失败就是这么来的：标题是可选功能，它不该把整个 tracker 带崩。
-#
-# 这条不依赖 node，所以放在 sqliteOk 的分支外面 —— 出问题最多的恰恰是
-# 那个没有 node、也没有主目录的环境。
-$oldProfile = $env:USERPROFILE
-$oldHome = $env:HOME
-$oldDb = $env:MCODE_RUNTIME_STATE_DB
-try {
-  $env:USERPROFILE = $null
-  $env:HOME = $null
-  $env:MCODE_RUNTIME_STATE_DB = $null
-  $script:runtimeTitlesAt = [DateTime]::MinValue
-  $script:runtimeTitles = @{}
-  $survived = $true
-  try {
-    $null = Get-NodeCommand
-    $null = Read-RuntimeTitles
-    $null = Get-RuntimeSessionTitle 'sess-anything'
-  } catch {
-    $survived = $false
-  }
-  Check '没有主目录时取标题不抛异常' $survived 'Get-NodeCommand / Read-RuntimeTitles / Get-RuntimeSessionTitle 抛了异常'
-} finally {
-  $env:USERPROFILE = $oldProfile
-  $env:HOME = $oldHome
-  $env:MCODE_RUNTIME_STATE_DB = $oldDb
-  $script:runtimeTitlesAt = [DateTime]::MinValue
-  $script:runtimeTitles = @{}
-}
+# 审核第 1 条。之前是先读日志再判过期：本机 400 多个历史会话的日志每秒
+# 被读一遍，读完再丢掉。
+$script:readFiles.Clear()
+$fOld = New-Session 'sess-ancient' @((Line-User '很久以前的会话')) 30
+Update-SessionTracker
+$oldLog = Join-Path (Split-Path -Parent $fOld) 'messages.jsonl'
+Check '过期会话的日志没有被读' (-not ($script:readFiles -contains $oldLog)) ("读了: " + ($script:readFiles -join ', '))
+Check '过期会话也不进列表' (-not $script:trackedSessions.Contains('sess-ancient')) '过期会话进了列表'
 
+# --- 12. 列表要能清理 ---------------------------------------------------
+#
+# 审核第 5 条。列表是"现在还活着的会话"，不是历史记录：太久没动的会话
+# 要从列表和 sessions.json 里一起消失。
+$fPrune = New-Session 'sess-prune' @((Line-User '待清理的会话'))
+Update-SessionTracker
+Check '刚动过的会话在列表里' ($script:trackedSessions.Contains('sess-prune')) '刚动过的会话不在列表里'
+# 把它的日志改成很久以前：下次更新就该被清掉
+$pruneLog = Join-Path (Split-Path -Parent $fPrune) 'messages.jsonl'
+[System.IO.File]::SetLastWriteTime($pruneLog, (Get-Date).AddHours(-2))
+Update-SessionTracker
+Check '很久没动的会话被清出列表' (-not $script:trackedSessions.Contains('sess-prune')) '过期会话还在列表里'
+Write-SessionsFile -Force
+$pruneJson = Get-Content (Join-Path $configDir 'sessions.json') -Raw | ConvertFrom-Json
+Check '被清掉的会话也不在 sessions.json 里' (-not (@($pruneJson.sessions | Where-Object { $_.id -eq 'sess-prune' }).Count)) 'sessions.json 里还有它'
 # --- 10. 停了的会话不该一直显示"运行中" -----------------------------------
 #
 # agent 跑完一个工具之后，它的最后一条消息永远是 toolCall 或 toolResult
