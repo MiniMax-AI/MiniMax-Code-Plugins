@@ -118,9 +118,9 @@ node ${PLUGIN_ROOT}/scripts/run-verb.mjs verify_diff '{
 node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_open '{"draft":"<草稿库>\\<草稿名>","copy":true}'
 node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_read '{"sessionId":"ve-session-N"}'
 # ③ 规划保留区间（产出"保留/删除"表 ⇒ ★ 必须给用户确认后再落刀）
-node ${PLUGIN_ROOT}/scripts/talk-cut-plan.mjs --srt "<用户给的.srt>" --draft "<①的 dir>"
-# ④ 用户确认后落稿（走 27 个官方 op 落草稿）
-node ${PLUGIN_ROOT}/scripts/talk-cut-apply.mjs --plan "<上一步的 plan.json>" --sessionId "ve-session-N"
+node ${PLUGIN_ROOT}/scripts/talk-cut-plan.mjs --srt "<用户给的.srt>" --out "<plan.json>"
+# ④ 用户确认后落稿（走 27 个官方 op 落草稿）★ --apply 才是真剪；★ --sessionId 复用 ② 的会话
+node ${PLUGIN_ROOT}/scripts/talk-cut-apply.mjs --plan "<上一步的 plan.json>" --sessionId "ve-session-N" --apply
 # ⑤ 落盘 + ⑥ 出成片（同路径 A 的 ②，draft 用 ① 的 dir）
 node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_commit '{"sessionId":"ve-session-N","realDraft":"<草稿库>\\<草稿名>"}'
 node ${PLUGIN_ROOT}/scripts/run-verb.mjs make_film '{"draft":"<①的 dir>","outDir":"<输出目录>","denoise":"auto"}'
@@ -129,6 +129,48 @@ node ${PLUGIN_ROOT}/scripts/run-verb.mjs make_film '{"draft":"<①的 dir>","out
 ### 路径 D：改完直接出片（"改完直接出个片"）
 
 = **路径 B 的 ①~④** + **路径 A 的 ②**（`make_film` 的 `draft` 用同一个 `dir`）。
+
+## ★ 两段式：人工确认点（`run_pipeline` 怎么做"先给人看，再落刀"）
+
+> 一条路线里**必须有一步等人工点头**时（例如"保留区间表出来了，但还没落刀"），
+> 把那一步标成 `"confirm": true` + `"artifact": "$产物变量"` 即可。
+> 编排器会**跑完那一步就停下来**，把产物路径 + sha + 摘要交回去；确认后带 token 续跑。
+
+```bash
+# ① 第一段：跑到确认点就停（verdict = AWAIT_CONFIRM，后面几步一步都没跑）
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs run_pipeline '{
+  "profile": "talk-cut-then-render",
+  "draft": "<草稿库>\\<草稿名>",
+  "srt": "<用户给的.srt>",
+  "outDir": "<输出目录>"
+}'
+#    ⇒ 返回 { verdict:"AWAIT_CONFIRM", gate:{step, artifact, artifactSha, artifactPreview, pendingSteps},
+#             resume:{token, profile, confirm:true} }
+
+# ② 把产物给用户看，等用户点头（这一步在编排器之外，是人的事）
+
+# ③ 第二段：确认后续跑（同一个 token）
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs run_pipeline '{
+  "profile": "talk-cut-then-render",
+  "resume": { "token": "<①返回的 token>", "confirm": true }
+}'
+#    ⇒ verdict = PASS / FAIL；失败会说明"停在第几步"
+
+# ★ 没给 confirm 就不许跑（这是编排器的硬规则，不是口头承诺）：
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs run_pipeline '{
+  "profile": "talk-cut-then-render", "resume": { "token": "<token>" }
+}'
+#    ⇒ verdict = REFUSED，且关卡后面的步骤【一步都没执行】
+```
+
+★ 三条纪律：
+
+1. **进度是持久化的**（存在 `PLUGIN_DATA/pipelines/<token>/state.json`）⇒
+   MCP 调用断了、换个进程续跑，接得上。
+2. **没 `confirm:true` ⇒ REFUSED**，不是"跑一半再问你"。自检里有一条断言专门看
+   "被拒绝那次，`talk-cut-apply.mjs` 根本没被执行"。
+3. **续跑时会检查产物有没有被人改过**（`artifactChangedSinceGate`）⇒
+   用户在确认前手改了产物，改了会被**点名**，不会静默吞掉。
 
 ## ★ 跨链共享会话（这一节是本 skill 的核心）
 

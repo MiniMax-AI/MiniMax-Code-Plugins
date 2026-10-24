@@ -573,6 +573,64 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
       rpBad.result?.isError === true && /未知路线|不在允许集合/.test(textOf(rpBad)),
       textOf(rpBad).replace(/\s+/g, ' ').slice(0, 140));
 
+    // ── ★★★ run_pipeline 的【人工确认点 + 两段式续跑】（2026-10-24 新增）──
+    //   路线 talk-cut-then-render 里有一步带 confirm:true ⇒ 跑完那一步必须【停下来等人】，
+    //   后面几步一步都不跑；确认后用 resume{token, confirm:true} 续跑。
+    //   ★ 三个断言各挑一个方向：① 停下来（AWAIT_CONFIRM）② 没确认就不许跑（REFUSED）③ 确认后才跑完（PASS）
+    //   ★ 阴性对照：REFUSED 那一次必须【证明】后面的脚本步骤没被执行（不是"看起来没跑"）
+    const GATE_SRT = path.join(OUT, 'gate.srt');
+    fs.writeFileSync(GATE_SRT,
+      '1\n00:00:00,200 --> 00:00:00,900\n嗯，那个，就是\n\n'
+      + '2\n00:00:01,000 --> 00:00:02,000\n今天我们讲剪映插件的编排器\n\n'
+      + '3\n00:00:02,200 --> 00:00:02,600\n嗯\n', 'utf8');
+    const g1 = await call('tools/call', {
+      name: 'run_pipeline',
+      arguments: {
+        profile: 'talk-cut-then-render', draft: FILM_DRAFT, srt: GATE_SRT,
+        outDir: path.join(SMOKE, 'pipeline-gate'),
+      },
+    });
+    const g1Txt = textOf(g1);
+    let g1Obj = null;
+    try { g1Obj = JSON.parse(g1Txt); } catch { /* 不是 JSON */ }
+    const gateOk = g1Obj && g1Obj.verdict === 'AWAIT_CONFIRM' && g1Obj.gate
+      && g1Obj.gate.artifact && fs.existsSync(g1Obj.gate.artifact)
+      && g1Obj.gate.artifactSha && g1Obj.gate.pendingSteps > 0;
+    check('★★★ run_pipeline：带确认点的路线 ⇒ 停在关卡（AWAIT_CONFIRM）+ 产物已生成',
+      !!gateOk,
+      gateOk ? `第 ${g1Obj.gate.step} 步 · 产物 ${path.basename(g1Obj.gate.artifact)} · 还有 ${g1Obj.gate.pendingSteps} 步没跑`
+        : g1Txt.replace(/\s+/g, ' ').slice(0, 200));
+    const gToken = g1Obj?.resume?.token || '';
+    // ★ 阴性①：不确认 ⇒ 必须拒绝，而且【关卡后面的步骤一步都没跑】
+    const g2 = await call('tools/call', {
+      name: 'run_pipeline', arguments: { profile: 'talk-cut-then-render', resume: { token: gToken } },
+    });
+    const g2Obj = (() => { try { return JSON.parse(textOf(g2)); } catch { return null; } })();
+    const g2Steps = (g2Obj?.steps || []).map((s) => s.script || s.verb).filter(Boolean);
+    check('★★★ run_pipeline：没 confirm ⇒ 拒绝执行（REFUSED），且关卡后的脚本一步都没跑',
+      g2Obj?.verdict === 'REFUSED' && !g2Steps.includes('talk-cut-apply.mjs'),
+      g2Obj ? `verdict=${g2Obj.verdict} · 已跑步骤=[${g2Steps.join(',')}]` : textOf(g2).slice(0, 160));
+    // ★ 阴性②：token 不存在 ⇒ 必须明确报错（不许默默从头跑）
+    const BAD_TOKEN = '0'.repeat(16);       // 形态合法但状态里没有 ⇒ 只能报"找不到"
+    const gBad = await call('tools/call', {
+      name: 'run_pipeline', arguments: { profile: 'talk-cut-then-render', resume: { token: BAD_TOKEN, confirm: true } },
+    });
+    check('★★★ run_pipeline：不存在的 token ⇒ 明确报错（不许默默从头跑）',
+      gBad.result?.isError === true && /找不到流水线状态|token/.test(textOf(gBad)),
+      textOf(gBad).replace(/\s+/g, ' ').slice(0, 160));
+    // ★ 阳性：确认后 ⇒ 续跑到底（apply 步骤必须【自证】剪掉了 2/2 个区间）
+    const g3 = await call('tools/call', {
+      name: 'run_pipeline', arguments: { profile: 'talk-cut-then-render', resume: { token: gToken, confirm: true } },
+    });
+    const g3Obj = (() => { try { return JSON.parse(textOf(g3)); } catch { return null; } })();
+    const g3Txt = textOf(g3);
+    const g3Ok = g3Obj && g3Obj.verdict === 'PASS'
+      && g3Obj.steps.some((s) => s.script === 'talk-cut-apply.mjs' && s.ok === true)
+      && /已验证剪掉\s*2\/2/.test(g3Txt);
+    check('★★★ run_pipeline：确认后续跑 ⇒ 走完（PASS），且 apply 自证"2/2 个区间已剪掉"',
+      !!g3Ok,
+      g3Ok ? 'verdict=PASS · apply 自证 2/2' : g3Txt.replace(/\s+/g, ' ').slice(-260));
+
     // ── ★★★ 覆盖度补强（2026-10-23）：verify_diff 的【语义判据】路径 ──
     //   beforeDraft / afterDraft / expect —— 这是 jianying-draft-edit 文档教的主工作流第⑤步，
     //   但【从未被任何测试触及】（"未测参数清单"查出来的）⇒ 文档教的流程没人验证过。

@@ -16,7 +16,7 @@
       },
       "draft": {
         "type": "string",
-        "description": "要编排的剪映草稿目录（真草稿，插件只读它、写它的副本）"
+        "description": "要编排的剪映草稿目录（真草稿，插件只读它、写它的副本）★ 续跑时不用给（已经存在流水线状态里了）"
       },
       "outDir": {
         "type": "string",
@@ -49,11 +49,29 @@
       "beautify": {
         "type": "string",
         "description": "人声美化（近似 EQ+压缩），如 approx"
+      },
+      "resume": {
+        "type": "object",
+        "description": "续跑（两段式的第二段）：把第一次调用返回的 resume 对象原样带回来。★ confirm 必须是 true 才会继续跑；不给 confirm ⇒ 编排器【一步都不往下跑】并回 REFUSED（确认点真的会拦人）。",
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "第一次调用返回的 resume.token（16 位小写十六进制）"
+          },
+          "confirm": {
+            "type": "boolean",
+            "description": "用户已看过关卡产物并确认 ⇒ true 才会继续执行后面的步骤"
+          },
+          "profile": {
+            "type": "string",
+            "description": "（可选）路线 id，用于校验 token 属于哪条路线"
+          }
+        },
+        "required": ["token"]
       }
     },
     "required": [
-      "profile",
-      "draft"
+      "profile"
     ],
     "additionalProperties": false
   }

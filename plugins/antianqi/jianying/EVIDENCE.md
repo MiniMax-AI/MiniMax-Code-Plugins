@@ -152,10 +152,10 @@
 
 | 自检 | 结果 |
 |---|---|
-| `test/jianying.test.mjs` | **10 / 10** |
-| `scripts/selftest-mcp.mjs` | **17 / 17** |
-| `scripts/selftest-draft-edit.mjs` | **16 / 16** |
-| `scripts/selftest-talk-cut.mjs` | **10 / 10** |
+| `test/jianying.test.mjs` | **11 / 11** |
+| `scripts/selftest-mcp.mjs` | **56 / 56**（含编排器两段式 4 条：停在关卡 / 没确认不许跑 / 假 token 报错 / 确认后走完） |
+| `scripts/selftest-draft-edit.mjs` | **17 / 17** |
+| `scripts/selftest-talk-cut.mjs` | **7 / 7** |
 | `scripts/check-env.mjs` | **17 OK / 0 MISS** |
 | 上游官方校验器 | `OK plugin antianqi/jianying` · **30 插件全绿** |
 
@@ -170,6 +170,52 @@
 | README 删掉"预期结果" | 失败 | `README must state the expected result` |
 | README 删掉"无遥测"披露 | 失败 | `README must disclose telemetry behaviour` |
 | manifest `skills[]` 指向缺失文件 | 失败 | Skill 路径列表 deep-equal 不匹配 |
+
+## 6.5 ★★ 编排器的两段式（人工确认点）—— 实测证据（2026-10-24）
+
+> 路线 `talk-cut-then-render` 里那一步（产出"保留/删除"区间表）标了
+> `"confirm": true` + `"artifact": "$planPath"` ⇒ 编排器跑完那一步就**停下来**。
+
+| 断言 | 期望 | 实测 |
+|---|---|---|
+| 第一段 | 停在关卡，后面 3 步**一步都没跑** | `verdict=AWAIT_CONFIRM` · `gate.step=3` · `gate.pendingSteps=3` |
+| 关卡产物 | 存在 + 有 sha | `artifact=<…>/talk-cut-plan.json` · `artifactSha` 非空 · `artifactPreview.stats` 有值 |
+| **不确认就续跑** | **拒绝执行** | `verdict=REFUSED` · 自检断言"被拒那次 `talk-cut-apply.mjs` **根本没被执行**" |
+| 假 token | 明确报错（不许默默从头跑） | `找不到流水线状态` |
+| 确认后续跑 | 走完 | `verdict=PASS` · apply 自证 **已验证剪掉 2/2 个区间** |
+| 真草稿 | 全程零改动 | 落盘前后 sha 相同（`realDraftUnchanged=true`） |
+
+**apply 的判据（形态无关 + 有区分力）**：
+
+| 区间 | 这一轨时长总量 | 结果 |
+|---|---|---|
+| `2200000..2600000 us`（400 000 us） | 3 000 000 → 2 600 000 | 正好少 400 000 ✅ |
+| `200000..900000 us`（700 000 us） | 2 600 000 → 1 900 000 | 正好少 700 000 ✅ |
+
+阴性对照：演练模式（没 `--apply`）下同一条判据**必然不成立**（脚本当场打印
+"阴性对照：演练没动草稿 ⇒ 判据现在【不成立】"）⇒ 判据能区分"剪了"和"没剪"。
+
+## 6.6 ★★★ 这一轮挖出来的两个真缺陷（都是"官方说改了不算数"的变种）
+
+| # | 症状 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | `draft_read {sessionId}` 读出来的**不是刚开的那份草稿**（段数/时长/id 全不一样）；最坑的一次读到的是**两天前**另一个会话留下的草稿 | **剪映的 session id 会回收复用**（进程重启后从 1 重新数）⇒ 状态目录里还留着上一次的 `snapshot-<sid>.json`，而 `draft_read` 优先读快照 ⇒ 新会话"继承"了旧草稿 | `draft_open` 开新会话时**先删掉这个 id 的旧快照**；另加一道：会话记下草稿 id，读到的 id 对不上就点名报错 |
+| 2 | `draft_patch` 报 `effectVerified=false, changes=0`，可段**确实**被切成了两半 | 生效探针的基线是**磁盘上的加密草稿** ⇒ `readDraftJson` 解析不出来 ⇒ 返回 null ⇒ 探针以为"改前不存在" ⇒ 段数变化算不出来 | 基线读不出来就**走官方管道解密**（`readDraftForDiff`）⇒ 探针不再假阴性 |
+
+⇒ 通用教训：**判据的基线读不出来时，要换一条路读，不能当成"没有基线"**；
+**任何"按 id 缓存"的东西，都必须考虑 id 会回收**。
+
+## 6.7 ★★ 判据的"无法判定"必须与"没变"分开（这一轮修的假绿）
+
+- 段级 diff 的 `fields` **只装【变了】的字段** ⇒ "没变"与"根本没法比"在 diff 里长得一样
+  ⇒ `expect: {segmentFieldUnchanged: X}` 会被**静默满足**（假绿）。
+- 现在有 `fieldComparability(before, after, field)`：数"两边都有的段"与"只有一边有的段"，
+  字段不可比时**明确报"无法判定"**并判 FAIL（不装作"没变"）。
+- 修完后 `selftest-draft-edit.mjs` 的负向注入 ⑦b 第一次**因正确原因**失败：
+  `不该变的 "volume" 字段却变了`（不是"无法判定"）⇒ 判据有区分力。
+- 同理，⑦ 的"改前"基线改成从**会话快照**取（暖机 patch 先把快照变成展开形态）⇒
+  改前/改后**同形态** ⇒ 逐段字段差才可比。
+
 
 ## 7. 复现
 

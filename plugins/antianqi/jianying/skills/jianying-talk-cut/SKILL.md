@@ -49,7 +49,9 @@ node ${PLUGIN_ROOT}/scripts/talk-cut-plan.mjs \
 #    确认要删的 → 把该区间加进 dropRanges（或直接改 verdict 后重跑 ①）
 
 # ③ 应用（默认演练；加 --apply 才真改）
-node ${PLUGIN_ROOT}/scripts/talk-cut-apply.mjs --plan "<plan.json>" --draft "<草稿名>" [--apply]
+#    ★ --sessionId <ve-session-N>：复用别人开好的会话（编排器 run_pipeline 就是这么接的）
+#      ⇒ 不自己 draft_open、不自己 draft_commit（落盘归编排器的 draft_commit 步骤管）
+node ${PLUGIN_ROOT}/scripts/talk-cut-apply.mjs --plan "<plan.json>" --draft "<草稿名>" [--apply] [--sessionId "<ve-session-N>"]
 
 # ④ 落盘后验收：官方渲染 + 像素差 + 时间线变化
 node ${PLUGIN_ROOT}/scripts/run-verb.mjs render_frames '{"draft":"<copy>","outDir":"<outdir>"}'
@@ -59,6 +61,25 @@ node ${PLUGIN_ROOT}/scripts/run-verb.mjs verify_diff '{
   "beforeDraft":"<before draft_content.json>","afterDraft":"<after draft_content.json>"
 }'
 ```
+
+## ★ 怎么知道"这一刀真的剪掉了"（判据，2026-10-24 重写）
+
+> 官方 `segment.delete` 会**把后面的段左移补空** ⇒ "这段区间不再被覆盖"**是错的判据**
+> （后面的段又盖上来了，会误判成"没剪掉"）。
+> ⇒ 判据改成：**这一轨的【时长总量】正好少了 (t1 - t0) us**。
+> 与位移无关、与形态无关（改前改后都读会话快照）、多轨道也不串。
+
+| | 判据 | 为什么 |
+|---|---|---|
+| 阳性前提 | 待剪区间在时间线上**确实被某个段完整覆盖** | 否则这一刀无从下手 ⇒ 报 SKIP，不算剪掉 |
+| 生效判据 | 剪完后**这一轨的时长总量少了恰好 (t1-t0)** | 官方 accepted 不算数，得看草稿真的短了 |
+| 阴性对照 | 演练模式（没 `--apply`）下判据**必然不成立** | 脚本会当场打印"阴性对照：…判据现在【不成立】" ⇒ 证明判据能区分"剪了"和"没剪" |
+| 失败处理 | 判定不通过 ⇒ **退出码 4** | 上游编排器会把它当失败步骤 ⇒ 不假装成功 |
+
+★ 同源校验：同一个会话里读到的草稿 id 变了 ⇒ 立刻停手（我们在剪两份不同的草稿）。
+★ 实测（2026-10-24，夹具 `JYAI能力批测9a-纯视频探针`）：2 个区间
+`2200000..2600000 us`（这一轨 3000000 → 2600000）与 `200000..900000 us`（2600000 → 1900000）
+⇒ **2/2 验证剪掉**，真草稿 sha 不变。
 
 ## ★ 剪"中间一段"的正确链（实测，2026-10-21）
 

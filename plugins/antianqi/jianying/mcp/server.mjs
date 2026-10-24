@@ -405,6 +405,19 @@ function readDraftJson(p) {
   if (i > 0) txt = txt.slice(i);
   try { return JSON.parse(txt); } catch { return null; }
 }
+/* ★ 读一份草稿用于【前后对比】。
+   磁盘上的草稿是【加密封装】⇒ readDraftJson 解析不出来 ⇒ 直接返回 null
+   ⇒ 生效探针会以为"改前不存在"，于是 changes=0 / effectVerified=false
+   ⇒ ★ 假阴性（实测：segment.split 明明把段切成了两半，探针却说"什么都没变"）。
+   补救：读不出就走官方管道解密（它能读加密草稿）。 */
+async function readDraftForDiff(p, st) {
+  const local = readDraftJson(p);
+  if (local) return local;
+  try {
+    const via = await readDraftViaOfficialPipe(p, st?.draftDir || path.dirname(p));
+    return via ? via.draft : null;
+  } catch { return null; }
+}
 function segmentDiffOf(before, after) {
   const segMap = (d) => {
     const m = new Map();
@@ -450,6 +463,23 @@ function draftShape(d) {
   }
   return { tracks: tracks.length, segments: segs, durationUs: dur, draftDurationUs: d?.duration };
 }
+/* ★ 某字段在【改前/改后】是不是【可比】。
+   段级 diff 的 fields 只装【变了】的字段 ⇒ "没变"与"根本没法比"在 diff 里长得一样
+   ⇒ "segmentFieldUnchanged" 这个断言会被静默满足（假绿）。
+   ⇒ 这里单独数一遍：两边都有的段数（可比）/ 只有一边有的段数（形态差）。 */
+function fieldComparability(db, da, field) {
+  const map = (d) => { const m = new Map(); for (const t of (d?.tracks || [])) for (const s of (t.segments || [])) m.set(s.id, s); return m; };
+  const mb = map(db), ma = map(da);
+  let both = 0, oneSide = 0;
+  for (const [id, s2] of ma) {
+    const s1 = mb.get(id);
+    if (!s1) continue;
+    const in1 = field in s1, in2 = field in s2;
+    if (in1 && in2) both++;
+    else if (in1 || in2) oneSide++;
+  }
+  return { comparable: both, oneSided: oneSide };
+}
 
 /* --------------------------------------------------------------- 编排器辅助 */
 /** 把步骤参数里的 $变量 换成实际值（对象/数组递归） */
@@ -484,12 +514,160 @@ function parseOkPayload(r) {
 /** 汇报里只留关键字段（不然 make_film 的 stdout 会把报告撑爆） */
 function summarizeStep(obj) {
   if (!obj || typeof obj !== 'object') return obj;
-  const keep = ['sessionId', 'dir', 'draft', 'committed', 'encrypted', 'realDraftUnchanged',
+  const keep = ['sessionId', 'dir', 'committed', 'encrypted', 'realDraftUnchanged',
     'verdict', 'failureKind', 'problems', 'effectVerified', 'changesCount', 'baselineKind'];
   const out = {};
   for (const k of keep) if (k in obj) out[k] = obj[k];
+  // ★ draft 有两种含义：draft_open 返回的是【草稿名】(字符串)；draft_read 返回的是【整份草稿】(对象)
+  //   ⇒ 字符串才留名字；对象换成形状摘要（不然一份草稿几万字，报告会被撑爆）
+  if (typeof obj.draft === 'string') out.draft = obj.draft;
+  else if (obj.draft && typeof obj.draft === 'object') out.draftShape = draftShape(obj.draft);
   if (obj.raw) out.rawTail = String(obj.raw).replace(/\s+/g, ' ').slice(-300);
   return Object.keys(out).length ? out : { rawTail: String(obj.raw || '').slice(-200) };
+}
+
+/* ------------------------------------------ 编排器：工作目录 / 脚本步骤 / 确认点 */
+/* ★ 两段式（人工确认点）必须把进度【持久化】：MCP 调用一断，关卡后面那几步就接不上了。
+   目录放在状态目录下（跟着 PLUGIN_DATA 走 ⇒ 同机子进程也看得见同一份状态）。 */
+const PIPE_TOKEN_RE = /^[0-9a-f]{16}$/;
+function pipelineWorkDir(token) {
+  if (!PIPE_TOKEN_RE.test(String(token || ''))) {
+    throw new Error('流水线 token 非法（只接受 16 位小写十六进制）');
+  }
+  const base = path.join(stateDirReal(), 'pipelines');
+  fs.mkdirSync(base, { recursive: true });
+  const d = path.join(base, token);
+  if (!isInside(base, d)) throw new Error('流水线目录逃出了状态目录');
+  fs.mkdirSync(d, { recursive: true });      // ★ 产物（plan.json / before-draft.json）直接写在这里
+  return d;
+}
+function pipeStatePath(workDir) {
+  const p = path.join(workDir, 'state.json');
+  if (!isInside(workDir, p)) throw new Error('流水线状态文件逃出了工作目录');
+  return p;
+}
+function savePipeState(workDir, obj) {
+  fs.mkdirSync(workDir, { recursive: true });
+  fs.writeFileSync(pipeStatePath(workDir), JSON.stringify(obj, null, 2), 'utf8');
+}
+function loadPipeState(workDir) {
+  const p = pipeStatePath(workDir);
+  if (!fs.existsSync(p)) return null;
+  try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; }
+}
+function shaFile(p) {
+  try { return crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex'); }
+  catch { return null; }
+}
+
+/* ★ 脚本步骤：跑插件 scripts/ 下的脚本。
+   args 的【键】就是命令行 flag（"--srt": "$srt"）⇒ 值可以是变量引用；
+   值为 true ⇒ 裸 flag（--apply）；false/null/undefined ⇒ 不传。 */
+async function runScriptStep(st, vars) {
+  const scriptsDir = path.join(PLUGIN_ROOT, 'scripts');
+  if (!fs.existsSync(scriptsDir)) throw new Error('插件里没有 scripts/ 目录');
+  const sp = path.join(scriptsDir, st.script);
+  if (!fs.existsSync(sp)) throw new Error(`脚本不存在：scripts/${st.script}`);
+  const realDir = fs.realpathSync(scriptsDir);
+  const realSp = fs.realpathSync(sp);
+  if (!isInside(realDir, realSp)) throw new Error(`脚本路径逃出了 scripts/：${st.script}`);
+  const argv = [];
+  for (const [k, v0] of Object.entries(st.args || {})) {
+    if (!k.startsWith('--')) throw new Error(`脚本步骤的键必须是命令行 flag（--xxx），收到 "${k}"`);
+    const v = substVars(v0, vars);
+    if (v === undefined || v === null || v === false) continue;   // false/null ⇒ 不传
+    if (v === true) { argv.push(k); continue; }                   // true ⇒ 裸 flag
+    argv.push(k, String(v));
+  }
+  const r = await run(process.execPath, [realSp, ...argv]);
+  if (r.code !== 0) {
+    throw new Error(`脚本 ${st.script} 失败（退出码 ${r.code}）：\n${String(r.stderr || r.stdout).slice(0, 600)}`);
+  }
+  return r;
+}
+
+/* ★ 确认点：跑完这一步就停下来等人确认。
+   产物必须由路线显式声明（"artifact": "$planPath"）⇒ 编排器不猜、不自己找。 */
+function buildGate(st, vars, prof, stepNo, scriptOut) {
+  const av = st.artifact || null;
+  let artifact = null, artifactSha = null, preview = null;
+  if (av) {
+    artifact = vars[av] || null;
+    if (!artifact) throw new Error(`确认点声明的产物变量 ${av} 没有值`);
+    if (!fs.existsSync(artifact)) throw new Error(`确认点的产物文件不存在：${artifact}`);
+    artifactSha = shaFile(artifact);
+    preview = { sizeBytes: fs.statSync(artifact).size };
+    try {
+      const j = JSON.parse(fs.readFileSync(artifact, 'utf8'));
+      preview.keys = Object.keys(j);
+      if (j.stats) preview.stats = j.stats;
+      if (Array.isArray(j.dropRanges)) preview.dropRanges = j.dropRanges.length;
+    } catch { preview.keys = ['<不是 JSON>']; }
+  }
+  return {
+    step: stepNo,
+    script: st.script || null,
+    reason: st.confirmNote || '这一步之后需要人工确认',
+    artifact, artifactSha, artifactPreview: preview,
+    stdoutTail: String(scriptOut?.stdout || '').replace(/\s+/g, ' ').slice(-400),
+    pendingSteps: prof.steps.length - stepNo,
+  };
+}
+
+/* ★ 跑一串步骤（第一段与续跑共用这一份逻辑 ⇒ 两边不会走偏）。
+   遇到确认点就停（返回 gate）；跑完返回 done；出错返回 failed + 停在第几步。 */
+async function execSteps(prof, vars, workDir, startIdx, stepsIn) {
+  const steps = stepsIn.slice();
+  for (let i = startIdx; i < prof.steps.length; i++) {
+    const st = prof.steps[i];
+    const n = i + 1;
+    try {
+      if (st.script) {
+        const r = await runScriptStep(st, vars);
+        steps.push({
+          n, script: st.script, ok: true,
+          result: { stdoutTail: String(r.stdout).replace(/\s+/g, ' ').slice(-300) },
+        });
+        if (st.confirm) return { gate: buildGate(st, vars, prof, n, r), steps };
+        continue;
+      }
+      const impl = IMPL[st.verb];
+      if (!impl) throw new Error(`路线 "${prof.id}" 第 ${n} 步用了不存在的动词 ${st.verb}`);
+      // ★ 参数里还留着 $xxx 的 ⇒ 说明那个变量没人提供 ⇒ 明确报错（不猜）
+      const args = substVars(st.args || {}, vars);
+      const leftover = JSON.stringify(args).match(/\$[A-Za-z_][A-Za-z0-9_]*/g) || [];
+      if (leftover.length) {
+        throw new Error(`路线 "${prof.id}" 第 ${n} 步缺少变量：${[...new Set(leftover)].join(', ')}`);
+      }
+      const r = await impl(args);
+      const obj = parseOkPayload(r);
+      // 收集这一步的产出，供后面步骤用
+      if (st.verb === 'draft_open') {
+        if (obj.sessionId) vars.$sessionId = obj.sessionId;
+        if (obj.dir) vars.$dir = obj.dir;
+      }
+      if (st.verb === 'draft_read') {
+        const seg = ((obj.draft?.tracks) || []).flatMap((t) => t.segments || [])[0];
+        if (seg?.id) vars.$segmentId = seg.id;
+        const f = path.join(workDir, 'before-draft.json');
+        fs.writeFileSync(f, JSON.stringify(obj.draft ?? obj, null, 2), 'utf8');
+        vars.$beforeDraft = f;
+      }
+      if (st.verb === 'draft_commit') {
+        const after = await IMPL.draft_read({ sessionId: vars.$sessionId });
+        const ao = parseOkPayload(after);
+        const f = path.join(workDir, 'after-draft.json');
+        fs.writeFileSync(f, JSON.stringify(ao.draft ?? ao, null, 2), 'utf8');
+        vars.$afterDraft = f;
+      }
+      steps.push({ n, verb: st.verb, ok: true, result: summarizeStep(obj) });
+    } catch (e) {
+      const msg = String(e?.message || e);
+      steps.push({ n, verb: st.verb || st.script || '?', ok: false, error: msg.slice(0, 400) });
+      return { failed: true, error: msg, failedStep: n, steps };
+    }
+  }
+  return { done: true, steps };
 }
 
 /* --------------------------------------------------------------- 8 个动词 */
@@ -519,6 +697,12 @@ const IMPL = {
                  realSha: a.draft ? shaTree(a.draft) : null,
                  openedAt: new Date().toISOString() };
     writeState(sid, st);
+    // ★★ 剪映的 session id 会【回收复用】（剪映进程重启后重新计数）
+    //   ⇒ 新会话可能拿到一个【以前用过的 id】⇒ 状态目录里还留着"上一次那个会话"的 snapshot
+    //   ⇒ draft_read 会优先读到那份旧快照 ⇒ 拿到【完全无关的另一份草稿】（实测踩过：
+    //      session 155 读出来的是 10-22 那天的草稿，段数/形态/内容全错）
+    //   ⇒ 开新会话时，先把这个 id 的旧快照清掉。
+    try { fs.rmSync(snapshotFile(sid), { force: true }); } catch { /* 没有就算了 */ }
     return ok({ copy, sessionId: sid, draft: dname, dir: draftDir, raw: txt });
   },
 
@@ -565,8 +749,17 @@ const IMPL = {
       }
     }
     if (parsed) {
+      // ★ 会话状态里记下草稿 id ⇒ 读到的草稿 id 对不上就【点名】（不给一份"别的草稿"而不说）
+      //   实测踩过：剪映回收 session id ⇒ 读到了上一次那个会话的旧快照（另一份草稿）
+      const sid = a.sessionId;
+      const st = sid ? readState(sid) : null;
+      let draftIdMismatch = false;
+      if (st && parsed.id) {
+        if (st.draftId && st.draftId !== parsed.id) draftIdMismatch = true;
+        else if (!st.draftId) { st.draftId = parsed.id; writeState(sid, st); }
+      }
       // 附一份"好用的摘要"：track/segment 的 id 与时间范围（供 skill 直接用）
-      const summary = { source, tracks: (parsed.tracks || []).map((t) => ({
+      const summary = { source, draftId: parsed.id || null, draftIdMismatch, tracks: (parsed.tracks || []).map((t) => ({
         type: t.type, id: t.id, segments: (t.segments || []).map((s) => ({
           id: s.id, target_timerange: s.target_timerange, material_id: s.material_id,
         })),
@@ -605,6 +798,7 @@ const IMPL = {
     //   但草稿里 materials.audios 仍是 0 条 ⇒ 官方自述是个【空承诺】。
     let changes = null, effectVerified = null, effectNote = null, baselineFull = null;
     let baselineSegKeys = null, afterSegKeys = null;
+    let before = null;      // ★ 改前的草稿（供 expect 断言复用）
     // ★★ 基线必须是【上一次 op 之后的状态】（会话快照），不是磁盘上的原草稿
     //   否则连续多个 op 时，会把【上一次】的改动算成【这一次】的 ⇒ 探针会说谎
     //   （实测踩过：audio.add 什么都没改，但因为前面 setVolume 改过 ⇒ 误报"生效"）
@@ -613,7 +807,7 @@ const IMPL = {
       ? snapBase
       : (st && st.draftPath && fs.existsSync(st.draftPath) ? st.draftPath : null);
     if (full && baseP) {
-      const before = readDraftJson(baseP);
+      before = await readDraftForDiff(baseP, st);
       if (before) {
         changes = segmentDiffOf(before, full);
         // ★ 基线形态：磁盘草稿是剪映自己存的【精简形态】，官方返回是【运行时展开形态】
@@ -635,7 +829,11 @@ const IMPL = {
     if (a.expect && changes) {
       const exp = a.expect;
       if (exp.segmentsDelta !== undefined) {
-        const now = draftShape(full).segments - draftShape(readDraftJson(baseP)).segments;
+        const baseShape = before ? draftShape(before) : null;
+        if (!baseShape) {
+          throw new Error(`op "${a.op}" 的 expect.segmentsDelta 无法判定：读不出改前的草稿（${baseP}）`);
+        }
+        const now = draftShape(full).segments - baseShape.segments;
         if (now !== exp.segmentsDelta) {
           throw new Error(`op "${a.op}" 的 expect 不成立：段数变化 ${now} ≠ 期望 ${exp.segmentsDelta}（改动可能没落盘）`);
         }
@@ -657,6 +855,14 @@ const IMPL = {
         const hit = changes.some((d) => d.fields && d.fields[exp.segmentFieldUnchanged]);
         if (hit) {
           throw new Error(`op "${a.op}" 的 expect 不成立：不该变的 "${exp.segmentFieldUnchanged}" 字段却变了`);
+        }
+        // ★ "没变"必须区分"【无法判定】"（字段不在交集里 ⇒ 视野不够）
+        const cmp = fieldComparability(before, full, exp.segmentFieldUnchanged);
+        if (cmp.comparable === 0) {
+          throw new Error(cmp.oneSided > 0
+            ? `op "${a.op}" 的 expect【无法判定】："${exp.segmentFieldUnchanged}" 只在【一边】的形态里存在`
+              + '（改前/改后形态不同）⇒ 不能断言它"没变"。请在同一 session 里先做一次别的 patch（让基线变成同一形态），再判。'
+            : `op "${a.op}" 的 expect【无法判定】："${exp.segmentFieldUnchanged}" 在改前/改后都不存在`);
         }
       }
       effectVerified = true;
@@ -818,6 +1024,7 @@ const IMPL = {
   async run_pipeline(a) {
     // ★ 命令级编排器：按 references/pipeline-profiles.json 里的路线逐步执行
     //   ★ 路线定义是【单一真源】（在 JSON 里）⇒ 改路线不用改这里
+    //   ★ 三种步骤：动词步骤 / 脚本步骤（scripts/ 下的脚本）/ 确认点（跑完就停下来等人）
     // ★ ESM 没有 __dirname ⇒ 用 import.meta.url 解析
     const here = path.dirname(fileURLToPath(import.meta.url));
     const defFile = path.join(here, '..', 'references', 'pipeline-profiles.json');
@@ -828,70 +1035,88 @@ const IMPL = {
     if (!prof) {
       throw new Error(`未知路线 "${a.profile}"；可用：${(defs.profiles || []).map((p) => p.id).join(', ')}`);
     }
-    if (!a.draft) throw new Error('缺少 draft（要编排的剪映草稿目录）');
+
+    // ───────────────────────── 续跑（两段式的第二段）─────────────────────────
+    if (a.resume) {
+      const rq = a.resume || {};
+      if (!rq.token) throw new Error('resume 缺少 token（第一次调用返回的 resume.token）');
+      const workDir = pipelineWorkDir(rq.token);
+      const st = loadPipeState(workDir);
+      if (!st) throw new Error(`找不到流水线状态（token ${rq.token}）—— 可能已被清理`);
+      if (st.profile !== prof.id) throw new Error(`token 属于路线 "${st.profile}"，不是 "${prof.id}"`);
+      if (!st.gate) throw new Error('这条流水线没有待确认的关卡（不需要续跑）');
+      // ★ 没有 confirm ⇒ 【一步都不往下跑】：这是"关卡真的会拦人"的证据，不是口头承诺
+      if (rq.confirm !== true) {
+        return ok({
+          profile: st.profile, when: prof.when, steps: st.steps || [], failed: false,
+          verdict: 'REFUSED', gate: st.gate,
+          note: `没有 confirm=true ⇒ 【一步都没往下跑】：关卡后面的 ${st.gate.pendingSteps ?? '?'} 步全都没执行。`,
+        });
+      }
+      // ★ 产物有没有被人改过？改过要说出来（不静默吞掉用户的编辑）
+      const changed = !!(st.gate.artifact && shaFile(st.gate.artifact) !== st.gate.artifactSha);
+      const vars = st.vars || {};
+      const r = await execSteps(prof, vars, workDir, st.stepNo || 0, st.steps || []);
+      if (r.failed) {
+        savePipeState(workDir, { ...st, vars, steps: r.steps, failed: true, gate: null });
+        return ok({
+          profile: prof.id, when: prof.when, steps: r.steps, failed: true, verdict: 'FAIL',
+          artifactChangedSinceGate: changed,
+          note: `路线 "${prof.id}" 在第 ${r.failedStep} 步停下：${String(r.error).slice(0, 300)}`,
+        });
+      }
+      if (r.gate) {
+        const gate = { ...r.gate, artifactChangedSinceGate: changed };
+        savePipeState(workDir, { ...st, stepNo: r.gate.step, vars, steps: r.steps, gate });
+        return ok({
+          profile: prof.id, when: prof.when, steps: r.steps, failed: false, verdict: 'AWAIT_CONFIRM',
+          gate, resume: { token: st.token, profile: prof.id, confirm: true },
+          artifactChangedSinceGate: changed,
+          note: `又到一个确认点（第 ${r.gate.step} 步）—— 继续等人确认。`,
+        });
+      }
+      savePipeState(workDir, { ...st, vars, steps: r.steps, finished: true, gate: null });
+      return ok({
+        profile: prof.id, when: prof.when, steps: r.steps, failed: false, verdict: 'PASS',
+        outDir: vars.$outDir || null, resumedFrom: st.stepNo, artifactChangedSinceGate: changed,
+      });
+    }
+
+    // ───────────────────────── 新建一条流水线 ─────────────────────────
+    // ★ draft 不在 schema 的 required 里（续跑时不需要它）⇒ 这里补上条件必填
+    if (!a.draft) throw new Error('缺少 draft（要编排的剪映草稿目录）；续跑时用 resume.token 即可');
+    const token = crypto.randomBytes(8).toString('hex');
+    const workDir = pipelineWorkDir(token);
     const vars = {
       $draft: a.draft, $outDir: a.outDir, $grade: a.grade, $srt: a.srt,
       $segmentId: a.segmentId, $fps: a.fps, $denoise: a.denoise,
       $targetLufs: a.targetLufs, $beautify: a.beautify,
     };
-    const steps = [];
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jyai-pipe-'));
-    let stepNo = 0;
-    let failed = false;
-    try {
-      for (const st of prof.steps) {
-        stepNo++;
-        if (st.script) {
-          throw new Error(`路线 "${prof.id}" 第 ${stepNo} 步是脚本步骤（${st.script}）—— 还没接进编排器`
-            + '（脚本参数形态未探明 ⇒ 宁可报错也不静默跳过）');
-        }
-        const impl = IMPL[st.verb];
-        if (!impl) throw new Error(`路线 "${prof.id}" 第 ${stepNo} 步用了不存在的动词 ${st.verb}`);
-        // ★ 参数里还留着 $xxx 的 ⇒ 说明那个变量没人提供 ⇒ 明确报错（不猜）
-        const args = substVars(st.args || {}, vars);
-        const leftover = JSON.stringify(args).match(/\$[A-Za-z_][A-Za-z0-9_]*/g) || [];
-        if (leftover.length) {
-          throw new Error(`路线 "${prof.id}" 第 ${stepNo} 步缺少变量：${[...new Set(leftover)].join(', ')}`);
-        }
-        const r = await impl(args);
-        const obj = parseOkPayload(r);
-        // 收集这一步的产出，供后面步骤用
-        if (st.verb === 'draft_open') {
-          if (obj.sessionId) vars.$sessionId = obj.sessionId;
-          if (obj.dir) vars.$dir = obj.dir;
-        }
-        if (st.verb === 'draft_read') {
-          const seg = ((obj.draft?.tracks) || []).flatMap((t) => t.segments || [])[0];
-          if (seg?.id) vars.$segmentId = seg.id;
-          const f = path.join(tmpDir, 'before-draft.json');
-          fs.writeFileSync(f, JSON.stringify(obj.draft ?? obj, null, 2), 'utf8');
-          vars.$beforeDraft = f;
-        }
-        if (st.verb === 'draft_commit') {
-          const after = await IMPL.draft_read({ sessionId: vars.$sessionId });
-          const ao = parseOkPayload(after);
-          const f = path.join(tmpDir, 'after-draft.json');
-          fs.writeFileSync(f, JSON.stringify(ao.draft ?? ao, null, 2), 'utf8');
-          vars.$afterDraft = f;
-        }
-        steps.push({ n: stepNo, verb: st.verb, ok: true, result: summarizeStep(obj) });
-      }
-    } catch (e) {
-      failed = true;
-      const msg = String(e?.message || e);
-      steps.push({
-        n: stepNo, verb: prof.steps[stepNo - 1]?.verb || '?', ok: false,
-        error: msg.slice(0, 400),
-      });
-      return ok({
-        profile: prof.id, when: prof.when, steps, failed: true, verdict: 'FAIL',
-        note: `路线 "${prof.id}" 在第 ${stepNo} 步停下：${msg.slice(0, 300)}`,
-      });
-    } finally {
-      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    // ★ 产物路径由编排器分配（放在流水线工作目录里 ⇒ 关卡前后都能用）
+    for (const [vn, fname] of Object.entries(prof.alloc || {})) {
+      vars[vn] = path.join(workDir, fname);
     }
+    const r = await execSteps(prof, vars, workDir, 0, []);
+    if (r.failed) {
+      savePipeState(workDir, { token, profile: prof.id, stepNo: r.failedStep, vars, steps: r.steps, failed: true, createdAt: new Date().toISOString() });
+      return ok({
+        profile: prof.id, when: prof.when, steps: r.steps, failed: true, verdict: 'FAIL',
+        note: `路线 "${prof.id}" 在第 ${r.failedStep} 步停下：${String(r.error).slice(0, 300)}`,
+      });
+    }
+    if (r.gate) {
+      savePipeState(workDir, { token, profile: prof.id, stepNo: r.gate.step, vars, steps: r.steps, gate: r.gate, createdAt: new Date().toISOString() });
+      return ok({
+        profile: prof.id, when: prof.when, steps: r.steps, failed: false, verdict: 'AWAIT_CONFIRM',
+        gate: r.gate,
+        resume: { token, profile: prof.id, confirm: true },
+        note: `路线 "${prof.id}" 在第 ${r.gate.step} 步停下等人确认（后面还有 ${r.gate.pendingSteps} 步没跑）。`
+          + '确认后用 run_pipeline({ profile: ' + prof.id + ', resume: { token: <上面 resume 里的那个>, confirm: true } }) 续跑。',
+      });
+    }
+    savePipeState(workDir, { token, profile: prof.id, stepNo: prof.steps.length, vars, steps: r.steps, finished: true, createdAt: new Date().toISOString() });
     return ok({
-      profile: prof.id, when: prof.when, steps, failed: false, verdict: 'PASS',
+      profile: prof.id, when: prof.when, steps: r.steps, failed: false, verdict: 'PASS',
       outDir: a.outDir || null,
     });
   },
@@ -1129,7 +1354,18 @@ const IMPL = {
             }
             if (exp.segmentFieldUnchanged) {
               const hit = segmentDiffs.some((d) => d.fields && d.fields[exp.segmentFieldUnchanged]);
-              if (hit) problems.push(`不该变的 "${exp.segmentFieldUnchanged}" 字段却变了`);
+              if (hit) {
+                problems.push(`不该变的 "${exp.segmentFieldUnchanged}" 字段却变了`);
+              } else {
+                // ★ "没变"必须区分"【无法判定】"：字段压根不在交集里 ⇒ 判据的视野不够
+                const cmp = fieldComparability(db, da, exp.segmentFieldUnchanged);
+                if (cmp.comparable === 0) {
+                  problems.push(cmp.oneSided > 0
+                    ? `"${exp.segmentFieldUnchanged}" 只在【一边】的形态里存在（改前/改后形态不同）`
+                      + '⇒ 这一项【无法判定】（不是"没变"）。请让改前/改后都是同一形态再判。'
+                    : `"${exp.segmentFieldUnchanged}" 在改前/改后都不存在 ⇒ 这一项【无法判定】（不是"没变"）`);
+                }
+              }
             }
           } else if (t.segmentsDelta === 0 && t.durationDeltaUs === 0 && segmentDiffs.length === 0) {
             problems.push('时间线没有任何变化（段数、时长、段字段都没动）—— 改动可能没落盘');

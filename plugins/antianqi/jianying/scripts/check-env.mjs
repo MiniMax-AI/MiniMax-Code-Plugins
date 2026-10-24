@@ -39,8 +39,10 @@ else bad('effect 包', `${effectPkg} 不存在`);
 console.log('\n[3] 插件结构');
 const tools = path.join(ROOT, 'mcp', 'tools');
 const schemas = fs.existsSync(tools) ? fs.readdirSync(tools).filter((f) => f.endsWith('.schema.json')) : [];
-if (schemas.length === 8) ok('mcp/tools 下 8 份 schema', schemas.length + ' 份');
-else bad('mcp/tools 下 8 份 schema', `实际 ${schemas.length} 份`);
+// ★ 不写死数量（写死过一次 ⇒ 加了 run-pipeline/grade-apply 两份 schema 后它天天报 MISS）：
+//   真正的契约是【每个动词都有 schema】⇒ 数量随动词数走
+if (schemas.length >= 10) ok(`mcp/tools 下 ${schemas.length} 份 schema`, schemas.map((f) => f.replace('.schema.json', '')).join(', '));
+else bad('mcp/tools 下的 schema', `只有 ${schemas.length} 份（应 ≥ 10：每个动词一份）`);
 for (const f of ['mcp/server.mjs', 'mcp.json', 'plugin.json', 'README.md',
   'references/chain-api.md', 'references/verify-discipline.md', 'references/pitfalls.md',
   'references/capability-dict.json', 'scripts/run-verb.mjs']) {

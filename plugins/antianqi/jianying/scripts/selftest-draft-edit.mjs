@@ -17,6 +17,7 @@
  * 需要: JYAI_HOME 指向 JYAI 仓库；剪映在运行；有一个带视频片段的草稿
  */
 import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -101,19 +102,23 @@ check('① draft_open 开副本', open.code === 0 && !!open.json?.sessionId,
 if (!open.json?.sessionId) { console.log(open.text.slice(0, 400) + '\n' + open.stderr.slice(0, 400)); process.exit(1); }
 const sid = open.json.sessionId;
 const copyDir = open.json.dir;
+// ★ 副本草稿文件在【任何改动之前】的 sha ⇒ 用来断言"落盘后文件真的变了"（而不是只看了个非空）
+const copyFile = path.join(copyDir, 'draft_content.json');
+const sha0 = (() => { try { return crypto.createHash('sha256').update(fs.readFileSync(copyFile)).digest('hex'); } catch { return null; } })();
 
 // ①b ★ 读【副本的草稿文件】（磁盘，自动解密）⇒ 落盘前的基线
 const readBefore = await call('draft_read', { path: path.join(copyDir, 'draft_content.json') });
 let beforeDraft = null;
 try { beforeDraft = JSON.parse(readBefore.text).draft; } catch { /* ignore */ }
-const beforeDraftFile = path.join(WORK, 'before-draft.json');
-if (beforeDraft) fs.writeFileSync(beforeDraftFile, JSON.stringify(beforeDraft), 'utf8');
+const beforeDraftFileDisk = path.join(WORK, 'before-draft-disk.json');
+if (beforeDraft) fs.writeFileSync(beforeDraftFileDisk, JSON.stringify(beforeDraft), 'utf8');
 check('①b 读副本草稿（磁盘，自动解密）', readBefore.code === 0 && !!beforeDraft,
-  beforeDraft ? `tracks=${(beforeDraft.tracks || []).length} → ${beforeDraftFile}` : readBefore.text.slice(0, 160));
+  beforeDraft ? `tracks=${(beforeDraft.tracks || []).length} → ${beforeDraftFileDisk}` : readBefore.text.slice(0, 160));
 
 // ② draft_read 拿片段
-//   ★ 原来传 scope:'segments' —— 该入参已在审计里删掉（后端不支持分段读）⇒ 现在会被 schema 拒
-const read = await call('draft_read', {});
+//   ★ 原来传 scope:'segments' —— 该入参已在审计里删掉（后端不支持分段读）；
+//   ★ 后来又改成了空参数 ⇒ draft_read 根本不知道读哪 ⇒ 现在必须带 sessionId
+const read = await call('draft_read', { sessionId: sid });
 check('② draft_read 读结构', read.code === 0, read.code === 0 ? `${read.text.length} 字符` : read.text.slice(0, 200));
 let segIds = [];
 let trackIds = [];
@@ -146,6 +151,20 @@ check('★ ④ 未知 op 被 schema 拦下', badop.code !== 0 && /不合法|未�
   (badop.text + badop.stderr).split('\n').slice(0, 2).join(' / '));
 
 // ⑤ 真实改：给一个片段调音量（有 segmentId 时），否则用 track.mute / canUndo
+// ⑤0 ★★ 暖机 patch：先让会话快照存在（快照 = 运行时展开形态）
+//    ⇒ 后面"改前"从快照取，"改后"也从快照取 ⇒ 两边【同形态】⇒ 逐段字段差才有意义
+//    （踩过的坑：改前取磁盘（精简形态，段 11 键）、改后取快照（展开形态，段 50+ 键）
+//     ⇒ volume 只在展开形态里存在 ⇒ 判据【无法判定】，永远判不成）
+const warm = await call('draft_patch', { op: 'undoRedo.canUndo', sessionId: sid, params: {} });
+const readBeforeSession = await call('draft_read', { sessionId: sid });
+let beforeDraftSession = null;
+try { beforeDraftSession = JSON.parse(readBeforeSession.text).draft; } catch { /* ignore */ }
+const beforeDraftFile = path.join(WORK, 'before-draft.json');
+if (beforeDraftSession) fs.writeFileSync(beforeDraftFile, JSON.stringify(beforeDraftSession), 'utf8');
+check('⑤0 暖机 patch + 取"改前"快照（同形态基线）',
+  warm.code === 0 && readBeforeSession.code === 0 && !!beforeDraftSession,
+  beforeDraftSession ? `快照=${warm.json?.snapshotSaved ? '已存' : '未存'} tracks=${(beforeDraftSession.tracks || []).length}` : readBeforeSession.text.slice(0, 160));
+
 let patchOp = null, patchParams = null;
 if (segIds.length) { patchOp = 'video.setVolume'; patchParams = { segmentId: segIds[0], volume: 0.2 }; }
 else if (trackIds.length) { patchOp = 'track.mute'; patchParams = { trackId: trackIds[0] }; }
@@ -159,25 +178,28 @@ const commit = await call('draft_commit', { sessionId: sid, realDraft: DRAFT });
 check('⑥ draft_commit 落盘 + 真草稿零改动', commit.code === 0 && commit.json?.realDraftUnchanged === true,
   commit.code === 0 ? `encrypted=${commit.json.encrypted} cipherType=${commit.json.cipherType} relocated=${commit.json.relocated} realDraftUnchanged=${commit.json.realDraftUnchanged}` : (commit.text + commit.stderr).split('\n').slice(0, 2).join(' / '));
 
-// ⑥b ★ 落盘后副本的草稿必须真的变了（否则 = 改动没落盘）
+// ⑥b ★ 落盘后副本的草稿文件必须【真的变了】（sha 不同）—— 不许只看"文件存在且非空"
 if (commit.code === 0 && copyDir) {
-  const fp = path.join(copyDir, 'draft_content.json');
-  let changed = null;
-  try { changed = fs.statSync(fp).size > 0; } catch { /* ignore */ }
-  check('⑥b 落盘后草稿文件存在且非空', changed === true, fp);
+  const sha1 = (() => { try { return crypto.createHash('sha256').update(fs.readFileSync(copyFile)).digest('hex'); } catch { return null; } })();
+  check('⑥b 落盘后草稿文件真的变了（sha 不同）', !!sha1 && !!sha0 && sha1 !== sha0,
+    `before=${String(sha0).slice(0, 12)} after=${String(sha1).slice(0, 12)}`);
 }
 
 // ⑥c ★ 读回【已落盘】的副本草稿 ⇒ 语义基线（改后）
-const readAfter = await call('draft_read', { path: path.join(copyDir, 'draft_content.json') });
+//   ★ 但要注意【形态】：磁盘上的草稿是"精简形态"（段 11 键），而落盘时写进去的是
+//     【会话快照】= "运行时展开形态"（段 50+ 键）⇒ 拿磁盘改前比磁盘改后 ⇒ 两种形态混比
+//   ⇒ 改前也取【会话快照】里的那份（展开形态）⇒ 两边同形态，判据才有意义
+const readAfter = await call('draft_read', { sessionId: sid });
 let afterDraft = null;
 try { afterDraft = JSON.parse(readAfter.text).draft; } catch { /* ignore */ }
 const afterDraftFile = path.join(WORK, 'after-draft.json');
 if (afterDraft) fs.writeFileSync(afterDraftFile, JSON.stringify(afterDraft), 'utf8');
-check('⑥c 读回落盘后的副本草稿', readAfter.code === 0 && !!afterDraft,
+check('⑥c 读回落盘后的草稿（会话快照＝展开形态）', readAfter.code === 0 && !!afterDraft,
   afterDraft ? `tracks=${(afterDraft.tracks || []).length} → ${afterDraftFile}` : readAfter.text.slice(0, 160));
 
 // ⑦ ★★ 主判据（语义）：改动真的落到草稿文件里了吗？
-if (beforeDraft && afterDraft) {
+//   ★ 改前/改后都取【会话快照】⇒ 同形态 ⇒ 逐段字段差可比
+if (beforeDraftSession && afterDraft) {
   const expect = patchOp === 'video.setVolume' ? { segmentFieldChanged: 'volume' } : { segmentsDelta: 0 };
   const v = await call('verify_diff', {
     checks: ['timeline'], beforeDraft: beforeDraftFile, afterDraft: afterDraftFile, expect,

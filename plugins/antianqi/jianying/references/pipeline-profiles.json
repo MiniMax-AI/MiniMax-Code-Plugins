@@ -10,7 +10,8 @@
     "$segmentId": "draft_read 里读到的段 id",
     "$beforeDraft": "改前的裸草稿 JSON 路径（顶层有 tracks）",
     "$afterDraft": "改后的裸草稿 JSON 路径（顶层有 tracks）",
-    "$srt": "用户提供的转写稿（SRT）★ 官方 ASR 拿不到，不能自己编"
+    "$srt": "用户提供的转写稿（SRT）★ 官方 ASR 拿不到，不能自己编",
+    "$planPath": "★ 编排器分配的产物路径（在流水线工作目录里）⇒ 路线用 alloc 声明谁来分配"
   },
   "profiles": [
     {
@@ -78,18 +79,22 @@
       "id": "talk-cut-then-render",
       "when": "剪口播再出片（'把口播的废话剪了再出片'）",
       "requires": ["剪映在跑", "素材在盘上", "★ 用户提供 SRT（官方 ASR 拿不到，不能自己编）", "★ 保留区间表必须先给用户确认"],
+      "alloc": { "$planPath": "talk-cut-plan.json" },
       "steps": [
         { "verb": "draft_open", "args": { "draft": "$draft", "copy": true }, "yields": ["$sessionId", "$dir"] },
         { "verb": "draft_read", "args": { "sessionId": "$sessionId" } },
         {
           "script": "talk-cut-plan.mjs",
-          "args": { "srt": "$srt", "draft": "$dir" },
-          "note": "产出保留/删除区间表 ⇒ ★ 必须给用户确认后才能落刀"
+          "args": { "--srt": "$srt", "--out": "$planPath" },
+          "confirm": true,
+          "artifact": "$planPath",
+          "confirmNote": "★ 保留/删除区间表已经生成，但【还没落刀】—— 必须先给用户确认",
+          "note": "产出保留/删除区间表 ⇒ confirm:true ⇒ 这一步跑完编排器会停下来等人确认（AWAIT_CONFIRM）"
         },
         {
           "script": "talk-cut-apply.mjs",
-          "args": { "plan": "$plan", "sessionId": "$sessionId" },
-          "note": "走 27 个官方 op 落草稿"
+          "args": { "--plan": "$planPath", "--draft": "$draft", "--sessionId": "$sessionId", "--apply": true },
+          "note": "★ --sessionId ⇒ 复用编排器开的会话（不自己开、不自己落盘）；--apply ⇒ 真剪"
         },
         { "verb": "draft_commit", "args": { "sessionId": "$sessionId", "realDraft": "$draft" } },
         { "verb": "make_film", "args": { "draft": "$dir", "outDir": "$outDir", "denoise": "auto" } }
