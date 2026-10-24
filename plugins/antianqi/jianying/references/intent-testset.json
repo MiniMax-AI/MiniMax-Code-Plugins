@@ -43,6 +43,7 @@
     { "utterance": "给这个视频加字幕再出片", "expect": { "route": "subtitle-then-render" } },
     { "utterance": "出片的时候把混音按草稿重做一遍", "expect": { "route": "render-and-mix" } },
     { "utterance": "把这版审一遍", "expect": { "route": "review-only" } },
-    { "utterance": "把改前改后对着看一遍", "expect": { "route": "review-compare" } }
+    { "utterance": "把改前改后对着看一遍", "expect": { "route": "review-compare" } },
+    { "utterance": "曲线调完再出片", "expect": { "route": "grade-chain-then-render" } }
   ]
 }

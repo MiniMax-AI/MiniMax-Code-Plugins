@@ -943,6 +943,22 @@
         "和上一版比"
       ],
       "source": "pipeline-profiles.json（★ 只带该路线独有的组合特征）"
+    },
+    {
+      "id": "route:grade-chain-then-render",
+      "kind": "route",
+      "route": "grade-chain-then-render",
+      "skill": "jianying-pipeline",
+      "utterance": "曲线类调色并出片（'按这条调色链调一版再出片'）",
+      "keywords": [
+        "grade-chain-then-render",
+        "调色链走一遍",
+        "按调色链出片",
+        "曲线调完出片",
+        "曲线调色再出片",
+        "曲线调完再出"
+      ],
+      "source": "pipeline-profiles.json（★ 只带该路线独有的组合特征；★ 不抢 jianying-grade-chain 的常用说法——\"这个参数该填哪个节点\"仍归那个 skill，那是【填参】的问题）"
     }
   ]
 }

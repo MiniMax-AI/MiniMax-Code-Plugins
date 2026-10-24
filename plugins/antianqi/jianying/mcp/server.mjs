@@ -710,9 +710,23 @@ async function execSteps(prof, vars, workDir, startIdx, stepsIn) {
       }
       steps.push({
         n, verb: st.verb, ok: true,
-        // ★ verify_diff 的结论就是【这条路线要产出的东西】⇒ 必须留在报告里（紧凑版）
-        result: st.verb === 'verify_diff' ? summarizeVerify(obj) : summarizeStep(obj),
+        // ★ 结论类动词走【专用摘要】⇒ 否则"跑成了却没产出它该产出的东西"
+        //   （verify_diff 的结论在 checks 里、grade_apply 的探针在 probe 里，都不在白名单上）
+        result: st.verb === 'verify_diff' ? summarizeVerify(obj)
+          : st.verb === 'grade_apply'
+            ? { out: obj.out, outLut: obj.outLut, gradeChangeMad: obj.gradeChangeMad, probe: obj.probe }
+            : summarizeStep(obj),
       });
+      // ★ capture：从【这一步的响应】里取一个值当变量
+      //   （例：grade_apply 的 out = 10bit 成片的确切路径，只有响应知道）
+      //   ★ 响应里没有这个字段 ⇒ 明确报错（不静默塞 undefined）
+      for (const [vn, field] of Object.entries(st.capture || {})) {
+        const v = obj?.[field];
+        if (v === undefined || v === null) {
+          throw new Error(`路线 "${prof.id}" 第 ${n} 步要把响应里的 "${field}" 取作 ${vn}，但响应里没有这个字段`);
+        }
+        vars[vn] = v;
+      }
       // ★ setVars：给变量起别名 / 派生新变量（值可以含 $变量 ⇒ 走模板替换）
       //   ★ 时机在【这一步之后】⇒ 它抓的就是这一步的产出（例：draft_open 的 $sessionId / $dir）
       //   为什么需要：一份路线里开两次草稿 ⇒ $dir / $sessionId 会被第二次覆盖
@@ -1184,6 +1198,8 @@ const IMPL = {
     return ok({
       profile: prof.id, when: prof.when, steps: r.steps, failed: false, verdict: 'PASS',
       outDir: a.outDir || null,
+      // ★ 这条路线【产出了什么】：只报字符串/数字型变量（路径与 id）⇒ 报告里能直接看到成片在哪
+      vars: Object.fromEntries(Object.entries(vars).filter(([, v]) => typeof v === 'string' || typeof v === 'number')),
     });
   },
 

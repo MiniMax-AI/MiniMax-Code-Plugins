@@ -573,6 +573,34 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
       rpBad.result?.isError === true && /未知路线|不在允许集合/.test(textOf(rpBad)),
       textOf(rpBad).replace(/\s+/g, ' ').slice(0, 140));
 
+    // ── ★★★ 第 9 条路线：曲线类调色并出片（grade-chain-then-render）──
+    //   ★ grade_apply 是【唯一一条能做曲线/HSL/色轮的路】（make_film 的 --grade 只能做强度型）
+    //   ★ 断言两件事：① 逐节点探针都非零（每个节点单独打开画面都变了 ⇒ 调色真的生效）
+    //                ② capture 取到的产物路径真实存在（编排器能把"上一步的产物"传给下一步）
+    const grRp = await call('tools/call', {
+      name: 'run_pipeline',
+      arguments: {
+        profile: 'grade-chain-then-render', draft: FILM_DRAFT,
+        outDir: path.join(SMOKE, 'pipeline-grade'),
+        grade: {
+          adjustColor: { brightness: 0.12, contrast: 0.08 },
+          logWheel: { shadow: { r: 0.10, g: 0.04, b: 0, s: 0.05 } },
+        },
+      },
+    });
+    const grTxt = textOf(grRp);
+    const grObj = (() => { try { return JSON.parse(grTxt); } catch { return null; } })();
+    const grStep = (grObj?.steps || []).find((s) => s.verb === 'grade_apply');
+    const grProbe = grStep?.result?.probe || {};
+    const grNodes = Object.entries(grProbe).filter(([k]) => k !== '_full_chain');
+    check('★★★ run_pipeline：曲线类调色并出片（grade-chain-then-render）⇒ 逐节点探针非零 + 调色改变量 > 0 + 产物存在',
+      grObj?.verdict === 'PASS' && grNodes.length > 0 && grNodes.every(([, v]) => v > 0)
+      && grStep?.result?.gradeChangeMad > 0
+      && !!grObj?.vars?.$graded && fs.existsSync(grObj.vars.$graded),
+      `节点=${grNodes.map(([k, v]) => `${k}:${(+v).toFixed(4)}`).join(',')}`
+      + ` 改变量=${grStep?.result?.gradeChangeMad?.toFixed?.(4)}`
+      + ` 产物=${String(grObj?.vars?.$graded || '(缺)').split('\\').pop()}`);
+
     // ── ★★★ 单版审片路线（2026-10-24 新增）："审一下这版" ──
     //   ★ 这条路线只读不改（审片不授权修改）⇒ 断言里也要体现
     //   ★ 三条断言各挑一个方向：① 噪声底量出来了 ② 没判的维度【点名】了 ③ 真草稿没被动过

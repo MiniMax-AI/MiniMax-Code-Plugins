@@ -27,7 +27,8 @@
     "$beforeOut": "★ 改前那一版的成片输出目录",
     "$afterOut": "★ 改后那一版的成片输出目录",
     "$filmBefore": "★ 改前那一版的成片（相对 $outDir）",
-    "$filmAfter": "★ 改后那一版的成片（相对 $outDir）"
+    "$filmAfter": "★ 改后那一版的成片（相对 $outDir）",
+    "$graded": "★ 调色后的成片路径（由 grade_apply 的响应给出 —— 只有响应知道确切文件名）"
   },
   "profiles": [
     {
@@ -230,6 +231,27 @@
             "checks": ["visibility", "picture", "audio", "timeline", "draft_integrity"]
           },
           "note": "★ 两版对照：像素（带噪声底校准）+ 画质 + 响度 + 逐段字段差 + 真草稿 sha" }
+      ]
+    },
+    {
+      "id": "grade-chain-then-render",
+      "when": "曲线类调色并出片（'按这条调色链调一版再出片' / '曲线调完出片'）",
+      "requires": ["剪映在跑", "★ 调色 spec（$grade）：曲线 / HSL / 色轮这类强度型之外的",
+        "★ make_film 的 --grade 只能做强度型（官方预览渲染器带的那部分）⇒ 曲线类必须走这条"],
+      "steps": [
+        { "verb": "draft_open", "args": { "draft": "$draft", "copy": true }, "yields": ["$sessionId", "$dir"] },
+        {
+          "verb": "make_film",
+          "args": { "draft": "$dir", "outDir": "$outDir", "denoise": "auto" },
+          "produces": { "$film": "film.mp4" },
+          "note": "★ 先出画面 + 混音（这一步【不做调色】：曲线类要交给我们的逐像素链）"
+        },
+        {
+          "verb": "grade_apply",
+          "args": { "src": "$film", "outDir": "$outDir/graded", "spec": "$grade" },
+          "capture": { "$graded": "out" },
+          "note": "★ 我们逐像素复刻的调色链（10 节点，曲线/HSL/色轮都能做）⇒ 自带逐节点生效探针；capture 从响应里取 out（10bit 成片的确切路径，只有响应知道）"
+        }
       ]
     }
   ]
