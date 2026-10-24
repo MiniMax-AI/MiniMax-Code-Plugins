@@ -607,37 +607,72 @@ const main = async () => {
             out('WARN', 'mcode-island.ps1: Toggle-Window body not found (drift lock skipped)');
         } else {
             const toggleBody = toggleMatch[0];
-            // Extract the `else` branch (the restore path) so the check
-            // is anchored on the show branch, not the hide branch (which
-            // intentionally uses SW_HIDE=0).
-            const elseMatch = toggleBody.match(/else\s*\{([\s\S]*?)\n\s*\}\s*\n\s*\}\s*$/m);
-            const restoreBody = elseMatch ? elseMatch[1] : '';
-            if (!restoreBody) {
-                out('FAIL', 'mcode-island.ps1: Toggle-Window else branch not parseable');
-            } else if (!/ShowWindow\(\s*\$Target\.Hwnd\s*,\s*3\s*\)/.test(restoreBody)) {
-                out('FAIL', 'mcode-island.ps1: Toggle restore branch does not call SW_MAXIMIZE (ShowWindow(_, 3)). A regression to SW_SHOW (5) or SW_RESTORE (9) re-shows the window at its pre-hide size (e.g., 480x84 strip if WT got accidentally resized).');
-            } else if (/ShowWindow\(\s*\$Target\.Hwnd\s*,\s*5\s*\)/.test(restoreBody)) {
-                out('FAIL', 'mcode-island.ps1: Toggle restore branch calls SW_SHOW (5) in addition to SW_MAXIMIZE — keep only SW_MAXIMIZE; SW_SHOW re-shows at pre-hide size and defeats the maximize intent.');
+            // Round-15 (rewritten): "show the window full-screen" now lives
+            // in ONE helper, and every caller must use it.
+            //
+            //   SW_MAXIMIZE (3), not SW_SHOW (5) / SW_RESTORE (9): SW_HIDE
+            //   preserves the window's "non-maximized size", and if that
+            //   size got clobbered -- a SetWindowPos without SWP_NOSIZE
+            //   resizes WT to 0x0 and WT clamps it to a ~480x84 strip --
+            //   then SW_SHOW / SW_RESTORE re-shows the strip instead of the
+            //   window. That was the user's "show is a thin strip" bug.
+            //
+            // The session-list click needs the same guarantee (it raises
+            // the terminal without toggling it), so the helper is shared
+            // and the lock has to check the helper AND both callers
+            // instead of the text inside Toggle-Window alone.
+            const fullScreenMatch = widget.match(/function Show-WindowFullScreen[\s\S]*?\n\}\n/);
+            if (!fullScreenMatch) {
+                out('FAIL', 'mcode-island.ps1: Show-WindowFullScreen helper not found -- the restore path and the session click both need one implementation that maximizes to the work area');
             } else {
-                out('PASS', 'mcode-island.ps1: Toggle restore branch forces SW_MAXIMIZE (full-screen on show, fixes 480x84 strip bug)');
+                const fsBody = fullScreenMatch[0];
+                const maximizeAt = fsBody.search(/ShowWindow\(\s*\$h\s*,\s*3\s*\)/);
+                const restoreAt = fsBody.search(/ShowWindow\(\s*\$h\s*,\s*9\s*\)/);
+                const showAt = fsBody.search(/ShowWindow\(\s*\$h\s*,\s*5\s*\)/);
+                if (maximizeAt < 0) {
+                    out('FAIL', 'mcode-island.ps1: Show-WindowFullScreen does not call SW_MAXIMIZE (ShowWindow(_, 3)). A regression to SW_SHOW (5) or SW_RESTORE (9) re-shows the window at its pre-hide size (e.g., 480x84 strip if WT got accidentally resized).');
+                } else if (showAt >= 0) {
+                    out('FAIL', 'mcode-island.ps1: Show-WindowFullScreen calls SW_SHOW (5) -- SW_SHOW re-shows the window at its pre-hide size and defeats the maximize intent.');
+                } else if (restoreAt < 0) {
+                    // SW_RESTORE has to come FIRST: the SetWindowPos that
+                    // writes the restored size only takes effect while the
+                    // window is in its normal (not maximized) state.
+                    out('FAIL', 'mcode-island.ps1: Show-WindowFullScreen does not call SW_RESTORE (9) before the maximize -- without it the SetWindowPos cannot write the restored size, so a stale size (e.g. a 480x84 strip) survives the next restore.');
+                } else if (restoreAt > maximizeAt) {
+                    out('FAIL', 'mcode-island.ps1: Show-WindowFullScreen calls SW_RESTORE (9) AFTER SW_MAXIMIZE (3) -- restoring after the maximize puts the window back at its pre-hide size (the 480x84 strip bug).');
+                } else if (!/Show-WindowFullScreen/.test(toggleBody)) {
+                    out('FAIL', 'mcode-island.ps1: Toggle-Window does not call Show-WindowFullScreen -- the show path would skip the maximize and go back to the pre-hide size.');
+                } else {
+                    const focusTermMatch = widget.match(/function Focus-TerminalWindow[\s\S]*?\n\}\n/);
+                    const focusTermBody = focusTermMatch ? focusTermMatch[0] : '';
+                    if (!focusTermBody) {
+                        out('FAIL', 'mcode-island.ps1: Focus-TerminalWindow body not found -- the session click must raise the terminal full-screen too');
+                    } else if (!/Show-WindowFullScreen/.test(focusTermBody)) {
+                        out('FAIL', 'mcode-island.ps1: Focus-TerminalWindow does not call Show-WindowFullScreen -- raising the terminal from the session list would restore whatever "normal size" the window last had (e.g. a 480x84 strip in the top-left corner)');
+                    } else {
+                        out('PASS', 'mcode-island.ps1: the restore path and the session click both force SW_MAXIMIZE via Show-WindowFullScreen (full-screen on show, fixes the 480x84 strip)');
+                    }
+                }
             }
 
-            // Round-16: Toggle's restore branch must also force the window
-            // to fill the actual monitor work area (MonitorFromWindow +
-            // GetMonitorInfo + SetWindowPos). SW_MAXIMIZE alone is
-            // insufficient on multi-monitor + DPI-virtualized setups: the
-            // user's primary monitor is physically 2560x1440, but WinForms
-            // [Screen]::PrimaryScreen reports 1920x1080 (DPI virtualization).
-            // SW_MAXIMIZE follows the 1920x1080 number and leaves WT at
-            // ~75% of the physical screen — visually "in the top-left corner"
-            // of the user's 2K monitor. The drift lock forces the explicit
-            // SetWindowPos path.
-            if (!/GetWorkAreaForWindow|GetMonitorInfo|MonitorFromWindow/.test(toggleBody)) {
-                out('FAIL', 'mcode-island.ps1: Toggle restore branch does not query monitor work area. Without MonitorFromWindow + SetWindowPos(explicit size), SW_MAXIMIZE alone fills only the WinForms 1920x1080 logical work area, not the actual 2560x1440 physical monitor — leaves WT at the top-left 75%.');
-            } else if (!/SetWindowPos\([^)]*\$wa\.|SetWindowPos\(\$Target\.Hwnd,[^,]+,\s*\$wa\.Left,\s*\$wa\.Top,\s*\$cx,\s*\$cy/.test(toggleBody)) {
-                out('FAIL', 'mcode-island.ps1: Toggle restore branch has monitor query but does not SetWindowPos with work-area coords. The contract is: read monitor work area, then SetWindowPos with explicit (Left, Top, cx, cy) — never rely on SW_MAXIMIZE alone for size.');
+            // Round-16 (rewritten): the work-area size lives in the same
+            // helper now, so the lock follows it there.
+            //
+            // SW_MAXIMIZE alone is insufficient on multi-monitor +
+            // DPI-virtualized setups: the user's primary monitor is
+            // physically 2560x1440, but WinForms [Screen]::PrimaryScreen
+            // reports 1920x1080 (DPI virtualization). SW_MAXIMIZE follows
+            // the 1920x1080 number and leaves WT at ~75% of the physical
+            // screen -- visually "in the top-left corner" of the user's 2K
+            // monitor. The drift lock forces the explicit SetWindowPos
+            // path.
+            const fullScreenBody = fullScreenMatch ? fullScreenMatch[0] : '';
+            if (!/GetWorkAreaForWindow|GetMonitorInfo|MonitorFromWindow/.test(fullScreenBody)) {
+                out('FAIL', 'mcode-island.ps1: Show-WindowFullScreen does not query the monitor work area. Without MonitorFromWindow + SetWindowPos(explicit size), SW_MAXIMIZE alone fills only the WinForms 1920x1080 logical work area, not the actual 2560x1440 physical monitor -- leaves WT at the top-left 75%.');
+            } else if (!/SetWindowPos\([^)]*\$wa\.|SetWindowPos\(\$h,[^,]+,\s*\$wa\.Left,\s*\$wa\.Top,\s*\$cx,\s*\$cy/.test(fullScreenBody)) {
+                out('FAIL', 'mcode-island.ps1: Show-WindowFullScreen has the monitor query but does not SetWindowPos with work-area coords. The contract is: read monitor work area, then SetWindowPos with explicit (Left, Top, cx, cy) -- never rely on SW_MAXIMIZE alone for size.');
             } else {
-                out('PASS', 'mcode-island.ps1: Toggle restore branch forces work-area size via MonitorFromWindow + SetWindowPos (fills 2560x1440 physical monitor, not just 1920x1080 logical)');
+                out('PASS', 'mcode-island.ps1: the full-screen path forces work-area size via MonitorFromWindow + SetWindowPos (fills 2560x1440 physical monitor, not just 1920x1080 logical)');
             }
 
             // Round-17 + round-19: the follow-up z-order SetWindowPos call
@@ -1727,6 +1762,93 @@ const main = async () => {
     }
     if (reservedHits === 0) {
         out('PASS', `ps1 reserved-variable guard: no assignment to a read-only PowerShell automatic variable (${ps1Files.length} scanned)`);
+    }
+
+    // --- SetWindowPos must not resize or move the target -----------------
+    //
+    // SetWindowPos(hwnd, after, X, Y, cx, cy, flags): cx=0/cy=0 and
+    // X=0/Y=0 only mean "keep the current size / position" when the
+    // matching flag is present.
+    //
+    //   missing SWP_NOSIZE -> the window is resized to 0x0. Windows
+    //     Terminal has a min-size fallback, so the window collapses into a
+    //     480x84 strip instead of disappearing.
+    //   missing SWP_NOMOVE -> the window is really moved to (0,0).
+    //
+    // That is not a hypothetical: Focus-Window did exactly this, so every
+    // "raise the terminal" collapsed it into a strip in the top-left
+    // corner of the screen. The flags were also written through a local
+    // variable, so the check has to resolve the variable instead of
+    // looking at the call site only.
+    const splitCallArgs = (body) => {
+        const args = [];
+        let cur = '';
+        let d = 0;
+        for (const ch of body) {
+            if (ch === '(') { d++; cur += ch; continue; }
+            if (ch === ')') { d--; cur += ch; continue; }
+            if (ch === ',' && d === 0) { args.push(cur.trim()); cur = ''; continue; }
+            cur += ch;
+        }
+        args.push(cur.trim());
+        return args;
+    };
+
+    const findSetWindowPosCalls = (code) => {
+        const calls = [];
+        const re = /\bSetWindowPos\s*\(/g;
+        let m;
+        while ((m = re.exec(code)) !== null) {
+            let depth = 1;
+            let i = m.index + m[0].length;
+            while (i < code.length && depth > 0) {
+                if (code[i] === '(') depth++;
+                else if (code[i] === ')') depth--;
+                i++;
+            }
+            const body = code.slice(m.index + m[0].length, i - 1);
+            calls.push({
+                line: code.slice(0, m.index).split('\n').length,
+                args: splitCallArgs(body),
+            });
+        }
+        return calls;
+    };
+
+    // The flags argument is often a local variable ($nofollow / $flags);
+    // resolve it so the guard sees the flags that are actually passed.
+    const resolveFlags = (code, flagsArg) => {
+        if (!flagsArg) return '';
+        if (!flagsArg.startsWith('$')) return flagsArg;
+        const name = flagsArg.slice(1).split(/[^\w]/)[0];
+        const m = code.match(new RegExp('\\$' + name + '\\s*=\\s*([^\\r\\n]+)', 'i'));
+        return m ? m[1] : '';
+    };
+
+    let swpHits = 0;
+    for (const abs of ps1Files) {
+        const rel = abs.slice(PLUGIN_ROOT.length + 1);
+        const code = stripLiterals(await readFile(abs, 'utf8')).join('\n');
+        for (const call of findSetWindowPosCalls(code)) {
+            const a = call.args;
+            if (a.length < 7) continue;              // not a real call site
+            const flags = resolveFlags(code, a[6]);
+            const x = a[2].trim();
+            const y = a[3].trim();
+            const cx = a[4].trim();
+            const cy = a[5].trim();
+            if (!/\bSWP_NOSIZE\b/.test(flags) && cx === '0' && cy === '0') {
+                out('FAIL', `${rel}:${call.line}: SetWindowPos passes cx=0/cy=0 without SWP_NOSIZE -- that resizes the window to 0x0 (Windows Terminal clamps it to a ~480x84 strip)`);
+                swpHits++;
+            }
+            if (!/\bSWP_NOMOVE\b/.test(flags) && x === '0' && y === '0') {
+                out('FAIL', `${rel}:${call.line}: SetWindowPos passes X=0/Y=0 without SWP_NOMOVE -- that moves the window to the top-left corner`);
+                swpHits++;
+            }
+        }
+    }
+    if (swpHits === 0) {
+        out('PASS', `ps1 SetWindowPos guard: no call resizes or moves its target without SWP_NOSIZE / SWP_NOMOVE (${ps1Files.length} scanned)`);
     }
 
     finish();

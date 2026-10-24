@@ -768,6 +768,13 @@ function Focus-TerminalWindow([IntPtr]$h) {
     # catch 吞掉，于是"抢前台"这步从来没发生过，而外面看着一切正常。
     $procId = [uint32]0
     [void][WinAPI]::GetWindowThreadProcessId($h, [ref]$procId)
+    # 先把终端撑成满屏，再抢前台。
+    #
+    # 顺序不能反：Focus-Window 里对最小化窗口走的 SW_RESTORE 用的是"上次
+    # 正常尺寸"，而那个尺寸可能已经被写坏（0x0 -> WT 的 min-size 兜底 ->
+    # 480x84 的一条，还被挪到了 (0,0)）。先撑满屏，顺手把那个坏尺寸修
+    # 回来，用户看到的才是满屏的终端，而不是左上角一条。
+    Show-WindowFullScreen $h | Out-Null
     Focus-Window -Target @{ Hwnd = $h; Pid = $procId; Exe = 'WindowsTerminal' }
     if (Test-ForegroundPid $procId) {
       Dbg ("FOCUS CONFIRMED: pid=" + $procId + " hwnd=" + $h)
@@ -779,6 +786,7 @@ function Focus-TerminalWindow([IntPtr]$h) {
     # 不激活；主 pill 的 Toggle-Window 用的是 SetWindowPos(HWND_TOP) 且
     # **不**带 SWP_NOACTIVATE —— 那个会顺手把窗口激活，这才是"到前台"
     # 的关键。用同一套，别自创第四种。
+    # SWP_NOSIZE / SWP_NOMOVE 同样不能少：少了就是"缩到 0x0 + 挪到 (0,0)"。
     $flags = [WinAPI]::SWP_NOSIZE -bor [WinAPI]::SWP_NOMOVE
     [WinAPI]::SetWindowPos($h, [WinAPI]::HWND_TOP, 0, 0, 0, 0, $flags) | Out-Null
     [WinAPI]::BringWindowToTop($h) | Out-Null
@@ -1423,6 +1431,43 @@ function Resolve-ClickTarget {
   return $null
 }
 
+# 把窗口撑到所在显示器的 work area（满屏）。
+#
+# 为什么不能只靠 SW_RESTORE 还原：还原用的是"上次正常尺寸"，而那个尺寸可能
+# 已经被写坏。历史上 Focus-Window 用 cx=0/cy=0 的 SetWindowPos 把它缩成了
+# 0x0，Windows Terminal 的 min-size 兜底把窗口变成 480x84 的一条，位置还
+# 被挪到了 (0,0)。只还原的话，出来的是那条，不是满屏。
+#
+# 所以这里三步走：先还原到普通状态，再按 work area 显式设尺寸（这一步顺手
+# 把那个坏掉的"还原尺寸"也修回来），最后再最大化。
+function Show-WindowFullScreen([IntPtr]$h) {
+  try {
+    $wa = [WinAPI]::GetWorkAreaForWindow($h)
+    if ($wa.Left -eq -1) { return $null }
+    $cx = $wa.Right - $wa.Left
+    $cy = $wa.Bottom - $wa.Top
+    # 三步，顺序不能乱：
+    #   1) SW_RESTORE 先退出最大化 / 最小化，回到"普通"状态
+    #   2) SetWindowPos 按 work area 显式设大小 —— 这一步发生在普通状态下，
+    #      所以窗口的"还原尺寸"被真正写成 work area
+    #   3) SW_MAXIMIZE 再最大化
+    #
+    # 为什么第 2 步不能省：对**已经最大化**的窗口调 SetWindowPos，Windows
+    # 不会更新它的还原尺寸，那个坏尺寸（历史上被 0x0 缩成 480x84 的）就
+    # 一直留着 —— 以后任何一次还原（用户点还原按钮、WT 自己恢复）都会把
+    # 那条小条请回来。
+    #
+    # 为什么不用 SetWindowPlacement：实测对 WT 它不生效，rcNormalPosition
+    # 写进去，读出来还是 0x0。
+    [WinAPI]::ShowWindow($h, 9) | Out-Null                      # SW_RESTORE
+    [WinAPI]::SetWindowPos($h, [IntPtr]::Zero, $wa.Left, $wa.Top, $cx, $cy, [WinAPI]::SWP_NOZORDER) | Out-Null
+    [WinAPI]::ShowWindow($h, 3) | Out-Null                      # SW_MAXIMIZE
+    return @{ Left = $wa.Left; Top = $wa.Top; W = $cx; H = $cy }
+  } catch {
+    return $null
+  }
+}
+
 # Raise a window to the front: show + focus, whatever its current visible
 # state is. After the desktop-app adaptation both focus and toggle take a
 # resolved target object; the caller decides which one it is.
@@ -1431,15 +1476,30 @@ function Focus-Window {
 
   try {
     [WinAPI]::AllowSetForegroundWindow([uint32]$Target.Pid) | Out-Null
+    # 只在窗口真的"看不见"时才动它的显示状态：
+    #   minimized -> SW_RESTORE（还原）
+    #   hidden    -> SW_SHOW（显示）
+    # 已经可见的窗口一个字节都不碰 —— 对一个已经最大化的窗口再调一次
+    # SW_SHOW 没有意义，只是白白多一次状态抖动。
     if ([WinAPI]::IsIconic($Target.Hwnd)) {
       [WinAPI]::ShowWindow($Target.Hwnd, 9) | Out-Null   # SW_RESTORE
-    } else {
+    } elseif (-not [WinAPI]::IsWindowVisible($Target.Hwnd)) {
       [WinAPI]::ShowWindow($Target.Hwnd, 5) | Out-Null   # SW_SHOW
     }
     # TOPMOST -> NOTOPMOST: it lets BringWindowToTop push the window all the
     # way up without leaving a "always on top" side effect behind.
-    [WinAPI]::SetWindowPos($Target.Hwnd, [WinAPI]::HWND_TOPMOST, 0, 0, 0, 0, [WinAPI]::SWP_NOACTIVATE) | Out-Null
-    [WinAPI]::SetWindowPos($Target.Hwnd, [IntPtr]::new(-2), 0, 0, 0, 0, [WinAPI]::SWP_NOACTIVATE) | Out-Null  # HWND_NOTOPMOST
+    #
+    # SWP_NOSIZE / SWP_NOMOVE 是必须的，不是锦上添花：这里 cx=0/cy=0/
+    # X=0/Y=0 的意思是"大小和位置都不变"，但这个意思**只在 flag 齐全时
+    # 才成立**。少了 SWP_NOSIZE，Windows 会把它当成"resize 到 0x0"——
+    # Windows Terminal 有 min-size 兜底，于是窗口塌成 480x84 的一条；
+    # 少了 SWP_NOMOVE 同理，窗口会被真的挪到 (0,0) 左上角。
+    #
+    # 同一文件里 Toggle-Window 的注释早就写明了这个坑，但 Focus-Window
+    # 一直漏着，直到会话点击真的走到这里才暴露出来。
+    $nofollow = [WinAPI]::SWP_NOACTIVATE -bor [WinAPI]::SWP_NOSIZE -bor [WinAPI]::SWP_NOMOVE
+    [WinAPI]::SetWindowPos($Target.Hwnd, [WinAPI]::HWND_TOPMOST, 0, 0, 0, 0, $nofollow) | Out-Null
+    [WinAPI]::SetWindowPos($Target.Hwnd, [IntPtr]::new(-2), 0, 0, 0, 0, $nofollow) | Out-Null  # HWND_NOTOPMOST
     [WinAPI]::BringWindowToTop($Target.Hwnd) | Out-Null
     [WinAPI]::SetForegroundWindow($Target.Hwnd) | Out-Null
     # "DONE" 而不是 "OK"：这里只说明这几个调用没抛异常，不代表窗口真到了
@@ -1481,18 +1541,15 @@ function Toggle-Window {
       [WinAPI]::ShowWindow($Target.Hwnd, 0) | Out-Null   # SW_HIDE
       Dbg "TOGGLE: hid target=$($Target.Exe) PID=$($Target.Pid) hwnd=$($Target.Hwnd)"
     } else {
-      # 1) SW_MAXIMIZE 激活+标记 maximized
-      [WinAPI]::ShowWindow($Target.Hwnd, 3) | Out-Null   # SW_MAXIMIZE
-      # 2) SetWindowPos 强制拉到 monitor work area (绕过 DPI/remembered-size 限制)
-      $wa = [WinAPI]::GetWorkAreaForWindow($Target.Hwnd)
-      if ($wa.Left -ne -1) {
-        $cx = $wa.Right - $wa.Left
-        $cy = $wa.Bottom - $wa.Top
-        [WinAPI]::SetWindowPos($Target.Hwnd, [IntPtr]::Zero, $wa.Left, $wa.Top, $cx, $cy, [WinAPI]::SWP_NOZORDER) | Out-Null
+      # 1)+2) SW_MAXIMIZE 激活+标记 maximized，再用 SetWindowPos 强制拉到
+      #        monitor work area（绕过 DPI/remembered-size 限制；细节见
+      #        Show-WindowFullScreen 的注释）
+      $wa = Show-WindowFullScreen $Target.Hwnd
+      if ($wa) {
         # The -f has to sit inside the parentheses: written as
         # `Dbg "..." -f a, b` the format operator binds to the command, not to
         # the string, and the log line keeps the raw {0} {1} placeholders.
-        Dbg ("TOGGLE: forced to work area ({0},{1}) {2}x{3}" -f $wa.Left, $wa.Top, $cx, $cy)
+        Dbg ("TOGGLE: forced to work area ({0},{1}) {2}x{3}" -f $wa.Left, $wa.Top, $wa.W, $wa.H)
       }
       # 3) 抢 z-order 到最前(SetWindowPos(HWND_TOP) 不需要 foreground 权限)
       #    SWP_NOSIZE：cx=0/cy=0 缺它会被 Windows 当成"resize 到 0x0"，
