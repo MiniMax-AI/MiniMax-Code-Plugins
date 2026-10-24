@@ -473,6 +473,46 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
       cm1.result?.isError !== true && /"committed"\s*:\s*true/.test(textOf(cm1))
       && /"realDraftUnchanged"\s*:\s*true/.test(textOf(cm1)), textOf(cm1).replace(/\s+/g, ' ').slice(0, 140));
 
+    // ★★ 护栏负向注入（2026-10-24）：真草稿在【会话期间】被改 ⇒ 必须拒绝落盘
+    //   ★ 原护栏只是"落盘前 vs 落盘后"，抓不到这一种 ⇒ 我们会把用户的修改【覆盖】掉。
+    //   用草稿库里的【临时副本】当假真草稿 ⇒ 绝不动用户自己的草稿（结束时删掉）。
+    {
+      const tmpReal = path.join(FILM_LIB, 'JYAI自检-真草稿护栏-' + Date.now());
+      try {
+        fs.cpSync(FILM_DRAFT, tmpReal, { recursive: true });
+        const ropen = await call('tools/call', { name: 'draft_open', arguments: { draft: tmpReal, copy: true } });
+        const rsid = (textOf(ropen).match(/ve-session-\d+/) || [])[0];
+        const rread = await call('tools/call', { name: 'draft_read', arguments: { sessionId: rsid } });
+        let rseg = null;
+        try {
+          const oj = JSON.parse(textOf(rread));
+          const dd = oj?.draft || oj;
+          rseg = ((dd?.tracks || []).flatMap((tr) => tr.segments || [])[0] || {}).id || null;
+        } catch { /* 结构变了 ⇒ 跳过 */ }
+        if (!rseg) {
+          console.log('  [SKIP] 真草稿会话期被改 ⇒ 拒绝落盘 —— 没找到 segmentId（结构变了）⇒ 【不计入 PASS】');
+        } else {
+          await call('tools/call', {
+            name: 'draft_patch',
+            arguments: { op: 'video.setVolume', sessionId: rsid, params: { segmentId: rseg, volume: 0.2 } },
+          });
+          // ★ 故意改"真草稿"（会话期间）⇒ 模拟另一个窗口/用户改了它
+          fs.appendFileSync(path.join(tmpReal, 'draft_content.json'), ' ');
+          const rcommit = await call('tools/call', {
+            name: 'draft_commit', arguments: { sessionId: rsid, realDraft: tmpReal },
+          });
+          const rct = textOf(rcommit);
+          check('★★★ 护栏负向注入：真草稿在会话期间被改 ⇒ 必须拒绝落盘（否则会覆盖用户的修改）',
+            rcommit.result?.isError === true && /会话期间被改动过|sha 不一致/.test(rct),
+            rct.replace(/\s+/g, ' ').slice(0, 200));
+        }
+      } catch (e) {
+        check('★★★ 护栏负向注入：真草稿在会话期间被改 ⇒ 必须拒绝落盘', false, String(e).slice(0, 160));
+      } finally {
+        try { fs.rmSync(tmpReal, { recursive: true, force: true }); } catch { /* ignore */ }
+      }
+    }
+
     const rf1 = await call('tools/call', { name: 'render_frames', arguments: { draft: FILM_DRAFT, outDir: SMOKE, fps: 6 } });
     const framesOk = fs.existsSync(path.join(SMOKE, 'frames')) &&
       fs.readdirSync(path.join(SMOKE, 'frames')).some(f => /^\d+\.png$/.test(f));

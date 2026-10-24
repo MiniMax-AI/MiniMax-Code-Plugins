@@ -384,6 +384,10 @@ const IMPL = {
     const draftDir = dir || null;
     const st = { sessionId: sid, draft: dname, draftDir, copied: copy,
                  draftPath: draftDir ? path.join(draftDir, 'draft_content.json') : null,
+                 // ★ 会话开始时【源草稿】的 sha ⇒ draft_commit 在落盘【前】比对：
+                 //   防止"会话期间真草稿被别人改了"被我们用旧版本【覆盖】掉。
+                 //   （原有的落盘前后比对只能抓"我们自己误写了真草稿"，抓不到这一种）
+                 realSha: a.draft ? shaTree(a.draft) : null,
                  openedAt: new Date().toISOString() };
     writeState(sid, st);
     return ok({ copy, sessionId: sid, draft: dname, dir: draftDir, raw: txt });
@@ -485,6 +489,20 @@ const IMPL = {
     // 护栏 1：真草稿 sha 前后比对
     let before = null;
     if (a.realDraft) before = shaTree(a.realDraft);
+
+    // 护栏 1b：真草稿在【会话期间】被改过 ⇒ 拒绝落盘
+    //   ★ 护栏 1 是"落盘前 vs 落盘后"，只能抓"我们自己误写了真草稿"；
+    //   这里比的是"会话开始时 vs 现在" ⇒ 抓"别人在会话期间改了真草稿"，
+    //   否则我们会把用户的修改【覆盖】掉（静默丢数据）。
+    if (a.realDraft && st.realSha) {
+      const nowSha = shaTree(a.realDraft);
+      const same = nowSha.length === st.realSha.length
+        && nowSha.every((x, i) => x === st.realSha[i]);
+      if (!same) {
+        throw new Error('★ 真草稿在本次会话期间被改动过（会话开始时的 sha 与现在不一致）'
+          + '——拒绝落盘，避免覆盖你的修改。重新 draft_open 再改。');
+      }
+    }
 
     // 护栏 2：素材路径重定位（草稿搬过家后 path 失效 ⇒ 指回草稿目录内）
     const draftDir = st.draftDir || '';   // ★ 入参里的 draftDir 是死代码：schema 拒未知键 ⇒ 永远取不到（审计发现）
