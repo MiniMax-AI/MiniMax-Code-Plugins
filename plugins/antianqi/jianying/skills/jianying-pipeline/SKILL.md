@@ -19,11 +19,23 @@ metadata:
 > ★ **现在有两条路**：① **模型按本手册一步步调**（灵活）② **`run_pipeline` 动词**（一条命令跑完一条预置路线，路线定义在 `references/pipeline-profiles.json`）。
 > 需求只是"按路线走一遍"时用 ②；需要中途改参数/加确认点时用 ①。
 
-> ★ **不确定该走哪条链时**可以先问一句：
-> `node ${PLUGIN_ROOT}/scripts/classify-intent.mjs "<用户那句话>"`
-> ⇒ 它给出【候选 + 命中词 + 置信度】（数据在 `references/intent-routes.json`），
-> 但它只是**检索线索**（准确率由 `references/intent-testset.json` 量着，低于阈值会红）
-> ⇒ **拿不准就按各 Skill 的 description 自己判断**，别把它的输出当判决。
+> ★ **不确定该走哪条链时**，先要一个**判决**：
+> `node ${PLUGIN_ROOT}/scripts/classify-intent.mjs "<用户那句话>" --decide`
+>
+> ⇒ 它给三种结果之一：
+>
+> | 结果 | 判据 | 你该怎么走 |
+> |---|---|---|
+> | **① 判决** | `decision` 非空 | **照它走**（`decision.route` 或 `decision.skill`）⇒ 依据在 `evidence`（命中词 / 分数 / 与次优的分差） |
+> | **② 拒答·没线索** | `decision: null` 且最高分 < 阈值 | 按各 Skill 的 description 自己判断，或**问用户**要具体诉求（要动作、要对象） |
+> | **③ 拒答·分不清** | `decision: null` 且与次优分差不足 | 把两个候选都摆给用户选，别自己拍板 |
+>
+> ⇒ ★ **判决是可查证的**：命中了哪些词、多少分、跟第二名拉开多少，都在输出里。
+> ⇒ ★ **两条纪律都有守门人**：
+> 准确率由 `references/intent-testset.json` 量（top-1 ≥ 80% · top-3 ≥ 90%，低于阈值就红）；
+> "**绝不硬猜**"由 `references/intent-refusal-set.json` 守（18 句模糊话，
+> **一句都不许被判成某条链**，否则自检变红）。
+> ⇒ ★ 判决只是**起点**：执行中发现判决与用户原话不符 ⇒ **停下来问**，不要硬跑。
 >
 > ★ **本 skill 只做编排，不做实现**：每一步都落到既有动词上（`draft_*` / `grade_apply` /
 > `make_film` / `render_frames` / `verify_diff` / `talk-cut-*`），

@@ -116,10 +116,11 @@ plugin-root/
 │   ├── pitfalls.md             #   踩坑清单
 │   ├── capability-dict.json    #   能力字典（10 动词 / 3 类元素 / 3 类节点 / 6 类判据，机器可读）
 │   ├── intent-routes.json      #   意图路由表（一句人话 ⇒ 该走哪条链/路线）
-│   └── intent-testset.json     #   意图路由的带标注测试集（准确率可量化）
+│   ├── intent-testset.json     #   意图路由的带标注测试集（准确率可量化）
+│   └── intent-refusal-set.json #   拒答集（没有明确意图的话 ⇒ 必须拒答，不许硬猜）
 └── scripts/
     ├── run-verb.mjs            # 插件自带的 MCP 客户端（让 skill 调动词）
-    ├── classify-intent.mjs     # 意图路由建议（一句人话 ⇒ 候选链/路线 + 命中词 + 置信度）
+    ├── classify-intent.mjs     # 意图分类器（一句人话 ⇒ 候选链/路线 + 命中词；--decide ⇒ 判决或明确拒答）
     ├── selftest-intent.mjs     # 意图路由准确率自检（带标注测试集 ⇒ 低于阈值就红）
     ├── check-env.mjs           # 环境自检
     ├── selftest-mcp.mjs        # MCP 动词自检（61 项断言，含 MCP 层冒烟 / 参数覆盖 / 意图路由准确率 / 编排器确认点与新路线）

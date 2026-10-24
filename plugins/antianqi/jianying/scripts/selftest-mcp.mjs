@@ -863,10 +863,13 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
   {
     const intentMod = await import('./selftest-intent.mjs');
     const ir = intentMod.runIntentCheck();
-    check('★★★ 意图路由准确率（带标注测试集：top-1 ≥ 80% · top-3 ≥ 90%）',
+    check('★★★ 意图路由准确率（带标注测试集：top-1 ≥ 80% · top-3 ≥ 90%）+ 拒答集不硬猜 + 判决模式',
       ir.ok,
       `top-1 ${(ir.acc1 * 100).toFixed(1)}% · top-3 ${(ir.acc3 * 100).toFixed(1)}%`
-      + (ir.misses.length ? ` · 未命中：${ir.misses.map((m) => m.u).join('、')}` : ''));
+      + ` · 拒答集 ${ir.refusalTotal} 句硬猜 ${ir.hardGuesses.length}（须 0）`
+      + ` · 判决 ${ir.decided}/${ir.total}（对 ${ir.decisionRight}）明确句被拒 ${ir.refusedOnClear} 模糊句被硬判 ${ir.decidedOnVague}`
+      + (ir.misses.length ? ` · 未命中：${ir.misses.map((m) => m.u).join('、')}` : '')
+      + (ir.hardGuesses.length ? ` · 硬猜：${ir.hardGuesses.map((g) => g.u).join('、')}` : ''));
   }
 
   // ★★★ 参数覆盖（schema 声明了、但此前【从未被端到端验证过】的那批参数）
