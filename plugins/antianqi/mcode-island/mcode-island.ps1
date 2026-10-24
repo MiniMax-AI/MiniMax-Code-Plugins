@@ -96,6 +96,7 @@ public class WinAPI {
   [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);
   [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc lpEnumFunc, IntPtr lParam);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
@@ -705,7 +706,7 @@ function Invoke-SessionClick([string]$id) {
     }
   } catch {}
   if (Select-SessionTerminal $names) {
-    Dbg "session terminal switched: $id"
+    Dbg ("session terminal switched: " + $id + " foregroundPid=" + (Get-ForegroundPid))
     return
   }
   # 没找到具体 tab：把终端窗口带到前台，但不要再开一个终端。
@@ -714,10 +715,46 @@ function Invoke-SessionClick([string]$id) {
   # 只有连一个终端窗口都找不到时（桌面端 app 内嵌的终端就是这种），
   # 才退回新开 —— 那时候新开是唯一到得了那个会话的办法。
   if (Activate-TerminalWindow) {
-    Dbg "session terminal activated (tab not matched): $id"
+    Dbg ("session terminal activated (tab not matched): " + $id + " foregroundPid=" + (Get-ForegroundPid))
     return
   }
   Start-SessionTerminal $id
+}
+
+# 当前前台窗口是哪个进程。
+#
+# 切了 tab 但没抢到前台，肉眼看不出来，只能问系统。
+#
+# 记 pid 而不是标题：Windows Terminal 的前台窗口是它的 XAML 子窗口，
+# 标题是空的，pid 才是 WindowsTerminal.exe。
+function Get-ForegroundPid {
+  try {
+    $fg = [WinAPI]::GetForegroundWindow()
+    if ($fg -eq [IntPtr]::Zero) { return 0 }
+    $pid = [uint32]0
+    [void][WinAPI]::GetWindowThreadProcessId($fg, [ref]$pid)
+    return [int]$pid
+  } catch { return 0 }
+}
+
+# 把终端窗口抢到前台。
+#
+# 主 pill 的"显示/隐藏终端"早就解决过这个问题，用的是既有那套聚焦：先
+# TOPMOST 再 NOTOPMOST（这样 BringWindowToTop 才推得动），然后
+# SetForegroundWindow。直接复用，不另造一套。
+#
+# 裸的 SetForegroundWindow 不够：调用方是后台进程时，Windows 的前台锁会
+# 挡下来 —— 窗口切了 tab，用户却看不到变化。
+function Focus-TerminalWindow([IntPtr]$h) {
+  if (-not $h -or $h -eq [IntPtr]::Zero) { return $false }
+  try {
+    $pid = [uint32]0
+    [void][WinAPI]::GetWindowThreadProcessId($h, [ref]$pid)
+    Focus-Window -Target @{ Hwnd = $h; Pid = $pid; Exe = 'WindowsTerminal' }
+    return $true
+  } catch {
+    return $false
+  }
 }
 
 # 切到已经开着这个会话的终端 tab。
@@ -781,11 +818,13 @@ function Select-SessionTerminal([string[]]$names) {
           $sp = $tab.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
           $sp.Select()
         } catch { continue }
-        # 选中 tab 不一定会把窗口抢到前台，再点一次标题。
-        try {
-          $h = [IntPtr]$w.Current.NativeWindowHandle
-          [IslandNative.Win]::SetForegroundWindow($h) | Out-Null
-        } catch {}
+        # 选中 tab 不会把窗口带到前台，而裸的 SetForegroundWindow 又会被
+        # Windows 的前台锁挡下（调用方是后台进程）—— 实测窗口切了 tab，
+        # 用户却看不到任何变化。
+        #
+        # 所以复用主 pill 的聚焦：先 TOPMOST 再 NOTOPMOST，让
+        # BringWindowToTop 能把窗口推到最前，最后 SetForegroundWindow。
+        Focus-TerminalWindow ([IntPtr]$w.Current.NativeWindowHandle)
         return $true
       }
     }
@@ -826,9 +865,7 @@ function Activate-TerminalWindow {
       }
       if (-not $hasMcode) { continue }
       try {
-        $h = [IntPtr]$w.Current.NativeWindowHandle
-        [IslandNative.Win]::SetForegroundWindow($h) | Out-Null
-        return $true
+        if (Focus-TerminalWindow ([IntPtr]$w.Current.NativeWindowHandle)) { return $true }
       } catch {}
     }
   } catch {
