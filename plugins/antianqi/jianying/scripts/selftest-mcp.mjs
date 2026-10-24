@@ -600,6 +600,19 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
       + '+ 剪映在跑且 VE 管道就绪；未满足 ⇒ 【不计入 PASS】');
   }
 
+  // ★★★ 参数覆盖（schema 声明了、但此前【从未被端到端验证过】的那批参数）
+  //   覆盖：grade_apply.noLut · verify_diff.noiseK/threshold/beforeVideo/afterVideo
+  //         make_film.lut · make_film.maxFrames
+  if (FILM_LIB) {
+    const pmod = await import('./selftest-params.mjs');
+    const pr = await pmod.runParamsCheck();
+    const prBad = pr.cases.filter((c) => !c.ok);
+    check('★★★ 参数覆盖（7 个从未验证过的参数 + 阳性前置）', pr.fail === 0,
+      prBad.length ? prBad.map((c) => c.name).join(' | ') : `${pr.pass} PASS / ${pr.fail} FAIL`);
+  } else {
+    console.log('  [SKIP] 参数覆盖 —— 需要 env JYAI_DRAFT_LIB（草稿库）⇒ 【不计入 PASS】');
+  }
+
   console.log(`\n=== ${PASS} PASS / ${FAIL} FAIL ===`);
   child.kill();
   process.exit(FAIL === 0 ? 0 : 1);

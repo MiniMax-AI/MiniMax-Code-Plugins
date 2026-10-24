@@ -41,7 +41,7 @@
       "maxFrames": {
         "type": "number",
         "default": 0,
-        "description": "0 = 覆盖整个时间线（⚠️ 非 0 会让画面比音轨短，音画对不齐，只用于调试）"
+        "description": "调试用：只渲染前 N 帧。★ 截帧会让成片时长短于官方时间线 ⇒ 内建验收会判\"时长对不齐\"并失败。"
       },
       "targetLufs": {
         "type": "number",

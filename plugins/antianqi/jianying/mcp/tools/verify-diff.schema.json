@@ -41,7 +41,7 @@
       "noiseK": {
         "type": "number",
         "default": 1.5,
-        "description": "噪声底的倍数（判据线 = max(threshold, noiseMad × noiseK)）"
+        "description": "噪声底的倍数（默认 1.5）。★ 只在【给了 noiseDir】（噪声底校准）时参与判据线：判据线 = max(threshold, 噪声底 × noiseK)；不给 noiseDir 时判据线就是 threshold，本参数无效。"
       },
       "expect": {
         "type": "object",
@@ -68,11 +68,11 @@
       },
       "beforeVideo": {
         "type": "string",
-        "description": "audio 维度用：改前 mp4"
+        "description": "音频维度用：改前的 mp4（与 afterVideo 一起给）。不给 ⇒ 音频维度报 skipped（不判定）。"
       },
       "afterVideo": {
         "type": "string",
-        "description": "audio 维度用：改后 mp4"
+        "description": "音频维度用：改后的 mp4（与 beforeVideo 一起给）。不给 ⇒ 音频维度报 skipped（不判定）。"
       },
       "beforeDraft": {
         "type": "string",
