@@ -1,0 +1,60 @@
+{
+  "name": "run_pipeline",
+  "description": "按预置路线编排多个动词（开副本 → 改草稿 → 落盘 → 语义验收 → 出成片）。路线定义在 references/pipeline-profiles.json（单一真源）。任一步失败会立刻停下并报告停在哪一步（宁可报错不许装成功）。★ 编排器跑的是官方渲染器 ⇒ 用之前剪映里得打开着这个草稿。",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "profile": {
+        "type": "string",
+        "enum": [
+          "grade-and-render",
+          "edit-and-verify",
+          "edit-then-render",
+          "talk-cut-then-render"
+        ],
+        "description": "要走的路线：调色并出片 / 改草稿并语义验收 / 改完直接出片 / 剪口播再出片"
+      },
+      "draft": {
+        "type": "string",
+        "description": "要编排的剪映草稿目录（真草稿，插件只读它、写它的副本）"
+      },
+      "outDir": {
+        "type": "string",
+        "description": "成片输出目录"
+      },
+      "grade": {
+        "type": "object",
+        "description": "调色 spec（形状同 grade_apply 的 spec；不给就不调色）"
+      },
+      "segmentId": {
+        "type": "string",
+        "description": "要改的段 id（不给则取草稿里的第一个段）"
+      },
+      "srt": {
+        "type": "string",
+        "description": "转写稿路径（talk-cut 路线用；★ 官方 ASR 拿不到，得由用户提供）"
+      },
+      "fps": {
+        "type": "number",
+        "description": "出片帧率（默认官方时间线）"
+      },
+      "denoise": {
+        "type": "string",
+        "description": "降噪：auto / off / light / strong"
+      },
+      "targetLufs": {
+        "type": "number",
+        "description": "响度目标（默认 -14 LUFS）"
+      },
+      "beautify": {
+        "type": "string",
+        "description": "人声美化（近似 EQ+压缩），如 approx"
+      }
+    },
+    "required": [
+      "profile",
+      "draft"
+    ],
+    "additionalProperties": false
+  }
+}

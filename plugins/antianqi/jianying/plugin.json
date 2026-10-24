@@ -2,7 +2,7 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "jianying",
   "version": "0.2.0",
-  "description": "用逐像素复刻的剪映调色链给视频调色并出 10bit 成片（保留原音轨），附逐节点生效探针与画面级验收。9 个 MCP 动词覆盖草稿读写、调色、混音、渲染、验收，以及一条命令出成片（官方渲染器画面 + 我们的调色/混音 + ffmpeg 编码 + 带断言的验收）。",
+  "description": "用逐像素复刻的剪映调色链给视频调色并出 10bit 成片（保留原音轨），附逐节点生效探针与画面级验收。10 个 MCP 动词覆盖草稿读写、调色、混音、渲染、验收、一条命令出成片，以及按预置路线编排多条动词（官方渲染器画面 + 我们的调色/混音 + ffmpeg 编码 + 带断言的验收）。",
   "author": {
     "name": "antianqi",
     "url": "https://github.com/antianqi"

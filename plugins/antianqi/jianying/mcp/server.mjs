@@ -451,6 +451,47 @@ function draftShape(d) {
   return { tracks: tracks.length, segments: segs, durationUs: dur, draftDurationUs: d?.duration };
 }
 
+/* --------------------------------------------------------------- 编排器辅助 */
+/** 把步骤参数里的 $变量 换成实际值（对象/数组递归） */
+function substVars(obj, vars) {
+  if (typeof obj === 'string') {
+    // ★ 整串就是某个变量 ⇒ 【返回那个变量本身】���保留类型）
+    //   （否则 $grade 会被 JSON 字符串化 ⇒ make_film 收到字符串而不是对象 ⇒ 烘 LUT 时炸）
+    const whole = /^\$[A-Za-z_][A-Za-z0-9_]*$/.exec(obj);
+    if (whole) {
+      const v = vars[whole[0]];
+      return v === undefined ? obj : v;
+    }
+    return obj.replace(/\$[A-Za-z_][A-Za-z0-9_]*/g, (m) => {
+      const v = vars[m];
+      if (v === undefined || v === null) return m;          // 没给的变量保持原样 ⇒ 后面会报"变量缺失"
+      return typeof v === 'object' ? JSON.stringify(v) : String(v);
+    });
+  }
+  if (Array.isArray(obj)) return obj.map((x) => substVars(x, vars));
+  if (obj && typeof obj === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(obj)) out[k] = substVars(v, vars);
+    return out;
+  }
+  return obj;
+}
+/** 解析 ok()/fail() 的 content 文本：能当 JSON 就当，否则原样留 */
+function parseOkPayload(r) {
+  const t = (r?.content || []).map((c) => c.text || '').join('\n');
+  try { return JSON.parse(t); } catch { return { raw: t }; }
+}
+/** 汇报里只留关键字段（不然 make_film 的 stdout 会把报告撑爆） */
+function summarizeStep(obj) {
+  if (!obj || typeof obj !== 'object') return obj;
+  const keep = ['sessionId', 'dir', 'draft', 'committed', 'encrypted', 'realDraftUnchanged',
+    'verdict', 'failureKind', 'problems', 'effectVerified', 'changesCount', 'baselineKind'];
+  const out = {};
+  for (const k of keep) if (k in obj) out[k] = obj[k];
+  if (obj.raw) out.rawTail = String(obj.raw).replace(/\s+/g, ' ').slice(-300);
+  return Object.keys(out).length ? out : { rawTail: String(obj.raw || '').slice(-200) };
+}
+
 /* --------------------------------------------------------------- 8 个动词 */
 const IMPL = {
   async draft_open(a) {
@@ -772,6 +813,87 @@ const IMPL = {
     const r = await run(process.execPath, args);
     if (r.code !== 0) throw new Error(`出片失败：\n${r.stderr || r.stdout}`);
     return ok(r.stdout);
+  },
+
+  async run_pipeline(a) {
+    // ★ 命令级编排器：按 references/pipeline-profiles.json 里的路线逐步执行
+    //   ★ 路线定义是【单一真源】（在 JSON 里）⇒ 改路线不用改这里
+    // ★ ESM 没有 __dirname ⇒ 用 import.meta.url 解析
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const defFile = path.join(here, '..', 'references', 'pipeline-profiles.json');
+    let defs;
+    try { defs = JSON.parse(fs.readFileSync(defFile, 'utf8')); }
+    catch (e) { throw new Error(`读不到路线定义：${defFile} —— ${e.message}`); }
+    const prof = (defs.profiles || []).find((p) => p.id === a.profile);
+    if (!prof) {
+      throw new Error(`未知路线 "${a.profile}"；可用：${(defs.profiles || []).map((p) => p.id).join(', ')}`);
+    }
+    if (!a.draft) throw new Error('缺少 draft（要编排的剪映草稿目录）');
+    const vars = {
+      $draft: a.draft, $outDir: a.outDir, $grade: a.grade, $srt: a.srt,
+      $segmentId: a.segmentId, $fps: a.fps, $denoise: a.denoise,
+      $targetLufs: a.targetLufs, $beautify: a.beautify,
+    };
+    const steps = [];
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jyai-pipe-'));
+    let stepNo = 0;
+    let failed = false;
+    try {
+      for (const st of prof.steps) {
+        stepNo++;
+        if (st.script) {
+          throw new Error(`路线 "${prof.id}" 第 ${stepNo} 步是脚本步骤（${st.script}）—— 还没接进编排器`
+            + '（脚本参数形态未探明 ⇒ 宁可报错也不静默跳过）');
+        }
+        const impl = IMPL[st.verb];
+        if (!impl) throw new Error(`路线 "${prof.id}" 第 ${stepNo} 步用了不存在的动词 ${st.verb}`);
+        // ★ 参数里还留着 $xxx 的 ⇒ 说明那个变量没人提供 ⇒ 明确报错（不猜）
+        const args = substVars(st.args || {}, vars);
+        const leftover = JSON.stringify(args).match(/\$[A-Za-z_][A-Za-z0-9_]*/g) || [];
+        if (leftover.length) {
+          throw new Error(`路线 "${prof.id}" 第 ${stepNo} 步缺少变量：${[...new Set(leftover)].join(', ')}`);
+        }
+        const r = await impl(args);
+        const obj = parseOkPayload(r);
+        // 收集这一步的产出，供后面步骤用
+        if (st.verb === 'draft_open') {
+          if (obj.sessionId) vars.$sessionId = obj.sessionId;
+          if (obj.dir) vars.$dir = obj.dir;
+        }
+        if (st.verb === 'draft_read') {
+          const seg = ((obj.draft?.tracks) || []).flatMap((t) => t.segments || [])[0];
+          if (seg?.id) vars.$segmentId = seg.id;
+          const f = path.join(tmpDir, 'before-draft.json');
+          fs.writeFileSync(f, JSON.stringify(obj.draft ?? obj, null, 2), 'utf8');
+          vars.$beforeDraft = f;
+        }
+        if (st.verb === 'draft_commit') {
+          const after = await IMPL.draft_read({ sessionId: vars.$sessionId });
+          const ao = parseOkPayload(after);
+          const f = path.join(tmpDir, 'after-draft.json');
+          fs.writeFileSync(f, JSON.stringify(ao.draft ?? ao, null, 2), 'utf8');
+          vars.$afterDraft = f;
+        }
+        steps.push({ n: stepNo, verb: st.verb, ok: true, result: summarizeStep(obj) });
+      }
+    } catch (e) {
+      failed = true;
+      const msg = String(e?.message || e);
+      steps.push({
+        n: stepNo, verb: prof.steps[stepNo - 1]?.verb || '?', ok: false,
+        error: msg.slice(0, 400),
+      });
+      return ok({
+        profile: prof.id, when: prof.when, steps, failed: true, verdict: 'FAIL',
+        note: `路线 "${prof.id}" 在第 ${stepNo} 步停下：${msg.slice(0, 300)}`,
+      });
+    } finally {
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+    return ok({
+      profile: prof.id, when: prof.when, steps, failed: false, verdict: 'PASS',
+      outDir: a.outDir || null,
+    });
   },
 
   async verify_diff(a) {

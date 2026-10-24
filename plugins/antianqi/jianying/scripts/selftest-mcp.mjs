@@ -147,7 +147,7 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
   check('initialize 握手', init.result?.serverInfo?.name === 'jianying', `serverInfo=${JSON.stringify(init.result?.serverInfo)}`);
   const list = await call('tools/list', {});
   const tools = list.result?.tools || [];
-  check('tools/list 返回 9 个动词', tools.length === 9, `实际 ${tools.length}：${tools.map((t) => t.name).join(', ')}`);
+  check('tools/list 返回 10 个动词', tools.length === 10, `实际 ${tools.length}：${tools.map((t) => t.name).join(', ')}`);
   const noSchema = tools.filter((t) => !t.inputSchema || t.inputSchema.type !== 'object');
 
   // ★★★ 安全：会话状态不得读/写 PLUGIN_DATA 之外（PR #72 review 的合并阻塞项）
@@ -544,6 +544,34 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
     check('★★ MCP: audio_mix 在无音轨草稿上明确报输入问题（nothing to mix），不静默出坏片',
       am1.result?.isError === true ? /nothing to mix/.test(amTxt) : fs.existsSync(path.join(SMOKE, 'mix.mp4')),
       amTxt.replace(/\s+/g, ' ').slice(0, 140));
+
+    // ── ★★★ run_pipeline：编排器（一条命令走完一条路线）──
+    //   路线定义在 references/pipeline-profiles.json ⇒ 这里跑【grade-and-render】
+    //   ★ 编排器渲的是【剪映当前打开的草稿】⇒ 先 open 目标草稿
+    const rpOpen = await call('tools/call', { name: 'draft_open', arguments: { draft: FILM_DRAFT, copy: true } });
+    const rpSid = (textOf(rpOpen).match(/ve-session-\d+/) || [])[0];
+    const rp = await call('tools/call', {
+      name: 'run_pipeline',
+      arguments: {
+        profile: 'grade-and-render',
+        draft: FILM_DRAFT,
+        outDir: path.join(SMOKE, 'pipeline'),
+        grade: { adjustColor: { temperature: 0.15 } },
+        fps: 6, denoise: 'auto',
+      },
+    });
+    const rpTxt = textOf(rp);
+    check('★★★ run_pipeline：按路线走完（grade-and-render）⇒ 编排器判 PASS 且出片存在',
+      rp.result?.isError !== true && /"verdict"\s*:\s*"PASS"/.test(rpTxt)
+      && fs.existsSync(path.join(SMOKE, 'pipeline', 'film.mp4')),
+      rpTxt.replace(/\s+/g, ' ').slice(0, 200));
+    // ★ 阴性：未知路线必须被拒（不许静默跑别的）
+    const rpBad = await call('tools/call', {
+      name: 'run_pipeline', arguments: { profile: 'no-such-profile', draft: FILM_DRAFT },
+    });
+    check('★★★ run_pipeline：未知路线 ⇒ 明确报错（不许静默跑别的路线）',
+      rpBad.result?.isError === true && /未知路线|不在允许集合/.test(textOf(rpBad)),
+      textOf(rpBad).replace(/\s+/g, ' ').slice(0, 140));
 
     // ── ★★★ 覆盖度补强（2026-10-23）：verify_diff 的【语义判据】路径 ──
     //   beforeDraft / afterDraft / expect —— 这是 jianying-draft-edit 文档教的主工作流第⑤步，

@@ -15,7 +15,7 @@
 2. **自己复刻**（本插件）—— 把官方的调色数学逐 feature 复刻出来（13/13 逐像素对齐，误差 ≤ 1 LSB），
    自己出片。
 
-⇒ 本插件走第 2 条：**MCP 提供 9 个原子动词**（草稿读写 / 调色 / 出片 / 混音 / 渲染 / 验收），
+⇒ 本插件走第 2 条：**MCP 提供 10 个原子动词**（草稿读写 / 调色 / 出片 / 混音 / 渲染 / 验收），
 **Skill 提供 7 条"有自己中间思路 + 门禁"的剪辑链路**（含一条跨链流水线：一件事做完时按它串联）。
 
 ## 试一下
@@ -54,7 +54,7 @@ node scripts/run-verb.mjs --list
 node scripts/run-verb.mjs grade_apply '{"src":"<源视频.mp4>","outDir":"<输出目录>","spec":{"adjustColor":{"brightness":0.1,"temperature":0.15}}}'
 ```
 
-## 9 个动词
+## 10 个动词
 
 | 动词 | 作用 |
 |---|---|
@@ -67,6 +67,7 @@ node scripts/run-verb.mjs grade_apply '{"src":"<源视频.mp4>","outDir":"<输�
 | `audio_mix` | 混音 + 响度归一到 −14 LUFS |
 | `verify_diff` | 多维度验收：画面可见性 / 画质 / 响度 / 时间线 / 草稿完整性 |
 | **`make_film`** | **给剪映草稿一条命令出成片**（官方渲染器出画面 + 我们的调色/混音/编码 + 带断言的验收） |
+| **`run_pipeline`** | **按预置路线编排多条动词**（开副本 → 改草稿 → 落盘 → 语义验收 → 出成片；路线定义在 `references/pipeline-profiles.json`） |
 
 ## 7 个 Skill
 
