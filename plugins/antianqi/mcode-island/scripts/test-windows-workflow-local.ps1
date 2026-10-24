@@ -351,6 +351,26 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "OK Step 5: behavioral sub-step + redaction suite"
+
+# --- Step 6: the session tracker's own suite ---------------------------------
+# The session list (v0.5.0) brought a 500-line suite of its own, and it was
+# in no CI: the feature's core tests only ran when somebody remembered to
+# run them by hand. A suite that is not wired into CI is a suite that rots.
 Write-Host ""
-Write-Host "=== All 5 steps OK ==="
+Write-Host "--- Step 6: session tracker suite ---"
+
+$trackerSuite = Join-Path $repoRoot 'plugins/antianqi/mcode-island/scripts/test-session-tracker.ps1'
+if (-not (Test-Path $trackerSuite)) {
+  throw "Step 6: $trackerSuite not found (cwd: $((Get-Location).Path))"
+}
+Write-Host "Suite: $((Resolve-Path $trackerSuite).Path)"
+
+& $trackerSuite
+if ($LASTEXITCODE -ne 0) {
+  throw "Step 6: test-session-tracker.ps1 failed with exit code $LASTEXITCODE"
+}
+
+Write-Host "OK Step 6: session tracker suite"
+Write-Host ""
+Write-Host "=== All 6 steps OK ==="
 exit 0
