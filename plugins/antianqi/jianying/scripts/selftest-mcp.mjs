@@ -662,6 +662,17 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
         + ` problems=${JSON.stringify(cmpStep?.result?.problems || []).slice(0, 80)}`);
     }
 
+    // ★ 缺参预检：一次点名【全部】缺参，并标出哪些必须问用户（别跑到一半才说缺）
+    const needRp = await call('tools/call', {
+      name: 'run_pipeline',
+      arguments: { profile: 'talk-cut-then-render', draft: FILM_DRAFT },   // ★ 故意不给 srt / outDir
+    });
+    const needTxt = textOf(needRp);
+    check('★★★ run_pipeline：缺参 ⇒ 一次性点名全部缺参，并标出"必须由用户提供"的',
+      needRp.result?.isError === true && /\$srt/.test(needTxt) && /\$outDir/.test(needTxt)
+      && /必须由用户提供/.test(needTxt),
+      needTxt.replace(/\s+/g, ' ').slice(0, 200));
+
     // ── ★★★ 第二条【脚本步骤】路线：加字幕并出片（2026-10-24 新增）──
     //   ★ 价值有两个：① 字幕是高频真实需求 ② 这是【第二个脚本步骤】⇒ 证明脚本步骤机制不是
     //     只为 talk-cut 打的补丁；③ 字幕脚本自己会按 ±1 帧核对时码 ⇒ 它自证"字幕真的落进去了"

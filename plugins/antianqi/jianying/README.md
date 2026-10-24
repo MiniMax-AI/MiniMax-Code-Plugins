@@ -123,7 +123,7 @@ plugin-root/
     ├── classify-intent.mjs     # 意图分类器（一句人话 ⇒ 候选链/路线 + 命中词；--decide ⇒ 判决或明确拒答）
     ├── selftest-intent.mjs     # 意图路由准确率自检（带标注测试集 ⇒ 低于阈值就红）
     ├── check-env.mjs           # 环境自检
-    ├── selftest-mcp.mjs        # MCP 动词自检（61 项断言，含 MCP 层冒烟 / 参数覆盖 / 意图路由准确率 / 编排器确认点与新路线）
+    ├── selftest-mcp.mjs        # MCP 动词自检（62 项断言，含 MCP 层冒烟 / 参数覆盖 / 意图路由准确率 / 编排器确认点、缺参预检与新路线）
     ├── selftest-draft-edit.mjs # 改草稿链路端到端自检（17 项）
     ├── selftest-talk-cut.mjs   # 剪口播自检（11 项；没有草稿时落稿链显式 SKIP）
     ├── talk-cut-plan.mjs       # 口播保留区间规划器

@@ -12,6 +12,54 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROUTES = JSON.parse(fs.readFileSync(path.join(HERE, '..', 'references', 'intent-routes.json'), 'utf8'));
+// ★ 路线定义（要知道每条路线【要哪些输入】、哪些必须问用户）
+const PROFILES = (() => {
+  const p = path.join(HERE, '..', 'references', 'pipeline-profiles.json');
+  try { return (JSON.parse(fs.readFileSync(p, 'utf8')).profiles || []); } catch { return []; }
+})();
+// ★ 诉求 → 参数（机器可读）⇒ 判决能直接带出"参数怎么填"
+const IMAP = (() => {
+  const p = path.join(HERE, '..', 'references', 'intent-map.json');
+  try { return (JSON.parse(fs.readFileSync(p, 'utf8')).intents || []); } catch { return []; }
+})();
+
+/** 这条路线要哪些输入？哪些【必须问用户】？（依据 pipeline-profiles.json 的 inputs 声明） */
+function inputsOfRoute(routeId) {
+  const prof = PROFILES.find((p) => p.id === routeId);
+  const inputs = prof?.inputs || [];
+  return {
+    inputs: inputs.map((i) => ({ name: i.name, kind: i.kind, desc: i.desc, required: i.required !== false, from: i.from, note: i.note || null })),
+    mustAsk: inputs.filter((i) => i.required !== false && i.from === 'user')
+      .map((i) => ({ name: i.name, desc: i.desc, note: i.note || null })),
+  };
+}
+
+/** 从 intent-map 里找出这句话对应的参数（并按路线/动词里实际的参数名改名） */
+function paramsFromMap(query, routeId, skillId) {
+  const q = String(query || '');
+  // ★ 判决是【路线】时：参数落在该路线里那个动词的参数名上
+  //   （grade_apply 用 spec，make_film 用 grade —— 两者形状相同）
+  if (routeId) {
+    const prof = PROFILES.find((p) => p.id === routeId);
+    if (!prof) return null;
+    const target = prof.steps.find((s) => s.verb === 'grade_apply') ? 'spec'
+      : prof.steps.find((s) => s.verb === 'make_film') ? 'grade' : null;
+    if (!target) return null;
+    const hit = IMAP.find((e) => e.utterance && q.includes(e.utterance) && e.params);
+    if (!hit) return null;
+    const p = hit.params || {};
+    return { param: target, from: hit.utterance, value: p.spec || p.grade || p };
+  }
+  // ★ 判决是【skill】时：从 intent-map 里找同一诉求 ⇒ 直接给出那个动词的参数
+  if (skillId) {
+    const hit = IMAP.find((e) => e.utterance && q.includes(e.utterance) && e.params
+      && Array.isArray(e.skills) && e.skills.includes(skillId));
+    if (!hit) return null;
+    const p = hit.params || {};
+    return { param: 'spec', verb: hit.verb, from: hit.utterance, value: p.spec || p.grade || p };
+  }
+  return null;
+}
 
 /** 关键词权重：长词更具体 ⇒ 权重更高；单字（如"审"）几乎没区分度
  *  ★ 权重必须【随长度增长】（原来 ≥3 字一律 3 分 ⇒ 与这条注释自相矛盾）：
@@ -121,6 +169,20 @@ export function decide(query, opts = {}) {
     },
     margin,
     evidence: { matched: top.matched, margin, threshold: minScore },
+    // ★★ 判决【带出接下来要什么】：① 需要哪些输入 ② 哪些必须问用户 ③ 参数怎么填（能查到的话）
+    ...(top.route || top.skill ? (() => {
+      const io = top.route ? inputsOfRoute(top.route) : { inputs: [], mustAsk: [] };
+      const pm = paramsFromMap(query, top.route, top.skill);
+      const mustAsk = io.mustAsk;
+      return {
+        ...(top.route ? { routeInputs: io.inputs, mustAsk } : { mustAsk }),
+        params: pm,
+        nextStep: mustAsk.length
+          ? `先向用户要：${mustAsk.map((m) => m.name).join('、')}`
+            + (pm ? `；${pm.param} 可以按「${pm.from}」填：${JSON.stringify(pm.value)}` : '')
+          : (pm ? `参数可以直接带：${pm.param} = ${JSON.stringify(pm.value)}` : '输入齐了，可以直接跑'),
+      };
+    })() : {}),
     reason: `判决：走 ${top.kind === 'route' ? `路线 ${top.route}` : `skill ${top.skill}`}`
       + `（命中 ${top.matched.join('、')}，${top.score} 分，与次优【不同目标】拉开 ${margin} 分）`,
     action: '按判决走；执行中若发现判决与用户原话不符 ⇒ 停下来问，不要硬跑',

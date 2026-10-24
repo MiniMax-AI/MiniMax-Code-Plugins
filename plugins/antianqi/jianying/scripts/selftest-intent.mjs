@@ -75,14 +75,45 @@ export function runIntentCheck() {
   }
   const decisionOk = refusedOnClear === 0 && decidedOnVague === 0;
 
+  // ★★ 判决要【带出"接下来要什么"】：路线输入 + 该问用户什么 + 参数（能查到的话）
+  const IMAP = (() => {
+    const p = path.join(HERE, '..', 'references', 'intent-map.json');
+    try { return (JSON.parse(fs.readFileSync(p, 'utf8')).intents || []); } catch { return []; }
+  })();
+  let routeDecisions = 0, withInputs = 0, withMustAsk = 0, expectParams = 0, withParams = 0;
+  const carryProblems = [];
+  for (const c of cases) {
+    const d = decide(c.utterance);
+    if (!d.decision) continue;
+    if (d.decision.route) {
+      routeDecisions++;
+      if (Array.isArray(d.routeInputs) && d.routeInputs.length) withInputs++;
+      else carryProblems.push({ u: c.utterance, why: '路线判决没有带 routeInputs（不知道要哪些输入）' });
+      if (Array.isArray(d.mustAsk) && d.mustAsk.length) withMustAsk++;
+      else carryProblems.push({ u: c.utterance, why: '路线判决没有带 mustAsk（不知道该问用户什么）' });
+    }
+    // ★ 这句话命中了 intent-map 里的诉求 ⇒ 判决应当把参数带出来
+    const hitMap = IMAP.find((e) => e.utterance && c.utterance.includes(e.utterance) && e.params);
+    if (hitMap) {
+      expectParams++;
+      if (d.params) withParams++;
+      else carryProblems.push({ u: c.utterance, why: `命中 intent-map 的「${hitMap.utterance}」却没有带参数` });
+    }
+  }
+  const carryOk = carryProblems.length === 0
+    && withInputs === routeDecisions && withMustAsk === routeDecisions
+    && withParams === expectParams;
+
   return {
-    ok: acc1 >= MIN_TOP1 && acc3 >= MIN_TOP3 && hardGuesses.length === 0 && decisionOk,
+    ok: acc1 >= MIN_TOP1 && acc3 >= MIN_TOP3 && hardGuesses.length === 0 && decisionOk && carryOk,
     acc1, acc3, confRate, total: cases.length, misses,
     top1, top3, confident, minTop1: MIN_TOP1, minTop3: MIN_TOP3,
     // 拒答
     refusalTotal: (REFUSAL.cases || []).length, hardGuesses,
     // 判决
     decided, decisionRight, refusedOnClear, decidedOnVague, decideProblems, decisionOk,
+    // 判决带出的东西
+    routeDecisions, withInputs, withMustAsk, expectParams, withParams, carryProblems, carryOk,
   };
 }
 
@@ -108,6 +139,12 @@ if (isMain) {
     + ` · 明确句被拒 ${r.refusedOnClear} · 模糊句被硬判 ${r.decidedOnVague}（两个都必须 0）`);
   for (const p of r.decideProblems) {
     console.log(`   · 「${p.u}」 ⇒ ${p.why}${p.got ? ` 实际=${p.got}` : ''}${p.reason ? ` ${p.reason}` : ''}`);
+  }
+  // ★ 判决带出的"接下来要什么"
+  console.log(`  判决带出：路线判决 ${r.routeDecisions} 条（带出输入 ${r.withInputs} · 带出该问用户 ${r.withMustAsk}）`
+    + ` · 命中诉求可查参数 ${r.expectParams}（带出 ${r.withParams}）`);
+  for (const p of r.carryProblems) {
+    console.log(`   · 「${p.u}」 ⇒ ${p.why}`);
   }
   if (r.misses.length) {
     console.log('\n  未命中 top-1 的句子：');

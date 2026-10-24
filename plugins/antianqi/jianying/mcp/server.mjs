@@ -748,6 +748,19 @@ async function execSteps(prof, vars, workDir, startIdx, stepsIn) {
   return { done: true, steps };
 }
 
+/** 路线还缺哪些【必需输入】（依据 profile.inputs 的声明）
+ *  ★ 一次性点名，而不是"跑到第 3 步才说缺 $srt"；
+ *  ★ 并且标出哪些【必须由用户提供】（官方 ASR 拿不到 / 曲线形状猜不出来这类） */
+function missingInputsOf(prof, vars) {
+  const out = [];
+  for (const inp of prof.inputs || []) {
+    if (inp.required === false) continue;
+    const v = vars[inp.name];
+    if (v === undefined || v === null || v === '') out.push(inp);
+  }
+  return out;
+}
+
 /* --------------------------------------------------------------- 8 个动词 */
 const IMPL = {
   async draft_open(a) {
@@ -1163,15 +1176,23 @@ const IMPL = {
     // ───────────────────────── 新建一条流水线 ─────────────────────────
     // ★ draft 不在 schema 的 required 里（续跑时不需要它）⇒ 这里补上条件必填
     if (!a.draft) throw new Error('缺少 draft（要编排的剪映草稿目录）；续跑时用 resume.token 即可');
-    const token = crypto.randomBytes(8).toString('hex');
-    const workDir = pipelineWorkDir(token);
-    const vars = {
+    const vars0 = {
       $draft: a.draft, $outDir: a.outDir, $grade: a.grade, $srt: a.srt,
       $segmentId: a.segmentId, $fps: a.fps, $denoise: a.denoise,
       $targetLufs: a.targetLufs, $beautify: a.beautify,
       // ★ 第二份草稿（两版对照审片用）⇒ 没有它就不给，不是空串
       ...(a.draftAfter ? { $draftAfter: a.draftAfter } : {}),
     };
+    // ★ 预检：整条路线还缺哪些输入 ⇒ 【一次性点名】（别跑到第 3 步才说"缺 $srt"）
+    const missing = missingInputsOf(prof, vars0);
+    if (missing.length) {
+      throw new Error(`路线 "${prof.id}" 还缺 ${missing.length} 个必需输入：\n`
+        + missing.map((m) => `  · ${m.name}（${m.desc}）—— ${m.from === 'user' ? '★ 必须由用户提供' : '由调用方给'}${m.note ? '；' + m.note : ''}`).join('\n')
+        + '\n⇒ 补齐后再跑；缺什么就问什么，不要拿默认值糊过去。');
+    }
+    const vars = vars0;
+    const token = crypto.randomBytes(8).toString('hex');
+    const workDir = pipelineWorkDir(token);
     // ★ 产物路径由编排器分配（放在流水线工作目录里 ⇒ 关卡前后都能用）
     for (const [vn, fname] of Object.entries(prof.alloc || {})) {
       vars[vn] = path.join(workDir, fname);
