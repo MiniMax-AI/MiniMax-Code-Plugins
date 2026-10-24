@@ -731,10 +731,26 @@ function Get-ForegroundPid {
   try {
     $fg = [WinAPI]::GetForegroundWindow()
     if ($fg -eq [IntPtr]::Zero) { return 0 }
-    $pid = [uint32]0
-    [void][WinAPI]::GetWindowThreadProcessId($fg, [ref]$pid)
-    return [int]$pid
+    # 变量名不能叫 $pid：PowerShell 的变量名不区分大小写，$PID 是只读的
+    # 自动变量，赋值直接抛 "Cannot overwrite variable PID"。而这里外面还
+    # 包着 catch —— 异常被吞掉，表现是"这个函数永远返回 0"，从外面看
+    # 一点异常都看不出来。同名的坑 $HOME 也踩过一次。
+    $procId = [uint32]0
+    [void][WinAPI]::GetWindowThreadProcessId($fg, [ref]$procId)
+    return [int]$procId
   } catch { return 0 }
+}
+
+# 前台窗口现在是不是目标进程。
+#
+# SetForegroundWindow 失败是**静默**的：返回值不告诉你成没成。所以每次抢完
+# 前台都要回读一次前台窗口的 pid 跟目标 pid 对一下 —— 对不上就是没抢到。
+# 不回读的话，日志里一句 "switched" 会把"没抢到"盖过去。
+function Test-ForegroundPid([uint32]$procId) {
+  $fg = Get-ForegroundPid
+  if ($fg -eq [int]$procId) { return $true }
+  Dbg ("FOCUS CHECK: want pid=" + $procId + " foregroundPid=" + $fg)
+  return $false
 }
 
 # 把终端窗口抢到前台。
@@ -748,11 +764,33 @@ function Get-ForegroundPid {
 function Focus-TerminalWindow([IntPtr]$h) {
   if (-not $h -or $h -eq [IntPtr]::Zero) { return $false }
   try {
-    $pid = [uint32]0
-    [void][WinAPI]::GetWindowThreadProcessId($h, [ref]$pid)
-    Focus-Window -Target @{ Hwnd = $h; Pid = $pid; Exe = 'WindowsTerminal' }
-    return $true
+    # 变量名不能叫 $pid —— $PID 是只读自动变量，赋值会抛异常，被这里的
+    # catch 吞掉，于是"抢前台"这步从来没发生过，而外面看着一切正常。
+    $procId = [uint32]0
+    [void][WinAPI]::GetWindowThreadProcessId($h, [ref]$procId)
+    Focus-Window -Target @{ Hwnd = $h; Pid = $procId; Exe = 'WindowsTerminal' }
+    if (Test-ForegroundPid $procId) {
+      Dbg ("FOCUS CONFIRMED: pid=" + $procId + " hwnd=" + $h)
+      return $true
+    }
+    # 第一套没抢到：换主 pill 真正在用的那套。
+    #
+    # Focus-Window 里两次 SetWindowPos 都带 SWP_NOACTIVATE，只动 z-order
+    # 不激活；主 pill 的 Toggle-Window 用的是 SetWindowPos(HWND_TOP) 且
+    # **不**带 SWP_NOACTIVATE —— 那个会顺手把窗口激活，这才是"到前台"
+    # 的关键。用同一套，别自创第四种。
+    $flags = [WinAPI]::SWP_NOSIZE -bor [WinAPI]::SWP_NOMOVE
+    [WinAPI]::SetWindowPos($h, [WinAPI]::HWND_TOP, 0, 0, 0, 0, $flags) | Out-Null
+    [WinAPI]::BringWindowToTop($h) | Out-Null
+    [WinAPI]::SetForegroundWindow($h) | Out-Null
+    if (Test-ForegroundPid $procId) {
+      Dbg ("FOCUS CONFIRMED (z-order): pid=" + $procId + " hwnd=" + $h)
+      return $true
+    }
+    Dbg ("FOCUS NOT CONFIRMED: want pid=" + $procId + " foregroundPid=" + (Get-ForegroundPid))
+    return $false
   } catch {
+    Dbg ("FOCUS FAIL: " + $_.Exception.Message)
     return $false
   }
 }
@@ -824,7 +862,11 @@ function Select-SessionTerminal([string[]]$names) {
         #
         # 所以复用主 pill 的聚焦：先 TOPMOST 再 NOTOPMOST，让
         # BringWindowToTop 能把窗口推到最前，最后 SetForegroundWindow。
-        Focus-TerminalWindow ([IntPtr]$w.Current.NativeWindowHandle)
+        # tab 已经切过去了。即使抢前台没成功，也**不能**回退去新开一个终端
+        # —— 那正是"同一个会话两个终端"的病根。抢前台失败只记日志。
+        if (-not (Focus-TerminalWindow ([IntPtr]$w.Current.NativeWindowHandle))) {
+          Dbg ("session tab selected but foreground not confirmed: " + ($names -join ' | '))
+        }
         return $true
       }
     }
@@ -865,7 +907,10 @@ function Activate-TerminalWindow {
       }
       if (-not $hasMcode) { continue }
       try {
-        if (Focus-TerminalWindow ([IntPtr]$w.Current.NativeWindowHandle)) { return $true }
+        # 找到终端窗口就算"找到了"。抢前台没成功**不能**返回 $false ——
+        # 调用方拿 $false 会新开一个终端，同一个会话就多出一个终端了。
+        Focus-TerminalWindow ([IntPtr]$w.Current.NativeWindowHandle) | Out-Null
+        return $true
       } catch {}
     }
   } catch {
@@ -1397,7 +1442,9 @@ function Focus-Window {
     [WinAPI]::SetWindowPos($Target.Hwnd, [IntPtr]::new(-2), 0, 0, 0, 0, [WinAPI]::SWP_NOACTIVATE) | Out-Null  # HWND_NOTOPMOST
     [WinAPI]::BringWindowToTop($Target.Hwnd) | Out-Null
     [WinAPI]::SetForegroundWindow($Target.Hwnd) | Out-Null
-    Dbg ("FOCUS OK: target=" + $Target.Exe + " PID=" + $Target.Pid + " hwnd=" + $Target.Hwnd)
+    # "DONE" 而不是 "OK"：这里只说明这几个调用没抛异常，不代表窗口真到了
+    # 前台。到底到没到，看 Test-ForegroundPid 的回读。
+    Dbg ("FOCUS DONE: target=" + $Target.Exe + " PID=" + $Target.Pid + " hwnd=" + $Target.Hwnd)
   } catch {
     Dbg "FOCUS FAIL: $($_.Exception.Message)"
   }

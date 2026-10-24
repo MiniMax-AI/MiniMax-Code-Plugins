@@ -1592,6 +1592,143 @@ const main = async () => {
         out('PASS', `ps1 encoding: all ${nonAsciiCount} non-ASCII .ps1 file(s) carry a UTF-8 BOM (${ps1Files.length} scanned)`);
     }
 
+    // --- PowerShell read-only automatic variables ------------------------
+    //
+    // Assigning to one of these throws "Cannot overwrite variable PID
+    // because it is read-only or constant". PowerShell variable names are
+    // case-insensitive, so `$pid` IS the automatic `$PID` -- and a `catch`
+    // wrapped around the assignment swallows the error, which makes the
+    // function look like it ran while it never did.
+    //
+    // This is not hypothetical. Focus-TerminalWindow assigned to `$pid`, so
+    // every click on a session row threw, the catch ate it, and the log
+    // said "session terminal switched" while the terminal never came
+    // forward. The same class of bug already bit `$home` in Runtime-Titles
+    // and `$args` in the detector.
+    //
+    // The scanner strips comments and string literals first, so a `$pid`
+    // mentioned in prose, in a here-string, or in a log message is not a
+    // hit. `$null = <expr>` is a legal discard and `$Error` / `$args` /
+    // `$OutputEncoding` are writable, so none of them are in the set.
+    const RESERVED_PS_VARS = new Set([
+        'pid', 'home', 'pshome', 'psversiontable', 'host', 'iswindows',
+        'islinux', 'ismacos', 'psculture', 'psuiculture', 'shellid',
+        'myinvocation', 'enabledexperimentalfeatures', 'true', 'false',
+    ]);
+
+    // Remove comments and string literals, keeping the line structure so
+    // hits can still be reported with a line number. PowerShell strings
+    // are single- or double-quoted and escape the quote by doubling it;
+    // here-strings (@'...'@ / @"..."@) span lines.
+    const stripLiterals = (src) => {
+        const outLines = [];
+        let inHere = null;
+        for (const line of src.split(/\r?\n/)) {
+            if (inHere) {
+                const trimmed = line.trim();
+                if (trimmed.startsWith(inHere + '@')) inHere = null;
+                outLines.push('');
+                continue;
+            }
+            let res = '';
+            let i = 0;
+            while (i < line.length) {
+                const ch = line[i];
+                if (ch === '#') break;                    // comment to EOL
+                if (ch === '@' && (line[i + 1] === "'" || line[i + 1] === '"')) {
+                    const q = line[i + 1];
+                    if (line.slice(i + 2).trim() === '') {
+                        // multi-line here-string opener
+                        inHere = q;
+                        i = line.length;
+                        continue;
+                    }
+                    i++;                                  // single-line form
+                    continue;
+                }
+                if (ch === "'" || ch === '"') {
+                    const q = ch;
+                    i++;
+                    while (i < line.length) {
+                        if (line[i] === q) {
+                            if (line[i + 1] === q) { i += 2; continue; }
+                            i++;
+                            break;
+                        }
+                        if (q === '"' && line[i] === '`') { i += 2; continue; }
+                        i++;
+                    }
+                    res += '""';
+                    continue;
+                }
+                res += ch;
+                i++;
+            }
+            outLines.push(res);
+        }
+        return outLines;
+    };
+
+    // Parameters that shadow a read-only automatic variable. `param($pid)`
+    // does not throw at definition time but throws the moment the
+    // parameter is bound, so it has to be caught statically too.
+    const findReservedParams = (code) => {
+        const hits = [];
+        const re = /\bparam\s*\(/gi;
+        let m;
+        while ((m = re.exec(code)) !== null) {
+            let depth = 1;
+            let i = m.index + m[0].length;
+            while (i < code.length && depth > 0) {
+                if (code[i] === '(') depth++;
+                else if (code[i] === ')') depth--;
+                i++;
+            }
+            const body = code.slice(m.index + m[0].length, i - 1);
+            const nm = /\$([A-Za-z_][A-Za-z0-9_]*)/g;
+            let p;
+            while ((p = nm.exec(body)) !== null) {
+                const name = p[1];
+                if (!RESERVED_PS_VARS.has(name.toLowerCase())) continue;
+                let k = p.index - 1;
+                while (k >= 0 && /\s/.test(body[k])) k--;
+                if (k >= 0 && body[k] === '=') continue;  // default value, not a name
+                const line = code.slice(0, m.index + p.index).split(/\r?\n/).length;
+                hits.push({ line, name });
+            }
+        }
+        return hits;
+    };
+
+    const ASSIGN_RE = /(?<![-!<>=\w$:])\$(?:(?:script|global|local|private|using):)*([A-Za-z_][A-Za-z0-9_]*)\s*=(?!=)/g;
+    const BRACED_ASSIGN_RE = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}\s*=(?!=)/g;
+
+    let reservedHits = 0;
+    for (const abs of ps1Files) {
+        const rel = abs.slice(PLUGIN_ROOT.length + 1);
+        const code = stripLiterals(await readFile(abs, 'utf8')).join('\n');
+        const lines = code.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+            for (const re of [ASSIGN_RE, BRACED_ASSIGN_RE]) {
+                re.lastIndex = 0;
+                let m;
+                while ((m = re.exec(lines[i])) !== null) {
+                    const name = m[1];
+                    if (!RESERVED_PS_VARS.has(name.toLowerCase())) continue;
+                    out('FAIL', `${rel}:${i + 1}: assigns to $${name}, a read-only PowerShell automatic variable -- the assignment throws and a surrounding catch swallows it`);
+                    reservedHits++;
+                }
+            }
+        }
+        for (const hit of findReservedParams(code)) {
+            out('FAIL', `${rel}:${hit.line}: parameter $${hit.name} shadows the read-only PowerShell automatic variable`);
+            reservedHits++;
+        }
+    }
+    if (reservedHits === 0) {
+        out('PASS', `ps1 reserved-variable guard: no assignment to a read-only PowerShell automatic variable (${ps1Files.length} scanned)`);
+    }
+
     finish();
 };
 
