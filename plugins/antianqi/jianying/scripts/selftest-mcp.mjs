@@ -557,10 +557,26 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
       const { semSid, segId, beforeJson } = semParsed;
       const beforeFile = path.join(SMOKE, 'before-draft.json');
       const afterFile = path.join(SMOKE, 'after-draft.json');
-      fs.writeFileSync(beforeFile, beforeJson, 'utf8');
-      const patchRes = await call('tools/call', {
+      // ★★ 关键（2026-10-24 审计修正）：先做【第一次】patch 把基线变成【运行时展开形态】
+      //   —— 剪映自己存的草稿是【精简形态】（段 11 键、没有 volume），
+      //      官方返回的是【展开形态】（段 52 键、有 volume）
+      //   ⇒ 只做一次 patch 时，"改前(精简) vs 改后(展开)" 的 diff 里混着几十个形态字段
+      //      ⇒ 旧版判据会把形态噪音当成"volume 变了" ⇒ 【假绿】
+      //   ⇒ 现在连做两次 patch：before/after 都是展开形态 ⇒ 判定才精确
+      const patch1 = await call('tools/call', {
         name: 'draft_patch',
         arguments: { op: 'video.setVolume', sessionId: semSid, params: { segmentId: segId, volume: 0.25 } },
+      });
+      const beforeExpandedTxt = textOf(await call('tools/call', { name: 'draft_read', arguments: { sessionId: semSid } }));
+      let beforeExpandedJson = beforeExpandedTxt;
+      try {
+        const bo = JSON.parse(beforeExpandedTxt);
+        beforeExpandedJson = JSON.stringify(bo?.draft || bo || {}, null, 2);
+      } catch { /* ignore */ }
+      fs.writeFileSync(beforeFile, beforeExpandedJson, 'utf8');
+      const patchRes = await call('tools/call', {
+        name: 'draft_patch',
+        arguments: { op: 'video.setVolume', sessionId: semSid, params: { segmentId: segId, volume: 0.5 } },
       });
       const afterTxt = textOf(await call('tools/call', { name: 'draft_read', arguments: { sessionId: semSid } }));
       let afterJson = afterTxt;
@@ -579,7 +595,8 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
       });
       const semTxt = textOf(sem);
       check('★★★ MCP: verify_diff 语义判据（beforeDraft/afterDraft/expect）⇒ 判得"volume 变了"',
-        patchRes.result?.isError !== true && sem.result?.isError !== true && /"verdict"\s*:\s*"PASS"/.test(semTxt),
+        patch1.result?.isError !== true && patchRes.result?.isError !== true
+        && sem.result?.isError !== true && /"verdict"\s*:\s*"PASS"/.test(semTxt),
         semTxt.replace(/\s+/g, ' ').slice(0, 220));
       // ★ 阴性对照：两份草稿【相同】⇒ 必须判 FAIL（否则这条判据没有区分力）
       const neg = await call('tools/call', {

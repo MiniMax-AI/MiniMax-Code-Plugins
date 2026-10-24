@@ -363,6 +363,63 @@ function shaTree(dir) {
   return out;
 }
 
+/* --------------------------------------------------------------- 草稿读与段级 diff
+   ★ 这两个函数被 verify_diff（timeline 维度）与 draft_patch（生效探针）共用：
+   - readDraftJson：草稿可能是官方加密封装 ⇒ 取第一个 '{' 之后解析
+   - segmentDiffOf：段级字段差 —— "我到底改了什么"，不依赖像素、不依赖官方自述 */
+function readDraftJson(p) {
+  let txt;
+  try { txt = fs.readFileSync(p, 'utf8'); } catch { return null; }
+  const i = txt.indexOf('{');
+  if (i > 0) txt = txt.slice(i);
+  try { return JSON.parse(txt); } catch { return null; }
+}
+function segmentDiffOf(before, after) {
+  const segMap = (d) => {
+    const m = new Map();
+    for (const t of (d?.tracks || [])) for (const s of (t.segments || [])) m.set(s.id, s);
+    return m;
+  };
+  const mb = segMap(before), ma = segMap(after);
+  const out = [];
+  for (const [id, s2] of ma) {
+    const s1 = mb.get(id);
+    if (!s1) { out.push({ segmentId: id, kind: 'added' }); continue; }
+    const fields = {};
+    const morphOnly = [];
+    for (const k of new Set([...Object.keys(s1), ...Object.keys(s2)])) {
+      const v1 = JSON.stringify(s1[k]), v2 = JSON.stringify(s2[k]);
+      if (v1 === v2) continue;
+      // ★ 只在【两边都有】的字段上算"值变了"；只在一边有的 ⇒ 是【形态差】（精简 vs 运行时展开），
+      //   不是这个 op 改的 ⇒ 单列 morphOnly，否则真实变化会被几十个形态字段淹没（实测踩过）
+      if (k in s1 && k in s2) fields[k] = { before: s1[k], after: s2[k] };
+      else morphOnly.push(k);
+    }
+    // ★ fields 空但 morphOnly 有 ⇒ 也要保留（否则承载形态差的段被整段丢掉 ⇒
+    //   "这个字段只在展开形态里存在"这条信息就丢了 ⇒ expect 就分不清"没变"与"判不出来"）
+    if (Object.keys(fields).length || morphOnly.length) {
+      out.push({
+        segmentId: id,
+        kind: Object.keys(fields).length ? 'changed' : 'morph-only',
+        fields, morphOnly,
+      });
+    }
+  }
+  for (const [id] of mb) if (!ma.has(id)) out.push({ segmentId: id, kind: 'removed' });
+  return out;
+}
+/** 段数 / 时长摘要（timeline 维度也用） */
+function draftShape(d) {
+  const tracks = d?.tracks || [];
+  let segs = 0, dur = 0;
+  for (const t of tracks) for (const s of (t.segments || [])) {
+    segs++;
+    const tr = s.target_timerange || {};
+    dur = Math.max(dur, (tr.start || 0) + (tr.duration || 0));
+  }
+  return { tracks: tracks.length, segments: segs, durationUs: dur, draftDurationUs: d?.duration };
+}
+
 /* --------------------------------------------------------------- 8 个动词 */
 const IMPL = {
   async draft_open(a) {
@@ -451,6 +508,7 @@ const IMPL = {
     }
     // ★ 入口就校验 sessionId 形态（路径穿越防线）：缺失与格式非法分开说
     assertSessionId(a.sessionId);
+    const st = readState(a.sessionId);   // ★ 生效探针要用会话里记着的"改前草稿路径"
     const res = await editCall(a.op, a.params || {}, a.sessionId);
     // ★ 官方 edit 响应里的 diff.operations[0].value = 【改后的完整草稿】
     //   ⇒ 存成快照，供 draft_commit 落盘（动词之间靠插件状态目录共享状态）
@@ -464,6 +522,67 @@ const IMPL = {
       fs.writeFileSync(snapP, JSON.stringify(full), 'utf8');
       snapshot = snapP;
     }
+    // ★★ 生效探针：官方说"改了"不算数 —— 我们自己算"改前 vs 改后"的段级 diff
+    //   起因（实测）：官方 audio.add 返回 accepted:true / changedPaths:["/"]，
+    //   但草稿里 materials.audios 仍是 0 条 ⇒ 官方自述是个【空承诺】。
+    let changes = null, effectVerified = null, effectNote = null, baselineFull = null;
+    let baselineSegKeys = null, afterSegKeys = null;
+    // ★★ 基线必须是【上一次 op 之后的状态】（会话快照），不是磁盘上的原草稿
+    //   否则连续多个 op 时，会把【上一次】的改动算成【这一次】的 ⇒ 探针会说谎
+    //   （实测踩过：audio.add 什么都没改，但因为前面 setVolume 改过 ⇒ 误报"生效"）
+    const snapBase = snapshotFile(a.sessionId);
+    const baseP = (fs.existsSync(snapBase) && fs.existsSync(snapBase))
+      ? snapBase
+      : (st && st.draftPath && fs.existsSync(st.draftPath) ? st.draftPath : null);
+    if (full && baseP) {
+      const before = readDraftJson(baseP);
+      if (before) {
+        changes = segmentDiffOf(before, full);
+        // ★ 基线形态：磁盘草稿是剪映自己存的【精简形态】，官方返回是【运行时展开形态】
+        //   ⇒ 基线不完整时，diff 只覆盖交集字段；只在完整形态里才有的字段（如 volume）判不出来
+        const bSeg = (before.tracks || []).flatMap((x) => x.segments || [])[0] || {};
+        const aSeg = (full.tracks || []).flatMap((x) => x.segments || [])[0] || {};
+        baselineSegKeys = Object.keys(bSeg).length;
+        afterSegKeys = Object.keys(aSeg).length;
+        baselineFull = baselineSegKeys > 20;
+        effectVerified = changes.length > 0;
+        if (!effectVerified) {
+          effectNote = '官方返回 accepted，但【草稿里什么都没变】（段数/段字段都没动）'
+            + '⇒ 这个 op 可能没真正生效（实测：官方 audio.add 就是这样）。'
+            + '要确认就用 verify_diff 的 timeline 维度（语义判据），别只信 accepted。';
+        }
+      }
+    }
+    // ★ 给了 expect ⇒ 按 expect 断言（和 verify_diff 同一套语义）：没变就【判失败】
+    if (a.expect && changes) {
+      const exp = a.expect;
+      if (exp.segmentsDelta !== undefined) {
+        const now = draftShape(full).segments - draftShape(readDraftJson(baseP)).segments;
+        if (now !== exp.segmentsDelta) {
+          throw new Error(`op "${a.op}" 的 expect 不成立：段数变化 ${now} ≠ 期望 ${exp.segmentsDelta}（改动可能没落盘）`);
+        }
+      }
+      if (exp.segmentFieldChanged) {
+        const hit = changes.some((d) => d.fields && d.fields[exp.segmentFieldChanged]);
+        const morphHit = changes.some((d) => (d.morphOnly || []).includes(exp.segmentFieldChanged));
+        if (!hit) {
+          if (morphHit) {
+            throw new Error(`op "${a.op}" 的 expect【无法判定】："${exp.segmentFieldChanged}" 只在【运行时展开形态】里存在，`
+              + '而基线是【精简形态】（剪映自己存的那种）⇒ 这个字段本来就比不出来。'
+              + '要判定它，请在同一 session 里先做一次别的 patch（让基线变成展开形态），再判。');
+          }
+          throw new Error(`op "${a.op}" 的 expect 不成立：没有任何 segment 的 "${exp.segmentFieldChanged}" 字段发生变化`
+            + '（改动可能没落盘 —— 官方 accepted 不代表真生效）');
+        }
+      }
+      if (exp.segmentFieldUnchanged) {
+        const hit = changes.some((d) => d.fields && d.fields[exp.segmentFieldUnchanged]);
+        if (hit) {
+          throw new Error(`op "${a.op}" 的 expect 不成立：不该变的 "${exp.segmentFieldUnchanged}" 字段却变了`);
+        }
+      }
+      effectVerified = true;
+    }
     return ok({
       op: a.op,
       accepted: res.accepted !== false,
@@ -471,6 +590,16 @@ const IMPL = {
       baseRevision: res.diff?.baseRevision,
       changedPaths: ops.map((o) => o.path),
       snapshot, snapshotSaved: !!snapshot,
+      // ★ 生效证据（与 grade_apply 的逐节点探针同一族）
+      effectVerified, effectNote,
+      // ★ baselineKind：'full' = 基线是运行时展开形态（判定可信）
+      //                    'morph' = 基线是精简形态（只有交集字段可判）
+      baselineKind: changes ? (baselineFull ? 'full' : 'morph') : null,
+      // ★ 诊断/可信度：基线与改后各自的段键数（11 ⇒ 精简形态；50+ ⇒ 运行时展开形态）
+      baselineSegKeys: baselineSegKeys ?? null,
+      afterSegKeys: afterSegKeys ?? null,
+      changes: changes ? changes.slice(0, 20) : null,
+      changesCount: changes ? changes.length : null,
     });
   },
 
@@ -804,45 +933,14 @@ const IMPL = {
       if (!a.beforeDraft || !a.afterDraft) {
         res.checks.timeline = { skipped: '需要 beforeDraft / afterDraft（草稿 JSON 路径）' };
       } else {
-        const readDraft = (p) => {
-          let txt = fs.readFileSync(p, 'utf8');
-          const i = txt.indexOf('{');
-          if (i > 0) txt = txt.slice(i);
-          try { return JSON.parse(txt); } catch { return null; }
-        };
-        const db = readDraft(a.beforeDraft), da = readDraft(a.afterDraft);
+        const db = readDraftJson(a.beforeDraft), da = readDraftJson(a.afterDraft);
         if (!db || !da) res.checks.timeline = { skipped: '草稿读不出来（可能是官方加密封装）' };
         else {
-          const sum = (d) => {
-            const tracks = d.tracks || [];
-            let segs = 0, dur = 0;
-            for (const t of tracks) for (const s of (t.segments || [])) {
-              segs++;
-              const tr = s.target_timerange || {};
-              dur = Math.max(dur, (tr.start || 0) + (tr.duration || 0));
-            }
-            return { tracks: tracks.length, segments: segs, durationUs: dur, draftDurationUs: d.duration };
-          };
-          const sb = sum(db), sa = sum(da);
+          const sb = draftShape(db), sa = draftShape(da);
           // ★ 逐段字段差：语义证据（"我到底改了什么"），不依赖像素
-          const segMap = (d) => {
-            const m = new Map();
-            for (const t of (d.tracks || [])) for (const s of (t.segments || [])) m.set(s.id, s);
-            return m;
-          };
-          const mb = segMap(db), ma = segMap(da);
-          const segmentDiffs = [];
-          for (const [id, s2] of ma) {
-            const s1 = mb.get(id);
-            if (!s1) { segmentDiffs.push({ segmentId: id, kind: 'added' }); continue; }
-            const fields = {};
-            for (const k of new Set([...Object.keys(s1), ...Object.keys(s2)])) {
-              const v1 = JSON.stringify(s1[k]), v2 = JSON.stringify(s2[k]);
-              if (v1 !== v2) fields[k] = { before: s1[k], after: s2[k] };
-            }
-            if (Object.keys(fields).length) segmentDiffs.push({ segmentId: id, kind: 'changed', fields });
-          }
-          for (const [id] of mb) if (!ma.has(id)) segmentDiffs.push({ segmentId: id, kind: 'removed' });
+          // ★ 段级字段差一律走共用实现（交集比较 + morphOnly 单列）
+          //   旧实现在这里【又算了一遍全字段比较】⇒ 把"形态补全"当成了"值变了" ⇒ 语义判据假绿
+          const segmentDiffs = segmentDiffOf(db, da);
           const t = { before: sb, after: sa,
                       segmentsDelta: sa.segments - sb.segments,
                       durationDeltaUs: sa.durationUs - sb.durationUs,
@@ -858,7 +956,17 @@ const IMPL = {
             }
             if (exp.segmentFieldChanged) {
               const hit = segmentDiffs.some((d) => d.fields && d.fields[exp.segmentFieldChanged]);
-              if (!hit) problems.push(`没有任何 segment 的 "${exp.segmentFieldChanged}" 字段发生变化（改动可能没落盘）`);
+              // ★ 若该字段只在【运行时展开形态】里存在，而基线是【精简形态】⇒ 不是"没变"，
+              //   而是【判不出来】（判据的视野不够）—— 两者的结论必须分开说
+              const morphHit = segmentDiffs.some((d) => (d.morphOnly || []).includes(exp.segmentFieldChanged));
+              if (!hit) {
+                if (morphHit) {
+                  problems.push(`"${exp.segmentFieldChanged}" 只在【运行时展开形态】里存在，而基线是【精简形态】`
+                    + '⇒ 这一项【无法判定】（不是"没变"）。请让改前/改后都是同一形态再判。');
+                } else {
+                  problems.push(`没有任何 segment 的 "${exp.segmentFieldChanged}" 字段发生变化（改动可能没落盘）`);
+                }
+              }
             }
             if (exp.segmentFieldUnchanged) {
               const hit = segmentDiffs.some((d) => d.fields && d.fields[exp.segmentFieldUnchanged]);

@@ -216,6 +216,25 @@
       "params": {
         "type": "object",
         "description": "该 op 的参数（官方原生语义）。已知必填：video.add→path · text.add→content · track.mute/delete→trackId · segment.move/setTimeRange/setDescription→segmentId · segment.updateLayout→layout · segment.innerReplace→replacement。缺必填会先被本地拦下，不会白跑一次官方调用。"
+      },
+      "expect": {
+        "type": "object",
+        "description": "★ 可选的生效断言：要求这次改动【真的落到草稿里】。官方返回 accepted 不代表真生效（实测：官方 audio.add 会 accepted 且 changedPaths=[\"/\"]，但草稿里 materials.audios 仍是 0 条）。给了 expect 却不成立 ⇒ 直接判失败。",
+        "properties": {
+          "segmentFieldChanged": {
+            "type": "string",
+            "description": "要求某个段的这个字段发生了变化（如 volume）"
+          },
+          "segmentFieldUnchanged": {
+            "type": "string",
+            "description": "要求某个段的这个字段【没有】变化"
+          },
+          "segmentsDelta": {
+            "type": "integer",
+            "description": "要求段数变化等于此值（如加一条音频 ⇒ 1）"
+          }
+        },
+        "additionalProperties": false
       }
     },
     "required": [
