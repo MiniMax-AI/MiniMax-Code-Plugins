@@ -34,251 +34,93 @@
     {
       "id": "grade-and-render",
       "when": "调色并出成片（'把这个草稿调暖再出片'）",
-      "requires": [
-        "剪映在跑",
-        "素材在盘上"
+      "requires": ["剪映在跑", "素材在盘上"],
+      "inputs": [
+        { "name": "$draft", "kind": "path", "desc": "要编排的剪映草稿目录", "required": true, "from": "user", "note": "用户手上那一版" },
+        { "name": "$outDir", "kind": "path", "desc": "成片输出目录", "required": true, "from": "caller" },
+        { "name": "$grade", "kind": "object", "desc": "调色 spec（强度型）", "required": false, "from": "intent", "note": "★ 诉求能查到就自动带（intent-map.json）；查不到就跳过调色" }
       ],
       "steps": [
         {
           "verb": "draft_open",
-          "args": {
-            "draft": "$draft",
-            "copy": true
-          },
-          "yields": [
-            "$sessionId",
-            "$dir"
-          ],
+          "args": { "draft": "$draft", "copy": true },
+          "yields": ["$sessionId", "$dir"],
           "note": "开副本；copy 默认 true ⇒ 真草稿只读"
         },
         {
           "verb": "make_film",
-          "args": {
-            "draft": "$dir",
-            "outDir": "$outDir",
-            "grade": "$grade",
-            "denoise": "auto"
-          },
+          "args": { "draft": "$dir", "outDir": "$outDir", "grade": "$grade", "denoise": "auto" },
           "note": "官方渲染器出画面 + 我们的调色/混音 + ffmpeg 编码；★ 内建验收（双流/时长/响度）失败会直接判失败"
-        }
-      ],
-      "inputs": [
-        {
-          "name": "$draft",
-          "kind": "path",
-          "desc": "要编排的剪映草稿目录",
-          "required": true,
-          "from": "user",
-          "note": "用户手上那一版"
-        },
-        {
-          "name": "$outDir",
-          "kind": "path",
-          "desc": "成片输出目录",
-          "required": true,
-          "from": "caller"
-        },
-        {
-          "name": "$grade",
-          "kind": "object",
-          "desc": "调色 spec（强度型）",
-          "required": false,
-          "from": "intent",
-          "note": "★ 诉求能查到就自动带（intent-map.json）；查不到就跳过调色"
         }
       ]
     },
     {
       "id": "edit-and-verify",
       "when": "改草稿并用语义判据验收（'把这段音量调到 25%，改完确认一下'）",
-      "requires": [
-        "剪映在跑",
-        "素材在盘上"
+      "requires": ["剪映在跑", "素材在盘上"],
+      "inputs": [
+        { "name": "$draft", "kind": "path", "desc": "要编排的剪映草稿目录", "required": true, "from": "user" },
+        { "name": "$segmentId", "kind": "string", "desc": "要改的段 id", "required": false, "from": "derived", "note": "不给则取草稿里的第一个段" }
       ],
       "steps": [
-        {
-          "verb": "draft_open",
-          "args": {
-            "draft": "$draft",
-            "copy": true
-          },
-          "yields": [
-            "$sessionId",
-            "$dir"
-          ]
-        },
-        {
-          "verb": "draft_read",
-          "args": {
-            "sessionId": "$sessionId"
-          },
-          "yields": [
-            "$segmentId"
-          ]
-        },
+        { "verb": "draft_open", "args": { "draft": "$draft", "copy": true }, "yields": ["$sessionId", "$dir"] },
+        { "verb": "draft_read", "args": { "sessionId": "$sessionId" }, "yields": ["$segmentId"] },
         {
           "verb": "draft_patch",
-          "args": {
-            "op": "video.setVolume",
-            "sessionId": "$sessionId",
-            "params": {
-              "segmentId": "$segmentId",
-              "volume": 0.25
-            }
-          },
+          "args": { "op": "video.setVolume", "sessionId": "$sessionId", "params": { "segmentId": "$segmentId", "volume": 0.25 } },
           "note": "可多次；每次 baseRevision 会递增"
         },
         {
           "verb": "draft_commit",
-          "args": {
-            "sessionId": "$sessionId",
-            "realDraft": "$draft"
-          },
+          "args": { "sessionId": "$sessionId", "realDraft": "$draft" },
           "note": "素材路径重定位 + 真草稿 sha 断言（真草稿被改动就判失败）"
         },
         {
           "verb": "verify_diff",
-          "args": {
-            "checks": [
-              "timeline"
-            ],
-            "beforeDraft": "$beforeDraft",
-            "afterDraft": "$afterDraft",
-            "expect": {
-              "segmentFieldChanged": "volume"
-            }
-          },
+          "args": { "checks": ["timeline"], "beforeDraft": "$beforeDraft", "afterDraft": "$afterDraft", "expect": { "segmentFieldChanged": "volume" } },
           "note": "★ 主判据 = 语义（逐段字段差），完全确定；两份草稿必须是【裸草稿】"
-        }
-      ],
-      "inputs": [
-        {
-          "name": "$draft",
-          "kind": "path",
-          "desc": "要编排的剪映草稿目录",
-          "required": true,
-          "from": "user"
-        },
-        {
-          "name": "$segmentId",
-          "kind": "string",
-          "desc": "要改的段 id",
-          "required": false,
-          "from": "derived",
-          "note": "不给则取草稿里的第一个段"
         }
       ]
     },
     {
       "id": "edit-then-render",
       "when": "改完直接出片（'改完直接出个片'）= edit-and-verify 的前半 + grade-and-render 的出片",
-      "requires": [
-        "剪映在跑",
-        "素材在盘上"
+      "requires": ["剪映在跑", "素材在盘上"],
+      "inputs": [
+        { "name": "$draft", "kind": "path", "desc": "要编排的剪映草稿目录", "required": true, "from": "user" },
+        { "name": "$outDir", "kind": "path", "desc": "成片输出目录", "required": true, "from": "caller" }
       ],
       "steps": [
-        {
-          "verb": "draft_open",
-          "args": {
-            "draft": "$draft",
-            "copy": true
-          },
-          "yields": [
-            "$sessionId",
-            "$dir"
-          ]
-        },
-        {
-          "verb": "draft_read",
-          "args": {
-            "sessionId": "$sessionId"
-          },
-          "yields": [
-            "$segmentId"
-          ]
-        },
+        { "verb": "draft_open", "args": { "draft": "$draft", "copy": true }, "yields": ["$sessionId", "$dir"] },
+        { "verb": "draft_read", "args": { "sessionId": "$sessionId" }, "yields": ["$segmentId"] },
         {
           "verb": "draft_patch",
-          "args": {
-            "op": "video.setVolume",
-            "sessionId": "$sessionId",
-            "params": {
-              "segmentId": "$segmentId",
-              "volume": 0.25
-            }
-          }
+          "args": { "op": "video.setVolume", "sessionId": "$sessionId", "params": { "segmentId": "$segmentId", "volume": 0.25 } }
         },
-        {
-          "verb": "draft_commit",
-          "args": {
-            "sessionId": "$sessionId",
-            "realDraft": "$draft"
-          }
-        },
+        { "verb": "draft_commit", "args": { "sessionId": "$sessionId", "realDraft": "$draft" } },
         {
           "verb": "make_film",
-          "args": {
-            "draft": "$dir",
-            "outDir": "$outDir",
-            "grade": "$grade",
-            "denoise": "auto"
-          },
+          "args": { "draft": "$dir", "outDir": "$outDir", "grade": "$grade", "denoise": "auto" },
           "note": "★ draft 用同一个 $dir ⇒ 全程一份副本"
-        }
-      ],
-      "inputs": [
-        {
-          "name": "$draft",
-          "kind": "path",
-          "desc": "要编排的剪映草稿目录",
-          "required": true,
-          "from": "user"
-        },
-        {
-          "name": "$outDir",
-          "kind": "path",
-          "desc": "成片输出目录",
-          "required": true,
-          "from": "caller"
         }
       ]
     },
     {
       "id": "talk-cut-then-render",
       "when": "剪口播再出片（'把口播的废话剪了再出片'）",
-      "requires": [
-        "剪映在跑",
-        "素材在盘上",
-        "★ 用户提供 SRT（官方 ASR 拿不到，不能自己编）",
-        "★ 保留区间表必须先给用户确认"
+      "requires": ["剪映在跑", "素材在盘上", "★ 用户提供 SRT（官方 ASR 拿不到，不能自己编）", "★ 保留区间表必须先给用户确认"],
+      "inputs": [
+        { "name": "$draft", "kind": "path", "desc": "要编排的剪映草稿目录", "required": true, "from": "user" },
+        { "name": "$srt", "kind": "path", "desc": "转写稿（SRT）", "required": true, "from": "user", "note": "★ 官方 ASR 拿不到 ⇒ 必须由用户提供，不许自己编" },
+        { "name": "$outDir", "kind": "path", "desc": "成片输出目录", "required": true, "from": "caller" }
       ],
-      "alloc": {
-        "$planPath": "talk-cut-plan.json"
-      },
+      "alloc": { "$planPath": "talk-cut-plan.json" },
       "steps": [
-        {
-          "verb": "draft_open",
-          "args": {
-            "draft": "$draft",
-            "copy": true
-          },
-          "yields": [
-            "$sessionId",
-            "$dir"
-          ]
-        },
-        {
-          "verb": "draft_read",
-          "args": {
-            "sessionId": "$sessionId"
-          }
-        },
+        { "verb": "draft_open", "args": { "draft": "$draft", "copy": true }, "yields": ["$sessionId", "$dir"] },
+        { "verb": "draft_read", "args": { "sessionId": "$sessionId" } },
         {
           "script": "talk-cut-plan.mjs",
-          "args": {
-            "--srt": "$srt",
-            "--out": "$planPath"
-          },
+          "args": { "--srt": "$srt", "--out": "$planPath" },
           "confirm": true,
           "artifact": "$planPath",
           "confirmNote": "★ 保留/删除区间表已经生成，但【还没落刀】—— 必须先给用户确认",
@@ -286,248 +128,84 @@
         },
         {
           "script": "talk-cut-apply.mjs",
-          "args": {
-            "--plan": "$planPath",
-            "--draft": "$draft",
-            "--sessionId": "$sessionId",
-            "--apply": true
-          },
+          "args": { "--plan": "$planPath", "--draft": "$draft", "--sessionId": "$sessionId", "--apply": true },
           "note": "★ --sessionId ⇒ 复用编排器开的会话（不自己开、不自己落盘）；--apply ⇒ 真剪"
         },
-        {
-          "verb": "draft_commit",
-          "args": {
-            "sessionId": "$sessionId",
-            "realDraft": "$draft"
-          }
-        },
-        {
-          "verb": "make_film",
-          "args": {
-            "draft": "$dir",
-            "outDir": "$outDir",
-            "denoise": "auto"
-          }
-        }
-      ],
-      "inputs": [
-        {
-          "name": "$draft",
-          "kind": "path",
-          "desc": "要编排的剪映草稿目录",
-          "required": true,
-          "from": "user"
-        },
-        {
-          "name": "$srt",
-          "kind": "path",
-          "desc": "转写稿（SRT）",
-          "required": true,
-          "from": "user",
-          "note": "★ 官方 ASR 拿不到 ⇒ 必须由用户提供，不许自己编"
-        },
-        {
-          "name": "$outDir",
-          "kind": "path",
-          "desc": "成片输出目录",
-          "required": true,
-          "from": "caller"
-        }
+        { "verb": "draft_commit", "args": { "sessionId": "$sessionId", "realDraft": "$draft" } },
+        { "verb": "make_film", "args": { "draft": "$dir", "outDir": "$outDir", "denoise": "auto" } }
       ]
     },
     {
       "id": "subtitle-then-render",
       "when": "加字幕并出片（'给这个视频加字幕再出片'）",
-      "requires": [
-        "剪映在跑",
-        "素材在盘上",
-        "★ 用户提供 SRT（官方 ASR 拿不到，不能自己编）"
+      "requires": ["剪映在跑", "素材在盘上", "★ 用户提供 SRT（官方 ASR 拿不到，不能自己编）"],
+      "inputs": [
+        { "name": "$draft", "kind": "path", "desc": "要编排的剪映草稿目录", "required": true, "from": "user" },
+        { "name": "$srt", "kind": "path", "desc": "转写稿（SRT）", "required": true, "from": "user", "note": "★ 官方 ASR 拿不到 ⇒ 必须由用户提供" },
+        { "name": "$outDir", "kind": "path", "desc": "成片输出目录", "required": true, "from": "caller" }
       ],
       "steps": [
-        {
-          "verb": "draft_open",
-          "args": {
-            "draft": "$draft",
-            "copy": true
-          },
-          "yields": [
-            "$sessionId",
-            "$dir"
-          ]
-        },
-        {
-          "verb": "draft_read",
-          "args": {
-            "sessionId": "$sessionId"
-          }
-        },
+        { "verb": "draft_open", "args": { "draft": "$draft", "copy": true }, "yields": ["$sessionId", "$dir"] },
+        { "verb": "draft_read", "args": { "sessionId": "$sessionId" } },
         {
           "script": "add-subtitles.mjs",
-          "args": {
-            "--srt": "$srt",
-            "--sessionId": "$sessionId",
-            "--apply": true
-          },
+          "args": { "--srt": "$srt", "--sessionId": "$sessionId", "--apply": true },
           "note": "★ --sessionId ⇒ 复用编排器开的会话（不自己开、不自己落盘）；--apply ⇒ 真落字幕"
         },
-        {
-          "verb": "draft_commit",
-          "args": {
-            "sessionId": "$sessionId",
-            "realDraft": "$draft"
-          }
-        },
-        {
-          "verb": "make_film",
-          "args": {
-            "draft": "$dir",
-            "outDir": "$outDir",
-            "denoise": "auto"
-          }
-        }
-      ],
-      "inputs": [
-        {
-          "name": "$draft",
-          "kind": "path",
-          "desc": "要编排的剪映草稿目录",
-          "required": true,
-          "from": "user"
-        },
-        {
-          "name": "$srt",
-          "kind": "path",
-          "desc": "转写稿（SRT）",
-          "required": true,
-          "from": "user",
-          "note": "★ 官方 ASR 拿不到 ⇒ 必须由用户提供"
-        },
-        {
-          "name": "$outDir",
-          "kind": "path",
-          "desc": "成片输出目录",
-          "required": true,
-          "from": "caller"
-        }
+        { "verb": "draft_commit", "args": { "sessionId": "$sessionId", "realDraft": "$draft" } },
+        { "verb": "make_film", "args": { "draft": "$dir", "outDir": "$outDir", "denoise": "auto" } }
       ]
     },
     {
       "id": "render-and-mix",
       "when": "出片并按草稿重做混音（'出片时把混音按草稿重做一遍'）",
-      "requires": [
-        "剪映在跑",
-        "★ 草稿里要有音频轨（没有音轨就只剩画面）"
+      "requires": ["剪映在跑", "★ 草稿里要有音频轨（没有音轨就只剩画面）"],
+      "inputs": [
+        { "name": "$draft", "kind": "path", "desc": "要编排的剪映草稿目录", "required": true, "from": "user", "note": "★ 要有音频轨（没有就只剩画面）" },
+        { "name": "$outDir", "kind": "path", "desc": "成片输出目录", "required": true, "from": "caller" }
       ],
       "steps": [
-        {
-          "verb": "draft_open",
-          "args": {
-            "draft": "$draft",
-            "copy": true
-          },
-          "yields": [
-            "$sessionId",
-            "$dir"
-          ]
-        },
+        { "verb": "draft_open", "args": { "draft": "$draft", "copy": true }, "yields": ["$sessionId", "$dir"] },
         {
           "verb": "make_film",
-          "args": {
-            "draft": "$dir",
-            "outDir": "$outDir",
-            "denoise": "auto"
-          },
-          "produces": {
-            "$film": "film.mp4",
-            "$mixed": "mixed.mp4"
-          },
+          "args": { "draft": "$dir", "outDir": "$outDir", "denoise": "auto" },
+          "produces": { "$film": "film.mp4", "$mixed": "mixed.mp4" },
           "note": "★ produces ⇒ 把产物路径交给后面的步骤（$film = <outDir>/film.mp4）"
         },
         {
           "verb": "audio_mix",
-          "args": {
-            "draft": "$dir",
-            "video": "$film",
-            "out": "$mixed"
-          },
+          "args": { "draft": "$dir", "video": "$film", "out": "$mixed" },
           "note": "★ 按草稿里的音频结构重做混音，归一到 −14 LUFS"
-        }
-      ],
-      "inputs": [
-        {
-          "name": "$draft",
-          "kind": "path",
-          "desc": "要编排的剪映草稿目录",
-          "required": true,
-          "from": "user",
-          "note": "★ 要有音频轨（没有就只剩画面）"
-        },
-        {
-          "name": "$outDir",
-          "kind": "path",
-          "desc": "成片输出目录",
-          "required": true,
-          "from": "caller"
         }
       ]
     },
     {
       "id": "review-only",
       "when": "审这一版（'审一下这版' / '这版片子审得过吗' / '交片前检查一下'）",
-      "requires": [
-        "剪映在跑",
-        "★ 审片【只读不改】：这条路线只开副本做体检，不改草稿、不落盘"
+      "requires": ["剪映在跑", "★ 审片【只读不改】：这条路线只开副本做体检，不改草稿、不落盘"],
+      "inputs": [
+        { "name": "$draft", "kind": "path", "desc": "要审的那一版草稿目录", "required": true, "from": "user" },
+        { "name": "$outDir", "kind": "path", "desc": "输出目录（帧与成片）", "required": true, "from": "caller" }
       ],
       "steps": [
-        {
-          "verb": "draft_open",
-          "args": {
-            "draft": "$draft",
-            "copy": true
-          },
-          "yields": [
-            "$sessionId",
-            "$dir"
-          ]
-        },
-        {
-          "verb": "draft_read",
-          "args": {
-            "sessionId": "$sessionId"
-          }
-        },
+        { "verb": "draft_open", "args": { "draft": "$draft", "copy": true }, "yields": ["$sessionId", "$dir"] },
+        { "verb": "draft_read", "args": { "sessionId": "$sessionId" } },
         {
           "verb": "render_frames",
-          "args": {
-            "draft": "$dir",
-            "outDir": "$reviewDir"
-          },
-          "produces": {
-            "$reviewDir": "review"
-          },
+          "args": { "draft": "$dir", "outDir": "$reviewDir" },
+          "produces": { "$reviewDir": "review" },
           "note": "★ 第一次渲染 = 这一版的帧"
         },
         {
           "verb": "render_frames",
-          "args": {
-            "draft": "$dir",
-            "outDir": "$noiseDir"
-          },
-          "produces": {
-            "$noiseDir": "noise"
-          },
+          "args": { "draft": "$dir", "outDir": "$noiseDir" },
+          "produces": { "$noiseDir": "noise" },
           "note": "★ ★ 同一状态【再渲一次】⇒ 差异就是官方渲染器的噪声底（审片前最该先知道的数）"
         },
         {
           "verb": "make_film",
-          "args": {
-            "draft": "$dir",
-            "outDir": "$outDir",
-            "denoise": "auto"
-          },
-          "produces": {
-            "$film": "film.mp4"
-          },
+          "args": { "draft": "$dir", "outDir": "$outDir", "denoise": "auto" },
+          "produces": { "$film": "film.mp4" },
           "note": "★ 出片（自带时长/响度验收）⇒ 成片路径交给下一步量响度"
         },
         {
@@ -538,138 +216,45 @@
             "afterVideo": "$film",
             "afterDraft": "$draftJson",
             "realDraft": "$draft",
-            "checks": [
-              "visibility",
-              "picture",
-              "audio",
-              "timeline",
-              "draft_integrity"
-            ]
+            "checks": ["visibility", "picture", "audio", "timeline", "draft_integrity"]
           },
           "note": "★ 单版审片：没有改前 ⇒ visibility 判不了（会明说 skipped 并给出噪声底）、picture 只给绝对值不判失败；audio/timeline/draft_integrity 是这一版的真实体检"
-        }
-      ],
-      "inputs": [
-        {
-          "name": "$draft",
-          "kind": "path",
-          "desc": "要审的那一版草稿目录",
-          "required": true,
-          "from": "user"
-        },
-        {
-          "name": "$outDir",
-          "kind": "path",
-          "desc": "输出目录（帧与成片）",
-          "required": true,
-          "from": "caller"
         }
       ]
     },
     {
       "id": "review-compare",
       "when": "两版对照审片（'把改前改后对着看一遍' / '这版比上一版改了什么'）",
-      "requires": [
-        "剪映在跑",
-        "★ 两份草稿：改前 $draft + 改后 $draftAfter",
-        "★ 审片只读不改（不授权动草稿）"
+      "requires": ["剪映在跑", "★ 两份草稿：改前 $draft + 改后 $draftAfter", "★ 审片只读不改（不授权动草稿）"],
+      "inputs": [
+        { "name": "$draft", "kind": "path", "desc": "改前那一版草稿目录", "required": true, "from": "user" },
+        { "name": "$draftAfter", "kind": "path", "desc": "改后那一版草稿目录", "required": true, "from": "user", "note": "★ 两版对照要两份草稿" },
+        { "name": "$outDir", "kind": "path", "desc": "输出目录（帧与成片）", "required": true, "from": "caller" }
       ],
       "steps": [
-        {
-          "verb": "draft_open",
-          "args": {
-            "draft": "$draft",
-            "copy": true
-          },
-          "setVars": {
-            "$sidBefore": "$sessionId",
-            "$dirBefore": "$dir"
-          },
-          "note": "★ 先把改前的会话/副本存下来（否则第二次开草稿会覆盖 $sessionId / $dir）"
-        },
-        {
-          "verb": "draft_read",
-          "args": {
-            "sessionId": "$sidBefore"
-          },
-          "setVars": {
-            "$beforeDraftJson": "$draftJson"
-          }
-        },
-        {
-          "verb": "draft_open",
-          "args": {
-            "draft": "$draftAfter",
-            "copy": true
-          },
-          "setVars": {
-            "$sidAfter": "$sessionId",
-            "$dirAfter": "$dir"
-          }
-        },
-        {
-          "verb": "draft_read",
-          "args": {
-            "sessionId": "$sidAfter"
-          },
-          "setVars": {
-            "$afterDraftJson": "$draftJson"
-          }
-        },
-        {
-          "verb": "render_frames",
-          "args": {
-            "draft": "$dirBefore",
-            "outDir": "$reviewDir/before"
-          },
-          "produces": {
-            "$reviewDir": "review"
-          },
-          "setVars": {
-            "$beforeOut": "$outDir/before",
-            "$afterOut": "$outDir/after"
-          },
-          "note": "★ 改前的帧；同时定下两版的成片输出目录（后面 make_film 用）"
-        },
-        {
-          "verb": "render_frames",
-          "args": {
-            "draft": "$dirAfter",
-            "outDir": "$reviewDir/after"
-          }
-        },
-        {
-          "verb": "render_frames",
-          "args": {
-            "draft": "$dirAfter",
-            "outDir": "$reviewDir/noise"
-          },
-          "note": "★ ★ 同一状态【再渲一次】（改后那一版）⇒ 差异就是官方渲染器的噪声底"
-        },
-        {
-          "verb": "make_film",
-          "args": {
-            "draft": "$dirBefore",
-            "outDir": "$beforeOut"
-          },
-          "produces": {
-            "$filmBefore": "before/film.mp4"
-          },
-          "note": "★ 改前的成片（音频维度要它）"
-        },
-        {
-          "verb": "make_film",
-          "args": {
-            "draft": "$dirAfter",
-            "outDir": "$afterOut"
-          },
-          "produces": {
-            "$filmAfter": "after/film.mp4"
-          },
-          "note": "★ 改后的成片"
-        },
-        {
-          "verb": "verify_diff",
+        { "verb": "draft_open", "args": { "draft": "$draft", "copy": true },
+          "setVars": { "$sidBefore": "$sessionId", "$dirBefore": "$dir" },
+          "note": "★ 先把改前的会话/副本存下来（否则第二次开草稿会覆盖 $sessionId / $dir）" },
+        { "verb": "draft_read", "args": { "sessionId": "$sidBefore" },
+          "setVars": { "$beforeDraftJson": "$draftJson" } },
+        { "verb": "draft_open", "args": { "draft": "$draftAfter", "copy": true },
+          "setVars": { "$sidAfter": "$sessionId", "$dirAfter": "$dir" } },
+        { "verb": "draft_read", "args": { "sessionId": "$sidAfter" },
+          "setVars": { "$afterDraftJson": "$draftJson" } },
+        { "verb": "render_frames", "args": { "draft": "$dirBefore", "outDir": "$reviewDir/before" },
+          "produces": { "$reviewDir": "review" },
+          "setVars": { "$beforeOut": "$outDir/before", "$afterOut": "$outDir/after" },
+          "note": "★ 改前的帧；同时定下两版的成片输出目录（后面 make_film 用）" },
+        { "verb": "render_frames", "args": { "draft": "$dirAfter", "outDir": "$reviewDir/after" } },
+        { "verb": "render_frames", "args": { "draft": "$dirAfter", "outDir": "$reviewDir/noise" },
+          "note": "★ ★ 同一状态【再渲一次】（改后那一版）⇒ 差异就是官方渲染器的噪声底" },
+        { "verb": "make_film", "args": { "draft": "$dirBefore", "outDir": "$beforeOut" },
+          "produces": { "$filmBefore": "before/film.mp4" },
+          "note": "★ 改前的成片（音频维度要它）" },
+        { "verb": "make_film", "args": { "draft": "$dirAfter", "outDir": "$afterOut" },
+          "produces": { "$filmAfter": "after/film.mp4" },
+          "note": "★ 改后的成片" },
+        { "verb": "verify_diff",
           "args": {
             "beforeDir": "$reviewDir/before/frames",
             "afterDir": "$reviewDir/after/frames",
@@ -679,109 +264,34 @@
             "beforeDraft": "$beforeDraftJson",
             "afterDraft": "$afterDraftJson",
             "realDraft": "$draftAfter",
-            "checks": [
-              "visibility",
-              "picture",
-              "audio",
-              "timeline",
-              "draft_integrity"
-            ]
+            "checks": ["visibility", "picture", "audio", "timeline", "draft_integrity"]
           },
-          "note": "★ 两版对照：像素（带噪声底校准）+ 画质 + 响度 + 逐段字段差 + 真草稿 sha"
-        }
-      ],
-      "inputs": [
-        {
-          "name": "$draft",
-          "kind": "path",
-          "desc": "改前那一版草稿目录",
-          "required": true,
-          "from": "user"
-        },
-        {
-          "name": "$draftAfter",
-          "kind": "path",
-          "desc": "改后那一版草稿目录",
-          "required": true,
-          "from": "user",
-          "note": "★ 两版对照要两份草稿"
-        },
-        {
-          "name": "$outDir",
-          "kind": "path",
-          "desc": "输出目录（帧与成片）",
-          "required": true,
-          "from": "caller"
-        }
+          "note": "★ 两版对照：像素（带噪声底校准）+ 画质 + 响度 + 逐段字段差 + 真草稿 sha" }
       ]
     },
     {
       "id": "grade-chain-then-render",
       "when": "曲线类调色并出片（'按这条调色链调一版再出片' / '曲线调完出片'）",
-      "requires": [
-        "剪映在跑",
-        "★ 调色 spec（$grade）：曲线 / HSL / 色轮这类强度型之外的",
-        "★ make_film 的 --grade 只能做强度型（官方预览渲染器带的那部分）⇒ 曲线类必须走这条"
+      "requires": ["剪映在跑", "★ 调色 spec（$grade）：曲线 / HSL / 色轮这类强度型之外的",
+        "★ make_film 的 --grade 只能做强度型（官方预览渲染器带的那部分）⇒ 曲线类必须走这条"],
+      "inputs": [
+        { "name": "$draft", "kind": "path", "desc": "要编排的剪映草稿目录", "required": true, "from": "user" },
+        { "name": "$outDir", "kind": "path", "desc": "成片输出目录", "required": true, "from": "caller" },
+        { "name": "$grade", "kind": "object", "desc": "调色 spec（曲线 / HSL / 色轮这类）", "required": true, "from": "user", "note": "★ 曲线形状没法从一句话里猜 ⇒ 必须问用户（或让用户点名某个节点）" }
       ],
       "steps": [
-        {
-          "verb": "draft_open",
-          "args": {
-            "draft": "$draft",
-            "copy": true
-          },
-          "yields": [
-            "$sessionId",
-            "$dir"
-          ]
-        },
+        { "verb": "draft_open", "args": { "draft": "$draft", "copy": true }, "yields": ["$sessionId", "$dir"] },
         {
           "verb": "make_film",
-          "args": {
-            "draft": "$dir",
-            "outDir": "$outDir",
-            "denoise": "auto"
-          },
-          "produces": {
-            "$film": "film.mp4"
-          },
+          "args": { "draft": "$dir", "outDir": "$outDir", "denoise": "auto" },
+          "produces": { "$film": "film.mp4" },
           "note": "★ 先出画面 + 混音（这一步【不做调色】：曲线类要交给我们的逐像素链）"
         },
         {
           "verb": "grade_apply",
-          "args": {
-            "src": "$film",
-            "outDir": "$outDir/graded",
-            "spec": "$grade"
-          },
-          "capture": {
-            "$graded": "out"
-          },
+          "args": { "src": "$film", "outDir": "$outDir/graded", "spec": "$grade" },
+          "capture": { "$graded": "out" },
           "note": "★ 我们逐像素复刻的调色链（10 节点，曲线/HSL/色轮都能做）⇒ 自带逐节点生效探针；capture 从响应里取 out（10bit 成片的确切路径，只有响应知道）"
-        }
-      ],
-      "inputs": [
-        {
-          "name": "$draft",
-          "kind": "path",
-          "desc": "要编排的剪映草稿目录",
-          "required": true,
-          "from": "user"
-        },
-        {
-          "name": "$outDir",
-          "kind": "path",
-          "desc": "成片输出目录",
-          "required": true,
-          "from": "caller"
-        },
-        {
-          "name": "$grade",
-          "kind": "object",
-          "desc": "调色 spec（曲线 / HSL / 色轮这类）",
-          "required": true,
-          "from": "user",
-          "note": "★ 曲线形状没法从一句话里猜 ⇒ 必须问用户（或让用户点名某个节点）"
         }
       ]
     }
