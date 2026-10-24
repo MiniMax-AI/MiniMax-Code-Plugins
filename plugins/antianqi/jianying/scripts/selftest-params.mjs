@@ -13,8 +13,15 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SRV = path.join(HERE, '..', 'mcp', 'server.mjs');
 const WORK = path.join(os.tmpdir(), 'jianying-params-' + Date.now());
+// ★ 优先用【带音轨夹具】：只有它有音轨 ⇒ 响度/beautify 才有得验
+const AUDIO_FIXTURE = process.env.JYAI_DRAFT_LIB
+  ? path.join(process.env.JYAI_DRAFT_LIB, 'JYAI能力批测-带音轨夹具') : '';
+const PLAIN_FIXTURE = process.env.JYAI_DRAFT_LIB
+  ? path.join(process.env.JYAI_DRAFT_LIB, 'JYAI能力批测9a-纯视频探针') : '';
 const DRAFT = process.env.JYAI_FILM_DRAFT
-  || (process.env.JYAI_DRAFT_LIB ? path.join(process.env.JYAI_DRAFT_LIB, 'JYAI能力批测9a-纯视频探针') : '');
+  || (fs.existsSync(AUDIO_FIXTURE) ? AUDIO_FIXTURE : PLAIN_FIXTURE);
+const HAS_AUDIO = fs.existsSync(AUDIO_FIXTURE)
+  && fs.existsSync(path.join(AUDIO_FIXTURE, 'draft_content.json'));
 
 function startServer() {
   const child = spawn(process.execPath, [SRV], { stdio: ['pipe', 'pipe', 'pipe'] });
@@ -135,6 +142,9 @@ export async function runParamsCheck() {
 
   /* ── ④ make_film.lut：外部 3D LUT 能被吃进去 ── */
   if (DRAFT && fs.existsSync(DRAFT)) {
+    // ★★ 必须先让【官方打开】这个草稿 —— make_film 的画面来自官方渲染器，
+    //    它渲染的是"剪映当前打开的草稿"。不打开 ⇒ 渲的是上一个草稿（实测：命中段数对不上）。
+    await rpc('tools/call', { name: 'draft_open', arguments: { draft: DRAFT, copy: true } });
     const out1 = path.join(WORK, 'mf-lut-src');
     const r1 = await rpc('tools/call', {
       name: 'make_film',
@@ -180,7 +190,36 @@ export async function runParamsCheck() {
     rec('make_film.lut / maxFrames', false, '没有草稿库（JYAI_DRAFT_LIB）⇒ 无法验证');
   }
 
-  /* ── ⑥ verify_diff.beforeVideo / afterVideo：音频维度要真的测出 LUFS ── */
+  /* ── ⑥ make_film.beautify / targetLufs：需要【有音轨的草稿】才有得验 ── */
+  if (HAS_AUDIO) {
+    // ⑥a beautify：人声美化（近似 EQ+压缩）⇒ 出片成功，且报告里体现 beautify 被应用
+    const outB = path.join(WORK, 'mf-beautify');
+    const rb = await rpc('tools/call', {
+      name: 'make_film',
+      arguments: { draft: DRAFT, outDir: outB, fps: 6, denoise: 'auto', beautify: 'approx' },
+    });
+    const bt = textOf(rb);
+    // ★ 诚实说明：这个夹具的音频是 440Hz 正弦 ⇒ 官方【不判定为人声】⇒ beautify 命中数必然是 0
+    //   ⇒ 这条验的是【参数通路 + 不影响出片】，不是"美化的效果"（后者需要真人人声素材）
+    rec('make_film.beautify ⇒ 参数被传下去且出片正常（命中数取决于素材是否被判定为人声 ⇒ 夹具是正弦 ⇒ 0）',
+      rb.result?.isError !== true && /流:\s*video, audio/.test(bt) && /beautify=\d+/.test(bt),
+      bt.replace(/\s+/g, ' ').slice(-200));
+
+    // ⑥b targetLufs：响度目标改成 -18 ⇒ 验收的"整体响度"必须对着 -18 判（而不是 -14）
+    const outL = path.join(WORK, 'mf-lufs18');
+    const rl = await rpc('tools/call', {
+      name: 'make_film',
+      arguments: { draft: DRAFT, outDir: outL, fps: 6, denoise: 'auto', targetLufs: -18 },
+    });
+    const lt = textOf(rl);
+    rec('make_film.targetLufs ⇒ 响度目标被采用（验收对着目标判，且实测落在目标附近）',
+      rl.result?.isError !== true && /目标 -18/.test(lt) && /整体响度:\s*-1[78]/.test(lt),
+      lt.replace(/\s+/g, ' ').slice(-200));
+  } else {
+    rec('make_film.beautify / targetLufs', false, '没有带音轨的夹具（JYAI能力批测-带音轨夹具）⇒ 无法验证');
+  }
+
+  /* ── ⑦ verify_diff.beforeVideo / afterVideo：音频维度要真的测出 LUFS ── */
   {
     // 造两个带音轨的 mp4（响度不同 ⇒ 两个 LUFS 必须不同，否则测的就是空气）
     const VA = path.join(WORK, 'a-tone.mp4');
