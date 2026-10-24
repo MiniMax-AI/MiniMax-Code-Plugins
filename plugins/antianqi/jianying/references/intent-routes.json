@@ -909,6 +909,23 @@
         "混音"
       ],
       "source": "pipeline-profiles.json（★ 只带该路线独有的组合特征）"
+    },
+    {
+      "id": "route:review-only",
+      "kind": "route",
+      "route": "review-only",
+      "skill": "jianying-pipeline",
+      "utterance": "审这一版（'审一下这版' / '交片前检查一下'）",
+      "keywords": [
+        "review-only",
+        "审一遍这版",
+        "审一遍",
+        "自动审一遍",
+        "自动审片",
+        "审完给结论",
+        "这版体检"
+      ],
+      "source": "pipeline-profiles.json（★ 只带该路线独有的组合特征；★ 不抢 jianying-review 的常用说法——\"审一下这版\"那种仍归 skill，那是【怎么审】的方法问题）"
     }
   ]
 }

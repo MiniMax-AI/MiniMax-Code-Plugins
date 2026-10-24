@@ -511,6 +511,42 @@ function parseOkPayload(r) {
   const t = (r?.content || []).map((c) => c.text || '').join('\n');
   try { return JSON.parse(t); } catch { return { raw: t }; }
 }
+/** verify_diff 的紧凑摘要：保留每个维度的【关键数字】，丢掉逐帧明细（frameDetail 会把报告撑爆） */
+function summarizeVerify(obj) {
+  const c = obj?.checks || {};
+  const out = { verdict: obj?.verdict, problems: obj?.problems || [] };
+  // ★ "未判定的维度"必须进报告 ⇒ 否则 PASS 会被读成"全查过了"
+  if (obj?.undetermined) out.undetermined = obj.undetermined;
+  if (obj?.verdictNote) out.verdictNote = obj.verdictNote;
+  const ck = {};
+  if (c.visibility) {
+    const v = c.visibility;
+    ck.visibility = v.skipped
+      ? { skipped: v.skipped, noiseMad: v.noiseMad, noiseChangedFrames: v.noiseChangedFrames, totalFrames: v.totalFrames, note: v.note }
+      : { verdict: v.verdict, maxMad: v.maxMad, visibleMaxMad: v.visibleMaxMad, visibleFrameCount: v.visibleFrameCount,
+          noiseMad: v.noiseMad, calibrated: v.calibrated, madOverNoise: v.madOverNoise, totalFrames: v.totalFrames };
+  }
+  if (c.picture) {
+    const p = c.picture;
+    ck.picture = { afterMean: p.afterMean, clipRatio: p.clipRatio, overRatio: p.overRatio, underRatio: p.underRatio,
+                   clipDelta: p.clipDelta, underDelta: p.underDelta, pixels: p.pixels, verdict: p.verdict, note: p.note };
+  }
+  if (c.audio) {
+    const a = c.audio;
+    ck.audio = a.skipped ? { skipped: a.skipped }
+      : { before: a.before, after: a.after, note: a.note, undeterminedReason: a.undeterminedReason };
+  }
+  if (c.timeline) {
+    const t = c.timeline;
+    ck.timeline = t.skipped ? { skipped: t.skipped }
+      : { before: t.before, after: t.after, segmentsDelta: t.segmentsDelta, durationDeltaUs: t.durationDeltaUs,
+          segmentDiffCount: (t.segmentDiffs || []).length, single: t.single, note: t.note };
+  }
+  if (c.draft_integrity) ck.draft_integrity = c.draft_integrity;
+  out.checks = ck;
+  return out;
+}
+
 /** 汇报里只留关键字段（不然 make_film 的 stdout 会把报告撑爆） */
 function summarizeStep(obj) {
   if (!obj || typeof obj !== 'object') return obj;
@@ -633,6 +669,14 @@ async function execSteps(prof, vars, workDir, startIdx, stepsIn) {
       }
       const impl = IMPL[st.verb];
       if (!impl) throw new Error(`路线 "${prof.id}" 第 ${n} 步用了不存在的动词 ${st.verb}`);
+      // ★ 这一步【产出】的文件：声明式（"produces": {"$film": "film.mp4"}）⇒ 相对 $outDir 解析
+      //   ★ 【先分配再执行】⇒ 这一步自己的参数也能引用它（例：render_frames 的 outDir 就是产目录）
+      for (const [vn, fname] of Object.entries(st.produces || {})) {
+        if (!vars.$outDir) {
+          throw new Error(`路线 "${prof.id}" 第 ${n} 步声明了产物 ${vn}，但没有 $outDir（产物路径相对输出目录解析）`);
+        }
+        vars[vn] = path.join(vars.$outDir, String(fname));
+      }
       // ★ 参数里还留着 $xxx 的 ⇒ 说明那个变量没人提供 ⇒ 明确报错（不猜）
       const args = substVars(st.args || {}, vars);
       const leftover = JSON.stringify(args).match(/\$[A-Za-z_][A-Za-z0-9_]*/g) || [];
@@ -652,6 +696,9 @@ async function execSteps(prof, vars, workDir, startIdx, stepsIn) {
         const f = path.join(workDir, 'before-draft.json');
         fs.writeFileSync(f, JSON.stringify(obj.draft ?? obj, null, 2), 'utf8');
         vars.$beforeDraft = f;
+        // ★ 中性别名：同一个文件也叫 $draftJson ⇒ "这一版的草稿 JSON"（审片路线用它，
+        //   不必知道编排器内部把它叫 before-draft.json）
+        vars.$draftJson = f;
       }
       if (st.verb === 'draft_commit') {
         const after = await IMPL.draft_read({ sessionId: vars.$sessionId });
@@ -660,15 +707,11 @@ async function execSteps(prof, vars, workDir, startIdx, stepsIn) {
         fs.writeFileSync(f, JSON.stringify(ao.draft ?? ao, null, 2), 'utf8');
         vars.$afterDraft = f;
       }
-      steps.push({ n, verb: st.verb, ok: true, result: summarizeStep(obj) });
-      // ★ 这一步【产出】的文件：声明式（"produces": {"$film": "film.mp4"}）⇒ 相对 $outDir 解析
-      //   有了它，后面的步骤就能拿"上一步的成片"当输入（例：出片 → 按草稿重做混音）
-      for (const [vn, fname] of Object.entries(st.produces || {})) {
-        if (!vars.$outDir) {
-          throw new Error(`路线 "${prof.id}" 第 ${n} 步声明了产物 ${vn}，但没有 $outDir（产物路径相对输出目录解析）`);
-        }
-        vars[vn] = path.join(vars.$outDir, String(fname));
-      }
+      steps.push({
+        n, verb: st.verb, ok: true,
+        // ★ verify_diff 的结论就是【这条路线要产出的东西】⇒ 必须留在报告里（紧凑版）
+        result: st.verb === 'verify_diff' ? summarizeVerify(obj) : summarizeStep(obj),
+      });
     } catch (e) {
       const msg = String(e?.message || e);
       steps.push({ n, verb: st.verb || st.script || '?', ok: false, error: msg.slice(0, 400) });
@@ -1134,22 +1177,32 @@ const IMPL = {
     // ★ 多维度审片（visibility / picture / audio / timeline / draft_integrity）
     const checks = (a.checks && a.checks.length) ? a.checks : ['visibility'];
     const want = (k) => checks.includes(k);
-    // ★ 条件必填：只有查画面维度才需要帧目录（只查 timeline 时可以不给）
-    if ((want('visibility') || want('picture')) && (!a.beforeDir || !a.afterDir)) {
-      throw new Error('查 visibility/picture 时必须给 beforeDir 与 afterDir（帧目录）');
+    // ★★ 单版审片（2026-10-24）：没有【改前】也能审这一版（"审一下这版"）
+    //   单版模式下：① 画面维度【不判"改动是否可见"】（没有改前就无从比）⇒ 报 skipped 并给出噪声底
+    //   ② picture 只给【绝对值】且【不判失败】（片子里本来就有的纯白/纯黑也算在内 ⇒ 不能当缺陷）
+    //   ③ audio 测这一版的响度（绝对目标 −14 LUFS 可判）④ timeline 只给这一版的结构
+    //   ⇒ ★ 每一项都写清"判了什么、没判什么"，不许用没判的维度凑一个"通过"
+    const single = !a.beforeDir;
+    // ★ 条件必填：查画面维度时，【改后】帧目录必须有；【改前】没有 ⇒ 走单版模式（不抛错）
+    if ((want('visibility') || want('picture')) && !a.afterDir) {
+      throw new Error('查 visibility/picture 时必须给 afterDir（改后帧目录）；'
+        + '没有改前（beforeDir）也能审——但画面维度只能给噪声底与绝对值，不能判"改动可见"');
     }
     const res = { checks: {}, requested: checks };
     const problems = [];
 
     // ---------- ① 画面：visibility + picture（同一趟解码里一起算）----------
     if (want('visibility') || want('picture')) {
-      const list = (d) => fs.existsSync(d)
+      const list = (d) => (d && fs.existsSync(d))
         ? fs.readdirSync(d).filter((f) => f.endsWith('.png')).sort() : [];
-      const B = list(a.beforeDir), A = list(a.afterDir);
+      const B = single ? [] : list(a.beforeDir);
+      const A = list(a.afterDir);
       const N = a.noiseDir ? list(a.noiseDir) : [];
-      if (!B.length || !A.length) throw new Error('帧目录为空或不存在');
+      if (!A.length) throw new Error('帧目录为空或不存在（afterDir）');
+      if (!single && !B.length) throw new Error('改前帧目录为空或不存在（beforeDir）');
       if (a.noiseDir && !N.length) throw new Error('noiseDir 为空或不存在');
-      const n = Math.min(B.length, A.length);
+      // ★ 单版：噪声底就是【同一状态再渲一次】⇒ 拿 afterDir 跟 noiseDir 比
+      const n = single ? Math.min(A.length, N.length || A.length) : Math.min(B.length, A.length);
       const PNG = await importPng();
       let best = { mad: -1, frame: -1, maxAbs: 0, changed: 0 };
       let noiseBest = { mad: -1, frame: -1 };
@@ -1165,25 +1218,30 @@ const IMPL = {
       let bClipPx = 0, bOverPx = 0, bUnderPx = 0, bPx = 0;
       const beforeSum = [0, 0, 0]; let beforePx = 0;
       for (let i = 0; i < n; i++) {
-        const x = await PNG.read(path.join(a.beforeDir, B[i]));
+        // ★ 单版模式：没有改前帧 ⇒ x = null（后面所有"改动"量都跳过，只留噪声底）
+        const x = single ? null : await PNG.read(path.join(a.beforeDir, B[i]));
         const y = await PNG.read(path.join(a.afterDir, A[i]));
-        if (x.length !== y.length) continue;
-        let dsum = 0, dmx = 0, ch = 0;
-        for (let k = 0; k < x.length; k++) {
-          const d = Math.abs(x[k] - y[k]);
-          dsum += d; if (d > dmx) dmx = d; if (d > 0) ch++;
+        if (x && x.length !== y.length) continue;
+        if (x) {
+          let dsum = 0, dmx = 0, ch = 0;
+          for (let k = 0; k < x.length; k++) {
+            const d = Math.abs(x[k] - y[k]);
+            dsum += d; if (d > dmx) dmx = d; if (d > 0) ch++;
+          }
+          const mad = dsum / x.length;
+          perFrameMad[i] = mad;
+          if (mad > 0) changedFrames++;
+          if (mad > best.mad) best = { mad, frame: i, maxAbs: dmx, changed: ch };
         }
-        const mad = dsum / x.length;
-        perFrameMad[i] = mad;
-        if (mad > 0) changedFrames++;
-        if (mad > best.mad) best = { mad, frame: i, maxAbs: dmx, changed: ch };
         // ★ 噪声底：同一状态【再渲染一次】的帧 ⇒ 同态差异就是渲染器噪声
+        //   （单版模式：参照物是【这一版】的帧 —— 同样是"同一状态渲两遍"）
         if (N.length) {
           const z = await PNG.read(path.join(a.noiseDir, N[i]));
-          if (z.length === x.length) {
+          const ref = x || y;
+          if (z.length === ref.length) {
             let nsum = 0;
-            for (let k = 0; k < x.length; k++) nsum += Math.abs(x[k] - z[k]);
-            const nmad = nsum / x.length;
+            for (let k = 0; k < ref.length; k++) nsum += Math.abs(ref[k] - z[k]);
+            const nmad = nsum / ref.length;
             perFrameNoise[i] = nmad;
             if (nmad > 0) noiseChangedFrames++;
             if (nmad > noiseBest.mad) noiseBest = { mad: nmad, frame: i };
@@ -1200,7 +1258,8 @@ const IMPL = {
             if (hi >= 250) { clipPx++; overPx++; } else if (lo <= 5) underPx++;
             px++;
           }
-          for (let k = 0; k + 2 < x.length; k += 3) {
+          // ★ 单版模式没有改前帧 ⇒ 改前侧的统计全部跳过（"新增"本来就算不出来）
+          if (x) for (let k = 0; k + 2 < x.length; k += 3) {
             const r = x[k], g = x[k + 1], b = x[k + 2];
             beforeSum[0] += r; beforeSum[1] += g; beforeSum[2] += b;
             const hi = Math.max(r, g, b), lo = Math.min(r, g, b);
@@ -1210,7 +1269,21 @@ const IMPL = {
         }
       }
       const th = a.threshold ?? 0.5;
-      if (want('visibility')) {
+      if (want('visibility') && single) {
+        // ★★ 单版审片：没有改前 ⇒ "改动是否可见"判不了 ⇒ 明确报 skipped，
+        //   但把【噪声底】给出来（同一状态渲两遍的差异）—— 这是审片最该先知道的一个数
+        const noiseMad = noiseBest.mad < 0 ? null : noiseBest.mad;
+        res.checks.visibility = {
+          skipped: '单版审片：没有改前帧（beforeDir）⇒ 无法判"改动是否可见"'
+            + '（这一版没有"改动"可比）。要判改动可见，请给 beforeDir + noiseDir。',
+          noiseMad, noiseFrame: noiseBest.frame, noiseChangedFrames, totalFrames: n,
+          noiseK: a.noiseK ?? 1.5,
+          note: noiseMad === null
+            ? '没给 noiseDir ⇒ 噪声底未知；官方渲染器同态重渲染噪声实测可达 MAD 123.55 ⇒ 任何像素结论都要先量底'
+            : `同态重渲染的噪声底 = MAD ${noiseMad.toFixed(4)}（${noiseChangedFrames}/${n} 帧有差异）`
+              + ' ⇒ 任何"改动可见"的结论都要超过这个底',
+        };
+      } else if (want('visibility')) {
         // ★ 噪声校准：官方渲染器【同态重渲染】就有噪声（实测 17/108 帧变、最差 MAD 123.55）
         //   ⇒ 裸 MAD > 0.5 毫无判别力。给了 noiseDir 就按噪声底抬高判据线。
         const noiseMad = noiseBest.mad < 0 ? null : noiseBest.mad;
@@ -1292,16 +1365,24 @@ const IMPL = {
         }
         const clipDelta = p.clipDelta ?? 0;
         const underDelta = p.underDelta ?? 0;
-        if (clipDelta > 0.02) problems.push(`高光削波【新增】${(clipDelta * 100).toFixed(2)}%（>2%）`);
-        if (underDelta > 0.10) problems.push(`暗部死黑【新增】${(underDelta * 100).toFixed(2)}%（>10%）`);
+        if (beforePx) {
+          if (clipDelta > 0.02) problems.push(`高光削波【新增】${(clipDelta * 100).toFixed(2)}%（>2%）`);
+          if (underDelta > 0.10) problems.push(`暗部死黑【新增】${(underDelta * 100).toFixed(2)}%（>10%）`);
+        } else {
+          // ★ 单版：算不出"新增" ⇒ 只报绝对值，且【不判失败】
+          //   （片子里本来就有的纯白/纯黑不算缺陷 ⇒ 绝对值不能当判据，只能当"待确认"）
+          p.note = '单版审片：这是【绝对值】（片子里本来就有的纯白/纯黑也算在内）'
+            + '⇒ 不能当缺陷判据；判"新增削波/死黑"需要改前帧（beforeDir）';
+          p.verdict = '参考（未判定）';
+        }
         res.checks.picture = p;
       }
     }
 
     // ---------- ② 音频：LUFS / true peak ----------
     if (want('audio')) {
-      if (!a.beforeVideo || !a.afterVideo) {
-        res.checks.audio = { skipped: '需要 beforeVideo / afterVideo（mp4 路径）才能测响度' };
+      if (!a.afterVideo) {
+        res.checks.audio = { skipped: '需要 afterVideo（mp4 路径）才能测响度' };
       } else {
         const meas = async (mp) => {
           const r = await run(FFMPEG(), ['-hide_banner', '-nostats', '-i', mp,
@@ -1311,10 +1392,17 @@ const IMPL = {
           const Pk = (s.match(/^\s*Peak:\s*(-?[\d.]+)\s*dBFS/m) || [])[1];
           return { integratedLufs: I === undefined ? null : +I, truePeakDbfs: Pk === undefined ? null : +Pk };
         };
-        const b = await meas(a.beforeVideo), c = await meas(a.afterVideo);
-        const res2 = { before: b, after: c };
-        if (c.integratedLufs !== null && Math.abs(c.integratedLufs) > 0.5) {
-          res2.note = '响度未归一到 −14 LUFS（见 jianying-audio-mix）';
+        const c = await meas(a.afterVideo);
+        const res2 = { after: c };
+        // ★ 单版：没有改前视频也能测响度（绝对目标 −14 LUFS ⇒ 可判），只是没有增量可比
+        if (a.beforeVideo) res2.before = await meas(a.beforeVideo);
+        else res2.note = '单版审片：没有改前视频 ⇒ 只测了【这一版】的响度（没有比增量）';
+        // ★★ 测不出来 ≠ "响度正常"：成片里没有音频流时必须点名"未判定"
+        if (c.integratedLufs === null) {
+          res2.undeterminedReason = '这一版的成片里没有可测的音频（无音轨 / 纯画面片）'
+            + ' ⇒ 响度【未判定】（不是"响度正常"）';
+        } else if (Math.abs(c.integratedLufs) > 0.5) {
+          res2.note = (res2.note ? res2.note + '；' : '') + '响度未归一到 −14 LUFS（见 jianying-audio-mix）';
         }
         res.checks.audio = res2;
       }
@@ -1322,8 +1410,19 @@ const IMPL = {
 
     // ---------- ③ 时间线：段数 / 轨道 / 时长 ----------
     if (want('timeline')) {
-      if (!a.beforeDraft || !a.afterDraft) {
-        res.checks.timeline = { skipped: '需要 beforeDraft / afterDraft（草稿 JSON 路径）' };
+      if (!a.afterDraft) {
+        res.checks.timeline = { skipped: '需要 afterDraft（草稿 JSON 路径）' };
+      } else if (!a.beforeDraft) {
+        // ★ 单版审片：只给【这一版】的结构（不判"变了什么"）
+        const da0 = readDraftJson(a.afterDraft);
+        if (!da0) res.checks.timeline = { skipped: '草稿读不出来（可能是官方加密封装）' };
+        else {
+          res.checks.timeline = {
+            after: draftShape(da0), single: true,
+            note: '单版审片：没有改前草稿 ⇒ 只给了【这一版】的结构（段数/轨道/时长）；'
+              + '要判"改了什么"，需要改前草稿（beforeDraft）',
+          };
+        }
       } else {
         const db = readDraftJson(a.beforeDraft), da = readDraftJson(a.afterDraft);
         if (!db || !da) res.checks.timeline = { skipped: '草稿读不出来（可能是官方加密封装）' };
@@ -1395,6 +1494,22 @@ const IMPL = {
 
     res.verdict = problems.length ? 'FAIL' : 'PASS';
     res.problems = problems;
+    // ★★ 收集【未判定的维度】（skipped）—— 纪律：没测的维度不能算"通过"
+    //   （官方 editing-review 的原话：没有足够证据的必查项要保留为"待确认"，
+    //     不能因为"没发现问题"就给完整通过）
+    //   单版审片时尤其重要：visibility 本来就判不了 ⇒ 不能让 PASS 看起来像"全查过了"
+    const undetermined = [];
+    for (const [k, v] of Object.entries(res.checks)) {
+      // ★ skipped（这个维度没查）与 undeterminedReason（查了但测不出来）都要点名
+      if (v && typeof v === 'object' && (v.skipped || v.undeterminedReason)) {
+        undetermined.push({ check: k, why: v.skipped || v.undeterminedReason });
+      }
+    }
+    if (undetermined.length) {
+      res.undetermined = undetermined;
+      res.verdictNote = `有 ${undetermined.length} 个维度【未判定】（${undetermined.map((u) => u.check).join('、')}）`
+        + ' ⇒ 这不是"完整通过"；未测的维度要写成"待确认"，不能写成"正常"';
+    }
     // ★ isError=true 仍保留（skill 语义：判不过就是判不过），但加 failureKind 让调用方能区分
     //   「验收结论不通过」与「工具故障」⇒ 后者走 .catch 的 `xxx 失败：…` 文本，没有 failureKind
     if (problems.length) res.failureKind = 'acceptance';

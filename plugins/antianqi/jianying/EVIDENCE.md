@@ -155,7 +155,7 @@
 | `test/jianying.test.mjs` | **11 / 11** |
 | `scripts/selftest-mcp.mjs` | **58 / 58**（含编排器两段式 4 条 + 新路线 2 条） |
 | `scripts/selftest-draft-edit.mjs` | **17 / 17** |
-| `scripts/selftest-talk-cut.mjs` | **7 / 7** |
+| `scripts/selftest-talk-cut.mjs` | **11 / 11**（带草稿；无草稿时落稿链显式 SKIP ⇒ 7 项） |
 | `scripts/check-env.mjs` | **17 OK / 0 MISS** |
 | 上游官方校验器 | `OK plugin antianqi/jianying` · **30 插件全绿** |
 
@@ -238,6 +238,39 @@
 ★ 顺带修掉一个自相矛盾：意图分类器的权重函数注释写"长词更具体 ⇒ 权重更高"，
 实现却是"3 字以上一律 3 分" ⇒ 命中"加字幕再出片"(6 字) 反而输给命中"加字幕"+"字幕"的
 通用 skill 条目。改成**随长度增长**后，测试句 33 句 **top-1 100% / top-3 100%**。
+
+## 6.9 ★ 单版审片（"审一下这版"）与 `undetermined`（2026-10-24 续）
+
+| 维度 | 单版能判什么 | 为什么 |
+|---|---|---|
+| `visibility` | **判不了**（`skipped`）但**给出噪声底** | 没有改前就没有"改动"可比 |
+| `picture` | 只给**绝对值**、**不判失败** | 片子里本来就有的纯白/纯黑不算缺陷 ⇒ 绝对值不能当判据 |
+| `audio` | **能判** | 这一版的 LUFS / true peak（绝对目标 −14 LUFS） |
+| `timeline` | 只给这一版的**结构** | 段数 / 轨道 / 时长 |
+| `draft_integrity` | **能判** | 真草稿的 sha |
+
+实测（`review-only` 路线，夹具 `JYAI能力批测-带音轨夹具`）：
+
+| 项 | 实测 |
+|---|---|
+| 噪声底 | 同态重渲 MAD = **0.0000206**（另一轮 0）⇒ **噪声底本身也非确定 ⇒ 每次都要量** |
+| 画面绝对值 | `clipRatio = 0.00724` · verdict = **"参考（未判定）"** |
+| 响度 | **integratedLufs = −14** ✓ |
+| 时间线 | 段数 3 · `single: true` |
+| 结论 | PASS + **`undetermined: [visibility]`** + `verdictNote`（"这不是完整通过"） |
+
+★ **"PASS" 不等于"全查过了"**：没判的维度现在进 `undetermined` 并附 `verdictNote`
+⇒ 未测的维度要写成"待确认"，不能写成"正常"（官方 `editing-review` 的纪律）。
+
+★ 自检当场又抓出第二层：**查了但测不出来**（纯画面片没有音轨 ⇒ `ebur128` 量不出 LUFS ⇒
+`integratedLufs = null`）旧行为是**静默 null**（看着像"响度正常"）⇒
+现在也进 `undetermined`（新增 `undeterminedReason`）⇒ 自检的断言是
+"响度**要么**达标（|LUFS+14| ≤ 0.5）**要么**出现在 undetermined 里"。
+
+★ 顺带修了一个**报告层缺陷**：编排器的步骤摘要只留白名单字段 ⇒ `verify_diff` 的结论
+在 `checks` 里被丢掉 ⇒ 路线"跑成了却没产出它该产出的东西"。现在 `verify_diff` 走
+**专用紧凑摘要**（保留关键数字，丢掉逐帧明细）。
+
 
 
 

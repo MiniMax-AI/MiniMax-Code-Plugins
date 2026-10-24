@@ -573,6 +573,35 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
       rpBad.result?.isError === true && /未知路线|不在允许集合/.test(textOf(rpBad)),
       textOf(rpBad).replace(/\s+/g, ' ').slice(0, 140));
 
+    // ── ★★★ 单版审片路线（2026-10-24 新增）："审一下这版" ──
+    //   ★ 这条路线只读不改（审片不授权修改）⇒ 断言里也要体现
+    //   ★ 三条断言各挑一个方向：① 噪声底量出来了 ② 没判的维度【点名】了 ③ 真草稿没被动过
+    const revRp = await call('tools/call', {
+      name: 'run_pipeline',
+      arguments: {
+        profile: 'review-only', draft: FILM_DRAFT,
+        outDir: path.join(SMOKE, 'pipeline-review'),
+      },
+    });
+    const revTxt = textOf(revRp);
+    const revObj = (() => { try { return JSON.parse(revTxt); } catch { return null; } })();
+    const revStep = (revObj?.steps || []).find((s) => s.verb === 'verify_diff');
+    const revChecks = revStep?.result?.checks || {};
+    const revUndet = (revStep?.result?.undetermined || []).map((u) => u.check);
+    // ★ 断言三件事：① 噪声底量出来了 ② 没判的维度【被点名】了 ③ 响度要么达标、要么明说"未判定"
+    //   （纯画面片没有音轨 ⇒ integratedLufs 为 null ⇒ 这时必须落在 undetermined 里，不能装作"响度正常"）
+    const lufs = revChecks.audio?.after?.integratedLufs;
+    const lufsOk = typeof lufs === 'number' ? Math.abs(lufs + 14) <= 0.5 : revUndet.includes('audio');
+    check('★★★ run_pipeline：单版审片（review-only）⇒ 噪声底量出来 + 没判的维度被点名 + 响度要么达标要么点名',
+      revObj?.verdict === 'PASS' && revUndet.includes('visibility')
+      && revChecks.visibility && typeof revChecks.visibility.noiseMad === 'number'
+      && revChecks.audio && 'after' in revChecks.audio && lufsOk
+      && revChecks.timeline?.single === true
+      && !!revChecks.draft_integrity,
+      `未判定=[${revUndet.join(',')}]`
+      + ` 噪声底=${revChecks.visibility?.noiseMad} 响度=${lufs === undefined ? '未测' : lufs}`
+      + ` 段数=${revChecks.timeline?.after?.segments}`);
+
     // ── ★★★ 第二条【脚本步骤】路线：加字幕并出片（2026-10-24 新增）──
     //   ★ 价值有两个：① 字幕是高频真实需求 ② 这是【第二个脚本步骤】⇒ 证明脚本步骤机制不是
     //     只为 talk-cut 打的补丁；③ 字幕脚本自己会按 ±1 帧核对时码 ⇒ 它自证"字幕真的落进去了"

@@ -12,9 +12,10 @@
           "edit-then-render",
           "talk-cut-then-render",
           "subtitle-then-render",
-          "render-and-mix"
+          "render-and-mix",
+          "review-only"
         ],
-        "description": "要走的路线：调色并出片 / 改草稿并语义验收 / 改完直接出片 / 剪口播再出片 / 加字幕并出片 / 出片并按草稿重做混音"
+        "description": "要走的路线：调色并出片 / 改草稿并语义验收 / 改完直接出片 / 剪口播再出片 / 加字幕并出片 / 出片并按草稿重做混音 / 审这一版（只读不改）"
       },
       "draft": {
         "type": "string",

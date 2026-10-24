@@ -64,10 +64,10 @@ metadata:
 
 ## 意图路由表：综合诉求 → 步骤序列
 
-> ★ **机器可读版**：`references/pipeline-profiles.json`（**6 条路线 / 26 个步骤**）
+> ★ **机器可读版**：`references/pipeline-profiles.json`（**7 条路线 / 32 个步骤**）
 > ★ 每一步的动词、参数、变量都由机械审计**按 schema 校验** ⇒ 写错会当场报出来。
 > 下面的路径是它的人读展开（两边必须一致，审计 7k 会查）。
-> ★ **6 条路线**：调色并出片 / 改草稿并语义验收 / 改完直接出片 / 剪口播再出片 / 加字幕并出片 / 出片并重做混音。
+> ★ **7 条路线**：调色并出片 / 改草稿并语义验收 / 改完直接出片 / 剪口播再出片 / 加字幕并出片 / 出片并重做混音 / 审这一版。
 
 ### 路径 A：调色并出成片（"把这个草稿调暖再出片"）
 
@@ -160,6 +160,38 @@ node ${PLUGIN_ROOT}/scripts/run-verb.mjs audio_mix '{
 
 > ★ 用 `run_pipeline` 跑这两条时，**上一步的成片路径不用手写**：
 > 步骤上声明 `"produces": {"$film": "film.mp4"}` ⇒ 编排器把 `<outDir>/film.mp4` 交给下一步。
+
+### 路径 G：审这一版（"审一下这版" / "交片前检查一下"）
+
+```bash
+# ① 开副本（★ 审片只读不改：只开副本做体检，不改草稿、不落盘）
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_open '{"draft":"<草稿库>\\<草稿名>","copy":true}'
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_read '{"sessionId":"ve-session-N"}'
+# ② 渲两遍：第二遍只为了【量噪声底】（同一状态再渲一次 ⇒ 差异就是官方渲染器的噪声）
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs render_frames '{"draft":"<①的 dir>","outDir":"<输出>/review"}'
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs render_frames '{"draft":"<①的 dir>","outDir":"<输出>/noise"}'
+# ③ 出片（自带时长/响度验收）⇒ 成片给 ④ 量响度
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs make_film '{"draft":"<①的 dir>","outDir":"<输出目录>","denoise":"auto"}'
+# ④ 单版审片（★ 没有改前 ⇒ visibility 会明说 skipped 并给出噪声底）
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs verify_diff '{
+  "afterDir":"<输出>/review/frames", "noiseDir":"<输出>/noise/frames",
+  "afterVideo":"<输出目录>/film.mp4", "afterDraft":"<①的 draft_read 响应里的 draft>",
+  "realDraft":"<草稿库>\\<草稿名>",
+  "checks":["visibility","picture","audio","timeline","draft_integrity"]
+}'
+```
+
+> ★ **单版审片能判什么、不能判什么**（结果里会写清）：
+>
+> | 维度 | 单版 | 说明 |
+> |---|---|---|
+> | `visibility` | **判不了** | 没有改前就没有"改动"可比 ⇒ 报 skipped，**但给出噪声底** |
+> | `picture` | 只给绝对值、**不判失败** | 片子里本来就有的纯白/纯黑不算缺陷 ⇒ 绝对值不能当判据 |
+> | `audio` | **能判** | 这一版的 LUFS / true peak（绝对目标 −14 LUFS） |
+> | `timeline` | 只给这一版的结构 | 段数 / 轨道 / 时长；"改了什么"要改前草稿 |
+> | `draft_integrity` | **能判** | 真草稿的 sha |
+>
+> ⇒ ★ 结果里有 **`undetermined`** 字段列出没判的维度 ⇒ **PASS 不等于"全查过了"**。
 
 ## ★ 两段式：人工确认点（`run_pipeline` 怎么做"先给人看，再落刀"）
 

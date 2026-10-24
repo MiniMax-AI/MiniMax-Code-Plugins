@@ -13,7 +13,10 @@
     "$srt": "用户提供的转写稿（SRT）★ 官方 ASR 拿不到，不能自己编",
     "$planPath": "★ 编排器分配的产物路径（在流水线工作目录里）⇒ 路线用 alloc 声明谁来分配",
     "$film": "★ 上一步产出的成片（相对 $outDir）⇒ 由步骤的 produces 声明",
-    "$mixed": "★ 混音后的成片（相对 $outDir）⇒ 由步骤的 produces 声明"
+    "$mixed": "★ 混音后的成片（相对 $outDir）⇒ 由步骤的 produces 声明",
+    "$draftJson": "★ 这一版的裸草稿 JSON（由 draft_read 步骤写出）⇒ 单版审片用它看结构",
+    "$reviewDir": "★ 审片帧目录的父目录（相对 $outDir）⇒ 由步骤的 produces 声明",
+    "$noiseDir": "★ 噪声底帧目录的父目录（相对 $outDir）⇒ 同一状态再渲一次"
   },
   "profiles": [
     {
@@ -134,6 +137,45 @@
           "verb": "audio_mix",
           "args": { "draft": "$dir", "video": "$film", "out": "$mixed" },
           "note": "★ 按草稿里的音频结构重做混音，归一到 −14 LUFS"
+        }
+      ]
+    },
+    {
+      "id": "review-only",
+      "when": "审这一版（'审一下这版' / '这版片子审得过吗' / '交片前检查一下'）",
+      "requires": ["剪映在跑", "★ 审片【只读不改】：这条路线只开副本做体检，不改草稿、不落盘"],
+      "steps": [
+        { "verb": "draft_open", "args": { "draft": "$draft", "copy": true }, "yields": ["$sessionId", "$dir"] },
+        { "verb": "draft_read", "args": { "sessionId": "$sessionId" } },
+        {
+          "verb": "render_frames",
+          "args": { "draft": "$dir", "outDir": "$reviewDir" },
+          "produces": { "$reviewDir": "review" },
+          "note": "★ 第一次渲染 = 这一版的帧"
+        },
+        {
+          "verb": "render_frames",
+          "args": { "draft": "$dir", "outDir": "$noiseDir" },
+          "produces": { "$noiseDir": "noise" },
+          "note": "★ ★ 同一状态【再渲一次】⇒ 差异就是官方渲染器的噪声底（审片前最该先知道的数）"
+        },
+        {
+          "verb": "make_film",
+          "args": { "draft": "$dir", "outDir": "$outDir", "denoise": "auto" },
+          "produces": { "$film": "film.mp4" },
+          "note": "★ 出片（自带时长/响度验收）⇒ 成片路径交给下一步量响度"
+        },
+        {
+          "verb": "verify_diff",
+          "args": {
+            "afterDir": "$reviewDir/frames",
+            "noiseDir": "$noiseDir/frames",
+            "afterVideo": "$film",
+            "afterDraft": "$draftJson",
+            "realDraft": "$draft",
+            "checks": ["visibility", "picture", "audio", "timeline", "draft_integrity"]
+          },
+          "note": "★ 单版审片：没有改前 ⇒ visibility 判不了（会明说 skipped 并给出噪声底）、picture 只给绝对值不判失败；audio/timeline/draft_integrity 是这一版的真实体检"
         }
       ]
     }

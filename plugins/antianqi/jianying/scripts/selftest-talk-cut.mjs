@@ -73,9 +73,24 @@ if (!DRAFT) {
   const a = spawnSync(process.execPath, [path.join(HERE, 'talk-cut-apply.mjs'),
     '--plan', cutPlan, '--draft', DRAFT, '--apply'], { encoding: 'utf8', timeout: 600000 });
   const out = a.stdout || '';
-  check('② 落稿链跑通', a.status === 0, out.split('\n').filter((l) => l.includes('时间线判定') || l.includes('[OK]') || l.includes('落盘')).join(' | ').trim());
-  check('②a 时间线正好缩短剪掉的长度', /时间线判定: OK/.test(out), (out.match(/# 时间线判定.*/) || [''])[0].trim());
+  check('② 落稿链跑通', a.status === 0,
+    out.split('\n').filter((l) => /判定|已验证剪掉|这一轨时长总量|\[OK\]|落盘/.test(l)).join(' | ').trim());
+  // ★ 判据（2026-10-24 改写）：这一轨的【时长总量】正好少了剪掉的长度
+  //   —— 旧判据是"总时长 == 原总时长 − 剪掉量"，但①改前读的是磁盘形态、改后读的是会话快照形态
+  //   （段 11 键 vs 50+ 键）⇒ 两种形态混着比 ⇒ 假红；②官方删片段会把后面的段左移补空
+  //   ⇒ 总时长也不是可靠判据。现在判据形态无关、且与位移无关。
+  check('②a 这一轨的时长总量正好少了剪掉的长度（★ 形态无关的判据）',
+    /判定: 已验证剪掉 1\/1 个区间/.test(out) && /这一轨时长总量 \d+ → \d+ us（正好少 1000000）/.test(out),
+    (out.match(/# 判定:.*/) || [''])[0].trim() + ' || ' + (out.match(/\[OK\].*/) || [''])[0].trim());
   check('②b 真草稿零改动', /realDraftUnchanged=true/.test(out), (out.match(/# 落盘:.*/) || [''])[0].trim());
+  // ★ ②c 阴性对照：演练模式（没 --apply）⇒ 判据必然【不成立】
+  //   ⇒ 这一条证明判据【有区分力】："剪了"和"没剪"结论不同（不是恒真）
+  const dry = spawnSync(process.execPath, [path.join(HERE, 'talk-cut-apply.mjs'),
+    '--plan', cutPlan, '--draft', DRAFT], { encoding: 'utf8', timeout: 600000 });
+  const dryOut = dry.stdout || '';
+  check('②c 阴性对照：演练模式 ⇒ 判据不成立（证明判据能区分"剪了"和"没剪"）',
+    /阴性对照/.test(dryOut) && /判据现在【不成立】/.test(dryOut),
+    (dryOut.match(/阴性对照.*/) || [''])[0].trim());
 }
 
 console.log(`\n=== ${PASS} PASS / ${FAIL} FAIL ===`);
