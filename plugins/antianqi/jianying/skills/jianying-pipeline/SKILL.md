@@ -1,0 +1,345 @@
+---
+name: jianying-pipeline
+description: 'Use when: 用户要的是【一件事做完】而不是单一步骤时 / 调完色还要出成片 / 改完草稿顺便审一遍 / 剪完口播再出成片 / 全流程走一遍 / 把这条片子从头做到尾. 触发词: 一站式做完 / 全流程走一遍 / 把整条流程走完 / 改完直接出片 / 顺便也出个片.'
+displayNames:
+  zh-Hans: 剪映·成片流水线（跨链 · 一份副本走到底）
+license: Apache-2.0
+compatibility: Requires Windows + 剪映 11.6 在运行（草稿与官方渲染都走本机命名管道）+ ffmpeg 6.0 + Python 3.9+ + JYAI_HOME 指向 JYAI 仓库. ★ 剪口播那条链还需要用户自带转写稿(SRT)——官方 ASR 在 agent runtime 里、拿不到.
+metadata:
+  author: antianqi
+  version: "0.1.0"
+  basis: "6 条链各自端到端 + 意图映射表（references/intent-map.json，21 条）+ 跨链共享会话约定（sessionId → 副本目录）"
+---
+
+# 剪映成片流水线（jianying-pipeline）
+
+> **一句话定位**：用户要的是**一件事做完**（"调完色再出片"、"剪完口播再出成片"）时，
+> 按本手册把 2~3 条链串起来，**共用同一份草稿副本**，每一步都用**语义判据**验收。
+
+> ★ **现在有两条路**：① **模型按本手册一步步调**（灵活）② **`run_pipeline` 动词**（一条命令跑完一条预置路线，路线定义在 `references/pipeline-profiles.json`）。
+> 需求只是"按路线走一遍"时用 ②；需要中途改参数/加确认点时用 ①。
+
+> ★ **不确定该走哪条链时**，先要一个**判决**：
+> `node ${PLUGIN_ROOT}/scripts/classify-intent.mjs "<用户那句话>" --decide`
+>
+> ⇒ 它给三种结果之一：
+>
+> | 结果 | 判据 | 你该怎么走 |
+> |---|---|---|
+> | **① 判决** | `decision` 非空 | **照它走**（`decision.route` 或 `decision.skill`）⇒ 依据在 `evidence`（命中词 / 分数 / 与次优的分差） |
+> | **② 拒答·没线索** | `decision: null` 且最高分 < 阈值 | 按各 Skill 的 description 自己判断，或**问用户**要具体诉求（要动作、要对象） |
+> | **③ 拒答·分不清** | `decision: null` 且与次优分差不足 | 把两个候选都摆给用户选，别自己拍板 |
+>
+> ⇒ ★ **判决是可查证的**：命中了哪些词、多少分、跟第二名拉开多少，都在输出里。
+> ⇒ ★ **判决还带出"接下来要什么"**（`routeInputs` / `mustAsk` / `params`）：
+> 这条路线要哪些输入 · **哪些必须问用户**（如"$srt 官方 ASR 拿不到"、"$grade 曲线形状猜不出来"）·
+> 参数怎么填（能查到诉求映射时直接给）。
+> ⇒ ★ **缺参会一次性点名**（开跑前预检）：把缺的全部列出来，并标出哪些只能问用户要。
+> ⇒ ★ **两条纪律都有守门人**：
+> 准确率由 `references/intent-testset.json` 量（top-1 ≥ 80% · top-3 ≥ 90%，低于阈值就红）；
+> "**绝不硬猜**"由 `references/intent-refusal-set.json` 守（18 句模糊话，
+> **一句都不许被判成某条链**，否则自检变红）。
+> ⇒ ★ 判决只是**起点**：执行中发现判决与用户原话不符 ⇒ **停下来问**，不要硬跑。
+>
+> ★ **本 skill 只做编排，不做实现**：每一步都落到既有动词上（`draft_*` / `grade_apply` /
+> `make_film` / `render_frames` / `verify_diff` / `talk-cut-*`），
+> **参数怎么填**看 `references/intent-map.json`（"人话 → 参数"的机器可读版，21 条），
+> **判据怎么定**看 `references/verify-discipline.md`。
+
+## 什么时候用本 skill / 什么时候不用
+
+| 用户要的是 | 用谁 |
+|---|---|
+| **一件事做完**（调完色还要出片 / 改完还要审 / 剪完还要出） | ★ **本 skill** |
+| 只要调色出片 | `jianying-cut` |
+| 只要改草稿 | `jianying-draft-edit` |
+| 只要审片 | `jianying-review` |
+| 只要剪口播 | `jianying-talk-cut` |
+| 问参数怎么填 / 问验收口径 | `jianying-grade-chain` / `jianying-verify`（库） |
+
+⇒ **单链条的活不要绕本 skill**（多一层编排 = 多一层出错的地方）。
+
+## ★ 三条纪律（别破）
+
+1. **先查缺什么前置** —— 缺前置就别开始，否则会做出黑屏/静音的成片。
+   | 前置 | 不满足会怎样 | 怎么办 |
+   |---|---|---|
+   | **剪映在跑** | 草稿动词与官方渲染全部连不上 | 让用户先开剪映（不必开界面，但进程要在） |
+   | **素材在盘上** | 官方渲出黑帧 ⇒ 成片 3 秒只有 3 KB | 先确认草稿里引用的素材路径存在 |
+   | **口播链要 SRT** | 官方 ASR 拿不到 ⇒ 没有转写稿就剪不了 | ★ **必须让用户给 SRT**，不要自己编 |
+   | **调色参数已知** | 不知道"暖一点"是多少 | 从 `intent-map.json` 查；查不到就按链语义推并**问用户确认** |
+
+2. **一份副本走到底** —— 全流程只用**一个** `draft_open` 的副本。
+   ⇒ `draft_open` 返回的 `sessionId`（给 `draft_*` 用）和 `dir`（副本目录，给 `make_film` / `render_frames` 用）
+   **要一起往下传**。★ 不要每一步重新 `draft_open`（那会开多份副本，状态对不上）。
+
+3. **每步都要判据** —— "没报错"不等于"生效"。
+   ⇒ 改草稿用**语义判据**（`verify_diff` 的 `timeline` + `expect`），
+   出片用**内建验收**（`make_film` 的双流/时长/响度断言），
+   画面可见才需要像素判据（且**必须带 `noiseDir` 校准**）。
+
+## 意图路由表：综合诉求 → 步骤序列
+
+> ★ **机器可读版**：`references/pipeline-profiles.json`（**9 条路线 / 45 个步骤**）
+> ★ 每一步的动词、参数、变量都由机械审计**按 schema 校验** ⇒ 写错会当场报出来。
+> 下面的路径是它的人读展开（两边必须一致，审计 7k 会查）。
+> ★ **9 条路线**：调色并出片 / 改草稿并语义验收 / 改完直接出片 / 剪口播再出片 / 加字幕并出片 /
+> 出片并重做混音 / 审这一版 / 两版对照审片 / 曲线类调色并出片。
+> ★ **10 个动词全部被路线覆盖**（`grade_apply` 是曲线类唯一走得通的路）。
+
+### 路径 A：调色并出成片（"把这个草稿调暖再出片"）
+
+```bash
+# ① 开副本（拿 sessionId + dir，后面两步都用它）
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_open '{"draft":"<草稿库>\\<草稿名>","copy":true}'
+#    ⇒ 记下返回里的 sessionId（ve-session-N）与 dir（副本目录）
+
+# ② 出成片（画面来自官方渲染器；grade 由我们自己给 ⇒ 曲线类也能用）
+#    ★ grade 的参数从 references/intent-map.json 取（"调暖一点" ⇒ adjustColor.temperature 0.15）
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs make_film '{
+  "draft": "<①返回的 dir>",
+  "outDir": "<输出目录>",
+  "denoise": "auto",
+  "grade": { "adjustColor": { "temperature": 0.15 } }
+}'
+#    ⇒ make_film 自带验收（双流齐备 + 时长对齐 ±1 帧 + 响度偏离 ≤1 LUFS）⇒ 失败会直接判失败
+
+# ③（可选）画面级对比：原片 vs 成片 ⇒ 必须带 noiseDir 校准
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs render_frames '{"draft":"<①的 dir>","outDir":"<原片帧目录>"}'
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs verify_diff '{
+  "beforeDir": "<原片帧目录>/frames", "afterDir": "<成片帧目录>/frames",
+  "noiseDir": "<原片帧目录>/frames-again",
+  "checks": ["visibility"]
+}'
+```
+
+### 路径 B：改草稿并验收（"改完顺便审一遍"）
+
+```bash
+# ① 开副本 ⇒ ② 读结构拿 segmentId ⇒ ③ 改（可多次）⇒ ④ 落盘 ⇒ ⑤ 语义验收
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_open  '{"draft":"<草稿库>\\<草稿名>","copy":true}'
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_read  '{"sessionId":"ve-session-N"}'
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_patch '{"op":"video.setVolume","sessionId":"ve-session-N","params":{"segmentId":"<uuid>","volume":0.25}}'
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_commit '{"sessionId":"ve-session-N","realDraft":"<草稿库>\\<草稿名>"}'
+# ⑤ 语义判据：★ 两份草稿必须是【裸草稿】（顶层就有 tracks）——draft_read 的响应外面还包了一层 draft
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs verify_diff '{
+  "checks": ["timeline"],
+  "beforeDraft": "<改前的裸草稿.json>", "afterDraft": "<改后的裸草稿.json>",
+  "expect": { "segmentFieldChanged": "volume" }
+}'
+```
+
+### 路径 C：剪口播并出成片（"把口播的废话剪了再出片"）
+
+```bash
+# ① ★ 先要 SRT（用户给的转写稿）——没有它就停，别自己编
+# ② 开副本 + 读结构
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_open '{"draft":"<草稿库>\\<草稿名>","copy":true}'
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_read '{"sessionId":"ve-session-N"}'
+# ③ 规划保留区间（产出"保留/删除"表 ⇒ ★ 必须给用户确认后再落刀）
+node ${PLUGIN_ROOT}/scripts/talk-cut-plan.mjs --srt "<用户给的.srt>" --out "<plan.json>"
+# ④ 用户确认后落稿（走 27 个官方 op 落草稿）★ --apply 才是真剪；★ --sessionId 复用 ② 的会话
+node ${PLUGIN_ROOT}/scripts/talk-cut-apply.mjs --plan "<上一步的 plan.json>" --sessionId "ve-session-N" --apply
+# ⑤ 落盘 + ⑥ 出成片（同路径 A 的 ②，draft 用 ① 的 dir）
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_commit '{"sessionId":"ve-session-N","realDraft":"<草稿库>\\<草稿名>"}'
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs make_film '{"draft":"<①的 dir>","outDir":"<输出目录>","denoise":"auto"}'
+```
+
+### 路径 D：改完直接出片（"改完直接出个片"）
+
+= **路径 B 的 ①~④** + **路径 A 的 ②**（`make_film` 的 `draft` 用同一个 `dir`）。
+
+### 路径 E：加字幕并出片（"给这个视频加字幕再出片"）
+
+```bash
+# ① 开副本 + 读结构
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_open '{"draft":"<草稿库>\\<草稿名>","copy":true}'
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_read '{"sessionId":"ve-session-N"}'
+# ② 落字幕（★ --sessionId 复用 ① 的会话 ⇒ 不自己开、不自己落盘）
+node ${PLUGIN_ROOT}/scripts/add-subtitles.mjs --srt "<用户给的.srt>" --sessionId "ve-session-N" --apply
+#    ⇒ 脚本自己按 ±1 帧核对时码并打印"时码吻合 N/N" ⇒ 不吻合会退出非 0
+# ③ 落盘 + ④ 出成片
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_commit '{"sessionId":"ve-session-N","realDraft":"<草稿库>\\<草稿名>"}'
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs make_film '{"draft":"<①的 dir>","outDir":"<输出目录>","denoise":"auto"}'
+```
+
+### 路径 F：出片并按草稿重做混音（"出片时把混音按草稿重做一遍"）
+
+```bash
+# ① 开副本（混音要读草稿里的音频结构）
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_open '{"draft":"<草稿库>\\<草稿名>","copy":true}'
+# ② 先出画面（带原声），再按草稿重做混音
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs make_film '{"draft":"<①的 dir>","outDir":"<输出目录>","denoise":"auto"}'
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs audio_mix '{
+  "draft":"<①的 dir>", "video":"<输出目录>/film.mp4", "out":"<输出目录>/mixed.mp4"
+}'
+#    ⇒ 混音按草稿的音频结构重做，并归一到 −14 LUFS
+```
+
+> ★ 用 `run_pipeline` 跑这两条时，**上一步的成片路径不用手写**：
+> 步骤上声明 `"produces": {"$film": "film.mp4"}` ⇒ 编排器把 `<outDir>/film.mp4` 交给下一步。
+
+### 路径 G：审这一版（"审一下这版" / "交片前检查一下"）
+
+```bash
+# ① 开副本（★ 审片只读不改：只开副本做体检，不改草稿、不落盘）
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_open '{"draft":"<草稿库>\\<草稿名>","copy":true}'
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_read '{"sessionId":"ve-session-N"}'
+# ② 渲两遍：第二遍只为了【量噪声底】（同一状态再渲一次 ⇒ 差异就是官方渲染器的噪声）
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs render_frames '{"draft":"<①的 dir>","outDir":"<输出>/review"}'
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs render_frames '{"draft":"<①的 dir>","outDir":"<输出>/noise"}'
+# ③ 出片（自带时长/响度验收）⇒ 成片给 ④ 量响度
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs make_film '{"draft":"<①的 dir>","outDir":"<输出目录>","denoise":"auto"}'
+# ④ 单版审片（★ 没有改前 ⇒ visibility 会明说 skipped 并给出噪声底）
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs verify_diff '{
+  "afterDir":"<输出>/review/frames", "noiseDir":"<输出>/noise/frames",
+  "afterVideo":"<输出目录>/film.mp4", "afterDraft":"<①的 draft_read 响应里的 draft>",
+  "realDraft":"<草稿库>\\<草稿名>",
+  "checks":["visibility","picture","audio","timeline","draft_integrity"]
+}'
+```
+
+> ★ **单版审片能判什么、不能判什么**（结果里会写清）：
+>
+> | 维度 | 单版 | 说明 |
+> |---|---|---|
+> | `visibility` | **判不了** | 没有改前就没有"改动"可比 ⇒ 报 skipped，**但给出噪声底** |
+> | `picture` | 只给绝对值、**不判失败** | 片子里本来就有的纯白/纯黑不算缺陷 ⇒ 绝对值不能当判据 |
+> | `audio` | **能判** | 这一版的 LUFS / true peak（绝对目标 −14 LUFS） |
+> | `timeline` | 只给这一版的结构 | 段数 / 轨道 / 时长；"改了什么"要改前草稿 |
+> | `draft_integrity` | **能判** | 真草稿的 sha |
+>
+> ⇒ ★ 结果里有 **`undetermined`** 字段列出没判的维度 ⇒ **PASS 不等于"全查过了"**。
+
+### 路径 H：两版对照审片（"把改前改后对着看一遍"）
+
+> ★ 这是 `jianying-review` 的**主工作流**（改前/改后对照）——
+> `run_pipeline {profile: "review-compare", draft: <改前>, draftAfter: <改后>}` 一次跑完。
+
+```bash
+# ① 开两份草稿的副本（★ 编排器用 setVars 把改前的会话/副本存成 $sidBefore / $dirBefore）
+#    —— 不存的话，第二次 draft_open 会把 $sessionId / $dir 覆盖掉
+# ② 两边各渲一遍帧 + 改后再渲一遍（噪声底）
+# ③ 两边各出一支成片（音频维度要它们）
+# ④ 一次 verify_diff 全维度对照：
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs verify_diff '{
+  "beforeDir":"<输出>/review/before/frames", "afterDir":"<输出>/review/after/frames",
+  "noiseDir":"<输出>/review/noise/frames",
+  "beforeVideo":"<输出>/before/film.mp4", "afterVideo":"<输出>/after/film.mp4",
+  "beforeDraft":"<改前的裸草稿.json>", "afterDraft":"<改后的裸草稿.json>",
+  "realDraft":"<改后那一版的真草稿>",
+  "checks":["visibility","picture","audio","timeline","draft_integrity"]
+}'
+```
+
+> ★ 一次对照能同时回答四件事：
+> **画面**变没变（带噪声底校准）· **画质**新增了多少削波/死黑 · **响度**两版各是多少 ·
+> **时间线**改了什么（逐段字段差）· **真草稿**有没有被误改。
+
+### 路径 I：曲线类调色并出片（"按这条调色链调一版再出片"）
+
+> ★ **曲线 / HSL / 色轮只能走这条路** —— `make_film` 的 `--grade` 只能做**强度型**
+> （官方预览渲染器自带的那部分）；曲线类必须用我们逐像素复刻的链（`grade_apply`，10 个节点，
+> 对齐官方 shader，误差 ≤1 LSB，**自带逐节点生效探针**）。
+
+```bash
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs run_pipeline '{
+  "profile": "grade-chain-then-render",
+  "draft": "<草稿库>\\<草稿名>",
+  "outDir": "<输出目录>",
+  "grade": { "adjustColor": { "brightness": 0.12, "contrast": 0.08 }, "logWheel": { "shadow": { "r": 0.10, "g": 0.04, "b": 0, "s": 0.05 } } }
+}'
+#    ⇒ ① make_film 先出画面 + 混音（这一步【不做调色】）
+#    ⇒ ② grade_apply 用我们的逐像素链调（产物 = 10bit 成片 + LUT 版 + 前后对比图）
+#    ★ 曲线的写法：官方 [A,L,R] 布局（每个控制点 6 个数），且 R/G/B/Y 四条要【一起给】
+#      —— 少一条会【直接报错】，不许静默烘成恒等 LUT（见 references/chain-api.md）
+```
+
+> ★ 编排器怎么把"上一步的产物"喂给下一步：
+> `produces`（声明路径，相对 `$outDir`）· `capture`（从**响应**里取值，
+> 例：调色后成片的确切文件名只有响应知道）· `setVars`（给变量起别名）。
+> ★ 报告里会带上这条路线**最终产出了什么**（`vars` 字段）⇒ 成片在哪一眼可见。
+
+## ★ 两段式：人工确认点（`run_pipeline` 怎么做"先给人看，再落刀"）
+
+> 一条路线里**必须有一步等人工点头**时（例如"保留区间表出来了，但还没落刀"），
+> 把那一步标成 `"confirm": true` + `"artifact": "$产物变量"` 即可。
+> 编排器会**跑完那一步就停下来**，把产物路径 + sha + 摘要交回去；确认后带 token 续跑。
+
+```bash
+# ① 第一段：跑到确认点就停（verdict = AWAIT_CONFIRM，后面几步一步都没跑）
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs run_pipeline '{
+  "profile": "talk-cut-then-render",
+  "draft": "<草稿库>\\<草稿名>",
+  "srt": "<用户给的.srt>",
+  "outDir": "<输出目录>"
+}'
+#    ⇒ 返回 { verdict:"AWAIT_CONFIRM", gate:{step, artifact, artifactSha, artifactPreview, pendingSteps},
+#             resume:{token, profile, confirm:true} }
+
+# ② 把产物给用户看，等用户点头（这一步在编排器之外，是人的事）
+
+# ③ 第二段：确认后续跑（同一个 token）
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs run_pipeline '{
+  "profile": "talk-cut-then-render",
+  "resume": { "token": "<①返回的 token>", "confirm": true }
+}'
+#    ⇒ verdict = PASS / FAIL；失败会说明"停在第几步"
+
+# ★ 没给 confirm 就不许跑（这是编排器的硬规则，不是口头承诺）：
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs run_pipeline '{
+  "profile": "talk-cut-then-render", "resume": { "token": "<token>" }
+}'
+#    ⇒ verdict = REFUSED，且关卡后面的步骤【一步都没执行】
+```
+
+★ 三条纪律：
+
+1. **进度是持久化的**（存在 `PLUGIN_DATA/pipelines/<token>/state.json`）⇒
+   MCP 调用断了、换个进程续跑，接得上。
+2. **没 `confirm:true` ⇒ REFUSED**，不是"跑一半再问你"。自检里有一条断言专门看
+   "被拒绝那次，`talk-cut-apply.mjs` 根本没被执行"。
+3. **续跑时会检查产物有没有被人改过**（`artifactChangedSinceGate`）⇒
+   用户在确认前手改了产物，改了会被**点名**，不会静默吞掉。
+
+## ★ 跨链共享会话（这一节是本 skill 的核心）
+
+| 东西 | 谁产出 | 谁消费 | 说明 |
+|---|---|---|---|
+| `sessionId`（`ve-session-N`） | `draft_open` | `draft_read` / `draft_patch` / `draft_commit` | 草稿改动的状态靠它串起来 |
+| `dir`（副本目录） | `draft_open` | `make_film` / `render_frames` / `talk-cut-apply` | ★ **副本目录是草稿动词与出片动词之间的交接点** |
+| `realDraft`（真草稿目录） | 用户给 | `draft_commit` | 只用于**落盘前的 sha 断言**（真草稿只读） |
+
+⇒ ★ **`make_film` / `render_frames` 不接 `sessionId`，只接草稿目录** ⇒ 跨链时要把 `dir` 显式传过去。
+⇒ ★ 真草稿**全程只读**：`draft_commit` 会逐文件 sha 断言真草稿没被改；被改了就会判失败（危险信号，立刻停）。
+
+## 失败处理
+
+| 症状 | 原因 | 怎么办 |
+|---|---|---|
+| `管道连不上` / `fetch failed` | 剪映没在跑（或刚启动、VE 还没就绪） | 让用户开剪映；**刚启动时等一下**（VE 要几十秒才起） |
+| 成片只有几 KB、画面全黑 | 草稿引用的素材不在盘上 | 查素材路径；这是**输入问题**，不是链坏了 |
+| `草稿读不出来（可能是官方加密封装）` | `verify_diff` 拿到的是**加密**草稿 | 传**裸草稿**（顶层有 tracks 的明文 JSON） |
+| `timeline` 判 FAIL | 语义判据没看到预期字段变化 | ① `expect` 的字段名对不对 ② `beforeDraft`/`afterDraft` 是不是**改前/改后**两份 |
+| `源画面几乎全黑 ⇒ 源没有可测信息` | 源本身没信息（不是调色没生效） | 换有大面积中间调/亮部的源 |
+| 官方批量 op 报错 | ★ **官方没有批量 op** | 连着调多次 `draft_patch`（每次 `baseRevision` 会递增） |
+
+## ★ 边界（不做什么 / 为什么 / 替代）
+
+| 不做 | 为什么 | 替代 |
+|---|---|---|
+| **改真草稿** | 官方零文件监听 ⇒ 写盘不保证 GUI 立刻可见；且官方库只读是红线 | 人工在剪映里导入/替换副本 |
+| **自己编 SRT / 自己转写口播** | 官方 ASR（`AnalyzeAsset`）在 agent runtime 里、拿不到 | ★ 让用户给 SRT |
+| **用官方导出器出片** | 官方 CLI 侧被 −100007 / −100015 挡死，**不绕** | `make_film`（官方渲染器出画面 + 我们的调色/混音/编码） |
+| **把曲线/HSL/色轮写回剪映预览** | 官方预览渲染器本身也不认这些（只认强度型调色） | 本地出片（`make_film --grade`） |
+| **发布 / 上传多平台** | 发布侧另有 skill 体系 | `daily-platforms-export` 等 |
+| **从零生成（AIGC 资产 / 一条龙生成）** | 生成线在 processor 沙箱里，取不到 | 不做 |
+
+## 参考
+
+- **参数怎么填**（人话 → 参数，机器可读 21 条）：`references/intent-map.json`
+- **跨链路线**（6 条路线的机器可读定义）：`references/pipeline-profiles.json`
+- **判据怎么定**（视野 / 噪声底 / 负向注入 / 语义优先）：`references/verify-discipline.md`
+- **单链条的细节**：`jianying-cut` · `jianying-draft-edit` · `jianying-review` · `jianying-talk-cut`
+- **官方 op 全集**（18 域 199 个）：`references/official-ops.md`
+- **踩坑清单**：`references/pitfalls.md`
