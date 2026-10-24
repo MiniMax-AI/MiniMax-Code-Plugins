@@ -573,6 +573,56 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
       rpBad.result?.isError === true && /未知路线|不在允许集合/.test(textOf(rpBad)),
       textOf(rpBad).replace(/\s+/g, ' ').slice(0, 140));
 
+    // ── ★★★ 第二条【脚本步骤】路线：加字幕并出片（2026-10-24 新增）──
+    //   ★ 价值有两个：① 字幕是高频真实需求 ② 这是【第二个脚本步骤】⇒ 证明脚本步骤机制不是
+    //     只为 talk-cut 打的补丁；③ 字幕脚本自己会按 ±1 帧核对时码 ⇒ 它自证"字幕真的落进去了"
+    const SUB_SRT = path.join(OUT, 'sub.srt');
+    fs.writeFileSync(SUB_SRT,
+      '1\n00:00:00,200 --> 00:00:00,900\n今天我们讲剪映插件\n\n'
+      + '2\n00:00:01,200 --> 00:00:02,000\n编排器怎么等人确认\n', 'utf8');
+    const subRp = await call('tools/call', {
+      name: 'run_pipeline',
+      arguments: {
+        profile: 'subtitle-then-render', draft: FILM_DRAFT, srt: SUB_SRT,
+        outDir: path.join(SMOKE, 'pipeline-sub'),
+      },
+    });
+    const subTxt = textOf(subRp);
+    check('★★★ run_pipeline：加字幕并出片（subtitle-then-render）⇒ PASS + 字幕时码吻合 + 成片存在',
+      subRp.result?.isError !== true && /"verdict"\s*:\s*"PASS"/.test(subTxt)
+      && /时码吻合\s*2\/2/.test(subTxt)
+      && fs.existsSync(path.join(SMOKE, 'pipeline-sub', 'film.mp4')),
+      subTxt.replace(/\s+/g, ' ').slice(-220));
+
+    // ── ★★★ 编排器的【产物传递】：出片 → 按草稿重做混音（2026-10-24 新增）──
+    //   ★ 测的是 produces 机制：上一步的成片路径要能喂给下一步（否则"混音"这步拿不到画面）
+    //   ★ 环境决定断言：草稿【没有音轨】时，混音必然失败 ⇒ 这时断言【诚实失败】（不许出片成功）
+    //     ；给了 JYAI_FILM_DRAFT_AUDIO（有音轨的草稿）才断言成功路径。
+    const MIX_LIB = process.env.JYAI_DRAFT_LIB || '';
+    const MIX_DRAFT = process.env.JYAI_FILM_DRAFT_AUDIO
+      || (MIX_LIB ? path.join(MIX_LIB, 'JYAI能力批测-带音轨夹具') : '');
+    const mixRp = await call('tools/call', {
+      name: 'run_pipeline',
+      arguments: {
+        profile: 'render-and-mix', draft: MIX_DRAFT,
+        outDir: path.join(SMOKE, 'pipeline-mix'),
+      },
+    });
+    const mixTxt = textOf(mixRp);
+    const mixHasFilm = fs.existsSync(path.join(SMOKE, 'pipeline-mix', 'film.mp4'));
+    const mixHasMixed = fs.existsSync(path.join(SMOKE, 'pipeline-mix', 'mixed.mp4'));
+    if (MIX_DRAFT && fs.existsSync(MIX_DRAFT) && mixHasFilm && mixHasMixed) {
+      check('★★★ run_pipeline：出片并重做混音（render-and-mix）⇒ PASS + 混音成片存在',
+        mixRp.result?.isError !== true && /"verdict"\s*:\s*"PASS"/.test(mixTxt),
+        mixTxt.replace(/\s+/g, ' ').slice(-200));
+    } else {
+      // ★ 阴性：草稿没有音轨 ⇒ 官方回 "nothing to mix" ⇒ 路线必须【判失败并说清原因】
+      //   （绝不能"没有音轨也照样出片成功"—— 那是不装成功）
+      check('★★★ run_pipeline：草稿没有音轨 ⇒ 混音路线必须明确失败（不装成功）',
+        /nothing to mix|"verdict"\s*:\s*"FAIL"/.test(mixTxt),
+        mixTxt.replace(/\s+/g, ' ').slice(-200));
+    }
+
     // ── ★★★ run_pipeline 的【人工确认点 + 两段式续跑】（2026-10-24 新增）──
     //   路线 talk-cut-then-render 里有一步带 confirm:true ⇒ 跑完那一步必须【停下来等人】，
     //   后面几步一步都不跑；确认后用 resume{token, confirm:true} 续跑。

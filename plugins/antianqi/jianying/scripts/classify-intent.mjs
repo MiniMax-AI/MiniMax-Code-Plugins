@@ -13,8 +13,15 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROUTES = JSON.parse(fs.readFileSync(path.join(HERE, '..', 'references', 'intent-routes.json'), 'utf8'));
 
-/** 关键词权重：长词更具体 ⇒ 权重更高；单字（如"审"）几乎没区分度 */
-function weight(kw) { return kw.length >= 3 ? 3 : kw.length === 2 ? 2 : 1; }
+/** 关键词权重：长词更具体 ⇒ 权重更高；单字（如"审"）几乎没区分度
+ *  ★ 权重必须【随长度增长】（原来 ≥3 字一律 3 分 ⇒ 与这条注释自相矛盾）：
+ *    一句话命中"加字幕再出片"(6 字) 应当比命中"加字幕"(3 字)+"字幕"(2 字) 更像【路线】意图 ——
+ *    后者只是前者的子串片段。实测：加了字幕+出片这两条路线时，权重封顶 ⇒ 通用 skill 词把路线抢走了。 */
+function weight(kw) {
+  const n = String(kw || '').length;
+  if (n >= 3) return Math.min(8, n);
+  return n;                       // 1 字 → 1 分；2 字 → 2 分
+}
 
 /** 给一句人话打分 ⇒ 排序后的候选 */
 export function classify(query, opts = {}) {

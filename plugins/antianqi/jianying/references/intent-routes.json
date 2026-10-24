@@ -3,8 +3,8 @@
   "note": "★ 【人话 → 该走哪条链/哪条路线】的机器可读路由表。用途：给模型一个可执行的【候选建议】（classify-intent.mjs），并给测试集一个可量化的准确率。★ 定位要诚实：它是【检索线索 + 候选排序】，不是判决 —— 真正选链的仍是模型按各 Skill 的 description 判断。★ 因此关键词命中数决定\"建议强度\"；没命中就说\"没有明确线索\"，绝不硬猜。",
   "counts": {
     "skills": 7,
-    "routes": 4,
-    "entries": 36
+    "routes": 6,
+    "entries": 38
   },
   "routes": [
     {
@@ -874,6 +874,39 @@
         "口播",
         "废话",
         "剪口播"
+      ],
+      "source": "pipeline-profiles.json（★ 只带该路线独有的组合特征）"
+    },
+    {
+      "id": "route:subtitle-then-render",
+      "kind": "route",
+      "route": "subtitle-then-render",
+      "skill": "jianying-pipeline",
+      "utterance": "加字幕并出片（'给这个视频加字幕再出片'）",
+      "keywords": [
+        "subtitle-then-render",
+        "加字幕再出片",
+        "加字幕出片",
+        "字幕加完出片",
+        "带字幕出片",
+        "字幕出片"
+      ],
+      "source": "pipeline-profiles.json（★ 只带该路线独有的组合特征）"
+    },
+    {
+      "id": "route:render-and-mix",
+      "kind": "route",
+      "route": "render-and-mix",
+      "skill": "jianying-pipeline",
+      "utterance": "出片并按草稿重做混音（'出片时把混音按草稿重做一遍'）",
+      "keywords": [
+        "render-and-mix",
+        "出片并混音",
+        "混音出片",
+        "重做混音",
+        "按草稿混音",
+        "混音再出",
+        "混音"
       ],
       "source": "pipeline-profiles.json（★ 只带该路线独有的组合特征）"
     }

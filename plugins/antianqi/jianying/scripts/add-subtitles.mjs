@@ -18,6 +18,8 @@
  *   node scripts/add-subtitles.mjs --srt <file.srt> --draft "<草稿名>" [--apply] [--style-size N]
  *   node scripts/add-subtitles.mjs --plan <plan.json> --draft "<草稿名>" [--apply]
  *     --apply  真的改草稿（默认只演练）
+ *   ★ --sessionId <ve-session-N>：复用【别人】开好的会话（编排器 run_pipeline 就是这么接的）
+ *     —— 不自己 draft_open、不自己 draft_commit（落盘归编排器的 draft_commit 步骤管）。
  */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -32,9 +34,10 @@ const has = (k) => argv.includes(k);
 const SRT = arg('--srt', null);
 const PLAN = arg('--plan', null);
 const DRAFT = arg('--draft', null);
+const SID = arg('--sessionId', null);
 const APPLY = has('--apply');
-if ((!SRT && !PLAN) || !DRAFT) {
-  console.error('用法: node add-subtitles.mjs (--srt <file.srt> | --plan <plan.json>) --draft "<草稿名>" [--apply]');
+if ((!SRT && !PLAN) || (!DRAFT && !SID)) {
+  console.error('用法: node add-subtitles.mjs (--srt <file.srt> | --plan <plan.json>) --draft "<草稿名>" [--apply] [--sessionId <ve-session-N>]');
   process.exit(2);
 }
 
@@ -88,7 +91,7 @@ console.log('=== 字幕落稿 ===');
 console.log(`  字幕条数: ${cues.length}`);
 console.log(`  时间跨度: ${(cues[0]?.startMs / 1000 || 0).toFixed(2)}s ~ ${((cues.at(-1)?.endMs || 0) / 1000).toFixed(2)}s`);
 console.log(`  模式: ${APPLY ? '★ 真改草稿' : '演练（只打印）'}`);
-console.log(`  草稿: ${DRAFT}\n`);
+console.log(`  草稿: ${DRAFT || (SID ? '(复用会话，不指定)' : '')}\n`);
 if (!cues.length) { console.log('没有可用的字幕条'); process.exit(0); }
 
 if (!APPLY) {
@@ -100,10 +103,19 @@ if (!APPLY) {
 }
 
 /* ---------- 真改 ---------- */
-const open = await call('draft_open', { draft: DRAFT, copy: true });
-if (open.failed) { console.error('打开草稿失败：\n' + (open.text + open.stderr).slice(0, 400)); process.exit(3); }
-const sid = open.json.sessionId;
-console.log(`  副本: ${open.json.dir}\n`);
+/* ★ 会话来源：① 复用别人开好的（--sessionId）② 自己开一个
+   —— 编排器走 ①：不然会跟编排器的 session 抢，两个进程各改各的。 */
+let sid = SID;
+let copyDir = null;
+if (sid) {
+  console.log('  复用会话 %s（不自己开、不自己落盘）\n', sid);
+} else {
+  const open = await call('draft_open', { draft: DRAFT, copy: true });
+  if (open.failed) { console.error('打开草稿失败：\n' + (open.text + open.stderr).slice(0, 400)); process.exit(3); }
+  sid = open.json.sessionId;
+  copyDir = open.json.dir;
+  console.log(`  副本: ${copyDir}\n`);
+}
 
 let textTrackIndex = -1;     // 已存在的 text 轨下标（第一条落进后确定）
 let ok = 0, fail = 0;
@@ -157,8 +169,13 @@ console.log(`  验收: 草稿里 text 段 ${textSegs.length} 条 · 时码吻合
 if (mism.length) console.log(`  ★ 时码不吻合的字幕条: ${mism.join(', ')}`);
 
 /* ---------- 落盘 ---------- */
-const commit = await call('draft_commit', { sessionId: sid, realDraft: DRAFT });
-if (commit.failed) { console.error('落盘失败：\n' + (commit.text + commit.stderr).slice(0, 300)); process.exit(4); }
-console.log(`  # 落盘: ${(commit.text + commit.stderr).replace(/\s+/g, ' ').slice(0, 200)}`);
+if (SID) {
+  // ★ 复用会话时【不落盘】：落盘是编排器 draft_commit 步骤的事（它还要做真草稿 sha 护栏）
+  console.log('  # 落盘: 跳过（复用会话模式 ⇒ 由编排器的 draft_commit 步骤落盘）');
+} else {
+  const commit = await call('draft_commit', { sessionId: sid, realDraft: DRAFT });
+  if (commit.failed) { console.error('落盘失败：\n' + (commit.text + commit.stderr).slice(0, 300)); process.exit(4); }
+  console.log(`  # 落盘: ${(commit.text + commit.stderr).replace(/\s+/g, ' ').slice(0, 200)}`);
+}
 
 process.exit(ok === cues.length && mism.length === 0 ? 0 : 1);

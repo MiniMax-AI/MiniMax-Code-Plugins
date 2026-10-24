@@ -153,7 +153,7 @@
 | 自检 | 结果 |
 |---|---|
 | `test/jianying.test.mjs` | **11 / 11** |
-| `scripts/selftest-mcp.mjs` | **56 / 56**（含编排器两段式 4 条：停在关卡 / 没确认不许跑 / 假 token 报错 / 确认后走完） |
+| `scripts/selftest-mcp.mjs` | **58 / 58**（含编排器两段式 4 条 + 新路线 2 条） |
 | `scripts/selftest-draft-edit.mjs` | **17 / 17** |
 | `scripts/selftest-talk-cut.mjs` | **7 / 7** |
 | `scripts/check-env.mjs` | **17 OK / 0 MISS** |
@@ -215,6 +215,30 @@
   `不该变的 "volume" 字段却变了`（不是"无法判定"）⇒ 判据有区分力。
 - 同理，⑦ 的"改前"基线改成从**会话快照**取（暖机 patch 先把快照变成展开形态）⇒
   改前/改后**同形态** ⇒ 逐段字段差才可比。
+
+## 6.8 ★ 编排器的另外两条路线（2026-10-24 续）
+
+| 路线 | 步骤链 | 实测 |
+|---|---|---|
+| `subtitle-then-render` | `draft_open → draft_read → add-subtitles.mjs → draft_commit → make_film` | **PASS** · 字幕脚本自证 **时码吻合 2/2**（±1 帧 = 33333 µs）· 成片 3.000000 s |
+| `render-and-mix` | `draft_open → make_film → audio_mix` | **PASS** · 双流齐备 **-14.00 LUFS** · `mixed.mp4` 实测 avg = **-14.28 LUFS** |
+
+★ `render-and-mix` 用的是新加的 **`produces`** 机制：步骤声明
+`"produces": {"$film": "film.mp4"}` ⇒ 编排器把 `<outDir>/film.mp4` 交给下一步
+（否则"混音"这一步拿不到画面）。
+
+★ 跑在**没有音轨**的草稿上时，这条路线 **FAIL** 并说明停在哪一步
+（官方回 `nothing to mix`）⇒ 自检按环境分两种断言：
+有音轨的草稿 ⇒ 断言成功；没有 ⇒ **断言它诚实失败**（不许"没音轨也照样出片成功"）。
+
+★ 顺带修掉一个盲区：`run-pipeline.schema.json` 的 `profile` **枚举**与
+`pipeline-profiles.json` **没有对账** ⇒ 加了新路线却忘了同步 ⇒ 路线存在却调不动
+（`不在允许集合`）。现在机械审计 7k 做**双向对账**，负向注入 ㉜ ⇒ 审计自检 **33 / 33**。
+
+★ 顺带修掉一个自相矛盾：意图分类器的权重函数注释写"长词更具体 ⇒ 权重更高"，
+实现却是"3 字以上一律 3 分" ⇒ 命中"加字幕再出片"(6 字) 反而输给命中"加字幕"+"字幕"的
+通用 skill 条目。改成**随长度增长**后，测试句 33 句 **top-1 100% / top-3 100%**。
+
 
 
 ## 7. 复现

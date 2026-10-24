@@ -64,9 +64,10 @@ metadata:
 
 ## 意图路由表：综合诉求 → 步骤序列
 
-> ★ **机器可读版**：`references/pipeline-profiles.json`（4 条路线 / 18 个步骤）
+> ★ **机器可读版**：`references/pipeline-profiles.json`（**6 条路线 / 26 个步骤**）
 > ★ 每一步的动词、参数、变量都由机械审计**按 schema 校验** ⇒ 写错会当场报出来。
-> 下面的四条路径是它的人读展开（两边必须一致，审计 7k 会查）。
+> 下面的路径是它的人读展开（两边必须一致，审计 7k 会查）。
+> ★ **6 条路线**：调色并出片 / 改草稿并语义验收 / 改完直接出片 / 剪口播再出片 / 加字幕并出片 / 出片并重做混音。
 
 ### 路径 A：调色并出成片（"把这个草稿调暖再出片"）
 
@@ -129,6 +130,36 @@ node ${PLUGIN_ROOT}/scripts/run-verb.mjs make_film '{"draft":"<①的 dir>","out
 ### 路径 D：改完直接出片（"改完直接出个片"）
 
 = **路径 B 的 ①~④** + **路径 A 的 ②**（`make_film` 的 `draft` 用同一个 `dir`）。
+
+### 路径 E：加字幕并出片（"给这个视频加字幕再出片"）
+
+```bash
+# ① 开副本 + 读结构
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_open '{"draft":"<草稿库>\\<草稿名>","copy":true}'
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_read '{"sessionId":"ve-session-N"}'
+# ② 落字幕（★ --sessionId 复用 ① 的会话 ⇒ 不自己开、不自己落盘）
+node ${PLUGIN_ROOT}/scripts/add-subtitles.mjs --srt "<用户给的.srt>" --sessionId "ve-session-N" --apply
+#    ⇒ 脚本自己按 ±1 帧核对时码并打印"时码吻合 N/N" ⇒ 不吻合会退出非 0
+# ③ 落盘 + ④ 出成片
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_commit '{"sessionId":"ve-session-N","realDraft":"<草稿库>\\<草稿名>"}'
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs make_film '{"draft":"<①的 dir>","outDir":"<输出目录>","denoise":"auto"}'
+```
+
+### 路径 F：出片并按草稿重做混音（"出片时把混音按草稿重做一遍"）
+
+```bash
+# ① 开副本（混音要读草稿里的音频结构）
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs draft_open '{"draft":"<草稿库>\\<草稿名>","copy":true}'
+# ② 先出画面（带原声），再按草稿重做混音
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs make_film '{"draft":"<①的 dir>","outDir":"<输出目录>","denoise":"auto"}'
+node ${PLUGIN_ROOT}/scripts/run-verb.mjs audio_mix '{
+  "draft":"<①的 dir>", "video":"<输出目录>/film.mp4", "out":"<输出目录>/mixed.mp4"
+}'
+#    ⇒ 混音按草稿的音频结构重做，并归一到 −14 LUFS
+```
+
+> ★ 用 `run_pipeline` 跑这两条时，**上一步的成片路径不用手写**：
+> 步骤上声明 `"produces": {"$film": "film.mp4"}` ⇒ 编排器把 `<outDir>/film.mp4` 交给下一步。
 
 ## ★ 两段式：人工确认点（`run_pipeline` 怎么做"先给人看，再落刀"）
 
@@ -208,7 +239,7 @@ node ${PLUGIN_ROOT}/scripts/run-verb.mjs run_pipeline '{
 ## 参考
 
 - **参数怎么填**（人话 → 参数，机器可读 21 条）：`references/intent-map.json`
-- **跨链路线**（4 条路线的机器可读定义）：`references/pipeline-profiles.json`
+- **跨链路线**（6 条路线的机器可读定义）：`references/pipeline-profiles.json`
 - **判据怎么定**（视野 / 噪声底 / 负向注入 / 语义优先）：`references/verify-discipline.md`
 - **单链条的细节**：`jianying-cut` · `jianying-draft-edit` · `jianying-review` · `jianying-talk-cut`
 - **官方 op 全集**（18 域 199 个）：`references/official-ops.md`

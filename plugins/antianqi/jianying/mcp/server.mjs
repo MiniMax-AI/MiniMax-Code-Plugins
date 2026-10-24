@@ -661,6 +661,14 @@ async function execSteps(prof, vars, workDir, startIdx, stepsIn) {
         vars.$afterDraft = f;
       }
       steps.push({ n, verb: st.verb, ok: true, result: summarizeStep(obj) });
+      // ★ 这一步【产出】的文件：声明式（"produces": {"$film": "film.mp4"}）⇒ 相对 $outDir 解析
+      //   有了它，后面的步骤就能拿"上一步的成片"当输入（例：出片 → 按草稿重做混音）
+      for (const [vn, fname] of Object.entries(st.produces || {})) {
+        if (!vars.$outDir) {
+          throw new Error(`路线 "${prof.id}" 第 ${n} 步声明了产物 ${vn}，但没有 $outDir（产物路径相对输出目录解析）`);
+        }
+        vars[vn] = path.join(vars.$outDir, String(fname));
+      }
     } catch (e) {
       const msg = String(e?.message || e);
       steps.push({ n, verb: st.verb || st.script || '?', ok: false, error: msg.slice(0, 400) });
