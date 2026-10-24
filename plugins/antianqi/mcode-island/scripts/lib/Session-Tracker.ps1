@@ -123,6 +123,18 @@ function Get-SessionLogGroups($root) {
 # 不是"第一行"：压缩过的会话（session compaction）第一行是
 # role=compactionSummary 或 role=custom，不是 user 消息。所以要往下扫。
 #
+# 判断一段正文是不是系统注入的消息，而不是用户或 agent 说的话。
+#
+# 系统会把后台任务完成通知、任务提醒、agent 上下文这些以 user 角色的
+# 消息塞进会话日志里。它们不是"有人在说话"，拿来当标题或摘要，列表上
+# 就会出现一堆 XML 噪声（"<background-task-finished> Local backend..."）。
+function Test-IsSystemInjected($text) {
+  if (-not $text) { return $true }
+  $t = ([string]$text).Trim()
+  if (-not $t) { return $true }
+  return ($t -match '^<(system-reminder|background-task|task-notification|agent-context|command-|user-message|system-)')
+}
+
 # user 消息的正文前面挂着一整块 <system-reminder>（agent-context 注入），
 # 把它剥掉，剩下的才是用户真正说的第一句话。
 function Get-SessionTitle($file) {
@@ -162,6 +174,8 @@ function Get-SessionTitle($file) {
         $t = $t -replace '(?s)<system-reminder>.*?</system-reminder>', ''
         $t = ($t -replace '\s+', ' ').Trim()
         if (-not $t) { continue }
+        # 系统注入的 user 消息不是用户说的话，跳过它继续找。
+        if (Test-IsSystemInjected $t) { continue }
         if ($role -eq $S_USER) { $title = $t; break }
         # 兜底：被压缩过的会话（compaction）里，原始提问已经被
         # compactionSummary 替换掉了，真实标题取不回来。agent 的第一句
@@ -296,11 +310,16 @@ function Get-SessionPreview($msg) {
   if ($role -eq $S_TOOLRESULT) { return '' }
   $text = ''
   foreach ($c in @($m.content)) {
-    if ($c.type -eq 'text' -and $c.text -and -not $text) { $text = [string]$c.text; break }
+    if ($c.type -ne 'text' -or -not $c.text) { continue }
+    $candidate = ([string]$c.text) -replace '(?s)<system-reminder>.*?</system-reminder>', ''
+    $candidate = ($candidate -replace '\s+', ' ').Trim()
+    if (-not $candidate) { continue }
+    # 系统注入的消息不算"说了什么"，跳过它看下一段。
+    if (Test-IsSystemInjected $candidate) { continue }
+    $text = $candidate
+    break
   }
   if (-not $text) { return '' }
-  $text = $text -replace '(?s)<system-reminder>.*?</system-reminder>', ''
-  $text = ($text -replace '\s+', ' ').Trim()
   return $text
 }
 

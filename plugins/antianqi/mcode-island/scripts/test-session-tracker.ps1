@@ -115,6 +115,11 @@ function Line-ToolResultFailed {
 function Line-ThinkingOnly {
     return '{"message":{"role":"assistant","content":[{"type":"thinking","thinking":"hmm"}],"timestamp":4}}'
 }
+# 系统注入的消息：后台任务完成通知、系统提醒这些，是以 user 角色塞进
+# 会话日志的，但它们不是"有人在说话"。
+function Line-SystemNoise {
+    return '{"message":{"role":"user","content":[{"type":"text","text":"<background-task-finished> noise from the system"}],"timestamp":4}}'
+}
 function Line-ToolResult {
     return '{"message":{"role":"toolResult","content":[{"type":"text","text":"ok"}],"timestamp":4}}'
 }
@@ -294,6 +299,15 @@ Restore-SessionTracker
 $eRestored = $script:trackedSessions['sess-preview']
 Check '重启后 preview 恢复了' ($eRestored.Preview -eq '改完了') ("得到: '" + $eRestored.Preview + "'")
 Check '重启后 lastAtMs 恢复了' ([int64]$eRestored.LastAtMs -gt 0) ("得到: " + $eRestored.LastAtMs)
+
+# 系统注入的消息不能当摘要。
+#
+# 系统把后台任务完成通知这些以 user 角色塞进日志。它们不是人话，拿来当
+# 摘要，列表第二行就会显示 "<background-task-finished> Local backend..."。
+$fNoise = New-Session 'sess-noise' @((Line-SystemNoise))
+$noiseMsg = Get-LastJsonLine $fNoise
+Check '系统注入的消息不进 preview' ([string]::IsNullOrEmpty((Get-SessionPreview $noiseMsg))) ("得到: '" + (Get-SessionPreview $noiseMsg) + "'")
+Check '标题也不取系统注入的那条' (-not ((Get-SessionTitle $fNoise) -match 'background-task')) ("得到: '" + (Get-SessionTitle $fNoise) + "'")
 
 # $HOME 是 PowerShell 的只读自动变量，而变量名**不区分大小写**：写
 # "$home = ..." 会直接抛 "VariableNotWritable"。那个异常被读标题的
