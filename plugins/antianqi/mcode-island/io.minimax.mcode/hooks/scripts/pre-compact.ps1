@@ -1,4 +1,4 @@
-# Hook: PreCompact
+﻿# Hook: PreCompact
 # Event:  io.minimax.mcode / PreCompact
 # State:  thinking
 # Note:   Fires before the runtime compresses context. We push

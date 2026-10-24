@@ -1,4 +1,4 @@
-# Hook: Stop
+﻿# Hook: Stop
 # Event:  io.minimax.mcode / Stop
 # State:  done
 # Note:   Fires when the agent finishes a turn (one model response,

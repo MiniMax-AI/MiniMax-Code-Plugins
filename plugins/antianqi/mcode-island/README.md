@@ -11,7 +11,9 @@ the terminal in the background and still see exactly what your agent is doing.
 |:----:|:--------:|:-------:|:-------:|:----:|:-----:|
 | ![idle](assets/state-idle.png) | ![thinking](assets/state-thinking.png) | ![working](assets/state-working.png) | ![waiting](assets/state-waiting.png) | ![done](assets/state-done.png) | ![error](assets/state-error.png) |
 
-The pill is a single 320×60 WPF window, always-on-top, click-to-focus. The
+The pill is a single 320×60 WPF window, always-on-top, click-to-focus: the click goes
+back to the desktop app window, to a manually pinned window, or to the
+originating terminal. The
 widget polls `%APPDATA%\mcode-island\status.json` every 400 ms; the agent (or a
 thin wrapper) just writes JSON to that file.
 
@@ -90,6 +92,35 @@ optional `-Message`. A separate `mcode-status-detect.ps1` polls the runtime's
 pill still moves even when the agent forgets to push. See
 [`SKILL.md`](skills/mcode-island/SKILL.md) for the agent-side call patterns.
 
+#### Which session the detector follows
+
+**The session that wrote its log most recently.** The detector scans every
+session log under the runtime's session store and picks the file with the
+newest mtime, then infers the state from that file's last complete line.
+
+This is a deliberate decision, not an accident. The conversation the user is
+looking at is the one writing to the log, so "whoever wrote last" is the
+active conversation. Anything smarter — pinning a session id, asking the
+runtime which window is focused — needs a signal the runtime does not expose
+to a plugin, and guessing one would make the pill wrong in the common case
+to make it right in the rare one.
+
+**Known boundary.** When several conversations run at the same time (a
+desktop session plus a CLI session, or two desktop windows), the detector
+follows whichever wrote last, so the pill can briefly show a neighbouring
+conversation's state. The detector deliberately does not try to disambiguate
+this. Two guards keep the damage small:
+
+- the state is re-derived on every change, so the pill corrects itself as
+  soon as the followed session writes again;
+- a log line that cannot be parsed never falls back to another session's
+  message (the reader grows its window until a complete line is found, and
+  a read failure reports "no new information" instead of a foreign state).
+
+This is also why the Marketplace build needs the detector: its package ships
+no Hook material, so the detector is the only source of state that does not
+depend on the agent cooperating.
+
 ## Copyable example
 
 ### One-line install and run
@@ -156,6 +187,28 @@ alternative:
 & "%PLUGIN_DIR%\mcode-island\notify-island.ps1" -State error    -Message "npm test failed"
 ```
 
+For sub-step progress (Computer Use iterative loops, multi-step plans),
+pass `-Step` / `-Total` / `-Detail` so the pill shows what the agent is
+doing *right now*:
+
+```powershell
+& "%PLUGIN_DIR%\mcode-island\notify-island.ps1" -State working -Message "Computer Use" `
+                                              -Step 3 -Total 12 -Detail "fill username field"
+# → pill renders: "step 3/12 · fill username field"
+
+& "%PLUGIN_DIR%\mcode-island\notify-island.ps1" -State working -Message "Bash" `
+                                              -Step 5 -Detail "npm install"
+# → pill renders: "step 5 · npm install"
+
+& "%PLUGIN_DIR%\mcode-island\notify-island.ps1" -State done -Message "Bash ok"
+# → pill renders: "Bash ok"  (no step → legacy behavior, backward compat)
+```
+
+All three params are optional and backward compatible. The detail field
+replaces the message in the rendered pill when present (avoids stacking
+"Bash ok · fill username"). See `skills/mcode-island/SKILL.md` for the
+full semantics and the contract with the widget renderer.
+
 ## Quick start
 
 1. **Install** — copy this folder into your `~/.minimax/plugins/mcode-island/`
@@ -194,7 +247,7 @@ mcode-island/
 ├── stop-island.ps1                   # stop the widget
 ├── status-island.ps1                 # print widget PID + recent log
 ├── show-island.ps1                   # re-raise hidden widget
-├── pin-island.ps1                    # lock click-to-focus target
+├── pin-island.ps1                    # pin the click target to the foreground window
 ├── autostart.ps1                     # register / unregister Windows logon
 ├── notify-island.ps1                 # state-push helper (Mode B)
 ├── wrap-tool.ps1                     # all-in-one bash wrapper
@@ -232,7 +285,7 @@ binary, no symlink, no `node_modules`.
 | .NET WPF runtime  | 4.x (ships with Windows 10/11)                        |
 | mcode             | any version (Mode B works everywhere); 0.2.4+ activates Mode A |
 | execution policy  | `Bypass` for this directory; not changed globally    |
-| network access    | **optional** — see "Network access" below. The widget itself is offline. `mcode-status-detect.ps1` only contacts `https://api.minimax.io/v1/coding_plan/remains` when a token is configured (see "Accounts" + "Data use"). |
+| network access    | **optional** — see "Network access" below. The widget itself is offline. `mcode-status-detect.ps1` only contacts `https://api.minimaxi.com/v1/coding_plan/remains` when a token is configured (see "Accounts" + "Data use"). |
 | accounts          | **optional** — see "Accounts" below. No account is required to run the widget; a token is only needed if you want the optional 5-hour usage readout in the pill. |
 | paid services     | **none added by this plugin** — the 5h usage endpoint is part of the user's existing MiniMax account, not a separate service |
 
@@ -241,33 +294,62 @@ binary, no symlink, no `node_modules`.
 | data             | location                              | lifetime                  | purpose                              |
 | ---------------- | ------------------------------------- | ------------------------- | ------------------------------------ |
 | `status.json`    | `%APPDATA%\mcode-island\`             | rewritten every transition | widget polling                       |
-| `caller.json`    | `%APPDATA%\mcode-island\`             | rewritten every transition | click-to-focus target HWND           |
+| `caller.json`    | `%APPDATA%\mcode-island\`             | rewritten every transition | originating terminal HWND (click fallback) |
+| `pin.json`       | `%APPDATA%\mcode-island\`             | until `mcode-island unpin` | manually pinned click target        |
 | `config.json`    | `%APPDATA%\mcode-island\`             | rewritten on drag         | pill position, size, opacity         |
-| `config.json` -> `planApiToken` | `%APPDATA%\mcode-island\` | until `-Clear` or manual edit | 5h usage API token (opt-in; see "Accounts") |
+| `config.json` -> `planApiTokenEnc` | `%APPDATA%\mcode-island\` | until `-Clear` or manual edit | 5h usage API token, DPAPI-encrypted (opt-in; see "Accounts") |
 | `widget.pid`     | `%APPDATA%\mcode-island\`             | rewritten on start        | widget process PID                   |
 | `island.log`     | `%APPDATA%\mcode-island\`             | append-only, never pruned  | state transition history             |
 | `widget.log`     | `%APPDATA%\mcode-island\`             | append-only, never pruned  | widget internal debug                |
 | `show.signal`    | `%APPDATA%\mcode-island\`             | transient                 | "raise hidden window" signal        |
 | `HKCU\...\Run`   | Windows registry                      | until disabled            | logon auto-start                     |
 
-**Telemetry: none.** **No data is sent off-machine unless the optional
-`planApiToken` is configured (see "Network access" below).** The widget
-itself is offline and never reads or writes anything outside `%APPDATA%\mcode-island\`.
+**Telemetry: none.** **No data is sent off-machine unless a token is
+configured (see "Network access" below).** The widget itself is offline
+and never reads or writes anything outside `%APPDATA%\mcode-island\`.
 
 ## Network access
 
-The widget is fully offline. The only network caller in this plugin is
-`mcode-status-detect.ps1` (Mode B detector), and it only makes a request
-when ALL of the following are true:
+**The 5h usage readout does not need the network.** The MiniMax Code
+runtime already resolves the token plan with the user's own login (the
+mcode launcher's "MCode status" panel renders it, footer: "Local view -
+credentials hidden"). When the runtime writes that result to a local file,
+the plugin reads it and never touches a credential.
 
-1. A token is configured (env `MINIMAX_OAUTH_TOKEN` or `MINIMAX_API_KEY`,
-   or `set-token.ps1 <token>` which writes to `config.json:planApiToken`).
+```
+%APPDATA%\mcode-island\usage.json
+```
+
+```json
+{
+  "fetchedAtMs": 1792800000000,
+  "fiveHour": { "remainingPercent": 58, "resetAtMs": 1792800000000, "unlimited": false },
+  "weekly":    { "remainingPercent": 40, "resetAtMs": 1792900000000, "unlimited": false },
+  "video":     { "remainingCount": 12, "totalCount": 40 }
+}
+```
+
+`scripts/lib/Plan-Usage.ps1` reads it. `MCODE_PLAN_USAGE_FILE` overrides
+the path; `~/.minimax/usage.json` is read as a fallback. `fiveHour` is
+required, `weekly` and `video` are optional.
+
+When that file is absent, the plugin falls back to asking the API itself,
+and the only network caller in this plugin is `mcode-status-detect.ps1`
+(Mode B detector). It only makes a request when ALL of the following are
+true:
+
+1. A token is configured — either `set-token.ps1 <token>`, which encrypts
+   it into `config.json:planApiTokenEnc`, or an environment variable
+   (`MINIMAX_OAUTH_TOKEN` / `MINIMAX_API_KEY`) that the user has
+   explicitly opted in to with `set-token.ps1 -AllowEnvToken`. An ambient
+   environment variable is not consent to send it to an API, so the
+   environment is not read by default.
 2. The detector is running (`mcode-island detect-on`, the default).
 3. At least 60 seconds have elapsed since the last call (rate-limited).
 
 When all three are true, the detector makes **one** GET to:
 
-- `https://api.minimax.io/v1/coding_plan/remains` (HTTPS, no credentials in
+- `https://api.minimaxi.com/v1/coding_plan/remains` (HTTPS, no credentials in
   the URL, no fragment, body is a small JSON object)
 
 The response is parsed and only two numbers are written to
@@ -287,15 +369,26 @@ the 5-hour usage readout in the pill.
 
 | token type        | how it enters the plugin                                | where it is stored                                | how it is removed                            |
 | ----------------- | -------------------------------------------------------- | -------------------------------------------------- | -------------------------------------------- |
-| `MINIMAX_OAUTH_TOKEN` (env) | set by the user in their shell or mcode config | process env (not on disk)                          | unset env / close shell                      |
-| `MINIMAX_API_KEY` (env)     | same as above                                          | process env                                       | same as above                                |
-| `config.json:planApiToken`   | `set-token.ps1 <token>`                                | `%APPDATA%\mcode-island\config.json` (plaintext)  | `set-token.ps1 -Clear` or edit the file      |
+| `MINIMAX_OAUTH_TOKEN` (env) | set by the user in their shell or mcode config | process env (not on disk), read only after `set-token.ps1 -AllowEnvToken` | unset env / close shell / `set-token.ps1 -NoEnvToken` |
+| `MINIMAX_API_KEY` (env)     | same as above                                          | process env, same opt-in                          | same as above                                |
+| `config.json:planApiTokenEnc` | `set-token.ps1 <token>`                               | `%APPDATA%\mcode-island\config.json`, DPAPI-encrypted (CurrentUser scope) | `set-token.ps1 -Clear` or edit the file      |
 
 The token is **never logged, never written to any other file, and never
-sent to a host other than `api.minimax.io`**. `set-token.ps1` only writes
+sent to a host other than `api.minimaxi.com`**. `set-token.ps1` only writes
 to `config.json`; it makes no network call. The detector only reads the
 token to attach as an `Authorization: Bearer ...` header on the single
 GET documented above.
+
+The token is stored encrypted with Windows DPAPI (CurrentUser scope):
+only the same Windows user on the same machine can decrypt it, so
+copying `config.json` elsewhere yields nothing usable. A `config.json`
+written by an older version, which kept the token in the clear under
+`planApiToken`, is migrated in place on the next detector start: the
+token is encrypted and the plaintext field is removed. No action is
+required from the user.
+
+The request carries the `Authorization` header and nothing else. It does
+not claim to be a MiniMax-owned surface.
 
 ## CLI reference
 
@@ -304,8 +397,8 @@ mcode-island                REM start the widget (no-op if already running)
 mcode-island stop           REM stop the widget
 mcode-island status         REM show widget PID, session, last 5 log lines
 mcode-island show           REM re-raise a hidden widget
-mcode-island pin            REM lock click-to-focus target to current foreground
-mcode-island unpin          REM clear focus target
+mcode-island pin            REM pin the click target to the current foreground window
+mcode-island unpin          REM clear the pinned click target
 mcode-island autostart-on   REM register for Windows logon
 mcode-island autostart-off  REM unregister
 ```
@@ -316,20 +409,96 @@ invoke `.ps1` more easily than `.cmd`.
 
 ## How click-to-focus works
 
-When the agent calls `notify-island.ps1`, the helper probes the process chain
-for an attached console window, and falls back to the first ancestor with a
-`MainWindowHandle`. The discovered HWND / PID is written to `caller.json`. When
-the user clicks the pill, the widget uses `SetForegroundWindow` on that HWND.
+The click target is resolved on every click. **This install prefers the
+caller's terminal**, the way the CLI has always behaved:
 
-If the auto-detected HWND is wrong (common on Windows Terminal with multiple
-tabs), run `mcode-island pin` from inside the tab you want to return to. The
-CLI grabs the foreground window *before* the widget steals focus, so this is
-the most reliable fix.
+| # | target              | how it is found                        | what the click does              |
+| - | ------------------- | -------------------------------------- | -------------------------------- |
+| 1 | a manual pin        | `pin.json` (written by `mcode-island pin`) | focuses that window        |
+| 2 | the caller's terminal | `caller.json` (written by `notify-island.ps1`) | shows it, or hides it if it is already visible |
+| 3 | the desktop app     | a process named `MiniMax Inside Code` / `MiniMax Code` / `Mavis` in the widget's own session | focuses the app window (only when there is no caller window) |
+
+**The two builds prefer different targets, on purpose.** The CLI runtime
+loads the `io.minimax.mcode` hooks, so the agent pushes the state itself and
+the click keeps the CLI habit: one click hides the terminal, the next brings
+it back. The Marketplace package ships no Hook material, the agent is hosted
+by the desktop app, and there the terminal belongs to the app session — hiding
+it leaves a static pill behind — so that build focuses the app window instead.
+
+Both are the same code: the source carries one switch,
+`$script:clickPrefers`, and the Marketplace builder flips that exact line to
+`'app'` (and fails the build when it cannot find it). The pin still wins in
+both builds — an explicit `mcode-island pin` is the user's own choice and
+outranks the preference.
+
+`mcode-island pin` stores the foreground window in `pin.json`, a separate file
+from `caller.json`: `caller.json` is rewritten on every status transition, so
+a pin stored there would not survive the next push. The pin is the escape
+hatch for the case where the desktop app is open next to a CLI session and the
+user wants the click to go to their terminal.
+
+When the auto-detected HWND is wrong (common on Windows Terminal with
+multiple tabs), run `mcode-island pin` from inside the tab you want to return
+to. The CLI grabs the foreground window *before* the widget steals focus, so
+this is the most reliable fix. `mcode-island unpin` clears it.
 
 The widget is also intentionally hard to kill. Alt+F4 sends `WM_CLOSE`, which
 the widget intercepts in `WndProc` and treats as Hide rather than Close. To
 re-raise the hidden window: `mcode-island show`. To kill it for real:
 `mcode-island stop`.
+
+## The session list
+
+Resting the mouse on the pill expands a list of **every session that is
+currently live**, not just the one the detector happens to be following.
+The detector follows a single session — the one that wrote its log most
+recently — but on a machine with a CLI session, a desktop-app session and
+a couple of side agents, the interesting thing is usually the *other* one.
+
+```
+   ●  剪映插件开发                          3 分钟前
+      执行 bash                              运行中
+```
+
+Each row carries four things:
+
+| part      | where it comes from |
+| --------- | ------------------- |
+| status dot | the same state vocabulary the pill uses, same color |
+| title     | the session's real name, read from the runtime's own SQLite store (`local_runtime_sessions.title`) |
+| preview   | the last thing that session said, so you can tell "running" from "stuck on one tool" |
+| timestamp | how long ago that session last moved, plus its state word |
+
+**The title is the session's name, not a summary.** The widget reads it
+from `~/.minimax/v2/sqlite/runtime-state.sqlite`, which is the same
+source the runtime itself uses. When that store is unavailable (a host
+without the usual paths), the widget falls back to the first thing the
+user said in that session — so the row is never blank.
+
+**The state words are the pill's words.** The list does not invent its
+own vocabulary: `working` / `thinking` / `waiting` / `idle` / `done` /
+`error` are rendered with the same text and the same color as on the
+pill, so the two places never disagree. The one addition is **已停止**
+("stopped"), which is not a message type but a liveness fallback: a
+session that has not moved for five minutes is no longer "running",
+even though nothing said otherwise.
+
+**Clicking a row goes back to that session — it never opens a second
+one.** The widget enumerates the Windows Terminal tabs, matches the
+session name against the title history the session has had, selects that
+tab, and brings the terminal window to the front. If no tab matches
+(e.g. the terminal was renamed, or the session runs inside the desktop
+app instead of Windows Terminal), the widget still raises the terminal
+window rather than starting a new `mcode --session <id>`. A second
+terminal for the same session is exactly the bug this feature is meant
+to avoid.
+
+Clicking a row also dismisses it: the session leaves the list and stays
+out of it until it starts its next round.
+
+The list is fed by the detector, which writes `sessions.json` next to
+`status.json` in `%APPDATA%\mcode-island\`. That file is the contract
+between the detector and the widget; the widget only reads it.
 
 ## Test evidence
 
@@ -343,6 +512,11 @@ a live MiniMax Code session. Empirical evidence (captured during development):
   `waiting` → `working` → `done` on a real `bash npm test` run.
 - Click-to-focus round-trip verified: from a Feishu tab, click the pill, focus
   jumps to the originating Windows Terminal tab (HWND consistent).
+- Click-target order verified against the live desktop app: with
+  `MiniMax Inside Code` running, the click resolves to the app window
+  (`mode=focus`, never hidden); with a `pin.json` present it resolves to the
+  pinned window; with neither, it falls back to the caller's terminal with
+  the original show/hide toggle (`mode=toggle`).
 - `wrap-tool.ps1` exit-code semantics: 0 → `done`, 1 → `waiting` (default;
   configurable via `-WaitingExitCodes`), other → `error`. As of v0.2.1 the
   wrapper no longer executes the command itself; the agent runs the command

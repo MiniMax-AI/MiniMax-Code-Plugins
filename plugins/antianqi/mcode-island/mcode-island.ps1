@@ -4,11 +4,36 @@
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-# 调试日志（写到 %APPDATA%\mcode-island\widget.log，最后 1KB 即可）
-$script:dbg = Join-Path $env:APPDATA 'mcode-island\widget.log'
+# 调试日志（写到 %APPDATA%\mcode-island\widget.log，上限 1MB）
+#
+# 2026-08-22 起这个函数一直是裸 Add-Content，头注释写的"最后 1KB 即可"
+# 从来没有被实现过：38 天累积到 37MB，活跃使用时约 3.6MB/天（POLL 行）。
+# 现在真的实现这个上限。
+#
+# 检查不每次调用都做。Add-Content 是 O(1) 追加，先用计数器累计到 1/4
+# 阈值才 stat 一次文件，避免在 400ms 轮询路径上反复摸磁盘。
+$script:dbg         = Join-Path $env:APPDATA 'mcode-island\widget.log'
+$script:dbgMaxBytes = 1MB
+$script:dbgKeepLines = 300
+$script:dbgPending  = 0
 function Dbg($msg) {
   $ts = (Get-Date).ToString('HH:mm:ss.fff')
-  "[$ts] $msg" | Add-Content -Path $script:dbg -Encoding UTF8
+  $line = "[$ts] $msg"
+  Add-Content -Path $script:dbg -Value $line -Encoding UTF8
+  $script:dbgPending += $line.Length + 2
+  if ($script:dbgPending -ge [int]($script:dbgMaxBytes / 4)) {
+    $script:dbgPending = 0
+    try {
+      $fi = Get-Item -LiteralPath $script:dbg -ErrorAction Stop
+      if ($fi.Length -gt $script:dbgMaxBytes) {
+        $keep = @(Get-Content -LiteralPath $script:dbg -Tail $script:dbgKeepLines -Encoding UTF8)
+        [System.IO.File]::WriteAllLines(
+          $script:dbg, $keep, (New-Object System.Text.UTF8Encoding($false)))
+      }
+    } catch {
+      # 截断失败不能让 widget 挂掉；下一个阈值周期会再试。
+    }
+  }
 }
 Dbg "PID=$PID APART=$([System.Threading.Thread]::CurrentThread.ApartmentState)"
 
@@ -71,11 +96,66 @@ public class WinAPI {
   [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);
   [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc lpEnumFunc, IntPtr lParam);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT pt);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassNameW(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
+  [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint dwFlags);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool GetMonitorInfoW(IntPtr hMonitor, ref MONITORINFO lpmi);
+  [StructLayout(LayoutKind.Sequential)]
+  public struct RECT { public int Left, Top, Right, Bottom; }
+  [StructLayout(LayoutKind.Sequential)]
+  public struct POINT { public int X, Y; }
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  public struct MONITORINFO {
+    public int cbSize;
+    public RECT rcMonitor;
+    public RECT rcWork;
+    public uint dwFlags;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szDevice;
+  }
   public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
   public static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+  public static readonly IntPtr HWND_TOP = new IntPtr(0);
   public const uint SWP_NOACTIVATE = 0x0010;
+  public const uint SWP_NOZORDER = 0x0004;
+  public const uint SWP_NOSIZE = 0x0001;
+  public const uint SWP_NOMOVE = 0x0002;
+  public const uint MONITOR_DEFAULTTONEAREST = 0x00000002;
+  public const uint SWP_SHOWWINDOW = 0x0040;
+
+  // True when a window owned by another process sits on top of the pill's centre
+  // pixel. Menus / tooltips / tray balloons are exempt so we never fight
+  // transient UI that is supposed to be above the pill anyway.
+  public static bool IsPillCovered(IntPtr self) {
+    RECT r;
+    if (!GetWindowRect(self, out r)) return false;
+    var pt = new POINT { X = (r.Left + r.Right) / 2, Y = (r.Top + r.Bottom) / 2 };
+    IntPtr hit = WindowFromPoint(pt);
+    if (hit == IntPtr.Zero || hit == self) return false;
+    var sb = new System.Text.StringBuilder(256);
+    GetClassNameW(hit, sb, 256);
+    string cls = sb.ToString();
+    if (cls.StartsWith("#32768")) return false;           // menu / tooltip
+    if (cls == "NotifyIconTooltipWindow") return false;  // tray balloon
+    if (cls == "Windows.UI.Core.CoreWindow") return false;
+    uint p;
+    GetWindowThreadProcessId(hit, out p);
+    return p != (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+  }
+
+  // 取窗口所在 monitor 的 work area。如果失败返回 (-1,-1)-(-1,-1) 表示无效。
+  public static RECT GetWorkAreaForWindow(IntPtr hWnd) {
+    var bad = new RECT { Left = -1, Top = -1, Right = -1, Bottom = -1 };
+    IntPtr hMon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+    if (hMon == IntPtr.Zero) return bad;
+    var mi = new MONITORINFO();
+    mi.cbSize = System.Runtime.InteropServices.Marshal.SizeOf(mi);
+    if (!GetMonitorInfoW(hMon, ref mi)) return bad;
+    return mi.rcWork;
+  }
 
   // 找 pid 的第一个可见窗口
   public static IntPtr FindVisibleWindowForPid(uint targetPid) {
@@ -132,7 +212,14 @@ $xaml = @'
         Topmost="True" ShowInTaskbar="False" ResizeMode="NoResize"
         WindowStartupLocation="Manual" UseLayoutRounding="True" SnapsToDevicePixels="True"
         Focusable="False" ShowActivated="False">
-  <Border x:Name="Pill" CornerRadius="30"
+  <Grid>
+    <Grid.RowDefinitions>
+      <!-- row 0 是药丸本体，高度在运行时按 config 的 height 设置（默认 70） -->
+      <RowDefinition x:Name="PillRow" Height="70"/>
+      <!-- row 1 是 session 列表，收起时高度为 0 -->
+      <RowDefinition x:Name="SessionListRow" Height="0"/>
+    </Grid.RowDefinitions>
+  <Border x:Name="Pill" Grid.Row="0" CornerRadius="30"
           Background="#CC1A1A20" BorderBrush="#33FFFFFF" BorderThickness="1"
           Padding="22,6" Margin="0">
     <Border.Effect>
@@ -218,6 +305,23 @@ $xaml = @'
                  VerticalAlignment="Center"/>
     </Grid>
   </Border>
+
+  <!--
+    session 列表。画在 pill 自己的窗口里，不另开一个 HWND：
+    独立窗口方案实测过 —— 窗口能创建、能命中（WindowFromPoint 返回它），
+    却不画出来（1053 个采样点里只有 39 个是面板色），被前台窗口整个盖住。
+    同一个窗口就没有这个问题：置顶、合成、命中测试全都走 pill 已经
+    验证过的那一套。
+
+    代价是窗口要变高。row 0 的高度锁死为药丸高度，所以展开时药丸本身
+    一动不动，列表在它下面长出来。
+  -->
+  <Border x:Name="SessionPanel" Grid.Row="1" Visibility="Collapsed"
+          CornerRadius="12" Background="#F21A1A20" BorderBrush="#33FFFFFF"
+          BorderThickness="1" Padding="10,6" Margin="0,14,0,0">
+    <StackPanel x:Name="SessionRows"/>
+  </Border>
+  </Grid>
 </Window>
 '@
 
@@ -248,6 +352,12 @@ $progressShimmer      = $window.FindName('ProgressShimmer')
 $progressShimmerTransform = $window.FindName('ProgressShimmerTransform')
 $elapsedText          = $window.FindName('ElapsedText')
 $usage5hText          = $window.FindName('Usage5hText')
+# 多 session 列表（画在 pill 自己的窗口里）
+$script:sessionRowsPanel = $window.FindName('SessionPanel')
+$script:sessionRows      = $window.FindName('SessionRows')
+$script:sessionListRow  = $window.FindName('SessionListRow')
+$script:pillHeight      = 70
+$script:listHideTimer   = $null
 
 # 状态配色
 $stateMap = @{
@@ -257,6 +367,602 @@ $stateMap = @{
   waiting  = @{ dot='#FFF59E0B'; ring='#FFF59E0B'; label='mcode · 等待审批';  icon='?' }
   done     = @{ dot='#FF22C55E'; ring='#FF22C55E'; label='mcode · 已完成';     icon='✓' }
   error    = @{ dot='#FFEF4444'; ring='#FFEF4444'; label='mcode · 出错';       icon='✕' }
+}
+
+# ---------------------------------------------------------------------------
+# 多 session 列表（v0.5.0）
+#
+# 鼠标停在灵动岛上时弹出一个列表：每个 session 一行，状态点 + 首条提问 +
+# 运行中/待回复。点一行 = 消掉它（写 ack.signal，detector 收走）并把这个
+# session 切过去（mcode --session <id>）。
+#
+# 为什么是独立窗口而不是 WPF Popup：
+#   - Popup 是独立 HWND，不继承 owner 的 always-on-top。这个 pill 靠
+#     Assert-Topmost 维持置顶，Popup 不在那套机制里，会被别的置顶窗口盖住。
+#   - 独立窗口可以自己 Topmost=True / ShowActivated=False，接管完全在我们手里。
+#   - pill 本体的 XAML 一个字都不用动 —— 它的视觉被反复调过，动它风险最大。
+#
+# 代价：鼠标从 pill 移到列表窗口会离开 pill（两个 HWND），所以收起有一个
+# 宽限期，鼠标进列表窗口就取消。
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 多 session 列表（v0.5.0）
+#
+# 鼠标停在灵动岛上时，在药丸下方展开一个列表：每个 session 一行，状态点 +
+# 首条提问 + 运行中/待回复。点一行 = 消掉它（写 ack.signal，detector 收走）
+# 并把这个 session 切过去（mcode --session <id>）。
+#
+# 为什么画在 pill 自己的窗口里，而不是另开一个窗口：
+#   独立窗口方案实测过 —— 窗口能创建、位置正确、能被命中
+#   （WindowFromPoint 返回它），却一个像素都不画：它自己矩形里 1053 个
+#   采样点只有 39 个是面板色，其余全是它背后的东西。隔离环境里同样的
+#   代码却能画出来，所以问题出在 widget 的上下文里。
+#   同一个窗口就没有这个问题：置顶、合成、命中测试全都走 pill 已经验证
+#   过的那一套。
+#
+# 代价是窗口要变高。row 0 的高度锁死为药丸高度，所以展开时药丸本身一动
+# 不动，列表在它下面长出来。鼠标从药丸移到列表不用离开窗口，也没有那个
+# "两个窗口之间的空档"。
+# ---------------------------------------------------------------------------
+
+function Read-SessionsFile {
+  $file = Join-Path $configDir 'sessions.json'
+  if (!(Test-Path -LiteralPath $file)) { return @() }
+  try {
+    $raw = [System.IO.File]::ReadAllText($file)
+    $j = $raw | ConvertFrom-Json
+    return @($j.sessions)
+  } catch {
+    return @()
+  }
+}
+
+function Clear-SessionRows {
+  if (-not $script:sessionRows) { return }
+  $script:sessionRows.Children.Clear()
+}
+
+# 列表里每一项的高度（含内边距和分隔线）。
+#
+# 两行（标题 + 摘要）加上下各 7px 的内边距，约 48px。写成一个常量，
+# 是因为 Show-SessionList 要用它算窗口高度，而这里的内容一改就得重算。
+# 实测校准：标题 12.5px 行高约 17 + 摘要 11px 行高约 15 + 行距 2
+#           + 上下内边距 14 + 分隔线 1 = 49。留一点余量取 48。
+$script:sessionRowHeight = 48
+
+# 相对时间：近的给"多久之前"，远的给钟点。
+#
+# 和小红书那种消息列表一个路子：60 分钟以内说"3 分钟前"（精确到分钟就
+# 够了），再早就给 HH:mm（"3 小时前"不如"13:09"精确）。
+function Format-RelativeTime([int64]$tsMs) {
+  if ($tsMs -le 0) { return '' }
+  $diff = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $tsMs
+  if ($diff -lt 0) { $diff = 0 }
+  if ($diff -lt 60000) { return '刚刚' }
+  if ($diff -lt 3600000) { return ([int][math]::Floor($diff / 60000)).ToString() + ' 分钟前' }
+  $t = [DateTimeOffset]::FromUnixTimeMilliseconds($tsMs).ToLocalTime()
+  return $t.ToString('HH:mm')
+}
+
+# 列表的一行。
+#
+# 布局参考小红书的展开态：左边一个状态点，中间两行字（标题 + 摘要），
+# 右边时间戳。
+#
+# 摘要那行是它比原来多出来的东西：光看首条提问，分不清"正在跑"和"卡在
+# 某个工具上"；看最后一句才知道它现在在说什么、要不要我回。
+#
+#   [●]  标题…………………………          3 分钟前
+#        摘要…………………………          运行中
+#
+# 状态点跨两行、垂直居中；标题和摘要都在中间列，所以天然左对齐。
+function Add-SessionRow([string]$id, [string]$title, [string]$phase, [string]$preview, [string]$lastTool, [int64]$lastAtMs, [bool]$isLast) {
+  if (-not $script:sessionRows) { return }
+  # 状态 -> 文案 + 颜色。
+  #
+  # 用的是 pill 那套状态词表（working/thinking/waiting/idle/done/error），
+  # 颜色也跟着 pill 走：同一个状态在两个地方就是同一个颜色、同一句话。
+  # 之前这里自己写了一套 running/waiting/stopped，于是同一个会话在 pill
+  # 上显示"等用户"、在列表里显示"运行中"，pill 有的"已完成"列表里更是
+  # 根本没有。
+  #
+  # "running" 是旧词表的值，留着当兼容：过渡期里 sessions.json 可能还是
+  # 旧的。
+  $stateTextMap = @{
+    'working'  = @{ text = '运行中';   dot = '#FF3B82F6' }
+    'thinking' = @{ text = '思考中';   dot = '#FFEAB308' }
+    'waiting'  = @{ text = '等待审批'; dot = '#FFF59E0B' }
+    'idle'     = @{ text = '待回复';   dot = '#FF6B7280' }
+    'done'     = @{ text = '已完成';   dot = '#FF22C55E' }
+    'error'    = @{ text = '出错';     dot = '#FFEF4444' }
+    'stopped'  = @{ text = '已停止';   dot = '#FF4B5563' }
+    'running'  = @{ text = '运行中';   dot = '#FF3B82F6' }
+  }
+  $stateInfo = $stateTextMap[[string]$phase]
+  if (-not $stateInfo) { $stateInfo = $stateTextMap['idle'] }
+  $dotHex = $stateInfo.dot
+  $phaseText = $stateInfo.text
+
+  # 第二行：正文优先。没有正文（最后一条恰好是 toolCall）就退到"正在
+  # 调用的工具名"，总比空着强。
+  $subText = ''
+  if ($preview) { $subText = $preview }
+  elseif ($lastTool) { $subText = '执行 ' + $lastTool }
+  if ($subText.Length -gt 48) { $subText = $subText.Substring(0, 48) + '…' }
+
+  $grid = New-Object System.Windows.Controls.Grid
+  $grid.Cursor = [System.Windows.Input.Cursor]::Hand
+
+  # 三列：状态点(自适应) | 文字(占满剩余) | 右侧时间(自适应)。
+  #
+  # 中间列必须是 * 才能被裁剪（TextTrimming 只在有有限宽度时才生效）。
+  $colDot = New-Object System.Windows.Controls.ColumnDefinition
+  $colDot.Width = New-Object System.Windows.GridLength(1, [System.Windows.GridUnitType]::Auto)
+  $colTitle = New-Object System.Windows.Controls.ColumnDefinition
+  $colTitle.Width = New-Object System.Windows.GridLength(1, [System.Windows.GridUnitType]::Star)
+  $colTag = New-Object System.Windows.Controls.ColumnDefinition
+  $colTag.Width = New-Object System.Windows.GridLength(1, [System.Windows.GridUnitType]::Auto)
+  $grid.ColumnDefinitions.Add($colDot) | Out-Null
+  $grid.ColumnDefinitions.Add($colTitle) | Out-Null
+  $grid.ColumnDefinitions.Add($colTag) | Out-Null
+
+  # 两行：标题 / 摘要。
+  $rowTop = New-Object System.Windows.Controls.RowDefinition
+  $rowTop.Height = New-Object System.Windows.GridLength(1, [System.Windows.GridUnitType]::Auto)
+  $rowBot = New-Object System.Windows.Controls.RowDefinition
+  $rowBot.Height = New-Object System.Windows.GridLength(1, [System.Windows.GridUnitType]::Auto)
+  $grid.RowDefinitions.Add($rowTop) | Out-Null
+  $grid.RowDefinitions.Add($rowBot) | Out-Null
+
+  $dot = New-Object System.Windows.Shapes.Ellipse
+  $dot.Width = 7; $dot.Height = 7
+  $dot.Fill = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString($dotHex)))
+  $dot.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+  $dot.Margin = New-Object System.Windows.Thickness(0,0,9,0)
+
+  $txt = New-Object System.Windows.Controls.TextBlock
+  $txt.Text = if ($title) { $title } else { $id }
+  $txt.Foreground = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#FFF5F5F7')))
+  $txt.FontSize = 12.5
+  $txt.TextTrimming = [System.Windows.TextTrimming]::CharacterEllipsis
+  $txt.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+
+  $sub = New-Object System.Windows.Controls.TextBlock
+  $sub.Text = $subText
+  $sub.Foreground = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#FF8B93A1')))
+  $sub.FontSize = 11
+  $sub.TextTrimming = [System.Windows.TextTrimming]::CharacterEllipsis
+  $sub.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+  $sub.Margin = New-Object System.Windows.Thickness(0,2,0,0)
+
+  # 右列：时间戳 + 状态文字，整块垂直居中于两行（和小红书那个时间戳的
+  # 位置一样）。
+  $right = New-Object System.Windows.Controls.StackPanel
+  $right.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+  $right.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Right
+  $right.Margin = New-Object System.Windows.Thickness(8,0,0,0)
+
+  $time = New-Object System.Windows.Controls.TextBlock
+  $time.Text = (Format-RelativeTime $lastAtMs)
+  $time.Foreground = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#FF9CA3AF')))
+  $time.FontSize = 10
+  $time.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Right
+
+  $tag = New-Object System.Windows.Controls.TextBlock
+  $tag.Text = $phaseText
+  $tag.Foreground = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString($dotHex)))
+  $tag.FontSize = 10
+  $tag.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Right
+
+  $right.Children.Add($time) | Out-Null
+  $right.Children.Add($tag) | Out-Null
+
+  $grid.Children.Add($dot)   | Out-Null
+  $grid.Children.Add($txt)   | Out-Null
+  $grid.Children.Add($right) | Out-Null
+  $grid.Children.Add($sub)   | Out-Null
+  [System.Windows.Controls.Grid]::SetColumn($dot, 0)
+  [System.Windows.Controls.Grid]::SetColumn($txt, 1)
+  [System.Windows.Controls.Grid]::SetColumn($right, 2)
+  [System.Windows.Controls.Grid]::SetColumn($sub, 1)
+  [System.Windows.Controls.Grid]::SetRow($dot, 0)
+  [System.Windows.Controls.Grid]::SetRow($txt, 0)
+  [System.Windows.Controls.Grid]::SetRow($right, 0)
+  [System.Windows.Controls.Grid]::SetRow($sub, 1)
+  # 状态点和右列各跨两行：状态点在整块左边居中，时间戳在整块右边居中。
+  $dot.SetValue([System.Windows.Controls.Grid]::RowSpanProperty, 2)
+  $right.SetValue([System.Windows.Controls.Grid]::RowSpanProperty, 2)
+
+  # 项之间的分隔线。最后一项不带线（下面就是面板底边）。
+  $border = New-Object System.Windows.Controls.Border
+  $border.BorderBrush = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#1FFFFFFF')))
+  $border.BorderThickness = $(if ($isLast) { New-Object System.Windows.Thickness(0) } else { New-Object System.Windows.Thickness(0,0,0,1) })
+  $border.Padding = New-Object System.Windows.Thickness(0,7,0,7)
+  $border.Child = $grid
+
+  # 提示框：标题 + 摘要 + 状态 + 时间，一次说全。
+  $tip = if ($title) { $title } else { $id }
+  if ($subText) { $tip = $tip + "`n" + $subText }
+  $rel = Format-RelativeTime $lastAtMs
+  if ($rel) { $tip = $tip + "`n" + $phaseText + ' · ' + $rel } else { $tip = $tip + "`n" + $phaseText }
+  $border.ToolTip = $tip
+
+  # 点击挂在最外层的 Border 上，子元素不再挂：
+  #
+  # MouseLeftButtonDown 会冒泡。挂子元素时，Border + Grid + TextBlock 各挂
+  # 一份就会一次点击触发多次消掉。现在只有最外层一个 handler，点整行任何
+  # 位置都算点这一行。
+  #
+  # Handled=true 是必须的：窗口上挂了拖拽处理器（MouseLeftButtonDown），
+  # 列表在同一个窗口里，不拦住的话点一行会被当成"开始拖药丸"。
+  $border.Add_MouseLeftButtonDown({
+    $args[1].Handled = $true
+    Invoke-SessionClick $id
+  }.GetNewClosure())
+
+  $script:sessionRows.Children.Add($border) | Out-Null
+}
+
+function Show-SessionList {
+  if (-not $script:sessionRows) { return }
+  # 取消待收起的定时器。
+  #
+  # 这一步不能只放在 MouseEnter 里：展开有三个入口（MouseEnter、
+  # MouseMove 兜底、手动调用），少一个就可能出现"展开后 300ms 立刻收起"
+  # 的闪烁 —— 展开把窗口撑高，收起又把高度改回去，窗口反复跳。
+  if ($script:listHideTimer) {
+    try { $script:listHideTimer.Stop() } catch {}
+    $script:listHideTimer = $null
+  }
+  $items = Read-SessionsFile
+  if (-not $items -or $items.Count -eq 0) { Hide-SessionList; return }
+  Clear-SessionRows
+  # 运行中的排前面，其余按"最后一次动静"倒序。
+  #
+  # 排序用 lastAtMs（最后活动时间），不是 sinceMs（进列表的时间）：
+  # 进列表的时间只说明"我什么时候看见它"，说明不了"它现在有多活跃"。
+  #
+  # 顺序：在跑的排最前，然后是等你的、再是等完了的，停了的排最后。
+  $stateOrder = @{
+    'working' = 0; 'thinking' = 0; 'waiting' = 1; 'idle' = 2
+    'done' = 3; 'error' = 4; 'stopped' = 5; 'running' = 0
+  }
+  $sorted = @($items | Sort-Object @{ Expression = { $k = [string]$_.phase; if ($stateOrder.ContainsKey($k)) { $stateOrder[$k] } else { 2 } } }, @{ Expression = { if ($_.lastAtMs) { [int64]$_.lastAtMs } else { [int64]$_.sinceMs } }; Descending = $true })
+  $i = 0
+  foreach ($s in $sorted) {
+    Add-SessionRow ([string]$s.id) ([string]$s.title) ([string]$s.phase) ([string]$s.preview) ([string]$s.lastTool) ([int64]$s.lastAtMs) ($i -lt ($sorted.Count - 1))
+    $i++
+  }
+  # 列表高度不能按"行数 × 猜的行高"算。
+  #
+  # 那样算有两处错：摘要会换行，一项不止那么高；而且 SessionPanel 自己
+  # 还要占 Margin 14 + Padding 12 + Border 2。两行时内容需要 106px，row
+  # 只分到 94px，最后一行就被裁掉半行 —— 窗口底部还空着 14px，看起来
+  # 更莫名其妙。
+  #
+  # 所以让布局自己算：row 1 改成 Auto，Grid 就按内容测量，再拿实际需要
+  # 的高度去撑窗口。DesiredSize 是"内容需要多高"，不受窗口当前高度影响。
+  $script:sessionRowsPanel.Visibility = [System.Windows.Visibility]::Visible
+  $script:sessionListRow.Height = [System.Windows.GridLength]::Auto
+  $script:sessionRowsPanel.UpdateLayout()
+  # DesiredSize 里没有 Margin，所以自己加上 SessionPanel 的 14px 上边距。
+  $listH = [int][Math]::Ceiling($script:sessionRowsPanel.DesiredSize.Height) + 14
+  if ($listH -le 0) { $listH = ($sorted.Count * $script:sessionRowHeight) + 26 }
+  $window.Height = $script:pillHeight + $listH
+  Dbg ("session list shown: " + $sorted.Count + " winH=" + $window.Height + " listH=" + $listH)
+}
+
+function Hide-SessionList {
+  if ($script:listHideTimer) {
+    try { $script:listHideTimer.Stop() } catch {}
+    $script:listHideTimer = $null
+  }
+  if ($script:sessionRowsPanel) {
+    $script:sessionRowsPanel.Visibility = [System.Windows.Visibility]::Collapsed
+  }
+  if ($script:sessionListRow) {
+    $script:sessionListRow.Height = New-Object System.Windows.GridLength(0)
+  }
+  if ($window) { $window.Height = $script:pillHeight }
+}
+
+# 宽限期之后才收起。鼠标从药丸移到列表会经过一段"两个窗口都不是"的地带，
+# 没有宽限期列表会在鼠标到达之前就消失。
+function Schedule-SessionListHide {
+  if (-not $script:sessionRowsPanel) { return }
+  if ($script:listHideTimer) { try { $script:listHideTimer.Stop() } catch {} }
+  $script:listHideTimer = New-Object System.Windows.Threading.DispatcherTimer
+  $script:listHideTimer.Interval = [TimeSpan]::FromMilliseconds(300)
+  $script:listHideTimer.Add_Tick({
+    try { $script:listHideTimer.Stop() } catch {}
+    Hide-SessionList
+  })
+  $script:listHideTimer.Start()
+}
+
+# 点一行：消掉它 + 切过去。
+function Invoke-SessionClick([string]$id) {
+  if (-not $id) { return }
+  # 消掉：写 ack.signal，detector 收走（它会从列表里删掉这一条，并且
+  # 在这个 session 跑完下一轮之前不再把它收回来）。
+  try {
+    $ackFile = Join-Path $configDir 'ack.signal'
+    [System.IO.File]::WriteAllText($ackFile, $id, [System.Text.Encoding]::UTF8)
+    Dbg "session ack written: $id"
+  } catch {
+    Dbg "SESSION ACK FAIL: $($_.Exception.Message)"
+  }
+  Hide-SessionList
+  # 先试"切到已经开着这个会话的终端 tab"。切到了就不用再开一个 ——
+  # 新开一个 mcode --session <id> 会让同一个会话有两个终端在跑。
+  $names = @()
+  try {
+    foreach ($s in @(Read-SessionsFile)) {
+      if ([string]$s.id -eq $id) {
+        $names = @(@($s.titles) | Where-Object { $_ })
+        if ($names.Count -eq 0 -and $s.title) { $names = @([string]$s.title) }
+        break
+      }
+    }
+  } catch {}
+  if (Select-SessionTerminal $names) {
+    Dbg ("session terminal switched: " + $id + " foregroundPid=" + (Get-ForegroundPid))
+    return
+  }
+  # 没找到具体 tab：把终端窗口带到前台，但不要再开一个终端。
+  #
+  # 会话名对不上只该影响"切到哪个标签"，不该造成"同一个会话两个终端"。
+  # 只有连一个终端窗口都找不到时（桌面端 app 内嵌的终端就是这种），
+  # 才退回新开 —— 那时候新开是唯一到得了那个会话的办法。
+  if (Activate-TerminalWindow) {
+    Dbg ("session terminal activated (tab not matched): " + $id + " foregroundPid=" + (Get-ForegroundPid))
+    return
+  }
+  Start-SessionTerminal $id
+}
+
+# 当前前台窗口是哪个进程。
+#
+# 切了 tab 但没抢到前台，肉眼看不出来，只能问系统。
+#
+# 记 pid 而不是标题：Windows Terminal 的前台窗口是它的 XAML 子窗口，
+# 标题是空的，pid 才是 WindowsTerminal.exe。
+function Get-ForegroundPid {
+  try {
+    $fg = [WinAPI]::GetForegroundWindow()
+    if ($fg -eq [IntPtr]::Zero) { return 0 }
+    # 变量名不能叫 $pid：PowerShell 的变量名不区分大小写，$PID 是只读的
+    # 自动变量，赋值直接抛 "Cannot overwrite variable PID"。而这里外面还
+    # 包着 catch —— 异常被吞掉，表现是"这个函数永远返回 0"，从外面看
+    # 一点异常都看不出来。同名的坑 $HOME 也踩过一次。
+    $procId = [uint32]0
+    [void][WinAPI]::GetWindowThreadProcessId($fg, [ref]$procId)
+    return [int]$procId
+  } catch { return 0 }
+}
+
+# 前台窗口现在是不是目标进程。
+#
+# SetForegroundWindow 失败是**静默**的：返回值不告诉你成没成。所以每次抢完
+# 前台都要回读一次前台窗口的 pid 跟目标 pid 对一下 —— 对不上就是没抢到。
+# 不回读的话，日志里一句 "switched" 会把"没抢到"盖过去。
+function Test-ForegroundPid([uint32]$procId) {
+  $fg = Get-ForegroundPid
+  if ($fg -eq [int]$procId) { return $true }
+  Dbg ("FOCUS CHECK: want pid=" + $procId + " foregroundPid=" + $fg)
+  return $false
+}
+
+# 把终端窗口抢到前台。
+#
+# 主 pill 的"显示/隐藏终端"早就解决过这个问题，用的是既有那套聚焦：先
+# TOPMOST 再 NOTOPMOST（这样 BringWindowToTop 才推得动），然后
+# SetForegroundWindow。直接复用，不另造一套。
+#
+# 裸的 SetForegroundWindow 不够：调用方是后台进程时，Windows 的前台锁会
+# 挡下来 —— 窗口切了 tab，用户却看不到变化。
+function Focus-TerminalWindow([IntPtr]$h) {
+  if (-not $h -or $h -eq [IntPtr]::Zero) { return $false }
+  try {
+    # 变量名不能叫 $pid —— $PID 是只读自动变量，赋值会抛异常，被这里的
+    # catch 吞掉，于是"抢前台"这步从来没发生过，而外面看着一切正常。
+    $procId = [uint32]0
+    [void][WinAPI]::GetWindowThreadProcessId($h, [ref]$procId)
+    # 先把终端撑成满屏，再抢前台。
+    #
+    # 顺序不能反：Focus-Window 里对最小化窗口走的 SW_RESTORE 用的是"上次
+    # 正常尺寸"，而那个尺寸可能已经被写坏（0x0 -> WT 的 min-size 兜底 ->
+    # 480x84 的一条，还被挪到了 (0,0)）。先撑满屏，顺手把那个坏尺寸修
+    # 回来，用户看到的才是满屏的终端，而不是左上角一条。
+    Show-WindowFullScreen $h | Out-Null
+    Focus-Window -Target @{ Hwnd = $h; Pid = $procId; Exe = 'WindowsTerminal' }
+    if (Test-ForegroundPid $procId) {
+      Dbg ("FOCUS CONFIRMED: pid=" + $procId + " hwnd=" + $h)
+      return $true
+    }
+    # 第一套没抢到：换主 pill 真正在用的那套。
+    #
+    # Focus-Window 里两次 SetWindowPos 都带 SWP_NOACTIVATE，只动 z-order
+    # 不激活；主 pill 的 Toggle-Window 用的是 SetWindowPos(HWND_TOP) 且
+    # **不**带 SWP_NOACTIVATE —— 那个会顺手把窗口激活，这才是"到前台"
+    # 的关键。用同一套，别自创第四种。
+    # SWP_NOSIZE / SWP_NOMOVE 同样不能少：少了就是"缩到 0x0 + 挪到 (0,0)"。
+    $flags = [WinAPI]::SWP_NOSIZE -bor [WinAPI]::SWP_NOMOVE
+    [WinAPI]::SetWindowPos($h, [WinAPI]::HWND_TOP, 0, 0, 0, 0, $flags) | Out-Null
+    [WinAPI]::BringWindowToTop($h) | Out-Null
+    [WinAPI]::SetForegroundWindow($h) | Out-Null
+    if (Test-ForegroundPid $procId) {
+      Dbg ("FOCUS CONFIRMED (z-order): pid=" + $procId + " hwnd=" + $h)
+      return $true
+    }
+    Dbg ("FOCUS NOT CONFIRMED: want pid=" + $procId + " foregroundPid=" + (Get-ForegroundPid))
+    return $false
+  } catch {
+    Dbg ("FOCUS FAIL: " + $_.Exception.Message)
+    return $false
+  }
+}
+
+# 切到已经开着这个会话的终端 tab。
+#
+# 为什么需要这一段：mcode 会话跑在某个终端 tab 里。点列表的时候如果新开
+# 一个 "mcode --session <id>"，同一个会话就有两个终端在跑 —— 旧的还在，
+# 新的也起来了。用户要的是回到原来那个，不是再要一个。
+#
+# Windows Terminal 的 tab 标题是 "<状态> | <会话名> | MCode"，会话名是
+# mcode 自己设的（ANSI OSC 0）。Win32 的 SetForegroundWindow 只能激活到
+# 窗口的**当前活动** tab，切不到指定的 tab；UI Automation 能列出 tab
+# 并选中它（实测：选中后回读，活动的确实是目标 tab）。
+#
+# 匹配用会话的标题历史。tab 上那个名字是 mcode 在**某个时刻**设的，而
+# 会话标题会随着对话推进变（运行时 SQLite 里存的是最新的），所以要拿
+# 历史上出现过的所有名字一起匹配。
+#
+# 匹配不上就退回原来的做法（新开一个）。这里不搞更聪明的：终端标题可能
+# 被程序改过，终端也可能根本不是 Windows Terminal（桌面端 app 内嵌的
+# 终端就不是），这时候新开反而是唯一到得了那个会话的办法。
+$script:uiaReady = $false
+
+function Select-SessionTerminal([string[]]$names) {
+  if (-not $names -or $names.Count -eq 0) { return $false }
+  try {
+    if (-not $script:uiaReady) {
+      Add-Type -AssemblyName UIAutomationClient -ErrorAction Stop
+      Add-Type -AssemblyName UIAutomationTypes -ErrorAction Stop
+      $script:uiaReady = $true
+    }
+    if (-not ('IslandNative' -as [type])) {
+      # 单行字符串，不写 here-string：外层已经是 here-string 了，嵌套会提前结束。
+      Add-Type -Namespace IslandNative -Name Win -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);' -ErrorAction Stop
+    }
+    $root = [System.Windows.Automation.AutomationElement]::RootElement
+    $winCond = New-Object System.Windows.Automation.PropertyCondition(
+      [System.Windows.Automation.AutomationElement]::ClassNameProperty, 'CASCADIA_HOSTING_WINDOW_CLASS')
+    $wins = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $winCond)
+    $tabCond = New-Object System.Windows.Automation.PropertyCondition(
+      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+      [System.Windows.Automation.ControlType]::TabItem)
+    foreach ($w in $wins) {
+      $tabs = $w.FindAll([System.Windows.Automation.TreeScope]::Descendants, $tabCond)
+      for ($t = 0; $t -lt $tabs.Count; $t++) {
+        $tab = $tabs.Item($t)
+        $title = [string]$tab.Current.Name
+        if (-not $title) { continue }
+        # "<状态> | <会话名> | MCode" -> 取中间那一段
+        $parts = @($title -split '\|')
+        $tabName = ''
+        if ($parts.Count -ge 3) { $tabName = $parts[1].Trim() } else { $tabName = $title.Trim() }
+        $hit = $false
+        foreach ($n in $names) {
+          if (-not $n) { continue }
+          $nn = ([string]$n).Trim()
+          if (-not $nn) { continue }
+          if ($tabName -eq $nn -or $title.Contains($nn)) { $hit = $true; break }
+        }
+        if (-not $hit) { continue }
+        try {
+          $sp = $tab.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+          $sp.Select()
+        } catch { continue }
+        # 选中 tab 不会把窗口带到前台，而裸的 SetForegroundWindow 又会被
+        # Windows 的前台锁挡下（调用方是后台进程）—— 实测窗口切了 tab，
+        # 用户却看不到任何变化。
+        #
+        # 所以复用主 pill 的聚焦：先 TOPMOST 再 NOTOPMOST，让
+        # BringWindowToTop 能把窗口推到最前，最后 SetForegroundWindow。
+        # tab 已经切过去了。即使抢前台没成功，也**不能**回退去新开一个终端
+        # —— 那正是"同一个会话两个终端"的病根。抢前台失败只记日志。
+        if (-not (Focus-TerminalWindow ([IntPtr]$w.Current.NativeWindowHandle))) {
+          Dbg ("session tab selected but foreground not confirmed: " + ($names -join ' | '))
+        }
+        return $true
+      }
+    }
+  } catch {
+    # UI Automation 不可用、终端不是 Windows Terminal、标题对不上……
+    # 统统退回原来的做法。
+  }
+  return $false
+}
+
+# 找不到具体 tab 时，至少把终端窗口带到前台，用户自己找那个标签。
+#
+# 关键是**不要再开一个**：同一个会话两个终端在跑，正是这个功能要消除的
+# 问题。会话名对不上（终端标题是 mcode 某个时刻起的名字，而会话标题会
+# 变）只影响"切到哪个标签"，不该影响"会不会多出一个终端"。
+function Activate-TerminalWindow {
+  try {
+    if (-not $script:uiaReady) {
+      Add-Type -AssemblyName UIAutomationClient -ErrorAction Stop
+      Add-Type -AssemblyName UIAutomationTypes -ErrorAction Stop
+      $script:uiaReady = $true
+    }
+    if (-not ('IslandNative' -as [type])) {
+      Add-Type -Namespace IslandNative -Name Win -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);' -ErrorAction Stop
+    }
+    $root = [System.Windows.Automation.AutomationElement]::RootElement
+    $winCond = New-Object System.Windows.Automation.PropertyCondition(
+      [System.Windows.Automation.AutomationElement]::ClassNameProperty, 'CASCADIA_HOSTING_WINDOW_CLASS')
+    $tabCond = New-Object System.Windows.Automation.PropertyCondition(
+      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+      [System.Windows.Automation.ControlType]::TabItem)
+    foreach ($w in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $winCond)) {
+      # 优先挑开着 mcode 的那个窗口（tab 标题是 "<状态> | <会话名> | MCode"）
+      $hasMcode = $false
+      $tabs = $w.FindAll([System.Windows.Automation.TreeScope]::Descendants, $tabCond)
+      for ($i = 0; $i -lt $tabs.Count; $i++) {
+        if ([string]$tabs.Item($i).Current.Name -match '\|\s*MCode\s*$') { $hasMcode = $true; break }
+      }
+      if (-not $hasMcode) { continue }
+      try {
+        # 找到终端窗口就算"找到了"。抢前台没成功**不能**返回 $false ——
+        # 调用方拿 $false 会新开一个终端，同一个会话就多出一个终端了。
+        Focus-TerminalWindow ([IntPtr]$w.Current.NativeWindowHandle) | Out-Null
+        return $true
+      } catch {}
+    }
+  } catch {
+  }
+  return $false
+}
+
+# 切到这个 session：mcode --session <id>
+#
+# 优先 Windows Terminal（wt.exe）；它不在 PATH 时退回 conhost 的 start。
+# mcode 是个 .ps1 包装器，cmd 认不出来，所以两条路都经由 powershell 跑。
+function Start-SessionTerminal([string]$id) {
+  $inner = "mcode --session $id"
+  try {
+    $wt = Get-Command wt.exe -ErrorAction SilentlyContinue
+    if ($wt) {
+      Start-Process -FilePath $wt.Source -ArgumentList @(
+        '-w', '0', 'new-tab', '--title', 'mcode',
+        'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $inner)
+    } else {
+      Start-Process -FilePath 'cmd.exe' -ArgumentList @(
+        '/c', 'start', '', 'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $inner)
+    }
+    Dbg "session jumped: $id"
+  } catch {
+    Dbg "SESSION JUMP FAIL: $($_.Exception.Message)"
+  }
+}
+
+# 工具家族配色：working 态下用 family 色盖掉 state 色，一眼分辨"在读"和"在改"。
+# 只覆盖 dot/ring（视觉识别），不动 stateText 文案。
+# family 名与 detector 的 $TOOL_FAMILIES 值一一对应；缺 family 时回落到 state 色。
+#
+# 色相分布刻意拉开：绿(shell) / 蓝(read) / 黄(write) / 紫(search) / 青(task) /
+# 粉(web) / 灰蓝(plan)。plan 早先用的是 #8B5CF6，和 search 的 #A855F7 在深色
+# pill 上几乎分不开，换成去饱和的灰蓝。
+$familyMap = @{
+  shell  = '#FF22C55E'   # bash / shell  → 绿
+  read   = '#FF3B82F6'   # read         → 蓝
+  write  = '#FFEAB308'   # edit / write → 黄
+  search = '#FFA855F7'   # grep / glob  → 紫
+  task   = '#FF06B6D4'   # task         → 青
+  web    = '#FFEC4899'   # web_search/fetch → 粉
+  plan   = '#FF94A3B8'   # todowrite    → 灰蓝
 }
 
 # 颜色转 brush
@@ -370,8 +1076,44 @@ function Stop-IndeterminateShimmer {
   $script:progressShimmerTransform.X = -130  # 重置到起点
 }
 
+# Sub-step 渲染（"step N[/M] · detail"）：
+#   Step > 0 + Total > 0   → "step 3/12 · fill username"
+#   Step > 0 + Total <= 0  → "step 3 · fill username"
+#   Step > 0 + Detail 空  → "step 3/12"
+#   Step <= 0               → 原 Message 字段
+# 这样 message 字段保持"工具名"("Bash ok"),detail 字段填具体动作,
+# 渲染时拼成 "step 3/12 · Bash ok · fill username" 或者更精确的
+# "step 3/12 · fill username"(detail 存在时优先覆盖 message)。
+# 注意：detail 非空时**完全替换** message,避免双重信息("Bash ok · ls -la")。
+function Build-DisplayMessage {
+  param(
+    [string]$Message,
+    [int]$Step,
+    [int]$Total,
+    [string]$Detail
+  )
+  $base = if ($Message) { $Message } else { '' }
+  if ($Step -le 0) { return $base }
+
+  $stepStr = if ($Total -gt 0) { "step $Step/$Total" } else { "step $Step" }
+  if ($Detail) {
+    # detail 非空时优先用 detail(agent 已经表达了"我在做什么")
+    return "$stepStr · $Detail"
+  }
+  # detail 空但 step 给出 → 只显示 step,避免重复 message 造成噪声
+  return $stepStr
+}
+
 # 状态更新
 # Progress 取值约定（跟 notify-island.ps1 / detector 对齐）：
+#   -1     → 没有进度信息，进度条隐藏
+#   0..100 → 百分比，0=空条，100=满条；超出范围会被 clamp
+# Usage5h：剩余百分比（0..100）；-2 = 未提供
+# Usage5hResetMs：距下次 5h 刷新的毫秒数；0 = 未知
+# TodoProgress：todowrite 列表的完成百分比（0..100）；-2 = 未提供
+# Step/Total/Detail：sub-step 进度（agent 自报），参 Build-DisplayMessage
+#   - 优先级：显式 Progress > TodoProgress > shimmer
+#   - 即：agent 直接传 progress 最高；否则如果有 todo 列表就用 todo 完成度；都没就 shimmer 动画
 #   -1     → 没有进度信息，进度条隐藏
 #   0..100 → 百分比，0=空条，100=满条；超出范围会被 clamp
 # Usage5h：剩余百分比（0..100）；-2 = 未提供
@@ -386,14 +1128,26 @@ function Update-State {
     [int]$Progress = -1,
     [int]$Usage5h = -2,
     [int]$Usage5hResetMs = 0,
-    [int]$TodoProgress = -2
+    [int]$TodoProgress = -2,
+    [int]$Step = -1,
+    [int]$Total = -1,
+    [string]$Detail = '',
+    [string]$Family = ''
   )
   $s = $script:stateMap[$State]
   if (!$s) { $s = $script:stateMap['idle'] }
-  $script:statusDot.Fill = C $s.dot
-  $script:pulseRing.Fill = C $s.ring
+  # 家族色只作用于 active 态（thinking/working/waiting），这样 done 绿 / error 红
+  # 依然是"结果"语义，家族色只用来区分"在做什么"。
+  $dotHex  = $s.dot
+  $ringHex = $s.ring
+  if ($Family -and $State -in @('thinking','working','waiting')) {
+    $famHex = $script:familyMap[$Family]
+    if ($famHex) { $dotHex = $famHex; $ringHex = $famHex }
+  }
+  $script:statusDot.Fill = C $dotHex
+  $script:pulseRing.Fill = C $ringHex
   $script:stateText.Text = $s.label
-  $script:messageText.Text = if ($Message) { $Message } else { '' }
+  $script:messageText.Text = Build-DisplayMessage -Message $Message -Step $Step -Total $Total -Detail $Detail
   $script:actionIcon.Text = $s.icon
 
   if ($State -in @('thinking','working','waiting')) { Start-Pulse } else { Stop-Pulse }
@@ -447,20 +1201,20 @@ function Update-State {
     $script:progressFill.Visibility = 'Visible'
     $script:progressIndeterminate.Visibility = 'Collapsed'
     $script:progressScale.ScaleX = $clamped / 100.0
-    $script:progressFill.Background = C $s.dot
+    $script:progressFill.Background = C $dotHex
     Stop-IndeterminateShimmer
   } elseif ($isActive -and $hasTodoProgress) {
     $script:progressBar.Visibility = 'Visible'
     $script:progressFill.Visibility = 'Visible'
     $script:progressIndeterminate.Visibility = 'Collapsed'
     $script:progressScale.ScaleX = $todoClamped / 100.0
-    $script:progressFill.Background = C $s.dot
+    $script:progressFill.Background = C $dotHex
     Stop-IndeterminateShimmer
   } elseif ($isActive) {
     $script:progressBar.Visibility = 'Visible'
     $script:progressFill.Visibility = 'Collapsed'
     $script:progressIndeterminate.Visibility = 'Visible'
-    $script:progressShimmer.Fill = C $s.dot
+    $script:progressShimmer.Fill = C $dotHex
     $script:progressScale.ScaleX = 0
     Start-IndeterminateShimmer
   } else {
@@ -477,83 +1231,363 @@ function Update-State {
   "[$ts] $State :: $Message$progTag" | Add-Content -Path $script:logFile -Encoding UTF8
 }
 
-# 切回调用方窗口（点击 pill 时调用）
-function Focus-CallerWindow {
+# 解析调用方窗口（caller.json → targetHwnd / targetPid）。
+# 处理三种死法：hwnd 死了 / 进程死了（fallback 到父进程 terminal）/
+# hwnd 被销毁重建。返回 [PSCustomObject]@{ Hwnd; Pid; Exe } 或 $null。
+function Resolve-CallerWindow {
   $callerFile = Join-Path $env:APPDATA 'mcode-island\caller.json'
-  if (!(Test-Path $callerFile)) { Dbg 'FOCUS: no caller file'; return }
+  if (!(Test-Path $callerFile)) { Dbg 'RESOLVE: no caller file'; return $null }
 
   $hwnd = [IntPtr]::Zero
   $targetPid = 0
   $targetExe = ''
+  $targetSource = ''
   try {
     $data = Get-Content $callerFile -Raw -Encoding UTF8 | ConvertFrom-Json
     $hwnd = [IntPtr]::new([int64]$data.targetHwnd)
     $targetPid = [int]$data.targetPid
     $targetExe = if ($data.targetExe) { [string]$data.targetExe } else { '' }
+    $targetSource = if ($data.source) { [string]$data.source } else { '' }
   } catch {
-    Dbg "FOCUS: caller.json parse error"
-    return
+    Dbg "RESOLVE: caller.json parse error"
+    return $null
   }
-  if ($targetPid -le 0) { Dbg 'FOCUS: no target'; return }
+  if ($targetPid -le 0) { Dbg 'RESOLVE: no target'; return $null }
 
-  # 1) 检查 hwnd 是否还活着
+  # 1) hwnd 死了 → 重找
   if ($hwnd -ne [IntPtr]::Zero -and -not [WinAPI]::IsWindow($hwnd)) {
-    Dbg "FOCUS: hwnd $hwnd dead, re-resolving"
+    Dbg "RESOLVE: hwnd $hwnd dead, re-resolving"
     $hwnd = [IntPtr]::Zero
   }
 
-  # 2) 进程死了 → 找它的父进程（terminal）兜底
+  # 2) 进程死了 → fallback 到父进程（terminal）兜底
   $proc = Get-Process -Id $targetPid -ErrorAction SilentlyContinue
   if (-not $proc) {
-    Dbg "FOCUS: target PID $targetPid gone, finding parent (terminal)"
+    Dbg "RESOLVE: target PID $targetPid gone, finding parent (terminal)"
     $parent = Get-CimInstance Win32_Process -Filter "ProcessId=$targetPid" -ErrorAction SilentlyContinue
     if ($parent -and $parent.ParentProcessId -and $parent.ParentProcessId -gt 0) {
       $parentProc = Get-Process -Id ([int]$parent.ParentProcessId) -ErrorAction SilentlyContinue
       if ($parentProc) {
         $targetPid = $parentProc.Id
         $targetExe = $parentProc.ProcessName
-        # 优先用 MainWindowHandle，失败就用第一个可见窗口
+        $targetSource = 'parent-fallback'
         if ($parentProc.MainWindowHandle -ne [IntPtr]::Zero) {
           $hwnd = $parentProc.MainWindowHandle
         } else {
           $hwnd = [WinAPI]::FindVisibleWindowForPid([uint32]$targetPid)
         }
-        Dbg "FOCUS: fall back to parent $($parentProc.ProcessName) PID=$targetPid hwnd=$hwnd"
+        Dbg "RESOLVE: fall back to parent $($parentProc.ProcessName) PID=$targetPid hwnd=$hwnd"
       }
     }
     if ($hwnd -eq [IntPtr]::Zero) {
-      Dbg 'FOCUS: no parent fallback available'
-      return
+      Dbg 'RESOLVE: no parent fallback available'
+      return $null
     }
-  }
-  # 3) 进程还在但 hwnd 死了（被销毁/重建）→ 找进程的第一个可见窗口
-  if ($hwnd -eq [IntPtr]::Zero -or -not [WinAPI]::IsWindow($hwnd)) {
-    Dbg "FOCUS: hwnd invalid, finding new visible window for PID $targetPid ($targetExe)"
-    $hwnd = [WinAPI]::FindVisibleWindowForPid([uint32]$targetPid)
-    if ($hwnd -eq [IntPtr]::Zero) {
-      Dbg 'FOCUS: no visible window found for target process'
-      return
-    }
-    Dbg "FOCUS: re-resolved to hwnd $hwnd"
   }
 
-  try {
-    # 1) 授权目标进程可以切前台（modern Windows 强制）
-    [WinAPI]::AllowSetForegroundWindow([uint32]$targetPid) | Out-Null
-    # 2) 最小化就还原
-    if ([WinAPI]::IsIconic($hwnd)) {
-      [WinAPI]::ShowWindow($hwnd, 9) | Out-Null   # SW_RESTORE
+  # 3) 进程还在但 hwnd 死了（被销毁/重建）→ 找新可见窗口
+  if ($hwnd -eq [IntPtr]::Zero -or -not [WinAPI]::IsWindow($hwnd)) {
+    Dbg "RESOLVE: hwnd invalid, finding new visible window for PID $targetPid ($targetExe)"
+    $hwnd = [WinAPI]::FindVisibleWindowForPid([uint32]$targetPid)
+    if ($hwnd -eq [IntPtr]::Zero) {
+      Dbg 'RESOLVE: no visible window found for target process'
+      return $null
     }
-    # 3) 设顶
-    [WinAPI]::SetWindowPos($hwnd, [WinAPI]::HWND_TOPMOST, 0, 0, 0, 0, [WinAPI]::SWP_NOACTIVATE) | Out-Null
-    [WinAPI]::SetWindowPos($hwnd, [IntPtr]::new(-2), 0, 0, 0, 0, [WinAPI]::SWP_NOACTIVATE) | Out-Null  # HWND_NOTOPMOST
-    # 4) 抢焦点
-    [WinAPI]::BringWindowToTop($hwnd) | Out-Null
-    [WinAPI]::SetForegroundWindow($hwnd) | Out-Null
-    $proc2 = Get-Process -Id $targetPid -ErrorAction SilentlyContinue
-    Dbg ("FOCUS OK: target=" + $proc2.ProcessName + " PID=" + $targetPid + " hwnd=" + $hwnd)
+    Dbg "RESOLVE: re-resolved to hwnd $hwnd"
+  }
+
+  return [PSCustomObject]@{ Hwnd = $hwnd; Pid = $targetPid; Exe = $targetExe; Source = $targetSource }
+}
+
+# ---------------------------------------------------------------------------
+# Click target resolution.
+#
+# In the desktop app (MiniMax Inside Code / MiniMax Code / Mavis) the agent
+# is hosted by the app and runs in a terminal the app opened. That terminal
+# belongs to the app session, so "hide the terminal" is meaningless there:
+# the agent keeps running behind a static pill. "Take me back to the app
+# window" is the action that matches the intent.
+#
+# The click target is therefore resolved in this order:
+#   1. a manual pin (pin.json) -- the user named the target explicitly, so it
+#      wins. A CLI user pins their terminal and it stays the target even
+#      while the desktop app is open.
+#   2. the desktop app main window -- found through a process-name allowlist
+#      and focused, never hidden.
+#   3. the caller's terminal (caller.json) -- without the desktop app the
+#      original show/hide toggle is kept.
+# ---------------------------------------------------------------------------
+
+# Process-name allowlist of the desktop app. The app is not an ancestor of
+# the agent process (the agent runs in a terminal the app opened), so the
+# process tree cannot be used to locate it.
+$script:desktopAppNames = @('MiniMax Inside Code', 'MiniMax Code', 'Mavis')
+
+# Read pin.json: the click target the user pinned by hand.
+# pin.json is separate from caller.json -- caller.json is rewritten by the
+# agent side on every state transition, so a pin stored there would not
+# survive the next notify and priority 1 would be unreachable.
+function Resolve-PinnedWindow {
+  $pinFile = Join-Path $env:APPDATA 'mcode-island\pin.json'
+  if (!(Test-Path $pinFile)) { return $null }
+
+  $hwnd = [IntPtr]::Zero
+  $targetPid = 0
+  $targetExe = ''
+  try {
+    $data = Get-Content $pinFile -Raw -Encoding UTF8 | ConvertFrom-Json
+    $hwnd = [IntPtr]::new([int64]$data.targetHwnd)
+    $targetPid = [int]$data.targetPid
+    $targetExe = if ($data.targetExe) { [string]$data.targetExe } else { '' }
+  } catch {
+    Dbg 'PIN: pin.json parse error'
+    return $null
+  }
+  if ($targetPid -le 0) { return $null }
+
+  # the hwnd died (window destroyed or recreated) -> find it again by pid
+  if ($hwnd -eq [IntPtr]::Zero -or -not [WinAPI]::IsWindow($hwnd)) {
+    $hwnd = [WinAPI]::FindVisibleWindowForPid([uint32]$targetPid)
+  }
+  if ($hwnd -eq [IntPtr]::Zero) {
+    Dbg "PIN: pinned PID $targetPid is gone"
+    return $null
+  }
+  return [PSCustomObject]@{ Hwnd = $hwnd; Pid = $targetPid; Exe = $targetExe }
+}
+
+# Find the desktop app main window: a process in the same session whose name
+# hits the allowlist and that owns a main window. The app is an Electron
+# multi-process (main + renderer + GPU + utility); only the main process
+# reports a non-zero MainWindowHandle.
+function Find-DesktopAppWindow {
+  $mySession = (Get-Process -Id $PID).SessionId
+  $cands = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+    $script:desktopAppNames -contains $_.ProcessName -and $_.SessionId -eq $mySession
+  })
+  if ($cands.Count -eq 0) { Dbg 'APP: no desktop app process'; return $null }
+
+  foreach ($p in $cands) {
+    if ($p.MainWindowHandle -ne [IntPtr]::Zero) {
+      Dbg "APP: desktop app $($p.ProcessName) PID=$($p.Id) hwnd=$($p.MainWindowHandle)"
+      return [PSCustomObject]@{ Hwnd = $p.MainWindowHandle; Pid = $p.Id; Exe = $p.ProcessName }
+    }
+  }
+  # The main process reports no MainWindowHandle (some Electron builds) ->
+  # enumerate the visible windows as a fallback.
+  foreach ($p in $cands) {
+    $h = [WinAPI]::FindVisibleWindowForPid([uint32]$p.Id)
+    if ($h -ne [IntPtr]::Zero) {
+      Dbg "APP: desktop app $($p.ProcessName) PID=$($p.Id) hwnd=$h (enumerated)"
+      return [PSCustomObject]@{ Hwnd = $h; Pid = $p.Id; Exe = $p.ProcessName }
+    }
+  }
+  Dbg 'APP: desktop app process has no visible window'
+  return $null
+}
+
+# Which target a click prefers when both are available.
+#
+#   'terminal' -- the caller's terminal first. The CLI habit: one click
+#                 hides it, the next brings it back.
+#   'app'      -- the desktop app window first. The Marketplace build ships
+#                 this one: in the desktop app the agent is hosted by the
+#                 app and the terminal belongs to the app session, so hiding
+#                 that terminal leaves a static pill behind.
+#
+# The Marketplace package is built with 'app'. The builder flips this one
+# line and FAILS the build when it cannot find it, so a renamed switch can
+# never silently ship the CLI behaviour to the desktop users.
+$script:clickPrefers = 'terminal'
+
+# Resolve the click target. Mode = focus (raise and activate only) /
+# toggle (show / hide).
+function Resolve-ClickTarget {
+  # 1) the manual pin -- the user's explicit choice, it always wins
+  $pin = Resolve-PinnedWindow
+  if ($pin) {
+    return [PSCustomObject]@{ Hwnd = $pin.Hwnd; Pid = $pin.Pid; Exe = $pin.Exe; Mode = 'focus'; Origin = 'pin' }
+  }
+  # 2) the preferred target, then the other one
+  if ($script:clickPrefers -eq 'app') {
+    $app = Find-DesktopAppWindow
+    if ($app) {
+      return [PSCustomObject]@{ Hwnd = $app.Hwnd; Pid = $app.Pid; Exe = $app.Exe; Mode = 'focus'; Origin = 'desktop-app' }
+    }
+    $caller = Resolve-CallerWindow
+    if ($caller) {
+      return [PSCustomObject]@{ Hwnd = $caller.Hwnd; Pid = $caller.Pid; Exe = $caller.Exe; Mode = 'toggle'; Origin = 'caller' }
+    }
+  } else {
+    $caller = Resolve-CallerWindow
+    if ($caller) {
+      return [PSCustomObject]@{ Hwnd = $caller.Hwnd; Pid = $caller.Pid; Exe = $caller.Exe; Mode = 'toggle'; Origin = 'caller' }
+    }
+    $app = Find-DesktopAppWindow
+    if ($app) {
+      return [PSCustomObject]@{ Hwnd = $app.Hwnd; Pid = $app.Pid; Exe = $app.Exe; Mode = 'focus'; Origin = 'desktop-app' }
+    }
+  }
+  return $null
+}
+
+# 把窗口撑到所在显示器的 work area（满屏）。
+#
+# 为什么不能只靠 SW_RESTORE 还原：还原用的是"上次正常尺寸"，而那个尺寸可能
+# 已经被写坏。历史上 Focus-Window 用 cx=0/cy=0 的 SetWindowPos 把它缩成了
+# 0x0，Windows Terminal 的 min-size 兜底把窗口变成 480x84 的一条，位置还
+# 被挪到了 (0,0)。只还原的话，出来的是那条，不是满屏。
+#
+# 所以这里三步走：先还原到普通状态，再按 work area 显式设尺寸（这一步顺手
+# 把那个坏掉的"还原尺寸"也修回来），最后再最大化。
+function Show-WindowFullScreen([IntPtr]$h) {
+  try {
+    $wa = [WinAPI]::GetWorkAreaForWindow($h)
+    if ($wa.Left -eq -1) { return $null }
+    $cx = $wa.Right - $wa.Left
+    $cy = $wa.Bottom - $wa.Top
+    # 三步，顺序不能乱：
+    #   1) SW_RESTORE 先退出最大化 / 最小化，回到"普通"状态
+    #   2) SetWindowPos 按 work area 显式设大小 —— 这一步发生在普通状态下，
+    #      所以窗口的"还原尺寸"被真正写成 work area
+    #   3) SW_MAXIMIZE 再最大化
+    #
+    # 为什么第 2 步不能省：对**已经最大化**的窗口调 SetWindowPos，Windows
+    # 不会更新它的还原尺寸，那个坏尺寸（历史上被 0x0 缩成 480x84 的）就
+    # 一直留着 —— 以后任何一次还原（用户点还原按钮、WT 自己恢复）都会把
+    # 那条小条请回来。
+    #
+    # 为什么不用 SetWindowPlacement：实测对 WT 它不生效，rcNormalPosition
+    # 写进去，读出来还是 0x0。
+    [WinAPI]::ShowWindow($h, 9) | Out-Null                      # SW_RESTORE
+    [WinAPI]::SetWindowPos($h, [IntPtr]::Zero, $wa.Left, $wa.Top, $cx, $cy, [WinAPI]::SWP_NOZORDER) | Out-Null
+    [WinAPI]::ShowWindow($h, 3) | Out-Null                      # SW_MAXIMIZE
+    return @{ Left = $wa.Left; Top = $wa.Top; W = $cx; H = $cy }
+  } catch {
+    return $null
+  }
+}
+
+# Raise a window to the front: show + focus, whatever its current visible
+# state is. After the desktop-app adaptation both focus and toggle take a
+# resolved target object; the caller decides which one it is.
+function Focus-Window {
+  param([Parameter(Mandatory = $true)]$Target)
+
+  try {
+    [WinAPI]::AllowSetForegroundWindow([uint32]$Target.Pid) | Out-Null
+    # 只在窗口真的"看不见"时才动它的显示状态：
+    #   minimized -> SW_RESTORE（还原）
+    #   hidden    -> SW_SHOW（显示）
+    # 已经可见的窗口一个字节都不碰 —— 对一个已经最大化的窗口再调一次
+    # SW_SHOW 没有意义，只是白白多一次状态抖动。
+    if ([WinAPI]::IsIconic($Target.Hwnd)) {
+      [WinAPI]::ShowWindow($Target.Hwnd, 9) | Out-Null   # SW_RESTORE
+    } elseif (-not [WinAPI]::IsWindowVisible($Target.Hwnd)) {
+      [WinAPI]::ShowWindow($Target.Hwnd, 5) | Out-Null   # SW_SHOW
+    }
+    # TOPMOST -> NOTOPMOST: it lets BringWindowToTop push the window all the
+    # way up without leaving a "always on top" side effect behind.
+    #
+    # SWP_NOSIZE / SWP_NOMOVE 是必须的，不是锦上添花：这里 cx=0/cy=0/
+    # X=0/Y=0 的意思是"大小和位置都不变"，但这个意思**只在 flag 齐全时
+    # 才成立**。少了 SWP_NOSIZE，Windows 会把它当成"resize 到 0x0"——
+    # Windows Terminal 有 min-size 兜底，于是窗口塌成 480x84 的一条；
+    # 少了 SWP_NOMOVE 同理，窗口会被真的挪到 (0,0) 左上角。
+    #
+    # 同一文件里 Toggle-Window 的注释早就写明了这个坑，但 Focus-Window
+    # 一直漏着，直到会话点击真的走到这里才暴露出来。
+    $nofollow = [WinAPI]::SWP_NOACTIVATE -bor [WinAPI]::SWP_NOSIZE -bor [WinAPI]::SWP_NOMOVE
+    [WinAPI]::SetWindowPos($Target.Hwnd, [WinAPI]::HWND_TOPMOST, 0, 0, 0, 0, $nofollow) | Out-Null
+    [WinAPI]::SetWindowPos($Target.Hwnd, [IntPtr]::new(-2), 0, 0, 0, 0, $nofollow) | Out-Null  # HWND_NOTOPMOST
+    [WinAPI]::BringWindowToTop($Target.Hwnd) | Out-Null
+    [WinAPI]::SetForegroundWindow($Target.Hwnd) | Out-Null
+    # "DONE" 而不是 "OK"：这里只说明这几个调用没抛异常，不代表窗口真到了
+    # 前台。到底到没到，看 Test-ForegroundPid 的回读。
+    Dbg ("FOCUS DONE: target=" + $Target.Exe + " PID=" + $Target.Pid + " hwnd=" + $Target.Hwnd)
   } catch {
     Dbg "FOCUS FAIL: $($_.Exception.Message)"
+  }
+}
+
+# 兼容旧调用点：自动聚焦流程（needs_input 状态自动弹窗那种）用调用方窗口。
+function Focus-CallerWindow {
+  $r = Resolve-CallerWindow
+  if (-not $r) { return }
+  Focus-Window $r
+}
+
+# 单击 pill toggle：可见 → 隐藏；隐藏 → 全屏还原 + 抢焦点。
+# 设计取舍 (round-14+15+16):
+#   hide 分支用 SW_HIDE (而不是 SW_MINIMIZE)：
+#     SW_MINIMIZE 在某些终端配置下(Windows Terminal "Always show tabs on top")
+#     会保留一个 thin tab-bar strip 浮在桌面顶部,不算真"藏"。
+#   show 分支先 SW_MAXIMIZE (激活+最大化),再用 SetWindowPos 强制拉到
+#   MonitorFromWindow+GetMonitorInfo 拿到的真实 work area(2560x1392 而
+#   不是 [Screen]::PrimaryScreen 报告的 1920x1080 — WinForms DPI 虚拟化
+#   会把 2560x1440 物理像素报成 1920x1080 逻辑像素,SW_MAXIMIZE 跟着
+#   1920x1080 走,结果 WT 只填了物理显示器的左上 75%)。
+#   最后 SetWindowPos(HWND_TOP) + BringWindowToTop 抢 z-order,绕过
+#   widget PID 没有 foreground 权限的限制。
+# 状态判定: IsWindowVisible 在 SW_HIDE 和 SW_MINIMIZE 后都返回 false
+# (区别是 IsIconic:SW_HIDE 后 false,SW_MINIMIZE 后 true)。toggle 只看
+# IsWindowVisible 即可,SW_MAXIMIZE 在内部正确处理两种 case。
+function Toggle-Window {
+  param([Parameter(Mandatory = $true)]$Target)
+
+  try {
+    $isShown = [WinAPI]::IsWindowVisible($Target.Hwnd)
+    if ($isShown) {
+      [WinAPI]::ShowWindow($Target.Hwnd, 0) | Out-Null   # SW_HIDE
+      Dbg "TOGGLE: hid target=$($Target.Exe) PID=$($Target.Pid) hwnd=$($Target.Hwnd)"
+    } else {
+      # 1)+2) SW_MAXIMIZE 激活+标记 maximized，再用 SetWindowPos 强制拉到
+      #        monitor work area（绕过 DPI/remembered-size 限制；细节见
+      #        Show-WindowFullScreen 的注释）
+      $wa = Show-WindowFullScreen $Target.Hwnd
+      if ($wa) {
+        # The -f has to sit inside the parentheses: written as
+        # `Dbg "..." -f a, b` the format operator binds to the command, not to
+        # the string, and the log line keeps the raw {0} {1} placeholders.
+        Dbg ("TOGGLE: forced to work area ({0},{1}) {2}x{3}" -f $wa.Left, $wa.Top, $wa.W, $wa.H)
+      }
+      # 3) 抢 z-order 到最前(SetWindowPos(HWND_TOP) 不需要 foreground 权限)
+      #    SWP_NOSIZE：cx=0/cy=0 缺它会被 Windows 当成"resize 到 0x0"，
+      #    触发 WT 的 min-size 兜底，变成 480x76 strip。
+      #    SWP_NOMOVE：X=0/Y=0 缺它会把窗口真的挪到 (0,0)。单屏时无所谓，
+      #    但副屏（monitor 原点非 0）上会把还原后的窗口甩到主屏左上角。
+      #    同样不能加 SWP_NOZORDER——那个 flag 会让 hWndInsertAfter 被忽略，
+      #    HWND_TOP 就白传了，BringWindowToTop 之后仍可能被别的窗口盖住。
+      [WinAPI]::AllowSetForegroundWindow([uint32]$Target.Pid) | Out-Null
+      $nofollow = [WinAPI]::SWP_NOACTIVATE -bor [WinAPI]::SWP_NOSIZE -bor [WinAPI]::SWP_NOMOVE
+      [WinAPI]::SetWindowPos($Target.Hwnd, [WinAPI]::HWND_TOP, 0, 0, 0, 0, $nofollow) | Out-Null
+      [WinAPI]::BringWindowToTop($Target.Hwnd) | Out-Null
+      [WinAPI]::SetForegroundWindow($Target.Hwnd) | Out-Null
+      Dbg "TOGGLE: shown (maximized + work-area) target=$($Target.Exe) PID=$($Target.Pid) hwnd=$($Target.Hwnd)"
+    }
+  } catch {
+    Dbg "TOGGLE FAIL: $($_.Exception.Message)"
+  }
+}
+
+# 兼容旧调用点。
+function Toggle-CallerWindow {
+  $r = Resolve-CallerWindow
+  if (-not $r) { return }
+  Toggle-Window $r
+}
+
+# The single entry point for a pill click: resolve the target, then run the
+# mode it resolved to. focus (manual pin / desktop app) and toggle (the
+# caller's terminal) are two different semantics -- do not mix them.
+function Invoke-ClickTarget {
+  $t = Resolve-ClickTarget
+  if (-not $t) { Dbg 'CLICK: no target resolved'; return }
+  Dbg "CLICK: target=$($t.Exe) PID=$($t.Pid) hwnd=$($t.Hwnd) mode=$($t.Mode) origin=$($t.Origin)"
+  if ($t.Mode -eq 'focus') {
+    Focus-Window $t
+  } else {
+    Toggle-Window $t
   }
 }
 
@@ -575,7 +1609,9 @@ public class FG2 {
   if (-not $proc) { Dbg 'PIN: target process gone'; return }
   $myPid = [int](Get-Process -Id $PID).Id
   $mySession = (Get-Process -Id $myPid).SessionId
-  $callerFile = Join-Path $env:APPDATA 'mcode-island\caller.json'
+  # Write pin.json, not caller.json: a pin is the user's explicit choice and
+  # must not be wiped by the agent-side caller.json on every transition.
+  $pinFile = Join-Path $env:APPDATA 'mcode-island\pin.json'
   $payload = [PSCustomObject]@{
     callerPid = $myPid
     callerSession = $mySession
@@ -586,7 +1622,7 @@ public class FG2 {
     source = 'manual-pin'
     ts = (Get-Date).ToString('o')
   } | ConvertTo-Json -Compress
-  [System.IO.File]::WriteAllText($callerFile, $payload, [System.Text.Encoding]::UTF8)
+  [System.IO.File]::WriteAllText($pinFile, $payload, [System.Text.Encoding]::UTF8)
   Dbg ("PIN: target=" + $proc.ProcessName + " PID=" + $proc.Id + " hwnd=" + $hwnd)
 }
 
@@ -609,6 +1645,50 @@ function Flash-Click {
   $sb.Begin($window)
 }
 
+# Keep the pill above everything else.
+#
+# Why this exists: the only thing that ever made the pill topmost is
+# Topmost="True" in the XAML, evaluated once at window creation. Every other
+# SetWindowPos in this file targets the *caller* window, not the pill. So once
+# anything else lands above the pill -- a maximized terminal being activated, a
+# fullscreen app, another always-on-top tool -- the pill stays buried forever.
+# WS_EX_TOPMOST is a persistent style but only orders the pill against the
+# topmost band; whichever topmost window was raised last wins, and a plain
+# maximized window that got re-shown can end up painting over it too.
+# Observed 2026-09-28: pill fully invisible behind Windows Terminal while
+# IsWindowVisible=1, IsIconic=0, DWMWA_CLOAKED=0, widget still polling.
+#
+# Fix: hit-test the pill centre on a throttle and re-assert HWND_TOPMOST when
+# something else owns that pixel. SWP_NOACTIVATE means this never steals focus
+# from the user's terminal. Skipped entirely while the pill is hidden so it
+# cannot undo a user-initiated hide. "mcode-island show" passes -Force because
+# $window.Show() is a no-op on an already-visible WPF window and therefore
+# never restored z-order on its own.
+$script:lastTopmostCheck = [DateTime]::MinValue
+function Assert-Topmost {
+  param([switch]$Force)
+  if (-not $Force -and
+      [DateTime]::UtcNow - $script:lastTopmostCheck -lt [TimeSpan]::FromMilliseconds(1500)) {
+    return
+  }
+  $script:lastTopmostCheck = [DateTime]::UtcNow
+  try {
+    $helper = New-Object System.Windows.Interop.WindowInteropHelper($window)
+    $h = $helper.Handle
+    if (-not $h -or -not [WinAPI]::IsWindow($h)) { return }
+    # Never resurrect a pill the user hid.
+    if (-not [WinAPI]::IsWindowVisible($h)) { return }
+    if ($Force -or [WinAPI]::IsPillCovered($h)) {
+      $flags = [WinAPI]::SWP_NOACTIVATE -bor [WinAPI]::SWP_NOMOVE -bor `
+               [WinAPI]::SWP_NOSIZE -bor [WinAPI]::SWP_SHOWWINDOW
+      [WinAPI]::SetWindowPos($h, [WinAPI]::HWND_TOPMOST, 0, 0, 0, 0, $flags) | Out-Null
+      Dbg "TOPMOST: re-raised (forced=$([bool]$Force))"
+    }
+  } catch {
+    Dbg "TOPMOST FAIL: $($_.Exception.Message)"
+  }
+}
+
 # 窗口定位
 $screen = [System.Windows.SystemParameters]::WorkArea
 if ($cfg.x -lt 0) {
@@ -620,6 +1700,13 @@ if ($cfg.x -lt 0) {
 }
 $window.Width  = $cfg.width
 $window.Height = $cfg.height
+# 药丸高度锚点。row 0 锁死成这个高度，所以展开 session 列表时窗口变高、
+# 药丸本身一动不动，列表在它下面长出来。
+$script:pillHeight = $window.Height
+try {
+  $pillRow = $window.FindName('PillRow')
+  if ($pillRow) { $pillRow.Height = New-Object System.Windows.GridLength($script:pillHeight) }
+} catch {}
 $window.Opacity = $cfg.opacity
 
 # 右键被禁用（用 CLI 'mcode-island pin' 替代，更稳）
@@ -629,37 +1716,124 @@ $window.Add_MouseRightButtonDown({
 })
 
 # 点击 vs 拖动
+#
+# 为什么不用 DragMove()。
+#
+# DragMove() 会 SendMessage(WM_SYSCOMMAND, SC_MOVE) 进入 Win32 的模态移动
+# 循环。那个循环里 WPF 的渲染线程不参与合成：DWM 不再把分层窗口
+# （AllowsTransparency=True 的 per-pixel alpha 表面）重新合成出来，屏幕上
+# 剩下的就是那块没被绘制过的表面 —— 一块白框，尺寸正好是窗口的 320x60。
+# 窗口上的 DropShadowEffect 让它更明显：效果本身是软件渲染的，模态循环
+# 期间那一帧根本没画出来。
+#
+# 所以这里自己实现拖动：正常消息泵里改 Left/Top，WPF 每帧照常合成，
+# 白框不会出现。代价是失去 DragMove() 的系统级移动手感（边缘吸附等），
+# 这个 pill 用不上那些。
+#
+# 另一个坑：MouseMove 里的 GetPosition($window) 是相对窗口的，而窗口正在
+# 跟着鼠标走，所以相对位移恒为 0，直接用它算 delta 窗口永远不动。必须拿
+# 屏幕坐标（PointToScreen）做差，再按 DPI 缩放换回 Left/Top 用的 DIP。
 $script:dragStart = $null
 $script:didDrag = $false
+$script:dragOriginLeft = 0.0
+$script:dragOriginTop = 0.0
+$script:dragAnchorX = 0.0
+$script:dragAnchorY = 0.0
 $script:pill.RenderTransform = New-Object System.Windows.Media.ScaleTransform(1, 1)
 $script:pill.RenderTransformOrigin = New-Object System.Windows.Point(0.5, 0.5)
+
+# 屏幕像素 -> DIP 的换算系数。PointToScreen 给的是设备像素，Window.Left/Top
+# 用的是设备无关单位，缩放不是 100% 时两者不等。
+function Get-DragScale {
+  $sx = 1.0
+  $sy = 1.0
+  try {
+    $src = [System.Windows.PresentationSource]::FromVisual($window)
+    if ($src -and $src.CompositionTarget) {
+      $m = $src.CompositionTarget.TransformToDevice
+      if ($m.M11 -gt 0) { $sx = [double]$m.M11 }
+      if ($m.M22 -gt 0) { $sy = [double]$m.M22 }
+    }
+  } catch {}
+  return @{ X = $sx; Y = $sy }
+}
+
 $window.Add_MouseLeftButtonDown({
   $script:dragStart = $_.GetPosition($window)
   $script:didDrag = $false
+  $script:dragOriginLeft = $window.Left
+  $script:dragOriginTop = $window.Top
+  try {
+    $anchor = $window.PointToScreen($script:dragStart)
+    $script:dragAnchorX = $anchor.X
+    $script:dragAnchorY = $anchor.Y
+  } catch {
+    $script:dragAnchorX = $script:dragStart.X
+    $script:dragAnchorY = $script:dragStart.Y
+  }
+  # 抓住鼠标，否则指针一移出 320x60 的窗口 MouseMove 就不再来，拖动会"粘住"。
+  try { $window.CaptureMouse() } catch {}
 })
 $window.Add_MouseMove({
-  if ($script:dragStart -and -not $script:didDrag) {
-    $cur = $_.GetPosition($window)
+  # 列表没开、而鼠标就在药丸上：补开一次。
+  #
+  # MouseEnter 只在"鼠标进入窗口"时触发。widget 恰好在光标底下启动的话
+  # （启动后光标没动过），MouseEnter 永远不会来，列表就再也不会出现。
+  # 拖拽中不弹（dragStart 非空）。
+  if ($null -eq $script:dragStart -and $script:sessionRowsPanel -and
+      $script:sessionRowsPanel.Visibility -ne [System.Windows.Visibility]::Visible) {
+    try { Show-SessionList } catch { Dbg "SESSION LIST SHOW FAIL: $($_.Exception.Message)" }
+  }
+  if ($null -eq $script:dragStart) { return }
+  # The position is read EVERY event, not only before the threshold is
+  # crossed: the window is moving, so a position read during an earlier
+  # event is stale relative to where the window is now.
+  $cur = $_.GetPosition($window)
+  # The threshold gates the START of the drag, not the movement. The
+  # previous guard returned as soon as didDrag was set, so the pill
+  # followed the cursor for exactly one event and then stopped --
+  # measured at 14% of the cursor movement.
+  if (-not $script:didDrag) {
     $dx = [Math]::Abs($cur.X - $script:dragStart.X)
     $dy = [Math]::Abs($cur.Y - $script:dragStart.Y)
-    if ($dx + $dy -gt 5) {
-      $script:didDrag = $true
-      try { $window.DragMove() } catch {}
-    }
+    if ($dx + $dy -le 5) { return }
+    $script:didDrag = $true
+  }
+  try {
+    $now = $window.PointToScreen($cur)
+    $scale = Get-DragScale
+    $window.Left = $script:dragOriginLeft + (($now.X - $script:dragAnchorX) / $scale.X)
+    $window.Top  = $script:dragOriginTop  + (($now.Y - $script:dragAnchorY) / $scale.Y)
+  } catch {
+    Dbg "DRAG FAIL: $($_.Exception.Message)"
   }
 })
 $window.Add_MouseLeftButtonUp({
+  try { $window.ReleaseMouseCapture() } catch {}
   try {
     if ($script:dragStart -and -not $script:didDrag) {
       Dbg 'CLICK detected'
       Flash-Click
-      Focus-CallerWindow
+      Invoke-ClickTarget
     }
   } catch {
     Dbg "CLICK FAIL: $($_.Exception.Message)"
   }
   $script:dragStart = $null
   $script:didDrag = $false
+})
+
+# 多 session 列表的展开/收起。
+#
+# 鼠标停在 pill 上 -> 展开；离开 -> 宽限期后收起。列表是独立窗口，鼠标从
+# pill 走到列表会经过一段"两个窗口都不在"的地带，所以要留宽限期，鼠标
+# 进列表窗口就取消。
+$window.Add_MouseEnter({
+  if ($script:listHideTimer) { try { $script:listHideTimer.Stop() } catch {} ; $script:listHideTimer = $null }
+  try { Show-SessionList } catch { Dbg "SESSION LIST SHOW FAIL: $($_.Exception.Message)" }
+})
+$window.Add_MouseLeave({
+  Schedule-SessionListHide
 })
 
 
@@ -670,6 +1844,8 @@ $showSignalFile = Join-Path $configDir 'show.signal'
 $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(400)
 $timer.Add_Tick({
+  # 0) 自愈：被别的窗口压住就重新置顶（内部 1.5s 节流）
+  Assert-Topmost
   # 1) 处理 "show" 信号（"mcode-island show" 创建这个文件）
   if (Test-Path $showSignalFile) {
     try { Remove-Item $showSignalFile -Force -ErrorAction SilentlyContinue } catch {}
@@ -677,6 +1853,7 @@ $timer.Add_Tick({
       $window.Show()
       $window.WindowState = [System.Windows.WindowState]::Normal
       $window.Activate()
+      Assert-Topmost -Force
       Dbg 'SHOWN via signal file'
     })
   }
@@ -689,18 +1866,28 @@ $timer.Add_Tick({
     $script:lastStatusMtime = $mtime
     $data = Get-Content $statusFile -Raw -Encoding UTF8 | ConvertFrom-Json
     # progress 也要进 sig，否则 agent 连续推 working+相同 message+不同 progress 会被去重
+    # step/total/detail 也要进 sig,否则连续推同 state 但不同 step 会被去重
     $prog = if ($data.PSObject.Properties['progress']) { [int]$data.progress } else { -1 }
     $usage = $null
     $resetMs = 0
     $todoP = -2
+    $step = -1
+    $total = -1
+    $detail = ''
     if ($data.PSObject.Properties['usage5h'] -and $null -ne $data.usage5h) { $usage = [int]$data.usage5h }
     if ($data.PSObject.Properties['usage5hResetMs'] -and $null -ne $data.usage5hResetMs) { $resetMs = [int]$data.usage5hResetMs }
     if ($data.PSObject.Properties['todoProgress'] -and $null -ne $data.todoProgress) { $todoP = [int]$data.todoProgress }
-    $sig = "$($data.state)|$($data.message)|$prog|$usage|$resetMs|$todoP|$($data.ts)"
+    if ($data.PSObject.Properties['step'] -and $null -ne $data.step) { $step = [int]$data.step }
+    if ($data.PSObject.Properties['total'] -and $null -ne $data.total) { $total = [int]$data.total }
+    if ($data.PSObject.Properties['detail'] -and $null -ne $data.detail) { $detail = [string]$data.detail }
+    # family 也进 sig，否则同一工具连续 working 但换了家族不会重新上色
+    $family = ''
+    if ($data.PSObject.Properties['family'] -and $data.family) { $family = [string]$data.family }
+    $sig = "$($data.state)|$($data.message)|$family|$prog|$usage|$resetMs|$todoP|$step|$total|$detail|$($data.ts)"
     if ($sig -eq $script:lastStatusSig) { return }
     $script:lastStatusSig = $sig
-    Dbg "POLL: $($data.state) :: $($data.message) (progress=$prog usage5h=$usage resetMs=$resetMs todoProgress=$todoP)"
-    Update-State -State $data.state -Message $data.message -Progress $prog -Usage5h $usage -Usage5hResetMs $resetMs -TodoProgress $todoP
+    Dbg "POLL: $($data.state) :: $($data.message) family=$family step=$step/$total detail=$detail (progress=$prog usage5h=$usage resetMs=$resetMs todoProgress=$todoP)"
+    Update-State -State $data.state -Message $data.message -Progress $prog -Usage5h $usage -Usage5hResetMs $resetMs -TodoProgress $todoP -Step $step -Total $total -Detail $detail -Family $family
   } catch {
     Dbg "POLL ERR: $($_.Exception.Message)"
   }
@@ -717,12 +1904,20 @@ if (Test-Path $statusFile) {
     $initUsage = $null
     $initReset = 0
     $initTodo = -2
+    $initStep = -1
+    $initTotal = -1
+    $initDetail = ''
     if ($init.PSObject.Properties['usage5h'] -and $null -ne $init.usage5h) { $initUsage = [int]$init.usage5h }
     if ($init.PSObject.Properties['usage5hResetMs'] -and $null -ne $init.usage5hResetMs) { $initReset = [int]$init.usage5hResetMs }
     if ($init.PSObject.Properties['todoProgress'] -and $null -ne $init.todoProgress) { $initTodo = [int]$init.todoProgress }
-    $script:lastStatusSig = "$($init.state)|$($init.message)|$initProg|$initUsage|$initReset|$initTodo|$($init.ts)"
+    if ($init.PSObject.Properties['step'] -and $null -ne $init.step) { $initStep = [int]$init.step }
+    if ($init.PSObject.Properties['total'] -and $null -ne $init.total) { $initTotal = [int]$init.total }
+    if ($init.PSObject.Properties['detail'] -and $null -ne $init.detail) { $initDetail = [string]$init.detail }
+    $initFamily = ''
+    if ($init.PSObject.Properties['family'] -and $init.family) { $initFamily = [string]$init.family }
+    $script:lastStatusSig = "$($init.state)|$($init.message)|$initFamily|$initProg|$initUsage|$initReset|$initTodo|$initStep|$initTotal|$initDetail|$($init.ts)"
     $script:lastStatusMtime = (Get-Item $statusFile).LastWriteTimeUtc.Ticks
-    Update-State -State $init.state -Message $init.message -Progress $initProg -Usage5h $initUsage -Usage5hResetMs $initReset -TodoProgress $initTodo
+    Update-State -State $init.state -Message $init.message -Progress $initProg -Usage5h $initUsage -Usage5hResetMs $initReset -TodoProgress $initTodo -Step $initStep -Total $initTotal -Detail $initDetail -Family $initFamily
   } catch {}
 } else {
   Update-State -State 'idle' -Message ''
@@ -735,6 +1930,8 @@ $script:realQuit = $false
 $window.Add_Closing({
   $args[1].Cancel = $true
   Dbg 'Closing event -> hide'
+  # pill 藏起来时列表也得跟着藏，否则鼠标一移开就剩一个空框在屏幕上。
+  try { Hide-SessionList } catch {}
   try {
     $cur = Get-Content $script:configFile -Raw -Encoding UTF8 | ConvertFrom-Json
     $cur.x = $window.Left

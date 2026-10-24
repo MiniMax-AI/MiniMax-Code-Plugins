@@ -1,7 +1,25 @@
-# Force LF for all source files in this plugin. PowerShell 5.1 reads
-# CRLF fine, but a cross-platform smoke (e.g. Linux CI) sees LF and
-# the pre-existing CRLF-handling bug in scripts/validate.mjs trips
-# on Windows-checked-out CRLF. LF avoids both failure modes.
+# Force LF for all source files in this plugin, so a cross-platform
+# smoke (e.g. Linux CI) does not trip the pre-existing CRLF-handling bug
+# in scripts/validate.mjs on a Windows-checked-out tree.
+#
+# IMPORTANT: this policy applies to .mjs / .json / .md, and it is safe
+# for .ps1 ONLY because every .ps1 that contains non-ASCII also carries
+# a UTF-8 BOM (enforced by smoke check 11).
+#
+# Round-20 correction: the comment here used to say "PowerShell 5.1 reads
+# CRLF fine, so LF avoids both failure modes". That is backwards, and it
+# is what hid a real outage. Windows PowerShell 5.1 decodes a BOM-less
+# script using the system ANSI codepage, so an LF .ps1 containing
+# non-ASCII comments is mis-decoded and the C# here-string in
+# mcode-status-detect.ps1 stops being a here-string -- `using System;`
+# gets parsed as PowerShell and the detector dies before its first
+# statement. Verified against 5.1: both CRLF and a UTF-8 BOM fix the
+# parse, bare LF does not. The BOM is used rather than flipping this file
+# to CRLF precisely so the Linux-side validator stays protected.
+#
+# Do NOT "clean up" the BOMs. If you rewrite a .ps1 with an editor that
+# drops them, smoke check 11 will fail and any `Copy-Item` sync into the
+# install directory will install a dead detector.
 #
 # Override at clone time: `git config core.autocrlf input` for a
 # one-shot pull, or set `[core] autocrlf = false` globally.
