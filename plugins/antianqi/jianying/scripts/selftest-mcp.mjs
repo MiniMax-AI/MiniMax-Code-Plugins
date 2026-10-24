@@ -661,6 +661,17 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
       + '+ 剪映在跑且 VE 管道就绪；未满足 ⇒ 【不计入 PASS】');
   }
 
+  // ★★★ 意图路由：在一批带标注的真实用户句上量准确率（top-1/top-3）
+  //   ★ 低于阈值直接判失败 ⇒ 路由表退化会立刻被发现（不是"看起来能用"）
+  {
+    const intentMod = await import('./selftest-intent.mjs');
+    const ir = intentMod.runIntentCheck();
+    check('★★★ 意图路由准确率（带标注测试集：top-1 ≥ 80% · top-3 ≥ 90%）',
+      ir.ok,
+      `top-1 ${(ir.acc1 * 100).toFixed(1)}% · top-3 ${(ir.acc3 * 100).toFixed(1)}%`
+      + (ir.misses.length ? ` · 未命中：${ir.misses.map((m) => m.u).join('、')}` : ''));
+  }
+
   // ★★★ 参数覆盖（schema 声明了、但此前【从未被端到端验证过】的那批参数）
   //   覆盖：grade_apply.noLut · verify_diff.noiseK/threshold/beforeVideo/afterVideo
   //         make_film.lut · make_film.maxFrames

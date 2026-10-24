@@ -99,7 +99,7 @@ plugin-root/
 ├── mcp.json                    # MCP 声明（0.3.x）
 ├── .claude-plugin/plugin.json  # v0.4.0+ manifest（skills[] + mcpServers）
 ├── mcp/
-│   ├── server.mjs              # 9 动词 stdio MCP server（0 npm 依赖）
+│   ├── server.mjs              # 10 动词 stdio MCP server（0 npm 依赖）
 │   └── tools/<verb>.schema.json# 每个动词的入参 schema（硬校验）
 ├── skills/
 │   ├── jianying-cut/SKILL.md
@@ -114,11 +114,15 @@ plugin-root/
 │   ├── official-ops.md         #   官方 op 全集（18 域 199 个，逐个打桥的结果）
 │   ├── verify-discipline.md    #   判据纪律（视野 / 噪声底 / 注入自检）
 │   ├── pitfalls.md             #   踩坑清单
-│   └── capability-dict.json    #   能力字典（9 动词 / 3 类元素 / 3 类节点 / 6 类判据，机器可读）
+│   ├── capability-dict.json    #   能力字典（10 动词 / 3 类元素 / 3 类节点 / 6 类判据，机器可读）
+│   ├── intent-routes.json      #   意图路由表（一句人话 ⇒ 该走哪条链/路线）
+│   └── intent-testset.json     #   意图路由的带标注测试集（准确率可量化）
 └── scripts/
     ├── run-verb.mjs            # 插件自带的 MCP 客户端（让 skill 调动词）
+    ├── classify-intent.mjs     # 意图路由建议（一句人话 ⇒ 候选链/路线 + 命中词 + 置信度）
+    ├── selftest-intent.mjs     # 意图路由准确率自检（带标注测试集 ⇒ 低于阈值就红）
     ├── check-env.mjs           # 环境自检
-    ├── selftest-mcp.mjs        # MCP 动词自检（40 项断言，含 8 条 MCP 层冒烟）
+    ├── selftest-mcp.mjs        # MCP 动词自检（52 项断言，含 MCP 层冒烟 / 参数覆盖 / 意图路由准确率）
     ├── selftest-draft-edit.mjs # 改草稿链路端到端自检（16 项）
     ├── selftest-talk-cut.mjs   # 剪口播自检（10 项）
     ├── talk-cut-plan.mjs       # 口播保留区间规划器

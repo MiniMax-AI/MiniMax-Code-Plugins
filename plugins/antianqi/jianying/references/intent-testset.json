@@ -1,0 +1,44 @@
+{
+  "schema": "jianying.intent-testset.v1",
+  "note": "★ 带标注的意图路由测试集：每句真实用户话 ⇒ 期望落到哪个 skill / 哪条路线。\n  ★ 用途：给分类器一个【可量化】的准确率（自检 selftest-intent.mjs 跑它）。\n  ★ 阈值不许拍脑袋：先跑一遍看分布，再定 minTop1 / minTop3。",
+  "cases": [
+    { "utterance": "给这个视频调亮一点", "expect": { "skill": "jianying-cut" } },
+    { "utterance": "把这个片段调暖一点", "expect": { "skill": "jianying-cut" } },
+    { "utterance": "帮我调出电影感", "expect": { "skill": "jianying-cut" } },
+    { "utterance": "出个10bit的成片", "expect": { "skill": "jianying-cut" } },
+    { "utterance": "画面看着有点平，拉点对比度", "expect": { "skill": "jianying-cut" } },
+    { "utterance": "红色太淡了，鲜亮点", "expect": { "skill": "jianying-cut" } },
+    { "utterance": "给我导个片，调个色", "expect": { "skill": "jianying-cut" } },
+
+    { "utterance": "把这个草稿里的第一段音量调到25%", "expect": { "skill": "jianying-draft-edit" } },
+    { "utterance": "给这轨加个文字", "expect": { "skill": "jianying-draft-edit" } },
+    { "utterance": "把这段剪成两半", "expect": { "skill": "jianying-draft-edit" } },
+    { "utterance": "撤销刚才那步", "expect": { "skill": "jianying-draft-edit" } },
+    { "utterance": "改完存一下", "expect": { "skill": "jianying-draft-edit" } },
+    { "utterance": "这轨删了", "expect": { "skill": "jianying-draft-edit" } },
+    { "utterance": "加一条视频进去", "expect": { "skill": "jianying-draft-edit" } },
+    { "utterance": "给这个草稿加个字幕", "expect": { "skill": "jianying-draft-edit" } },
+
+    { "utterance": "审一下这版", "expect": { "skill": "jianying-review" } },
+    { "utterance": "这版能交片吗", "expect": { "skill": "jianying-review" } },
+    { "utterance": "交片前检查一下", "expect": { "skill": "jianying-review" } },
+
+    { "utterance": "把这段口播的废话剪了", "expect": { "skill": "jianying-talk-cut" } },
+    { "utterance": "口播里的口水话去一下", "expect": { "skill": "jianying-talk-cut" } },
+
+    { "utterance": "这个改动怎么证明", "expect": { "skill": "jianying-verify" } },
+    { "utterance": "验收标准是什么", "expect": { "skill": "jianying-verify" } },
+
+    { "utterance": "这个参数该填哪个节点", "expect": { "skill": "jianying-grade-chain" } },
+    { "utterance": "曲线的控制点怎么排", "expect": { "skill": "jianying-grade-chain" } },
+
+    { "utterance": "帮我一站式做完", "expect": { "skill": "jianying-pipeline" } },
+    { "utterance": "改完直接出片", "expect": { "skill": "jianying-pipeline" } },
+    { "utterance": "把这条流程从头到尾走一遍", "expect": { "skill": "jianying-pipeline" } },
+
+    { "utterance": "调完色直接出成片", "expect": { "route": "grade-and-render" } },
+    { "utterance": "改完这个草稿顺便出片", "expect": { "route": "edit-then-render" } },
+    { "utterance": "改完确认一下有没有生效", "expect": { "route": "edit-and-verify" } },
+    { "utterance": "把口播剪了再出成片", "expect": { "route": "talk-cut-then-render" } }
+  ]
+}

@@ -19,6 +19,12 @@ metadata:
 > ★ **现在有两条路**：① **模型按本手册一步步调**（灵活）② **`run_pipeline` 动词**（一条命令跑完一条预置路线，路线定义在 `references/pipeline-profiles.json`）。
 > 需求只是"按路线走一遍"时用 ②；需要中途改参数/加确认点时用 ①。
 
+> ★ **不确定该走哪条链时**可以先问一句：
+> `node ${PLUGIN_ROOT}/scripts/classify-intent.mjs "<用户那句话>"`
+> ⇒ 它给出【候选 + 命中词 + 置信度】（数据在 `references/intent-routes.json`），
+> 但它只是**检索线索**（准确率由 `references/intent-testset.json` 量着，低于阈值会红）
+> ⇒ **拿不准就按各 Skill 的 description 自己判断**，别把它的输出当判决。
+>
 > ★ **本 skill 只做编排，不做实现**：每一步都落到既有动词上（`draft_*` / `grade_apply` /
 > `make_film` / `render_frames` / `verify_diff` / `talk-cut-*`），
 > **参数怎么填**看 `references/intent-map.json`（"人话 → 参数"的机器可读版，21 条），

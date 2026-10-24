@@ -77,7 +77,7 @@ metadata:
 ## 机器可读版
 
 - 入参 schema（硬校验，**未知键直接拒绝**）：`mcp/tools/grade-apply.schema.json`
-- 能力字典（9 动词 / 3 类元素 / 3 类节点 / 6 类判据）：`references/capability-dict.json`
+- 能力字典（10 动词 / 3 类元素 / 3 类节点 / 6 类判据）：`references/capability-dict.json`
 - 人读版（每个参数的语义、官方对应、已知不覆盖）：`references/chain-api.md`
 
 ## ★ 边界（不做什么 / 为什么 / 替代）
