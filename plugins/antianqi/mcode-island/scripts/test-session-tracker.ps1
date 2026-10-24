@@ -295,6 +295,19 @@ $eRestored = $script:trackedSessions['sess-preview']
 Check '重启后 preview 恢复了' ($eRestored.Preview -eq '改完了') ("得到: '" + $eRestored.Preview + "'")
 Check '重启后 lastAtMs 恢复了' ([int64]$eRestored.LastAtMs -gt 0) ("得到: " + $eRestored.LastAtMs)
 
+# $HOME 是 PowerShell 的只读自动变量，而变量名**不区分大小写**：写
+# "$home = ..." 会直接抛 "VariableNotWritable"。那个异常被读标题的
+# try/catch 吞掉之后，运行时标题就读不出来了 —— 列表里显示成首条消息的
+# 摘要，而不是会话名（用户报的就是这个）。
+#
+# 这条断言照着这个坑写的：源码里不许再出现 $home。
+$rtSrcPath = Join-Path $PSScriptRoot 'lib\Runtime-Titles.ps1'
+if (Test-Path $rtSrcPath) {
+  $rtSrc = [System.IO.File]::ReadAllText($rtSrcPath)
+  Check 'Runtime-Titles 没有用 $home 撞只读的 $HOME' (-not ($rtSrc -match '(?i)\$home\b')) '源码里又出现了 $home'
+}
+Check 'Get-UserHome 能拿到主目录' ((Get-UserHome) -ne '') '拿不到主目录'
+
 # 标题历史。
 #
 # 终端 tab 上的名字是 mcode 在**某个时刻**设的，而会话标题会随着对话

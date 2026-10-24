@@ -67,9 +67,9 @@ function Get-NodeCommand {
     if ($c) { return @{ Exe = $c.Source; Env = $null } }
 
     # CLI 自带：~/.minimax-code/runtime/node-vXX.Y.Z-win-x64/node.exe
-    $home = Get-UserHome
-    if ($home) {
-      $runtimeRoot = Join-Path $home '.minimax-code\runtime'
+    $userHome = Get-UserHome
+    if ($userHome) {
+      $runtimeRoot = Join-Path $userHome '.minimax-code\runtime'
       if (Test-Path -LiteralPath $runtimeRoot) {
         $nodeExe = Get-ChildItem -LiteralPath $runtimeRoot -Recurse -Depth 2 -File -Filter 'node.exe' -ErrorAction SilentlyContinue |
           Sort-Object LastWriteTime -Descending | Select-Object -First 1
@@ -107,9 +107,9 @@ function Read-RuntimeTitles {
     # 不然就只能读开发机上那个 1.9GB 的真库。
     $db = $env:MCODE_RUNTIME_STATE_DB
     if (-not $db) {
-      $home = Get-UserHome
-      if (-not $home) { return $result }
-      $db = Join-Path $home '.minimax\v2\sqlite\runtime-state.sqlite'
+      $userHome = Get-UserHome
+      if (-not $userHome) { return $result }
+      $db = Join-Path $userHome '.minimax\v2\sqlite\runtime-state.sqlite'
     }
     if (-not (Test-Path -LiteralPath $db)) { return $result }
 
