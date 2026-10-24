@@ -1452,6 +1452,85 @@ Write-Status 'done' 'Read' 'read'
 }
 
 // ---------------------------------------------------------------------------
+// 11. A session row switches the desktop app to that conversation
+// ---------------------------------------------------------------------------
+//
+// The session list is only worth having if a click actually takes you
+// somewhere. On the desktop app the session lives in the app's sidebar, and
+// the sidebar row is a Button whose accessibility name is the conversation
+// title -- so the row can be invoked.
+//
+// The UIA lookup is behind Get-AppConversationButton precisely so this can be
+// tested without the app running: the test swaps the lookup and the app
+// lookup, and checks the contract (found -> invoke, not found -> fall back,
+// no app -> fall back).
+{
+    const sourcePath = join(PLUGIN_ROOT, 'mcode-island.ps1');
+    const src = readFileSync(sourcePath, 'utf8');
+
+    let switchFn;
+    try {
+        switchFn = extractFn(src, 'Switch-ToAppConversation');
+    } catch (e) {
+        bad('Switch-ToAppConversation is extractable', e.message);
+    }
+
+    if (switchFn) {
+        ok('Switch-ToAppConversation is extractable');
+
+        const script = `
+$ErrorActionPreference = 'Stop'
+# The extracted function references the UIA pattern type by name, so the
+# assemblies have to be loadable even though the lookup itself is stubbed.
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$script:uiaReady = $true
+$global:invoked = $false
+$global:pattern = [PSCustomObject]@{}
+$global:pattern | Add-Member -MemberType ScriptMethod -Name Invoke -Value { $global:invoked = $true }
+# The extracted function logs; the harness has no logger.
+function Dbg([string]$m) { }
+
+# The app is running and its sidebar has a row named 'target-session'.
+function Find-DesktopAppWindow { return [PSCustomObject]@{ Hwnd = [IntPtr]1234; Pid = 42; Exe = 'fake-app' } }
+function Get-AppConversationButton([IntPtr]$h, [string]$n) {
+    if ($n -eq 'target-session') {
+        $el = [PSCustomObject]@{}
+        $el | Add-Member -MemberType ScriptMethod -Name GetCurrentPattern -Value { param($p) return $global:pattern }
+        return $el
+    }
+    return $null
+}
+${switchFn}
+
+$r1 = Switch-ToAppConversation @('target-session')
+Write-Output ("HIT=" + [string]$r1 + " INVOKED=" + [string]$global:invoked)
+
+$r2 = Switch-ToAppConversation @('another-session')
+Write-Output ("MISS=" + [string]$r2)
+
+function Find-DesktopAppWindow { return $null }
+$r3 = Switch-ToAppConversation @('target-session')
+Write-Output ("NOAPP=" + [string]$r3)
+`;
+
+        let out = '';
+        try {
+            out = runPs(script);
+        } catch (e) {
+            bad('the app conversation switch honours the contract',
+                `the extracted function threw: ${(e.stdout || e.message || '').toString().slice(0, 300)}`);
+        }
+
+        const hit = (out.match(/HIT=(\S*) INVOKED=(\S*)/) || []);
+        eq('a matching sidebar row switches the conversation', hit[1], 'True');
+        eq('the matching row is actually invoked', hit[2], 'True');
+        eq('a session that is not in the sidebar falls through', (out.match(/MISS=(\S*)/) || [])[1], 'False');
+        eq('no app running falls through', (out.match(/NOAPP=(\S*)/) || [])[1], 'False');
+    }
+}
+
+// ---------------------------------------------------------------------------
 // summary
 // ---------------------------------------------------------------------------
 

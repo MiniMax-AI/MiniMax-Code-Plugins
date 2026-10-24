@@ -594,6 +594,47 @@ const main = async () => {
             out('FAIL', 'mcode-island.ps1: Resolve-ClickTarget does not branch on $script:clickPrefers, so the two builds cannot differ');
         }
 
+        // (k) A session row has to reach the conversation it names.
+        //
+        // On the desktop app the session lives in the app's sidebar, and the
+        // sidebar row is a Button whose accessibility name is the conversation
+        // title -- so the row can be invoked. Without that, a row click on
+        // the desktop could only fall through to "open a new terminal",
+        // which is the one thing the session list promised never to do.
+        if (/function Switch-ToAppConversation\b/.test(widget)) {
+            out('PASS', 'mcode-island.ps1: Switch-ToAppConversation exists (a session row can reach the app conversation)');
+        } else {
+            out('FAIL', 'mcode-island.ps1: no Switch-ToAppConversation -- a session row cannot reach its conversation in the desktop app');
+        }
+        const sessionClickBody = (widget.match(/function Invoke-SessionClick[\s\S]*?\n\}\n/) || [''])[0];
+        if (!sessionClickBody) {
+            out('FAIL', 'mcode-island.ps1: Invoke-SessionClick body not found (session-row drift lock skipped)');
+        } else if (!/Switch-ToAppConversation\s+\$names/.test(sessionClickBody)) {
+            out('FAIL', 'mcode-island.ps1: Invoke-SessionClick does not try the app conversation');
+        } else {
+            out('PASS', 'mcode-island.ps1: Invoke-SessionClick tries the app conversation');
+            // The desktop branch must not reach the "open a new terminal"
+            // fallback: that is how one session ends up with two terminals.
+            const appBranch = sessionClickBody.indexOf("$script:clickPrefers -eq 'app'");
+            const newTerminal = sessionClickBody.indexOf('Start-SessionTerminal $id');
+            if (appBranch >= 0 && newTerminal > appBranch) {
+                out('PASS', 'mcode-island.ps1: the desktop branch returns before the new-terminal fallback');
+            } else {
+                out('FAIL', 'mcode-island.ps1: the desktop branch can reach the new-terminal fallback -- a session row would spawn a second terminal for the same session');
+            }
+        }
+        // The UIA lookup has to filter by name. Reading every element of the
+        // app's tree costs ~500ms, and the click handler runs on the UI
+        // thread -- that would freeze the pill.
+        const lookupBody = (widget.match(/function Get-AppConversationButton[\s\S]*?\n\}\n/) || [''])[0];
+        if (!lookupBody) {
+            out('FAIL', 'mcode-island.ps1: Get-AppConversationButton body not found');
+        } else if (!/NameProperty/.test(lookupBody)) {
+            out('FAIL', 'mcode-island.ps1: the app conversation lookup does not filter by name -- scanning the whole tree blocks the UI thread');
+        } else {
+            out('PASS', 'mcode-island.ps1: the app conversation lookup filters by name (no full-tree scan)');
+        }
+
         // Round-15: Toggle's restore branch must call SW_MAXIMIZE (3), not
         // SW_SHOW (5) / SW_RESTORE (9). SW_HIDE preserves the window's
         // "non-maximized size"; if the WT window got accidentally resized

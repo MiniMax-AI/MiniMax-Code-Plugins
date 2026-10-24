@@ -696,29 +696,132 @@ function Invoke-SessionClick([string]$id) {
   # 先试"切到已经开着这个会话的终端 tab"。切到了就不用再开一个 ——
   # 新开一个 mcode --session <id> 会让同一个会话有两个终端在跑。
   $names = @()
+  $cur = ''
   try {
     foreach ($s in @(Read-SessionsFile)) {
       if ([string]$s.id -eq $id) {
+        if ($s.title) { $cur = [string]$s.title }
         $names = @(@($s.titles) | Where-Object { $_ })
-        if ($names.Count -eq 0 -and $s.title) { $names = @([string]$s.title) }
         break
       }
     }
   } catch {}
+  # 终端 tab 上是**历史**名字，app 侧边栏上是**当前**名字，所以当前名字排前面。
+  if ($cur) { $names = @($cur) + @($names | Where-Object { $_ -and $_ -ne $cur }) }
+  if ($names.Count -eq 0 -and $cur) { $names = @($cur) }
   if (Select-SessionTerminal $names) {
     Dbg ("session terminal switched: " + $id + " foregroundPid=" + (Get-ForegroundPid))
     return
   }
-  # 没找到具体 tab：把终端窗口带到前台，但不要再开一个终端。
-  #
-  # 会话名对不上只该影响"切到哪个标签"，不该造成"同一个会话两个终端"。
-  # 只有连一个终端窗口都找不到时（桌面端 app 内嵌的终端就是这种），
-  # 才退回新开 —— 那时候新开是唯一到得了那个会话的办法。
-  if (Activate-TerminalWindow) {
-    Dbg ("session terminal activated (tab not matched): " + $id + " foregroundPid=" + (Get-ForegroundPid))
+  # 桌面端：会话多半住在 app 里，没有终端标签可切 —— 去 app 的侧边栏点那一行。
+  if (Switch-ToAppConversation $names) {
+    Dbg ("app conversation switched: " + $id + " foregroundPid=" + (Get-ForegroundPid))
     return
   }
+  # 形态相关的兜底。
+  if ($script:clickPrefers -eq 'app') {
+    # 桌面端：会话在 app 里，点不到那一行也说明 app 开着 —— 把 app 窗口带到
+    # 前台。**绝不**新开终端：那会在用户桌面上多出一个跑着同一个会话的
+    # 终端，而这个功能存在的意义就是"回到原来那个"。
+    if (Activate-AppWindow) {
+      Dbg ("app window activated (conversation not matched): " + $id)
+      return
+    }
+  } else {
+    # CLI：会话名对不上只该影响"切到哪个标签"，不该造成"同一个会话两个终端"。
+    # 先把终端窗口带到前台。
+    if (Activate-TerminalWindow) {
+      Dbg ("session terminal activated (tab not matched): " + $id + " foregroundPid=" + (Get-ForegroundPid))
+      return
+    }
+  }
+  # 真的什么都没有（app 没开、终端也没有）：新开一个终端，那是唯一到得了
+  # 那个会话的办法。
   Start-SessionTerminal $id
+}
+
+# 找到 app 侧边栏里那个名字等于会话标题的按钮。
+#
+# 单独一个函数是为了能测：返回的元素可以被测试替身换掉，不用真的开着
+# app 也能验证"找到就切、切不到就返回 false"这条契约。
+function Get-AppConversationButton([IntPtr]$hwnd, [string]$name) {
+  if (-not $name) { return $null }
+  try {
+    if (-not $script:uiaReady) {
+      Add-Type -AssemblyName UIAutomationClient -ErrorAction Stop
+      Add-Type -AssemblyName UIAutomationTypes -ErrorAction Stop
+      $script:uiaReady = $true
+    }
+    $root = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+    if (-not $root) { return $null }
+    # 用条件过滤而不是把整棵树读一遍：全扫 2000 多个元素要 500ms 出头，
+    # 点击处理在 UI 线程上，那样会卡住药丸；条件过滤实测 47ms。
+    $cond = New-Object System.Windows.Automation.AndCondition(
+      (New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::NameProperty, $name)),
+      (New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        [System.Windows.Automation.ControlType]::Button)))
+    $hits = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)
+    for ($i = 0; $i -lt $hits.Count; $i++) {
+      try {
+        $el = $hits.Item($i)
+        # 只认能 Invoke 的：项目分组那种按钮不支持 Invoke，点了也没用。
+        $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern) | Out-Null
+        return $el
+      } catch { continue }
+    }
+  } catch {
+    Dbg ("APP CONVERSATION LOOKUP FAIL: " + $_.Exception.Message)
+  }
+  return $null
+}
+
+# 切到桌面端 app 里的那个会话。
+#
+# app 的侧边栏把每个会话渲染成一个 Button，可访问性名就是会话标题；
+# UIA 的 Invoke 就是一次真实点击，app 就切到那个会话。这和切 Windows
+# Terminal 标签页是同一招（那边用 SelectionItemPattern.Select）。
+#
+# 为什么不用 deep link：app 只注册了 minimax-cn:// 协议，而且只认一个
+# action —— navigate（整页跳 URL）。它自己那 275 条路由全是
+# /minimax-desktop/api/v1/... 的 API，没有"某个会话"的 URL。所以没有
+# 官方入口能定位会话，只能点它的侧边栏。
+#
+# 匹配用标题，和终端那边一样有"同名会话点错第一个"的风险；找不到就返回
+# false，让调用方走自己的兜底（桌面端是聚焦 app 窗口，不是新开终端）。
+function Switch-ToAppConversation([string[]]$names) {
+  if (-not $names -or $names.Count -eq 0) { return $false }
+  $app = Find-DesktopAppWindow
+  if (-not $app) { return $false }
+  # 名字候选有上限：每个候选一次 UIA 查询（实测 47ms），历史名字太多会把
+  # 点击处理拖长，而最近的那几个名字才是对得上的。
+  $tried = 0
+  foreach ($n in $names) {
+    if ($tried -ge 4) { break }
+    $nn = ([string]$n).Trim()
+    if (-not $nn) { continue }
+    $tried++
+    $el = Get-AppConversationButton ([IntPtr]$app.Hwnd) $nn
+    if (-not $el) { continue }
+    try {
+      $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+      Dbg ("app conversation switched: " + $nn)
+      return $true
+    } catch {
+      Dbg ("APP CONVERSATION INVOKE FAIL: " + $_.Exception.Message)
+      return $false
+    }
+  }
+  return $false
+}
+
+# 把桌面端 app 的窗口带到前台。
+function Activate-AppWindow {
+  $app = Find-DesktopAppWindow
+  if (-not $app) { return $false }
+  Focus-Window -Target @{ Hwnd = $app.Hwnd; Pid = $app.Pid; Exe = $app.Exe }
+  return $true
 }
 
 # 当前前台窗口是哪个进程。
