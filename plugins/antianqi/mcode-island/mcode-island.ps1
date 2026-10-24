@@ -397,7 +397,7 @@ $stateMap = @{
 #   采样点只有 39 个是面板色，其余全是它背后的东西。隔离环境里同样的
 #   代码却能画出来，所以问题出在 widget 的上下文里。
 #   同一个窗口就没有这个问题：置顶、合成、命中测试全都走 pill 已经验证
-#   过的��一套。
+#   过的那一套。
 #
 # 代价是窗口要变高。row 0 的高度锁死为药丸高度，所以展开时药丸本身一动
 # 不动，列表在它下面长出来。鼠标从药丸移到列表不用离开窗口，也没有那个
@@ -632,12 +632,22 @@ function Show-SessionList {
     Add-SessionRow ([string]$s.id) ([string]$s.title) ([string]$s.phase) ([string]$s.preview) ([string]$s.lastTool) ([int64]$s.lastAtMs) ($i -lt ($sorted.Count - 1))
     $i++
   }
-  # 列表高度 = 行数 * 行高 + 上下 padding；再给药丸的投影留一点余量。
-  # 行高是两项（标题 + 摘要）加内边距，不是原来单行的那 24。
-  $listH = ($sorted.Count * $script:sessionRowHeight) + 12
+  # 列表高度不能按"行数 × 猜的行高"算。
+  #
+  # 那样算有两处错：摘要会换行，一项不止那么高；而且 SessionPanel 自己
+  # 还要占 Margin 14 + Padding 12 + Border 2。两行时内容需要 106px，row
+  # 只分到 94px，最后一行就被裁掉半行 —— 窗口底部还空着 14px，看起来
+  # 更莫名其妙。
+  #
+  # 所以让布局自己算：row 1 改成 Auto，Grid 就按内容测量，再拿实际需要
+  # 的高度去撑窗口。DesiredSize 是"内容需要多高"，不受窗口当前高度影响。
   $script:sessionRowsPanel.Visibility = [System.Windows.Visibility]::Visible
-  $script:sessionListRow.Height = New-Object System.Windows.GridLength($listH)
-  $window.Height = $script:pillHeight + $listH + 14
+  $script:sessionListRow.Height = [System.Windows.GridLength]::Auto
+  $script:sessionRowsPanel.UpdateLayout()
+  # DesiredSize 里没有 Margin，所以自己加上 SessionPanel 的 14px 上边距。
+  $listH = [int][Math]::Ceiling($script:sessionRowsPanel.DesiredSize.Height) + 14
+  if ($listH -le 0) { $listH = ($sorted.Count * $script:sessionRowHeight) + 26 }
+  $window.Height = $script:pillHeight + $listH
   Dbg ("session list shown: " + $sorted.Count + " winH=" + $window.Height + " listH=" + $listH)
 }
 
