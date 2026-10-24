@@ -155,7 +155,7 @@ const checkEntry = async (event, entry) => {
 };
 
 const main = async () => {
-    console.log(`mcode-island v0.4.0 self-check`);
+    console.log(`mcode-island v0.5.0 self-check`);
     console.log(`plugin root: ${PLUGIN_ROOT}`);
     console.log('-'.repeat(60));
 
@@ -182,8 +182,8 @@ const main = async () => {
     } else {
         out('PASS', `plugin.json: name is "${plugin.name}"`);
     }
-    if (plugin.version !== '0.4.0') {
-        out('FAIL', `plugin.json: version is "${plugin.version}", expected "0.4.0"`);
+    if (plugin.version !== '0.5.0') {
+        out('FAIL', `plugin.json: version is "${plugin.version}", expected "0.5.0"`);
     } else {
         out('PASS', `plugin.json: version is "${plugin.version}"`);
     }

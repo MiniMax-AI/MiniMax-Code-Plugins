@@ -447,6 +447,59 @@ the widget intercepts in `WndProc` and treats as Hide rather than Close. To
 re-raise the hidden window: `mcode-island show`. To kill it for real:
 `mcode-island stop`.
 
+## The session list
+
+Resting the mouse on the pill expands a list of **every session that is
+currently live**, not just the one the detector happens to be following.
+The detector follows a single session — the one that wrote its log most
+recently — but on a machine with a CLI session, a desktop-app session and
+a couple of side agents, the interesting thing is usually the *other* one.
+
+```
+   ●  剪映插件开发                          3 分钟前
+      执行 bash                              运行中
+```
+
+Each row carries four things:
+
+| part      | where it comes from |
+| --------- | ------------------- |
+| status dot | the same state vocabulary the pill uses, same color |
+| title     | the session's real name, read from the runtime's own SQLite store (`local_runtime_sessions.title`) |
+| preview   | the last thing that session said, so you can tell "running" from "stuck on one tool" |
+| timestamp | how long ago that session last moved, plus its state word |
+
+**The title is the session's name, not a summary.** The widget reads it
+from `~/.minimax/v2/sqlite/runtime-state.sqlite`, which is the same
+source the runtime itself uses. When that store is unavailable (a host
+without the usual paths), the widget falls back to the first thing the
+user said in that session — so the row is never blank.
+
+**The state words are the pill's words.** The list does not invent its
+own vocabulary: `working` / `thinking` / `waiting` / `idle` / `done` /
+`error` are rendered with the same text and the same color as on the
+pill, so the two places never disagree. The one addition is **已停止**
+("stopped"), which is not a message type but a liveness fallback: a
+session that has not moved for five minutes is no longer "running",
+even though nothing said otherwise.
+
+**Clicking a row goes back to that session — it never opens a second
+one.** The widget enumerates the Windows Terminal tabs, matches the
+session name against the title history the session has had, selects that
+tab, and brings the terminal window to the front. If no tab matches
+(e.g. the terminal was renamed, or the session runs inside the desktop
+app instead of Windows Terminal), the widget still raises the terminal
+window rather than starting a new `mcode --session <id>`. A second
+terminal for the same session is exactly the bug this feature is meant
+to avoid.
+
+Clicking a row also dismisses it: the session leaves the list and stays
+out of it until it starts its next round.
+
+The list is fed by the detector, which writes `sessions.json` next to
+`status.json` in `%APPDATA%\mcode-island\`. That file is the contract
+between the detector and the widget; the widget only reads it.
+
 ## Test evidence
 
 This plugin has been exercised on Windows 11 24H2 with PowerShell 5.1, against
