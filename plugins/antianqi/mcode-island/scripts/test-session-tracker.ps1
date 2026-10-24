@@ -295,6 +295,19 @@ $eRestored = $script:trackedSessions['sess-preview']
 Check '重启后 preview 恢复了' ($eRestored.Preview -eq '改完了') ("得到: '" + $eRestored.Preview + "'")
 Check '重启后 lastAtMs 恢复了' ([int64]$eRestored.LastAtMs -gt 0) ("得到: " + $eRestored.LastAtMs)
 
+# 标题历史。
+#
+# 终端 tab 上的名字是 mcode 在**某个时刻**设的，而会话标题会随着对话
+# 推进变。widget 靠这些名字认出"哪个 tab 是这个会话"，所以历史里必须有
+# 它：至少要有首条用户消息那一个。
+$fHist = New-Session 'sess-hist' @((Line-User '首条提问是另外一句话'))
+Update-SessionTracker
+Write-SessionsFile -Force
+$histJson = Get-Content (Join-Path $configDir 'sessions.json') -Raw | ConvertFrom-Json
+$histRow = @($histJson.sessions | Where-Object { $_.id -eq 'sess-hist' })[0]
+Check 'sessions.json 记下了标题历史' (@($histRow.titles).Count -ge 1) ("得到: " + (@($histRow.titles) -join ' | '))
+Check '标题历史里有首条用户消息' (@($histRow.titles) -contains '首条提问是另外一句话') ("得到: " + (@($histRow.titles) -join ' | '))
+
 # Phase 没变但内容变了，也要落盘。
 #
 # agent 连着跑两个工具时 Phase 一直是 running，摘要和最后活动时间却在变。

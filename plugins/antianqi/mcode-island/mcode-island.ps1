@@ -682,7 +682,148 @@ function Invoke-SessionClick([string]$id) {
     Dbg "SESSION ACK FAIL: $($_.Exception.Message)"
   }
   Hide-SessionList
+  # 先试"切到已经开着这个会话的终端 tab"。切到了就不用再开一个 ——
+  # 新开一个 mcode --session <id> 会让同一个会话有两个终端在跑。
+  $names = @()
+  try {
+    foreach ($s in @(Read-SessionsFile)) {
+      if ([string]$s.id -eq $id) {
+        $names = @(@($s.titles) | Where-Object { $_ })
+        if ($names.Count -eq 0 -and $s.title) { $names = @([string]$s.title) }
+        break
+      }
+    }
+  } catch {}
+  if (Select-SessionTerminal $names) {
+    Dbg "session terminal switched: $id"
+    return
+  }
+  # 没找到具体 tab：把终端窗口带到前台，但不要再开一个终端。
+  #
+  # 会话名对不上只该影响"切到哪个标签"，不该造成"同一个会话两个终端"。
+  # 只有连一个终端窗口都找不到时（桌面端 app 内嵌的终端就是这种），
+  # 才退回新开 —— 那时候新开是唯一到得了那个会话的办法。
+  if (Activate-TerminalWindow) {
+    Dbg "session terminal activated (tab not matched): $id"
+    return
+  }
   Start-SessionTerminal $id
+}
+
+# 切到已经开着这个会话的终端 tab。
+#
+# 为什么需要这一段：mcode 会话跑在某个终端 tab 里。点列表的时候如果新开
+# 一个 "mcode --session <id>"，同一个会话就有两个终端在跑 —— 旧的还在，
+# 新的也起来了。用户要的是回到原来那个，不是再要一个。
+#
+# Windows Terminal 的 tab 标题是 "<状态> | <会话名> | MCode"，会话名是
+# mcode 自己设的（ANSI OSC 0）。Win32 的 SetForegroundWindow 只能激活到
+# 窗口的**当前活动** tab，切不到指定的 tab；UI Automation 能列出 tab
+# 并选中它（实测：选中后回读，活动的确实是目标 tab）。
+#
+# 匹配用会话的标题历史。tab 上那个名字是 mcode 在**某个时刻**设的，而
+# 会话标题会随着对话推进变（运行时 SQLite 里存的是最新的），所以要拿
+# 历史上出现过的所有名字一起匹配。
+#
+# 匹配不上就退回原来的做法（新开一个）。这里不搞更聪明的：终端标题可能
+# 被程序改过，终端也可能根本不是 Windows Terminal（桌面端 app 内嵌的
+# 终端就不是），这时候新开反而是唯一到得了那个会话的办法。
+$script:uiaReady = $false
+
+function Select-SessionTerminal([string[]]$names) {
+  if (-not $names -or $names.Count -eq 0) { return $false }
+  try {
+    if (-not $script:uiaReady) {
+      Add-Type -AssemblyName UIAutomationClient -ErrorAction Stop
+      Add-Type -AssemblyName UIAutomationTypes -ErrorAction Stop
+      $script:uiaReady = $true
+    }
+    if (-not ('IslandNative' -as [type])) {
+      # 单行字符串，不写 here-string：外层已经是 here-string 了，嵌套会提前结束。
+      Add-Type -Namespace IslandNative -Name Win -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);' -ErrorAction Stop
+    }
+    $root = [System.Windows.Automation.AutomationElement]::RootElement
+    $winCond = New-Object System.Windows.Automation.PropertyCondition(
+      [System.Windows.Automation.AutomationElement]::ClassNameProperty, 'CASCADIA_HOSTING_WINDOW_CLASS')
+    $wins = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $winCond)
+    $tabCond = New-Object System.Windows.Automation.PropertyCondition(
+      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+      [System.Windows.Automation.ControlType]::TabItem)
+    foreach ($w in $wins) {
+      $tabs = $w.FindAll([System.Windows.Automation.TreeScope]::Descendants, $tabCond)
+      for ($t = 0; $t -lt $tabs.Count; $t++) {
+        $tab = $tabs.Item($t)
+        $title = [string]$tab.Current.Name
+        if (-not $title) { continue }
+        # "<状态> | <会话名> | MCode" -> 取中间那一段
+        $parts = @($title -split '\|')
+        $tabName = ''
+        if ($parts.Count -ge 3) { $tabName = $parts[1].Trim() } else { $tabName = $title.Trim() }
+        $hit = $false
+        foreach ($n in $names) {
+          if (-not $n) { continue }
+          $nn = ([string]$n).Trim()
+          if (-not $nn) { continue }
+          if ($tabName -eq $nn -or $title.Contains($nn)) { $hit = $true; break }
+        }
+        if (-not $hit) { continue }
+        try {
+          $sp = $tab.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+          $sp.Select()
+        } catch { continue }
+        # 选中 tab 不一定会把窗口抢到前台，再点一次标题。
+        try {
+          $h = [IntPtr]$w.Current.NativeWindowHandle
+          [IslandNative.Win]::SetForegroundWindow($h) | Out-Null
+        } catch {}
+        return $true
+      }
+    }
+  } catch {
+    # UI Automation 不可用、终端不是 Windows Terminal、标题对不上……
+    # 统统退回原来的做法。
+  }
+  return $false
+}
+
+# 找不到具体 tab 时，至少把终端窗口带到前台，用户自己找那个标签。
+#
+# 关键是**不要再开一个**：同一个会话两个终端在跑，正是这个功能要消除的
+# 问题。会话名对不上（终端标题是 mcode 某个时刻起的名字，而会话标题会
+# 变）只影响"切到哪个标签"，不该影响"会不会多出一个终端"。
+function Activate-TerminalWindow {
+  try {
+    if (-not $script:uiaReady) {
+      Add-Type -AssemblyName UIAutomationClient -ErrorAction Stop
+      Add-Type -AssemblyName UIAutomationTypes -ErrorAction Stop
+      $script:uiaReady = $true
+    }
+    if (-not ('IslandNative' -as [type])) {
+      Add-Type -Namespace IslandNative -Name Win -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);' -ErrorAction Stop
+    }
+    $root = [System.Windows.Automation.AutomationElement]::RootElement
+    $winCond = New-Object System.Windows.Automation.PropertyCondition(
+      [System.Windows.Automation.AutomationElement]::ClassNameProperty, 'CASCADIA_HOSTING_WINDOW_CLASS')
+    $tabCond = New-Object System.Windows.Automation.PropertyCondition(
+      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+      [System.Windows.Automation.ControlType]::TabItem)
+    foreach ($w in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $winCond)) {
+      # 优先挑开着 mcode 的那个窗口（tab 标题是 "<状态> | <会话名> | MCode"）
+      $hasMcode = $false
+      $tabs = $w.FindAll([System.Windows.Automation.TreeScope]::Descendants, $tabCond)
+      for ($i = 0; $i -lt $tabs.Count; $i++) {
+        if ([string]$tabs.Item($i).Current.Name -match '\|\s*MCode\s*$') { $hasMcode = $true; break }
+      }
+      if (-not $hasMcode) { continue }
+      try {
+        $h = [IntPtr]$w.Current.NativeWindowHandle
+        [IslandNative.Win]::SetForegroundWindow($h) | Out-Null
+        return $true
+      } catch {}
+    }
+  } catch {
+  }
+  return $false
 }
 
 # 切到这个 session：mcode --session <id>

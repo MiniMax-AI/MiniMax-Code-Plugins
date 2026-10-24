@@ -444,6 +444,12 @@ function Update-SessionTracker {
         #              那是 SinceMs；列表右侧显示的是这个。
         Preview = (Get-SessionPreview $msg)
         LastTool = (Get-SessionLastTool $msg)
+        # 见过的所有标题。终端 tab 上的名字是 mcode 在某个时刻设的，而
+        # 会话标题会随对话推进变，所以要留着历史才匹配得上那个 tab。
+        #
+        # 首条用户消息也要放进去：tab 上的名字通常就是会话刚起时那个
+        # 名字，而运行时那个标题是后来变的。
+        Titles = @(@((Get-SessionDisplayTitle $id $g.Log), (Get-SessionTitle $g.Log)) | Where-Object { $_ } | Select-Object -Unique)
         LastAtMs = [int64]([DateTimeOffset]::new($g.MTime).ToUnixTimeMilliseconds())
         Dir = $g.Dir
       }
@@ -483,6 +489,17 @@ function Update-SessionTracker {
     $entry.Preview = $newPreview
     $entry.LastTool = $newTool
     $entry.LastAtMs = $newAtMs
+    # 标题变了就记进历史（最多留 8 个，够覆盖 tab 标题那个时刻）。
+    #
+    # 无条件并入当前标题：detector 重启后条目是从 sessions.json 恢复的，
+    # 恢复出来的标题和当前标题一样，光靠"变了才记"会一个都记不上。
+    $newTitle = (Get-SessionDisplayTitle $id $g.Log)
+    if ($newTitle) {
+      # 首条用户消息一起并进来：tab 名多半是会话刚起时的那个名字。
+      $hist = @(@($entry.Titles) + @($newTitle) + @((Get-SessionTitle $g.Log)) | Where-Object { $_ } | Select-Object -Unique)
+      if ($hist.Count -gt 8) { $hist = @($hist | Select-Object -Last 8) }
+      $entry.Titles = $hist
+    }
     # 运行时标题可能比列表出现得晚（node 装好了、库能读了）。所以每次更新
     # 都再问一次，拿到更好的名字就升级。Get-RuntimeSessionTitle 内部有 60s
     # 缓存，所以每秒问一次并不会每秒起进程。
@@ -519,6 +536,8 @@ function Write-SessionsFile {
       preview = $(if ($e.Preview) { [string]$e.Preview } else { '' })
       lastTool = $(if ($e.LastTool) { [string]$e.LastTool } else { '' })
       lastAtMs = $(if ($e.LastAtMs) { [int64]$e.LastAtMs } else { 0 })
+      # 见过的所有标题，widget 拿它去匹配终端 tab。
+      titles = @($e.Titles | Where-Object { $_ })
     }
   }
   $payload = [PSCustomObject]@{
@@ -561,6 +580,7 @@ function Restore-SessionTracker {
         Preview = $(if ($s.preview) { [string]$s.preview } else { '' })
         LastTool = $(if ($s.lastTool) { [string]$s.lastTool } else { '' })
         LastAtMs = $(if ($s.lastAtMs) { [int64]$s.lastAtMs } else { 0 })
+        Titles = @($s.titles | Where-Object { $_ })
         Dir = ''
       }
     }
