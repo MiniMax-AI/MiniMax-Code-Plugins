@@ -363,10 +363,41 @@ function shaTree(dir) {
   return out;
 }
 
+/* ★★ 官方管道读草稿（能读【加密】草稿）
+   实测（2026-10-24）：官方 draft/readFile 的正确参数形态是
+     { path: <草稿目录>/draft_content.json, rootPath: <草稿库根> }
+   ⇒ 返回 { accepted, cipherType, content, encrypted, exists }，content 是【明文 JSON】。
+   ⇒ 我们的 draft_read 原来只走 jyai-live 读磁盘 ⇒ 用户的加密草稿【根本读不出来】。
+   ⇒ 下面这个函数负责兜底：磁盘读不出来（或内容是密文）时走官方管道。 */
+async function readDraftViaOfficialPipe(draftJsonPath, rootPath) {
+  const pid = vePipePid();
+  const env = {
+    protocolVersion: 1,
+    id: `jy-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+    domain: 'draft', operation: 'readFile',
+    params: { path: draftJsonPath, rootPath },
+    priority: 'interactive',
+  };
+  const r = await pipeOnce(pid, 'draft', 'readFile', env.params, undefined, 30000);
+  if (r.outcome !== 'RESPONSE') return null;
+  let parsed;
+  try { parsed = JSON.parse(r.raw); } catch { return null; }
+  if (parsed.ok === false) return null;
+  const res = parsed.result || {};
+  if (res.error) return null;
+  if (!res.exists || !res.content) return null;
+  try { return { draft: JSON.parse(res.content), encrypted: !!res.encrypted, cipherType: res.cipherType }; }
+  catch { return null; }
+}
+
 /* --------------------------------------------------------------- 草稿读与段级 diff
    ★ 这两个函数被 verify_diff（timeline 维度）与 draft_patch（生效探针）共用：
    - readDraftJson：草稿可能是官方加密封装 ⇒ 取第一个 '{' 之后解析
    - segmentDiffOf：段级字段差 —— "我到底改了什么"，不依赖像素、不依赖官方自述 */
+/** 猜草稿库根：<库>/<草稿名>/draft_content.json ⇒ 库根是上上级（官方 readFile 的 rootPath 要的是它） */
+function guessDraftRoot(draftJsonPath) {
+  return path.dirname(path.dirname(path.resolve(draftJsonPath)));
+}
 function readDraftJson(p) {
   let txt;
   try { txt = fs.readFileSync(p, 'utf8'); } catch { return null; }
@@ -484,7 +515,13 @@ const IMPL = {
       // jyai-live read 会在 JSON 之前打一行状态（exists=... encrypted=... cipherType=...）⇒ 剥掉
       const i = r.stdout.indexOf('{');
       const body = i >= 0 ? r.stdout.slice(i) : r.stdout;
-      try { parsed = JSON.parse(body); } catch { return ok(r.stdout); }
+      try { parsed = JSON.parse(body); source = 'disk'; }
+      catch {
+        // ★ 磁盘上的草稿是【加密封装】⇒ jyai-live 读不出来 ⇒ 走官方管道（它能解密）
+        const viaPipe = await readDraftViaOfficialPipe(fallbackPath, a.root || guessDraftRoot(fallbackPath));
+        if (viaPipe) { parsed = viaPipe.draft; source = 'official-pipe'; }
+        else return ok(r.stdout);
+      }
     }
     if (parsed) {
       // 附一份"好用的摘要"：track/segment 的 id 与时间范围（供 skill 直接用）

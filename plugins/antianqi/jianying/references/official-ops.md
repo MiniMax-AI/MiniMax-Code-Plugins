@@ -57,6 +57,26 @@
 
 `video.add`  `video.setMaterial`  `video.setMask`  `video.clearMask`  `video.setOpacity`  `video.setBackgroundColor`  `video.setBackgroundBlur`  `video.setBackgroundImage`  `video.clearBackground`  `video.formatVideo`  `video.setTransition`  `video.updateTransition`  `video.clearTransition`  `video.setFade`  `video.denoiseOn`  `video.denoiseOff`  `video.addAnimation`  `video.updateAnimation`  `video.deleteAnimation`  `video.setSpeed`  `video.pitchOn`  `video.pitchOff`  `video.setCurveSpeed`  `video.seprateAudio`  `video.setMatting`  `video.clearMatting`  `video.reverse`  `video.crop`  `video.muteOn`  `video.muteOff`  `video.setBasicColor`  `video.resetBasicColor`  `video.setVolume`  `video.setFigure`  `video.setMakeupRoot`  `video.clearFigure`  `video.setFigureFaceId`  `video.setMix`  `video.setChromaColor`  `video.setChromaIntensity`  `video.setChromaShadow`  `video.setChromaEdgeSmooth`  `video.setChromaSpill`  `video.resetChroma`  `video.applyAllChroma`  `video.removeSmartCrop`  `video.addSmartCrop`  `video.setSmartColorAdjust`  `video.setStable`  `video.setVideoAlgorithm`  `video.addDigitalHuman`  `video.updateDigitalHuman`  `video.updateDigitalHumanRendered`  `video.addObjectLocked`  `video.updateObjectLocked`  `video.removeObjectLocked`
 
+### ★ `draft` 域：直接读写草稿文件（2026-10-24 实测）
+
+| operation | 参数 | 返回 | 说明 |
+|---|---|---|---|
+| `readFile` | `{ path: <草稿目录>/draft_content.json, rootPath: <草稿库根> }` | `{ accepted, cipherType, content, encrypted, exists }` | ★ **能读加密草稿**：磁盘上是密文时 `content` 仍是【明文 JSON】 |
+| `writeFile` | `{ path: <草稿目录>/draft_content.json, rootPath: <草稿库根>, content: <明文 JSON 字符串> }` | `{ accepted, cipherType, encrypted }` | 写入时自动加密（sealed on write） |
+
+> ★ 其它形态的官方报错（可用于反推）：
+>
+> | 试法 | 官方报错 |
+> |---|---|
+> | `{path: 草稿目录, rootPath}` | `draft_read_failed` |
+> | `{path: 草稿目录, workspace}` / `{path: 草稿目录}` | `draft_path_invalid` |
+> | `{path: draft_content.json, workspace}` | `draft_path_invalid` |
+> | `{draftPath: …}` / `{path:…, root:…}` | `draft_path_invalid` |
+> | `operation: readDraft` / `getDraft` | `unsupported_draft_operation` |
+>
+> ⇒ ★ **`rootPath` 要的是【草稿库根】**（不是草稿自己的父目录）。
+> ⇒ ★ 这条路径让 `draft_read` 能读【加密草稿】—— 用户自己的真草稿在磁盘上都是加密封装，
+>   而 `draft_read` 原来只走磁盘 ⇒ 读不出来。
 ### `audio`（24）
 
 `audio.add`  `audio.setVolume`  `audio.setFade`  `audio.denoiseOn`  `audio.denoiseOff`  `audio.pitchOn`  `audio.pitchOff`  `audio.setVoiceEffect`  `audio.setVoiceEffectParams`  `audio.clearVoiceEffect`  `audio.setVoiceEffectToAll`  `audio.setVocalSeparation`  `audio.updateVocalSeparation`  `audio.removeVocalSeparation`  `audio.setVocalBeautify`  `audio.updateVocalBeautify`  `audio.resetVocalBeautify`  `audio.removeVocalBeautify`  `audio.setSpeed`  `audio.modifiedToneOn`  `audio.modifiedToneOff`  `audio.setMaterial`  `audio.addBeat`  `audio.removeBeat`

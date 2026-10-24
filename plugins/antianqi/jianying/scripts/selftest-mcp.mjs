@@ -519,6 +519,22 @@ const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\
     check('★★ MCP: render_frames 产出帧序列', rf1.result?.isError !== true && framesOk,
       textOf(rf1).replace(/\s+/g, ' ').slice(0, 120));
 
+    // ★★ draft_read 能读【加密】草稿（官方管道解密回退）
+    //   ★ 用户自己的真草稿在磁盘上是【加密封装】⇒ 之前走磁盘根本读不出来 ⇒ 这一条是刚需
+    const ENC_FIX = path.join(FILM_LIB, 'JYAI能力批测-加密草稿夹具', 'draft_content.json');
+    if (fs.existsSync(ENC_FIX)) {
+      const encRead = await call('tools/call', {
+        name: 'draft_read',
+        arguments: { path: ENC_FIX, root: FILM_LIB },
+      });
+      const encTxt = textOf(encRead);
+      check('★★ MCP: draft_read 能读【加密】草稿（官方管道解密回退）',
+        encRead.result?.isError !== true && /"tracks"/.test(encTxt),
+        encTxt.replace(/\s+/g, ' ').slice(0, 140));
+    } else {
+      console.log('  [SKIP] 加密草稿读取 —— 夹具不在草稿库（JYAI能力批测-加密草稿夹具）⇒ 【不计入 PASS】');
+    }
+
     const am1 = await call('tools/call', {
       name: 'audio_mix',
       arguments: { draft: FILM_DRAFT, video: path.join(FILM_DRAFT, 'draft_content.json'), out: path.join(SMOKE, 'mix.mp4') },
