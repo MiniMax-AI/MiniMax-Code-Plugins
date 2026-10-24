@@ -40,9 +40,9 @@ $script:SEED_WINDOW_MS = 30 * 60 * 1000
 # 会话标题：只用会话日志里的首条用户提问。
 #
 # 之前这里会绕到运行时的 SQLite 里去读它提炼过的标题，代价是借用 MiniMax
-# Code 自己的程序（ELECTRON_RUN_AS_NODE=1）当 node 用。审核明确不允许上架
-# 版借用那个程序、也不允许读它自己的数据库，所以这条链路整个去掉：标题就是
-# 首条提问，截断和脱敏之后照旧能用。
+# Code 自己的程序（设一个环境变量让它以 node 模式启动）当 node 用。审核明确
+# 不允许上架版借用那个程序、也不允许读它自己的数据库，所以这条链路整个去掉：
+# 标题就是首条提问，截断和脱敏之后照旧能用。
 #
 # 脱敏用的 Protect-SecretText 在 scripts/lib/Protect-Text.ps1 里，由
 # detector 在 dot-source 本文件之前加载。lib 被单独 dot-source 时没有它，
