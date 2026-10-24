@@ -71,7 +71,7 @@ const sid = open.json.sessionId;
 const copyDir = open.json.dir;
 console.log('# session', sid, '\n');
 
-let readRes = await call('draft_read', { scope: 'segments', sessionId: sid });
+let readRes = await call('draft_read', { sessionId: sid });
 let segs = segsOf(readRes.json?.summary);
 const len0 = totalUs(segs);
 console.log('# 初始: %d 段 · 时间线 %d us\n', segs.length, len0);
@@ -87,7 +87,7 @@ for (const d of drops) {
   // ① split @ t1
   let r = await call('draft_patch', { op: 'segment.split', sessionId: sid, params: { segmentId: cover.id, splitTime: t1 } });
   if (r.failed) { console.log(`  [FAIL] split@${t1}：${(r.text + r.stderr).slice(0, 160)}`); continue; }
-  readRes = await call('draft_read', { scope: 'segments', sessionId: sid });
+  readRes = await call('draft_read', { sessionId: sid });
   segs = segsOf(readRes.json?.summary);
   const front = segs.find((s) => s.id === cover.id);
   console.log(`  ① split@${t1} → ${segs.length} 段`, segs.map((s) => `${s.id.slice(0, 6)}@${s.start}+${s.dur}`).join(' '));
@@ -96,7 +96,7 @@ for (const d of drops) {
   // ② split @ t0
   r = await call('draft_patch', { op: 'segment.split', sessionId: sid, params: { segmentId: front.id, splitTime: t0 } });
   if (r.failed) { console.log(`  [FAIL] split@${t0}：${(r.text + r.stderr).slice(0, 160)}`); continue; }
-  readRes = await call('draft_read', { scope: 'segments', sessionId: sid });
+  readRes = await call('draft_read', { sessionId: sid });
   segs = segsOf(readRes.json?.summary);
   console.log(`  ② split@${t0} → ${segs.length} 段`, segs.map((s) => `${s.id.slice(0, 6)}@${s.start}+${s.dur}`).join(' '));
   const mid = segs.find((s) => s.id !== front.id && s.start >= t0 - 1 && s.start + s.dur <= t1 + 1 && s.dur > 0);
@@ -105,14 +105,14 @@ for (const d of drops) {
   // ③ delete 中间段
   r = await call('draft_patch', { op: 'segment.delete', sessionId: sid, params: { segmentId: mid.id } });
   if (r.failed) { console.log('  [FAIL] delete：%s', (r.text + r.stderr).slice(0, 160)); continue; }
-  readRes = await call('draft_read', { scope: 'segments', sessionId: sid });
+  readRes = await call('draft_read', { sessionId: sid });
   segs = segsOf(readRes.json?.summary);
   console.log('  [OK] 剪掉 %d..%d us（%d us）· 现在 %d 段 / 时间线 %d us',
     t0, t1, t1 - t0, segs.length, totalUs(segs));
   done.push({ t0, t1, ok: true });
 }
 
-readRes = await call('draft_read', { scope: 'segments', sessionId: sid });
+readRes = await call('draft_read', { sessionId: sid });
 segs = segsOf(readRes.json?.summary);
 const len1 = totalUs(segs);
 const cut = drops.reduce((a, d) => a + (d.endMs - d.startMs) * 1000, 0);

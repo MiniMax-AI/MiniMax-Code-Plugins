@@ -112,7 +112,8 @@ check('①b 读副本草稿（磁盘，自动解密）', readBefore.code === 0 &
   beforeDraft ? `tracks=${(beforeDraft.tracks || []).length} → ${beforeDraftFile}` : readBefore.text.slice(0, 160));
 
 // ② draft_read 拿片段
-const read = await call('draft_read', { scope: 'segments' });
+//   ★ 原来传 scope:'segments' —— 该入参已在审计里删掉（后端不支持分段读）⇒ 现在会被 schema 拒
+const read = await call('draft_read', {});
 check('② draft_read 读结构', read.code === 0, read.code === 0 ? `${read.text.length} 字符` : read.text.slice(0, 200));
 let segIds = [];
 let trackIds = [];
