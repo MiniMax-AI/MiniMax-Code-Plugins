@@ -1464,7 +1464,13 @@ Write-Status 'done' 'Read' 'read'
 // tested without the app running: the test swaps the lookup and the app
 // lookup, and checks the contract (found -> invoke, not found -> fall back,
 // no app -> fall back).
-{
+if (process.platform !== 'win32') {
+    // The harness Add-Type's the UIAutomation assemblies and swaps the lookup
+    // by name; neither exists on Linux. The contract is still covered on
+    // windows-latest, which is the only platform this code runs on.
+    console.log('[skip] section 11: the app conversation switch needs Windows (UIAutomation assemblies)');
+    skipped++;
+} else {
     const sourcePath = join(PLUGIN_ROOT, 'mcode-island.ps1');
     const src = readFileSync(sourcePath, 'utf8');
 
