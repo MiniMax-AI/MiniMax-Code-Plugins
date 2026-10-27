@@ -90,16 +90,54 @@ $script:PRUNE_AFTER_MS = 30 * 60 * 1000
 # "待回复"不看这个窗口：球在用户那边，用户半小时不回，它还是待回复。
 $script:STALE_RUNNING_MS = 5 * 60 * 1000
 
+# 一次最多跟多少个会话。
+#
+# 列表是"现在还活着的会话"，但它不该无限长：一上午开几十个会话，列表会顶
+# 满屏幕，sessions.json 也会长成一本历史书 —— 里面存着每个会话说过的话。
+# 30 分钟的活性窗口管"旧的会消失"，这个数管"活的同时有几十个时取哪些"：
+# 按最后活动时间留最近的这些，其余的淘汰。
+#
+# 20 是数据侧的上限；widget 还会按窗口高度再裁一次（见 mcode-island.ps1 的
+# $script:MAX_SESSION_ROWS）。
+$script:MAX_SESSIONS = 20
+
+# 会话 id 的形状。
+#
+# 这个值来自两处，都不是我们生成的：
+#   1. 会话目录名里的 base64 —— 解码出来是什么就是什么；
+#   2. sessions.json —— 上一次跑留下的，同样不可信。
+#
+# 它曾经被拼进一条命令字符串（"mcode --session $id" 交给 powershell
+# -Command），于是形如 x; Set-Content ... 的 id 能执行任意 PowerShell。
+# 那条路已经删掉了（匹配不上就失败关闭，不再新开终端），这里再把 id 本身
+# 收口：只认字母数字、下划线和连字符。
+#
+# 真实的 id 形如 mvs_70378ec639b2471a8f205b954e98a589；测试里也用过
+# e2e-test-001 这种。两者都在这个范围内。
+$script:SESSION_ID_PATTERN = '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'
+
+function Test-SessionIdSafe([string]$id) {
+  if (-not $id) { return $false }
+  return [bool]($id -match $script:SESSION_ID_PATTERN)
+}
+
 function Get-SessionIdFromDir($dir) {
   $name = [System.IO.Path]::GetFileName($dir)
   $i = $name.IndexOf('session_')
-  if ($i -lt 0) { return $name }
+  if ($i -lt 0) {
+    if (Test-SessionIdSafe $name) { return $name }
+    return ''
+  }
   $b64 = $name.Substring($i + 8)
   try {
     $pad = (4 - ($b64.Length % 4)) % 4
-    return [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($b64 + ('=' * $pad)))
+    $decoded = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($b64 + ('=' * $pad)))
+    # base64 里装的是什么都有可能 —— 解出来先过白名单，不合法就当没有。
+    if (Test-SessionIdSafe $decoded) { return $decoded }
+    return ''
   } catch {
-    return $name
+    if (Test-SessionIdSafe $name) { return $name }
+    return ''
   }
 }
 
@@ -125,6 +163,9 @@ function Get-SessionLogGroups($root) {
     }
     if (-not $log) { continue }
     $id = Get-SessionIdFromDir $dir
+    # 解不出合法 id 就跳过这个目录：没有 id 就没法去重，也没法在列表里
+    # 指向它，硬塞一个进去只会让同一条出现好几次（$groups[''] 互相覆盖）。
+    if (-not $id) { continue }
     $groups[$id] = @{ Id = $id; Dir = $dir; Log = $log; MTime = $mtime }
   }
   return $groups
@@ -580,6 +621,42 @@ function Update-SessionTracker {
     $script:sessionsDirty = $true
     Log-Line ("sessions pruned: " + $pruned)
   }
+
+  # 活性窗口管不住"同一时刻活着的会话很多"：一上午开几十个，30 分钟内它们
+  # 全都还在。这里再按最后活动时间留最近的 MAX_SESSIONS 个，其余淘汰 ——
+  # 列表有界，sessions.json 也有界。
+  #
+  # 只淘汰**已经不活跃**的会话（日志超过活性窗口没动）。不然有个更糟的后果：
+  # 被淘汰的会话日志还在活性窗口里，下一次扫描会把它当"新会话"重新收进来，
+  # 于是每个 tick 都在"淘汰 → 重新加入"，列表闪烁、SinceMs 和 Cycle 每轮
+  # 归零。不活跃的会话淘汰后不会被捞回来（扫描只收窗口内动过的），等它真的
+  # 又有动静才以新的一轮回来。
+  #
+  # 代价是"同时活跃的会话超过上限时列表会短暂超一点"。这是有意的：砍掉一个
+  # 正在干活的会话，比多画两行糟得多；屏幕那一侧还有行数上限兜着。
+  $over = [int]$script:trackedSessions.Count - [int]$script:MAX_SESSIONS
+  if ($over -gt 0) {
+    $idle = @()
+    foreach ($id in @($script:trackedSessions.Keys)) {
+      $e = $script:trackedSessions[$id]
+      $lastMs = $e.LastAtMs
+      if (-not $lastMs) { $lastMs = $e.SinceMs }
+      $ageMs = if ($lastMs) { $nowMs - [int64]$lastMs } else { [int64]::MaxValue }
+      if ($ageMs -gt $script:ACTIVE_WINDOW_MS) {
+        $idle += [PSCustomObject]@{ Id = $id; Last = $(if ($lastMs) { [int64]$lastMs } else { [int64]0 }) }
+      }
+    }
+    $victims = @($idle | Sort-Object Last | Select-Object -First $over | ForEach-Object { $_.Id })
+    foreach ($id in $victims) {
+      $script:trackedSessions.Remove($id)
+      # 淘汰的会话也不该在 dismissed 里留一辈子的记录。
+      $script:dismissedSessions.Remove($id)
+    }
+    if ($victims.Count -gt 0) {
+      $script:sessionsDirty = $true
+      Log-Line ("sessions capped: dropped " + $victims.Count + " (limit " + $script:MAX_SESSIONS + ")")
+    }
+  }
 }
 
 # 写 sessions.json。
@@ -636,6 +713,12 @@ function Restore-SessionTracker {
     $j = [System.IO.File]::ReadAllText($file) | ConvertFrom-Json
     foreach ($s in @($j.sessions)) {
       if (-not $s.id) { continue }
+      # sessions.json 是上一次跑写下的，里面可能有任何东西 —— 包括被手改过
+      # 的 id。不合法的直接丢掉，不让它进入列表。
+      if (-not (Test-SessionIdSafe ([string]$s.id))) {
+        Log-Line "sessions restore: dropped entry with an unsafe id"
+        continue
+      }
       $script:trackedSessions[$s.id] = @{
         Id = $s.id
         Title = [string]$s.title

@@ -613,14 +613,33 @@ const main = async () => {
             out('FAIL', 'mcode-island.ps1: Invoke-SessionClick does not try the app conversation');
         } else {
             out('PASS', 'mcode-island.ps1: Invoke-SessionClick tries the app conversation');
-            // The desktop branch must not reach the "open a new terminal"
-            // fallback: that is how one session ends up with two terminals.
-            const appBranch = sessionClickBody.indexOf("$script:clickPrefers -eq 'app'");
-            const newTerminal = sessionClickBody.indexOf('Start-SessionTerminal $id');
-            if (appBranch >= 0 && newTerminal > appBranch) {
-                out('PASS', 'mcode-island.ps1: the desktop branch returns before the new-terminal fallback');
+            // The "open a new terminal" fallback is gone and must stay gone.
+            //
+            // It built `powershell -Command "mcode --session <id>"` out of a
+            // value that came from a session directory's base64 and from
+            // sessions.json -- neither is trusted, so an id shaped like
+            // `x; Set-Content ...` was executable PowerShell. It also
+            // contradicted the feature: clicking a row means "go back to that
+            // session", never "start a second one".
+            //
+            // Two shapes of lock: the function is gone from the file, and the
+            // click handler spawns nothing. The handler's comments describe
+            // the old path, so the code check drops comment lines first --
+            // otherwise a comment could satisfy or break the lock by itself.
+            if (/function\s+Start-SessionTerminal\b/.test(widget)) {
+                out('FAIL', 'mcode-island.ps1: Start-SessionTerminal is back -- it turns a session id into PowerShell source');
+            } else if (/--session\s+\$/.test(widget)) {
+                out('FAIL', 'mcode-island.ps1: something interpolates a session id into a --session command line');
             } else {
-                out('FAIL', 'mcode-island.ps1: the desktop branch can reach the new-terminal fallback -- a session row would spawn a second terminal for the same session');
+                out('PASS', 'mcode-island.ps1: no code path turns a session id into a command line');
+            }
+            const clickCode = sessionClickBody.split('\n').filter((line) => !/^\s*#/.test(line)).join('\n');
+            if (/Start-Process|Start-SessionTerminal/.test(clickCode)) {
+                out('FAIL', 'mcode-island.ps1: Invoke-SessionClick still spawns something -- a row click must fail closed');
+            } else if (!/\$id\s+-notmatch\s+'/.test(clickCode)) {
+                out('FAIL', 'mcode-island.ps1: Invoke-SessionClick does not validate the session id before using it');
+            } else {
+                out('PASS', 'mcode-island.ps1: Invoke-SessionClick validates the id and spawns nothing');
             }
         }
         // The UIA lookup has to filter by name. Reading every element of the
@@ -633,6 +652,37 @@ const main = async () => {
             out('FAIL', 'mcode-island.ps1: the app conversation lookup does not filter by name -- scanning the whole tree blocks the UI thread');
         } else {
             out('PASS', 'mcode-island.ps1: the app conversation lookup filters by name (no full-tree scan)');
+        }
+
+        // (k2) The list has a height budget, not just a data budget.
+        //
+        // The detector caps the data side ($script:MAX_SESSIONS), but 20 rows
+        // at ~48px is taller than the work area on most screens: the bottom
+        // of the list runs off the screen and still covers the windows
+        // underneath. Three locks: a sane row cap, the overflow notice
+        // (silent truncation would claim nothing else is running -- the exact
+        // question this list exists to answer), and the work-area clamp.
+        const listBody = (widget.match(/function Show-SessionList[\s\S]*?\n\}\n/) || [''])[0];
+        const rowCap = widget.match(/\$script:MAX_SESSION_ROWS\s*=\s*(\d+)/);
+        if (!listBody) {
+            out('FAIL', 'mcode-island.ps1: Show-SessionList body not found (height-cap drift lock skipped)');
+        } else if (!rowCap) {
+            out('FAIL', 'mcode-island.ps1: no $script:MAX_SESSION_ROWS -- the session list height is unbounded');
+        } else if (+rowCap[1] < 6 || +rowCap[1] > 20) {
+            out('FAIL', `mcode-island.ps1: $script:MAX_SESSION_ROWS = ${rowCap[1]} is outside 6..20 -- too small hides work, too large runs off the screen`);
+        } else if (!/Select-Object -First \$script:MAX_SESSION_ROWS/.test(listBody)) {
+            out('FAIL', 'mcode-island.ps1: Show-SessionList does not slice the rows by $script:MAX_SESSION_ROWS');
+        } else if (!/if\s*\(\s*\$hidden\s*-gt\s*0\s*\)\s*\{\s*Add-SessionOverflowRow\s+\$hidden\s*\}/.test(listBody)) {
+            out('FAIL', 'mcode-island.ps1: rows beyond the cap vanish without the "还有 N 条" notice (or the notice is not gated on $hidden)');
+        } else {
+            out('PASS', `mcode-island.ps1: the list is capped at ${rowCap[1]} rows and says how many are hidden`);
+        }
+        if (!listBody) {
+            // already reported above
+        } else if (!/GetWorkAreaForWindow/.test(listBody) || !/\$window\.Height\s*=/.test(listBody)) {
+            out('FAIL', 'mcode-island.ps1: the list height is not clamped to the work area -- it can end up taller than the screen');
+        } else {
+            out('PASS', 'mcode-island.ps1: the list height is clamped to the work area');
         }
 
         // (l) The click must be scoped to the sidebar's conversation list.

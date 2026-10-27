@@ -430,6 +430,17 @@ function Clear-SessionRows {
 #           + 上下内边距 14 + 分隔线 1 = 49。留一点余量取 48。
 $script:sessionRowHeight = 48
 
+# 屏幕上最多画几行。
+#
+# detector 已经把数据侧限制在 $script:MAX_SESSIONS（20）条，但 20 行 × 48px
+# 已经 960px，比多数人的可用高度还高 —— 直接按条数长窗口，列表底部会跑到
+# 屏幕外面去，最后几条永远看不到，还挡着别的窗口。
+#
+# 所以这里按"窗口能放下"再裁一次，并且优先留最上面那几条（排序已经把
+# 需要用户看的放前面了）。多出来的条数在列表底部用一行"还有 N 条"交代，
+# 不静默截断。
+$script:MAX_SESSION_ROWS = 12
+
 # 相对时间：近的给"多久之前"，远的给钟点。
 #
 # 和小红书那种消息列表一个路子：60 分钟以内说"3 分钟前"（精确到分钟就
@@ -603,6 +614,22 @@ function Add-SessionRow([string]$id, [string]$title, [string]$phase, [string]$pr
   $script:sessionRows.Children.Add($border) | Out-Null
 }
 
+# 列表被行数上限截掉时，在底部补一行说明还剩多少条。
+#
+# 静默截断最糟：用户看到 12 行，以为就这么多，实际上还有 5 个会话在跑 ——
+# 而"还有东西在别处"正是这个列表要解决的问题。这一行不可点，只是交代。
+function Add-SessionOverflowRow([int]$hidden) {
+  if (-not $script:sessionRows) { return }
+  if ($hidden -le 0) { return }
+  $tb = New-Object System.Windows.Controls.TextBlock
+  $tb.Text = '还有 ' + $hidden + ' 条'
+  $tb.Foreground = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#FF8B93A1')))
+  $tb.FontSize = 10.5
+  $tb.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Center
+  $tb.Margin = New-Object System.Windows.Thickness(0,6,0,2)
+  $script:sessionRows.Children.Add($tb) | Out-Null
+}
+
 function Show-SessionList {
   if (-not $script:sessionRows) { return }
   # 取消待收起的定时器。
@@ -628,11 +655,20 @@ function Show-SessionList {
     'done' = 3; 'error' = 4; 'stopped' = 5; 'running' = 0
   }
   $sorted = @($items | Sort-Object @{ Expression = { $k = [string]$_.phase; if ($stateOrder.ContainsKey($k)) { $stateOrder[$k] } else { 2 } } }, @{ Expression = { if ($_.lastAtMs) { [int64]$_.lastAtMs } else { [int64]$_.sinceMs } }; Descending = $true })
+  # 画几行是有上限的：排序已经把最该看的放前面，超出的部分不画，但也不
+  # 装作没有 —— 底下补一行"还有 N 条"，把窗口高度框死在屏幕里。
+  $total = $sorted.Count
+  $hidden = 0
+  if ($total -gt $script:MAX_SESSION_ROWS) {
+    $hidden = $total - $script:MAX_SESSION_ROWS
+    $sorted = @($sorted | Select-Object -First $script:MAX_SESSION_ROWS)
+  }
   $i = 0
   foreach ($s in $sorted) {
-    Add-SessionRow ([string]$s.id) ([string]$s.title) ([string]$s.phase) ([string]$s.preview) ([string]$s.lastTool) ([int64]$s.lastAtMs) ($i -lt ($sorted.Count - 1))
+    Add-SessionRow ([string]$s.id) ([string]$s.title) ([string]$s.phase) ([string]$s.preview) ([string]$s.lastTool) ([int64]$s.lastAtMs) ($i -lt ($sorted.Count - 1) -and $hidden -eq 0)
     $i++
   }
+  if ($hidden -gt 0) { Add-SessionOverflowRow $hidden }
   # 列表高度不能按"行数 × 猜的行高"算。
   #
   # 那样算有两处错：摘要会换行，一项不止那么高；而且 SessionPanel 自己
@@ -648,8 +684,21 @@ function Show-SessionList {
   # DesiredSize 里没有 Margin，所以自己加上 SessionPanel 的 14px 上边距。
   $listH = [int][Math]::Ceiling($script:sessionRowsPanel.DesiredSize.Height) + 14
   if ($listH -le 0) { $listH = ($sorted.Count * $script:sessionRowHeight) + 26 }
+  # 兜底再夹一次：上面按行数裁过，但一行的高度会随字号/DIP 缩放变，理论上
+  # 仍可能超出屏幕。窗口一旦比工作区高，底部（也就是最后几条）跑到屏幕外，
+  # 还挡住底下的窗口 —— 那种"列表画了但看不见"比不画更难查。
+  try {
+    $wa = [WinAPI]::GetWorkAreaForWindow($window)
+    if ($wa.Left -ne -1) {
+      $maxH = ($wa.Bottom - $wa.Top) - $window.Top
+      if ($maxH -gt $script:pillHeight -and ($script:pillHeight + $listH) -gt $maxH) {
+        $listH = [int][Math]::Floor($maxH) - $script:pillHeight
+        Dbg ("session list clamped to the work area: listH=" + $listH)
+      }
+    }
+  } catch {}
   $window.Height = $script:pillHeight + $listH
-  Dbg ("session list shown: " + $sorted.Count + " winH=" + $window.Height + " listH=" + $listH)
+  Dbg ("session list shown: " + $sorted.Count + " hidden=" + $hidden + " winH=" + $window.Height + " listH=" + $listH)
 }
 
 function Hide-SessionList {
@@ -683,6 +732,16 @@ function Schedule-SessionListHide {
 # 点一行：消掉它 + 切过去。
 function Invoke-SessionClick([string]$id) {
   if (-not $id) { return }
+  # 会话 id 来自 sessions.json，而那个文件可能被手改过（或者上一次崩在半路）。
+  # 它现在**不**会被拼进任何命令，但白名单仍然值得有：一个不该出现的 id
+  # 说明这个条目不可信，别拿它去写 ack、也别拿它去匹配窗口。
+  #
+  # 与 scripts/lib/Session-Tracker.ps1 的 $script:SESSION_ID_PATTERN 同源；
+  # detector 那边在入口就把不合法的丢掉了，这里是 widget 侧的同一道门。
+  if ($id -notmatch '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$') {
+    Dbg "session click: refused an id that is not shaped like a session id"
+    return
+  }
   # 消掉：写 ack.signal，detector 收走（它会从列表里删掉这一条，并且
   # 在这个 session 跑完下一轮之前不再把它收回来）。
   try {
@@ -735,9 +794,21 @@ function Invoke-SessionClick([string]$id) {
       return
     }
   }
-  # 真的什么都没有（app 没开、终端也没有）：新开一个终端，那是唯一到得了
-  # 那个会话的办法。
-  Start-SessionTerminal $id
+  # 走到这里说明：没有匹配的终端标签，也没有 app 窗口可点。
+  #
+  # **失败关闭**：不新开终端。
+  #
+  # 以前这里会 `Start-SessionTerminal $id` 开一个 "mcode --session <id>"。
+  # 两处不对：
+  #   1. 它把 id 拼进命令字符串交给 powershell -Command —— 一个形如
+  #      `x; Set-Content ...` 的 id 就能执行任意 PowerShell；
+  #   2. 就算 id 是干净的，新开的终端也可能和**已经在跑**的那个会话重复，
+  #      正是这个功能要消除的局面。
+  #
+  # "找不到"本身不是开一个新的理由：会话可能跑在一个我们看不见的宿主里
+  # （app 内嵌终端、别的终端程序），那时候新开只会多一个。宁可什么都不做，
+  # 让用户自己切 —— 日志里写清楚为什么。
+  Dbg ("session click: no target for " + $id + " (no matching tab, no app window) -- not opening a new terminal")
 }
 
 # 找到 app 侧边栏里的**会话列表容器**。
@@ -1109,27 +1180,19 @@ function Activate-TerminalWindow {
   return $false
 }
 
-# 切到这个 session：mcode --session <id>
+# 这里**曾经**有一个 Start-SessionTerminal：找不到目标就开一个
+# "mcode --session <id>" 的新标签。
 #
-# 优先 Windows Terminal（wt.exe）；它不在 PATH 时退回 conhost 的 start。
-# mcode 是个 .ps1 包装器，cmd 认不出来，所以两条路都经由 powershell 跑。
-function Start-SessionTerminal([string]$id) {
-  $inner = "mcode --session $id"
-  try {
-    $wt = Get-Command wt.exe -ErrorAction SilentlyContinue
-    if ($wt) {
-      Start-Process -FilePath $wt.Source -ArgumentList @(
-        '-w', '0', 'new-tab', '--title', 'mcode',
-        'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $inner)
-    } else {
-      Start-Process -FilePath 'cmd.exe' -ArgumentList @(
-        '/c', 'start', '', 'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $inner)
-    }
-    Dbg "session jumped: $id"
-  } catch {
-    Dbg "SESSION JUMP FAIL: $($_.Exception.Message)"
-  }
-}
+# 它被删掉了，原因有两个，都是 review 点出来的：
+#   1. 它把会话 id 拼进一条命令字符串交给 `powershell -Command`。id 来自
+#      会话目录名里的 base64 和 sessions.json，两者都不可信，所以一个形如
+#      `x; Set-Content ...` 的 id 能执行任意 PowerShell。不做"更小心的引号
+#      拼接"，直接不留这条把数据变成代码的路。
+#   2. 它和这个功能的承诺相矛盾：点一行是为了**回到**那个会话，不是再起
+#      一个。同一个会话两个终端在跑，正是要消除的问题。
+#
+# 现在的行为是失败关闭：匹配不到就只写日志，不动用户的桌面。
+# smoke.mjs 里有一条检查盯着这里不许再长出命令拼接。
 
 # 工具家族配色：working 态下用 family 色盖掉 state 色，一眼分辨"在读"和"在改"。
 # 只覆盖 dot/ring（视觉识别），不动 stateText 文案。
