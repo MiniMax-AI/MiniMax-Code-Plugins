@@ -228,6 +228,32 @@ Check 'ack.signal 里的 session 被消掉' (-not $script:trackedSessions.Contai
 Check '消除被记进 dismissed' ($script:dismissedSessions.Contains('sess-flip')) ($script:dismissedSessions | ConvertTo-Json -Compress)
 Check 'ack.signal 本身被消费掉' (-not (Test-Path (Join-Path $configDir 'ack.signal'))) '文件还在'
 
+# 一次消多条。
+#
+# 列表每行都有 × 可以单独消除，"一秒内消掉两三条"是正常操作。以前
+# ack.signal 一个文件只装一个 id，后写的盖掉先写的 —— 那一条就永远消不
+# 掉，而且用户不知道它没被消（点 × 的那一下看着是生效了的）。
+#
+# 所以改成一行一个 id。
+$fMulti1 = New-Session 'sess-multi-1' @((Line-User '要消掉的第一个'))
+$fMulti2 = New-Session 'sess-multi-2' @((Line-User '要消掉的第二个'))
+$fMulti3 = New-Session 'sess-multi-3' @((Line-User '要消掉的第三个'))
+Update-SessionTracker
+Check '三条待消除的会话都在列表里' ($script:trackedSessions.Contains('sess-multi-1') -and $script:trackedSessions.Contains('sess-multi-2') -and $script:trackedSessions.Contains('sess-multi-3')) ("列表: " + (($script:trackedSessions.Keys) -join ','))
+[System.IO.File]::WriteAllText((Join-Path $configDir 'ack.signal'), "sess-multi-1`nsess-multi-2`nsess-multi-3`n", (New-Object System.Text.UTF8Encoding($false)))
+Update-SessionTracker
+Check '一次 ack 里的三条都被消掉' ((-not $script:trackedSessions.Contains('sess-multi-1')) -and (-not $script:trackedSessions.Contains('sess-multi-2')) -and (-not $script:trackedSessions.Contains('sess-multi-3'))) ("列表: " + (($script:trackedSessions.Keys) -join ','))
+Check '三条都记进了 dismissed' ($script:dismissedSessions.Contains('sess-multi-1') -and $script:dismissedSessions.Contains('sess-multi-2') -and $script:dismissedSessions.Contains('sess-multi-3')) ($script:dismissedSessions | ConvertTo-Json -Compress)
+Check '消费后没有留下 .taken 残file' (-not (Test-Path (Join-Path $configDir 'ack.signal.taken'))) '有残file'
+
+# 只写一行（末尾没有换行）也要能消掉 —— widget 写的每一行都带换行，但
+# 手工写一个 id 也要认。
+$fSolo = New-Session 'sess-solo-ack' @((Line-User '单独消一条'))
+Update-SessionTracker
+[System.IO.File]::WriteAllText((Join-Path $configDir 'ack.signal'), 'sess-solo-ack', (New-Object System.Text.UTF8Encoding($false)))
+Update-SessionTracker
+Check '单个 id（无换行结尾）也被消掉' (-not $script:trackedSessions.Contains('sess-solo-ack')) ("列表: " + (($script:trackedSessions.Keys) -join ','))
+
 # --- 6. 持久化 -------------------------------------------------------------
 Write-SessionsFile -Force
 $saved = Get-Content (Join-Path $configDir 'sessions.json') -Raw | ConvertFrom-Json

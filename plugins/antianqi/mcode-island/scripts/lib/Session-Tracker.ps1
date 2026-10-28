@@ -443,21 +443,49 @@ function Remove-TrackedSession($id) {
 #
 # 复用插件里已有的 show.signal 模式：widget 建一个文件，detector 看到就
 # 处理。ack.signal 里写要消掉的 session id。
+#
+# **一行一个 id，可以有多行。**
+#
+# 以前是一个文件一个 id。用户在一秒内点两行，后写的盖掉先写的，那一条
+# 就永远消不掉。现在列表每行都有 × 可以单独消除，"一秒内消掉两三条"是很
+# 正常的操作，所以改成追加。
+#
+# 消费方式是**改名**，不是读+删：
+#   读+删有两个窗口期 —— 读到之后、删之前，widget 写进来的新 id 会被
+#   一起删掉（那一条就丢了）；而且读到的可能是写了一半的文件。
+#   改名是原子的：rename 之后 widget 的下一次写入落在新的 ack.signal 里，
+#   不会被这一轮带走。
 function Read-AckSignal {
   $ackFile = Join-Path $configDir 'ack.signal'
-  if (!(Test-Path -LiteralPath $ackFile)) { return $null }
-  $id = $null
-  try { $id = (Get-Content -LiteralPath $ackFile -Raw -Encoding UTF8) } catch { $id = $null }
-  try { Remove-Item -LiteralPath $ackFile -Force -ErrorAction SilentlyContinue } catch {}
-  if ($id) { return $id.Trim() }
-  return $null
+  if (!(Test-Path -LiteralPath $ackFile)) { return @() }
+  # 先改名再读。改名失败（文件刚好被另一个进程动了）就放弃这一轮，下一
+  # 轮再来 —— 总比读到一个写了一半的文件强。
+  $taken = $ackFile + '.taken'
+  try {
+    Move-Item -LiteralPath $ackFile -Destination $taken -Force -ErrorAction Stop
+  } catch {
+    return @()
+  }
+  $ids = @()
+  try {
+    $raw = [System.IO.File]::ReadAllText($taken)
+    foreach ($line in ($raw -split "`r?`n")) {
+      $id = $line.Trim()
+      if (-not $id) { continue }
+      $ids += $id
+    }
+  } catch {
+    $ids = @()
+  } finally {
+    try { Remove-Item -LiteralPath $taken -Force -ErrorAction SilentlyContinue } catch {}
+  }
+  return @($ids)
 }
 
 # 每轮更新一次 session 列表。
 function Update-SessionTracker {
-  # 用户点掉的先消化掉
-  $acked = Read-AckSignal
-  if ($acked) {
+  # 用户点掉的先消化掉。一次可能有多个（一行一个 id）。
+  foreach ($acked in @(Read-AckSignal)) {
     if (Remove-TrackedSession $acked) { Log-Line "session ack: $acked" }
   }
 

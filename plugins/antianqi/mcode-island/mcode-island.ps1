@@ -417,6 +417,115 @@ function Read-SessionsFile {
   }
 }
 
+# 本地"已消除、detector 还没确认"的会话。
+#
+# 点 × 之后 detector 要等下一轮（最多 1 秒）才把 ack 消费掉、才把它从
+# sessions.json 里拿掉。在这一秒里列表还读得到这一行 —— 用户点了 × 而行
+# 还在屏幕上，看起来就是"没点动"。
+#
+# 所以 widget 自己先记一份：Show-SessionList 渲染时把它们藏掉。detector
+# 消费掉之后这个 id 就不再出现在 sessions.json 里，pending 集合自然收敛
+# （见 Show-SessionList 里的清理）。
+$script:pendingDismiss = @{}
+
+# 点 × 之前的前台窗口。
+#
+# 鼠标按下会让 Windows 把焦点交给被点的窗口 —— 灵动岛自己就成了前台。
+# 对"跳到那个会话"来说这是对的（本来就该跳过去）。对"只消掉"来说是反的：
+# 用户的意图是"别管这一条，让我继续在编辑器里干活"，结果焦点被抢到灵动岛
+# 上，编辑器失去焦点，下一次按键就落进了不知道哪儿去。
+#
+# 所以在按下之前记下前台是谁，处理完再还回去。
+#
+# 记的时机是 MouseEnter（鼠标进入药丸）而不是 MouseDown：MouseEnter 一定
+# 早于任何一次点击，而且此时焦点还在用户原来的窗口上。
+$script:foregroundBeforeAction = [IntPtr]::Zero
+
+# 灵动岛自己的窗口句柄。
+#
+# 用来判断"当前前台是不是我自己" —— 是的话就不用还（还给自己没有意义）。
+function Get-WidgetHwnd {
+  try {
+    $helper = New-Object System.Windows.Interop.WindowInteropHelper($window)
+    return $helper.Handle
+  } catch {
+    return [IntPtr]::Zero
+  }
+}
+
+# 记下当前前台窗口，供消除之后归还。
+#
+# 只记"不是灵动岛自己"的前台：自己激活自己的时候没什么可还的。
+function Save-ForegroundBeforeAction {
+  try {
+    $fg = [WinAPI]::GetForegroundWindow()
+    if ($fg -eq [IntPtr]::Zero) { return }
+    $self = Get-WidgetHwnd
+    if ($self -ne [IntPtr]::Zero -and $fg -eq $self) { return }
+    $script:foregroundBeforeAction = $fg
+  } catch {
+    # 记不住就算了：宁可焦点留在灵动岛，也不要在这里抛异常把点击搞崩。
+  }
+}
+
+# 把焦点还给之前记下的窗口。
+#
+# 用 SetForegroundWindow：它只改"哪个窗口在前台"，不动 z-order、不动大小
+# 位置、不最大化。用户的窗口保持原样，只是重新拿到焦点。
+#
+# SetForegroundWindow 可能被 Windows 的前台锁挡下来（调用方不是当前前台
+# 进程时）。所以抢完要回读一次前台窗口确认真的还回去了，不成功就记一笔
+# 日志 —— 静默失败会让人以为"消除会还焦点"是假的。
+function Restore-ForegroundAfterAction {
+  $target = $script:foregroundBeforeAction
+  if ($target -eq [IntPtr]::Zero) { return }
+  try {
+    if (-not [WinAPI]::IsWindow($target)) { return }
+    [WinAPI]::SetForegroundWindow($target) | Out-Null
+    $now = [WinAPI]::GetForegroundWindow()
+    if ($now -eq $target) {
+      Dbg ("foreground restored to hwnd=" + $target)
+    } else {
+      Dbg ("foreground NOT restored (wanted hwnd=" + $target + ", now=" + $now + ")")
+    }
+  } catch {
+    Dbg ("FOREGROUND RESTORE FAIL: " + $_.Exception.Message)
+  }
+}
+
+# 写 ack.signal：告诉 detector 消掉哪个会话。
+#
+# 一行一个 id，可以写多行。
+#
+# 为什么不是"覆盖写一个 id"：detector 每秒消费一次 ack.signal。用户在一秒
+# 里点两行（点两下 ×，或者点 × 之后立刻点另一行），后写的会盖掉先写的，
+# 那一条就永远消不掉。消除是个批量动作，一秒内消掉两三条很正常，所以这里
+# 改成追加。
+#
+# 先写临时文件再改名：detector 那边也是靠改名消费 ack.signal。两边都用
+# 改名，就不存在"读到写了一半的文件"这一种情况。
+function Write-AckSignal([string]$id) {
+  if (-not $id) { return $false }
+  $ackFile = Join-Path $configDir 'ack.signal'
+  $tmp = $ackFile + '.tmp'
+  try {
+    $existing = ''
+    if (Test-Path -LiteralPath $ackFile) {
+      try { $existing = [System.IO.File]::ReadAllText($ackFile) } catch { $existing = '' }
+    }
+    $text = $existing
+    if ($text.Length -gt 0 -and -not $text.EndsWith("`n")) { $text = $text + "`n" }
+    $text = $text + $id + "`n"
+    [System.IO.File]::WriteAllText($tmp, $text, (New-Object System.Text.UTF8Encoding($false)))
+    Move-Item -LiteralPath $tmp -Destination $ackFile -Force
+    return $true
+  } catch {
+    Dbg "SESSION ACK FAIL: $($_.Exception.Message)"
+    try { if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue } } catch {}
+    return $false
+  }
+}
+
 function Clear-SessionRows {
   if (-not $script:sessionRows) { return }
   $script:sessionRows.Children.Clear()
@@ -513,9 +622,14 @@ function Add-SessionRow([string]$id, [string]$title, [string]$phase, [string]$pr
   $colTitle.Width = New-Object System.Windows.GridLength(1, [System.Windows.GridUnitType]::Star)
   $colTag = New-Object System.Windows.Controls.ColumnDefinition
   $colTag.Width = New-Object System.Windows.GridLength(1, [System.Windows.GridUnitType]::Auto)
+  # 最右边一列：消除按钮（×）。固定宽度，不参与 Star 分配 —— 它必须一直
+  # 在同一个位置，否则鼠标移到不同行时 × 会左右跳。
+  $colX = New-Object System.Windows.Controls.ColumnDefinition
+  $colX.Width = New-Object System.Windows.GridLength(1, [System.Windows.GridUnitType]::Auto)
   $grid.ColumnDefinitions.Add($colDot) | Out-Null
   $grid.ColumnDefinitions.Add($colTitle) | Out-Null
   $grid.ColumnDefinitions.Add($colTag) | Out-Null
+  $grid.ColumnDefinitions.Add($colX) | Out-Null
 
   # 两行：标题 / 摘要。
   $rowTop = New-Object System.Windows.Controls.RowDefinition
@@ -568,14 +682,55 @@ function Add-SessionRow([string]$id, [string]$title, [string]$phase, [string]$pr
   $right.Children.Add($time) | Out-Null
   $right.Children.Add($tag) | Out-Null
 
+  # 消除按钮（×）。
+  #
+  # 用 TextBlock 而不是 Button：Button 默认带边框和背景，在这个无边框的
+  # 透明窗口里会画出一个灰底方块，很难看。TextBlock 自己画一个字就够。
+  #
+  # 键盘可达性是个已知短板：一个纯鼠标点的按钮没法用 Tab 走到。它挂在
+  # 一个本来就只能鼠标点的浮层列表上，这个列表整体没有键盘导航，先不
+  # 单独给 × 造一套焦点管理。
+  $xMark = New-Object System.Windows.Controls.TextBlock
+  $xMark.Text = '×'
+  $xMark.FontSize = 14
+  $xMark.Foreground = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#FF6B7280')))
+  $xMark.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+  $xMark.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Center
+  $xMark.Margin = New-Object System.Windows.Thickness(10,0,2,0)
+  $xMark.Cursor = [System.Windows.Input.Cursor]::Hand
+  $xMark.ToolTip = '从列表中消除（不跳转）'
+
+  # hover 时变红：让它一眼看出这是个"会动手"的东西。
+  $xIdleBrush = $xMark.Foreground
+  $xHotBrush = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#FFEF4444')))
+  # $args[0] 是 sender（这个 TextBlock），和下面 MouseLeftButtonDown 用
+  # $args[1] 取事件参数是同一套写法。
+  $xMark.Add_MouseEnter({ $args[0].Foreground = $xHotBrush }.GetNewClosure())
+  $xMark.Add_MouseLeave({ $args[0].Foreground = $xIdleBrush }.GetNewClosure())
+
+  # 点 × ：只消除，不跳转。
+  #
+  # Handled = true 是必须的：× 是 Border 的子元素，MouseLeftButtonDown 会
+  # 冒泡到 Border，而 Border 上挂着整行的点击处理（消掉 + 跳转）。不拦住
+  # 的话，点 × 会顺手把用户切到那个会话去 —— 正好是 × 要避免的事。
+  #
+  # 焦点：鼠标按下会把焦点交给灵动岛自己。消除完要还回去（见
+  # Invoke-SessionDismiss 末尾的 Restore-ForegroundAfterAction）。
+  $xMark.Add_MouseLeftButtonDown({
+    $args[1].Handled = $true
+    Invoke-SessionDismiss $id
+  }.GetNewClosure())
+
   $grid.Children.Add($dot)   | Out-Null
   $grid.Children.Add($txt)   | Out-Null
   $grid.Children.Add($right) | Out-Null
   $grid.Children.Add($sub)   | Out-Null
+  $grid.Children.Add($xMark) | Out-Null
   [System.Windows.Controls.Grid]::SetColumn($dot, 0)
   [System.Windows.Controls.Grid]::SetColumn($txt, 1)
   [System.Windows.Controls.Grid]::SetColumn($right, 2)
   [System.Windows.Controls.Grid]::SetColumn($sub, 1)
+  [System.Windows.Controls.Grid]::SetColumn($xMark, 3)
   [System.Windows.Controls.Grid]::SetRow($dot, 0)
   [System.Windows.Controls.Grid]::SetRow($txt, 0)
   [System.Windows.Controls.Grid]::SetRow($right, 0)
@@ -608,6 +763,10 @@ function Add-SessionRow([string]$id, [string]$title, [string]$phase, [string]$pr
   # 列表在同一个窗口里，不拦住的话点一行会被当成"开始拖药丸"。
   $border.Add_MouseLeftButtonDown({
     $args[1].Handled = $true
+    # 第二道保险：× 自己已经设了 Handled，理论上事件到不了这里。但
+    # "理论上"不够 —— 万一某个 WPF 版本的冒泡行为不同，点 × 就会顺手
+    # 把用户切到那个会话去，正好是 × 要避免的事。所以再查一次事件源。
+    if ($args[1].OriginalSource -eq $xMark) { return }
     Invoke-SessionClick $id
   }.GetNewClosure())
 
@@ -643,6 +802,22 @@ function Show-SessionList {
   }
   $items = Read-SessionsFile
   if (-not $items -or $items.Count -eq 0) { Hide-SessionList; return }
+  # 把"本地已消除、detector 还没确认"的先藏掉。
+  #
+  # 点 × 之后 detector 要等下一轮才消费 ack，这期间这一行还在 sessions.json
+  # 里。藏掉它，用户才觉得"点了就走了"。
+  #
+  # 同时反过来收敛：某个 id 已经不在 sessions.json 里了，说明 detector 已经
+  # 消费掉它、确认了消除 —— 这时把它从 pending 里划掉，pending 不会一直长。
+  if ($script:pendingDismiss.Count -gt 0) {
+    $present = @{}
+    foreach ($s in $items) { $present[[string]$s.id] = $true }
+    foreach ($pid_ in @($script:pendingDismiss.Keys)) {
+      if (-not $present.ContainsKey($pid_)) { $script:pendingDismiss.Remove($pid_) }
+    }
+    $items = @($items | Where-Object { -not $script:pendingDismiss.ContainsKey([string]$_.id) })
+    if (-not $items -or $items.Count -eq 0) { Hide-SessionList; return }
+  }
   Clear-SessionRows
   # 运行中的排前面，其余按"最后一次动静"倒序。
   #
@@ -745,9 +920,9 @@ function Invoke-SessionClick([string]$id) {
   # 消掉：写 ack.signal，detector 收走（它会从列表里删掉这一条，并且
   # 在这个 session 跑完下一轮之前不再把它收回来）。
   try {
-    $ackFile = Join-Path $configDir 'ack.signal'
-    [System.IO.File]::WriteAllText($ackFile, $id, [System.Text.Encoding]::UTF8)
-    Dbg "session ack written: $id"
+    if (Write-AckSignal $id) {
+      Dbg "session ack written: $id"
+    }
   } catch {
     Dbg "SESSION ACK FAIL: $($_.Exception.Message)"
   }
@@ -809,6 +984,34 @@ function Invoke-SessionClick([string]$id) {
   # （app 内嵌终端、别的终端程序），那时候新开只会多一个。宁可什么都不做，
   # 让用户自己切 —— 日志里写清楚为什么。
   Dbg ("session click: no target for " + $id + " (no matching tab, no app window) -- not opening a new terminal")
+}
+
+# 消除一个会话，但不跳过去。
+#
+# 点整行 = 消掉 + 跳到那个会话。跳转会抢焦点、会把用户从当前正在做的事
+# 里拽走 —— 而"我不想管这一条"和"我要去这一条"是两回事：有时候列表里那
+# 几条就是不想再看了（比如已经处理完的），但你并不想因此切走手头的事。
+#
+# 所以每行右边给一个 ×：只消掉，不跳转，不关列表（消完还能接着消下一条）。
+#
+# 消掉的语义沿用 detector 那边的 ack 协议：这一轮里它不再出现，等 agent
+# 跑完一轮又重新开始，它会自己回来。跟点整行的消掉是同一套规则。
+function Invoke-SessionDismiss([string]$id) {
+  if (-not $id) { return }
+  # 与 Invoke-SessionClick 同一道门：id 来自 sessions.json，不可信。
+  if ($id -notmatch '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$') {
+    Dbg "session dismiss: refused an id that is not shaped like a session id"
+    return
+  }
+  if (-not (Write-AckSignal $id)) { return }
+  # 先本地记下：detector 要到下一轮（最多 1 秒）才消费 ack，这期间这一行
+  # 还在 sessions.json 里。不先藏掉，用户点了 × 而行还在屏幕上。
+  $script:pendingDismiss[$id] = $true
+  Dbg ("session dismissed without switching: " + $id)
+  # 重画：这一行立刻消失，高度也跟着收。
+  try { Show-SessionList } catch { Dbg "SESSION LIST REFRESH FAIL: $($_.Exception.Message)" }
+  # 最后把焦点还回去。
+  Restore-ForegroundAfterAction
 }
 
 # 找到 app 侧边栏里的**会话列表容器**。
@@ -2028,6 +2231,9 @@ $window.Add_MouseMove({
   # 拖拽中不弹（dragStart 非空）。
   if ($null -eq $script:dragStart -and $script:sessionRowsPanel -and
       $script:sessionRowsPanel.Visibility -ne [System.Windows.Visibility]::Visible) {
+    # 补开的那条路也要记前台：MouseEnter 可能从来没来过（比如 widget 在
+    # 光标底下启动），这时候只有这一条路能记住用户原来在哪个窗口。
+    Save-ForegroundBeforeAction
     try { Show-SessionList } catch { Dbg "SESSION LIST SHOW FAIL: $($_.Exception.Message)" }
   }
   if ($null -eq $script:dragStart) { return }
@@ -2076,6 +2282,9 @@ $window.Add_MouseLeftButtonUp({
 # 进列表窗口就取消。
 $window.Add_MouseEnter({
   if ($script:listHideTimer) { try { $script:listHideTimer.Stop() } catch {} ; $script:listHideTimer = $null }
+  # 鼠标进来的这一刻，焦点还在用户原来的窗口上 —— 这是记下"点 × 之后该
+  # 还给谁"的唯一时机。点下去就晚了：那时焦点已经在灵动岛自己身上。
+  Save-ForegroundBeforeAction
   try { Show-SessionList } catch { Dbg "SESSION LIST SHOW FAIL: $($_.Exception.Message)" }
 })
 $window.Add_MouseLeave({

@@ -526,9 +526,42 @@ the bug this feature is meant to avoid.
 Clicking a row also dismisses it: the session leaves the list and stays
 out of it until it starts its next round.
 
+**The × on each row dismisses it without going anywhere.** Clicking the
+row body means "take me back to that session". The × means "I am done with
+this one" — and those are different intentions. Sometimes the rows in the
+list are conversations you have already dealt with, and you do not want to
+be dragged out of whatever you are doing to get rid of them.
+
+So the × dismisses the row and nothing else:
+
+- it does **not** switch to the session, and does not open a terminal;
+- it does **not** close the list — the row disappears, the list shrinks,
+  and the next row's × is right there, so several rows can be dismissed in
+  a row;
+- it **gives the focus back** to the window that had it. Pressing the
+  mouse button hands the focus to the pill; for "jump to that session"
+  that is fine, but for "just dismiss this" it would cost the user their
+  editor's focus. The widget captures the foreground window when the
+  mouse enters the pill and hands it back afterwards.
+
+Dismissal uses the same rule as a row click: the session stays out of the
+list until it starts its next round, then it comes back on its own.
+
 The list is fed by the detector, which writes `sessions.json` next to
 `status.json` in `%APPDATA%\mcode-island\`. That file is the contract
 between the detector and the widget; the widget only reads it.
+
+**The list is bounded.** Two limits, on purpose:
+
+- the detector keeps at most **20** sessions (`MAX_SESSIONS`), dropping the
+  ones that have been idle the longest;
+- the widget draws at most **12** rows (`MAX_SESSION_ROWS`) and says
+  "还有 N 条" underneath, rather than silently dropping them — a row that
+  vanished without a word would be read as "that is all there is", which
+  is the exact question the list exists to answer.
+
+The list height is also clamped to the work area, so it can never grow
+past the screen.
 
 ## Test evidence
 
@@ -542,6 +575,12 @@ a live MiniMax Code session. Empirical evidence (captured during development):
   `waiting` → `working` → `done` on a real `bash npm test` run.
 - Click-to-focus round-trip verified: from a Feishu tab, click the pill, focus
   jumps to the originating Windows Terminal tab (HWND consistent).
+- Per-row × verified on a live machine with real mouse input: the row is
+  removed from `sessions.json` within a second, the list stays open and
+  shrinks by one row, the foreground window is unchanged before and after
+  the click (`pid` and `hwnd` identical), and a second × dismisses a second
+  row — two dismissals in one second both land, which is what the
+  multi-id `ack.signal` is for.
 - Click-target order verified against the live desktop app: with
   `MiniMax Inside Code` running, the click resolves to the app window
   (`mode=focus`, never hidden); with a `pin.json` present it resolves to the

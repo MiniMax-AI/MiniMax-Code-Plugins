@@ -642,6 +642,113 @@ const main = async () => {
                 out('PASS', 'mcode-island.ps1: Invoke-SessionClick validates the id and spawns nothing');
             }
         }
+
+        // (k2) The per-row dismiss button.
+        //
+        // Clicking a row means "go back to that session", and it also drops
+        // the row from the list. Those are two different intentions: "I am
+        // done with this one" does not mean "take me there" -- switching
+        // would yank the user out of whatever they are doing.
+        //
+        // So each row carries a dismiss mark that only dismisses. Three
+        // things have to hold, and each is a separate lock:
+        //   1. the mark exists on the row,
+        //   2. it calls the dismiss path (not the click path),
+        //   3. it cannot reach the click path -- the row's own handler is
+        //      on the parent Border, and MouseLeftButtonDown bubbles, so
+        //      the mark has to mark the event handled.
+        const rowBody = (widget.match(/function Add-SessionRow[\s\S]*?\n\}\n/) || [''])[0];
+        // Comments inside the row mention the dismiss function by name, so a
+        // text search would be satisfied by the comment alone -- the row would
+        // look wired even with the call gone. Strip the comment lines first.
+        const rowCode = rowBody.split('\n').filter((line) => !/^\s*#/.test(line)).join('\n');
+        if (!rowBody) {
+            out('FAIL', 'mcode-island.ps1: Add-SessionRow body not found (dismiss-button lock skipped)');
+        } else if (!/\$xMark\s*=/.test(rowCode) || !/Invoke-SessionDismiss/.test(rowCode)) {
+            out('FAIL', 'mcode-island.ps1: the session row has no dismiss mark, or it does not call Invoke-SessionDismiss');
+        } else {
+            out('PASS', 'mcode-island.ps1: the session row carries a dismiss mark wired to Invoke-SessionDismiss');
+            // The mark must not be able to reach the click handler: that
+            // handler switches the user to the session.
+            const dismissBlock = (rowCode.match(/\$xMark\.Add_MouseLeftButtonDown\(\{[\s\S]*?\}\)/) || [''])[0];
+            if (!dismissBlock) {
+                out('FAIL', 'mcode-island.ps1: the dismiss mark has no MouseLeftButtonDown handler');
+            } else if (!/Handled\s*=\s*\$true/.test(dismissBlock)) {
+                out('FAIL', 'mcode-island.ps1: the dismiss mark does not mark the event handled -- the click would bubble to the row and switch the session');
+            } else if (/Invoke-SessionClick/.test(dismissBlock)) {
+                out('FAIL', 'mcode-island.ps1: the dismiss mark calls the click path -- dismissing would also switch the session');
+            } else {
+                out('PASS', 'mcode-island.ps1: the dismiss mark stops the event and never calls the click path');
+            }
+        }
+
+        // The dismiss path itself must not switch sessions: it only writes
+        // the ack, records the pending dismissal and redraws.
+        const dismissBody = (widget.match(/function Invoke-SessionDismiss[\s\S]*?\n\}\n/) || [''])[0];
+        if (!dismissBody) {
+            out('FAIL', 'mcode-island.ps1: Invoke-SessionDismiss not found');
+        } else {
+            const dismissCode = dismissBody.split('\n').filter((line) => !/^\s*#/.test(line)).join('\n');
+            if (/Invoke-SessionClick|Select-SessionTerminal|Switch-ToAppConversation|Activate-/.test(dismissCode)) {                out('FAIL', 'mcode-island.ps1: Invoke-SessionDismiss switches to the session -- dismissing must not move the user');
+            } else if (!/Write-AckSignal/.test(dismissCode)) {
+                out('FAIL', 'mcode-island.ps1: Invoke-SessionDismiss does not write the ack -- the row would come back');
+            } else if (!/\$id\s+-notmatch\s+'/.test(dismissCode)) {
+                out('FAIL', 'mcode-island.ps1: Invoke-SessionDismiss does not validate the session id');
+            } else {
+                out('PASS', 'mcode-island.ps1: Invoke-SessionDismiss only acks the row (no switch, id validated)');
+            }
+        }
+
+        // The focus has to go back to where it was.
+        //
+        // Pressing the mouse button hands focus to the pressed window -- the
+        // pill. For "jump to that session" that is fine (it jumps anyway).
+        // For "just dismiss it" it is the opposite of the intent: the user
+        // asked not to be interrupted, and losing the editor's focus means
+        // the next keystroke goes somewhere unknown.
+        //
+        // So the foreground has to be captured before the click (on
+        // MouseEnter) and handed back afterwards.
+        if (!/function\s+Save-ForegroundBeforeAction\b/.test(widget)) {
+            out('FAIL', 'mcode-island.ps1: no Save-ForegroundBeforeAction -- the pill keeps the focus it stole');
+        } else if (!/function\s+Restore-ForegroundAfterAction\b/.test(widget)) {
+            out('FAIL', 'mcode-island.ps1: no Restore-ForegroundAfterAction -- the pill keeps the focus it stole');
+        } else if (!/Restore-ForegroundAfterAction/.test(dismissBody)) {
+            out('FAIL', 'mcode-island.ps1: Invoke-SessionDismiss does not give the focus back');
+        } else {
+            out('PASS', 'mcode-island.ps1: dismissing gives the focus back to where it was');
+        }
+        // The capture has to happen on MouseEnter: by MouseDown the pill
+        // already owns the focus, and there would be nothing to give back.
+        const mouseEnterBlock = (widget.match(/\$window\.Add_MouseEnter\(\{[\s\S]*?\}\)/) || [''])[0];
+        if (!mouseEnterBlock) {
+            out('FAIL', 'mcode-island.ps1: no window MouseEnter handler -- the foreground cannot be captured before the click');
+        } else if (!/Save-ForegroundBeforeAction/.test(mouseEnterBlock)) {
+            out('FAIL', 'mcode-island.ps1: MouseEnter does not capture the foreground -- by click time the pill already owns it');
+        } else {
+            out('PASS', 'mcode-island.ps1: the foreground is captured on MouseEnter, before any click');
+        }
+
+        // The ack file has to carry more than one id. The dismiss button
+        // makes dismissing several rows in a row a normal thing to do, and
+        // the detector consumes the file once a second -- a single-id file
+        // loses every dismiss but the last one.
+        if (!/function\s+Write-AckSignal\b/.test(widget)) {
+            out('FAIL', 'mcode-island.ps1: no Write-AckSignal -- the ack path is still the single-id one');
+        } else {
+            out('PASS', 'mcode-island.ps1: the ack is written through Write-AckSignal');
+        }
+        const trackerSrc = await readFile(join(PLUGIN_ROOT, 'scripts', 'lib', 'Session-Tracker.ps1'), 'utf8');
+        const ackBody = (trackerSrc.match(/function\s+Read-AckSignal[\s\S]*?\n\}\n/) || [''])[0];
+        if (!ackBody) {
+            out('FAIL', 'scripts/lib/Session-Tracker.ps1: Read-AckSignal body not found');
+        } else if (!/-split\s+"`r\?`n"/.test(ackBody)) {
+            out('FAIL', 'scripts/lib/Session-Tracker.ps1: Read-AckSignal reads one id -- dismissing several rows in a second would lose all but the last');
+        } else if (!/Move-Item[\s\S]*ackFile[\s\S]*taken/.test(ackBody)) {
+            out('FAIL', 'scripts/lib/Session-Tracker.ps1: Read-AckSignal does not take the file by rename -- an ack written while it reads would be lost');
+        } else {
+            out('PASS', 'scripts/lib/Session-Tracker.ps1: the ack carries many ids and is taken by rename');
+        }
         // The UIA lookup has to filter by name. Reading every element of the
         // app's tree costs ~500ms, and the click handler runs on the UI
         // thread -- that would freeze the pill.
