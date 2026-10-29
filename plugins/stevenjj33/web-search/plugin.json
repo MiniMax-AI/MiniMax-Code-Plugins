@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
-  "name": "web-research",
+  "name": "web-search",
   "version": "0.1.0",
-  "description": "End-to-end web research: search the web via Tavily keyless, then fetch each URL with a free-first cascade (defuddle → Tavily extract → mcode browser fallback). One Skill, one Python entry point.",
+  "description": "End-to-end web search and research: search the web via Tavily keyless, then fetch each URL with a free-first cascade (defuddle → Tavily extract → mcode browser fallback). One Skill, one Python entry point.",
   "author": {
     "name": "stevenjj33",
     "url": "https://github.com/stevenjj33"

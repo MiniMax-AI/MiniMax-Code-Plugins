@@ -1,5 +1,5 @@
 ---
-name: web-research
+name: web-search
 description: Use when the user asks to research a topic on the web, gather information from multiple sources, do a literature scan, summarize recent developments on a subject, or look up articles. Triggers on requests like "调研 X", "找几篇关于 Y 的文章", "research Z", "汇总 Q 的资料", "look up the latest on W". Do NOT use for single-URL fetches with no research framing (use the defuddle skill directly), local file operations, code edits, or tasks that do not need web data.
 license: Apache-2.0
 compatibility: Requires Python 3.8+. Defuddle CLI is optional but strongly recommended. Network access to https://api.tavily.com required.
@@ -8,7 +8,7 @@ metadata:
   version: "0.1.0"
 ---
 
-# web-research
+# web-search
 
 End-to-end web research pipeline: search → fetch with a free-first cascade → summarise.
 
