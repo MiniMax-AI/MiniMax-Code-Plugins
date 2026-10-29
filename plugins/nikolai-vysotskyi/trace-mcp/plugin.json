@@ -1,0 +1,22 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "trace-mcp",
+  "version": "3.31.5",
+  "description": "Framework-aware code intelligence MCP server — 88 framework integrations, 81 languages, 72.7% fewer input tokens to review a pull request, comprehension at parity",
+  "author": {
+    "name": "Nikolai Vysotskyi",
+    "url": "https://github.com/nikolai-vysotskyi"
+  },
+  "license": "MIT",
+  "repository": "https://github.com/nikolai-vysotskyi/trace-mcp",
+  "homepage": "https://trace-mcp.com",
+  "keywords": [
+    "mcp",
+    "code-intelligence",
+    "static-analysis",
+    "refactoring",
+    "semantic-search",
+    "code-graph",
+    "framework-aware"
+  ]
+}
