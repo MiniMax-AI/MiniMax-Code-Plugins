@@ -1,4 +1,4 @@
-# Hook: SessionEnd
+﻿# Hook: SessionEnd
 # Event:  io.minimax.mcode / SessionEnd
 # State:  idle
 # Note:   Fires when the runtime terminates a session. We push idle
