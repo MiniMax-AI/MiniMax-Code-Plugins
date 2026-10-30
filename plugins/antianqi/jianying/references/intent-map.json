@@ -1,0 +1,309 @@
+{
+  "schema": "jianying.intent-map.v1",
+  "note": "自然语言诉求 → 动词/参数 的【机器可读】映射。各 skill 正文里那张\"常见诉求\"人读表是本文件的展开（★ 两者必须一致，由机械审计 7f/7g 双向校验）。★ 本文件里的参数名由机械审计按 mcp/tools/grade-apply.schema.json 校验 ⇒ 拼错会被当场抓出来。",
+  "generated_from": [
+    "jianying-cut: 7 条",
+    "jianying-grade-chain: 6 条",
+    "jianying-draft-edit: 14 条"
+  ],
+  "counts": {
+    "raw": 27,
+    "merged": 21
+  },
+  "intents": [
+    {
+      "utterance": "调亮一点",
+      "verb": "grade_apply",
+      "params": {
+        "spec": {
+          "adjustColor": {
+            "brightness": 0.12
+          }
+        }
+      },
+      "skills": [
+        "jianying-cut",
+        "jianying-grade-chain"
+      ]
+    },
+    {
+      "utterance": "调暖一点",
+      "verb": "grade_apply",
+      "params": {
+        "spec": {
+          "adjustColor": {
+            "temperature": 0.15
+          }
+        }
+      },
+      "skills": [
+        "jianying-cut",
+        "jianying-grade-chain"
+      ]
+    },
+    {
+      "utterance": "提亮中间调、压高光",
+      "verb": "grade_apply",
+      "params": {
+        "spec": {
+          "adjustColor": {
+            "shadow": 0.15,
+            "highlight": -0.1
+          }
+        }
+      },
+      "skills": [
+        "jianying-cut",
+        "jianying-grade-chain"
+      ]
+    },
+    {
+      "utterance": "更有食欲（餐饮）",
+      "verb": "grade_apply",
+      "params": {
+        "spec": {
+          "adjustColor": {
+            "saturation": 0.28,
+            "temperature": 0.15,
+            "contrast": 0.12
+          },
+          "logWheel": {
+            "shadow": {
+              "r": 0.14,
+              "g": 0.06,
+              "b": 0,
+              "s": 0.08
+            }
+          }
+        }
+      },
+      "skills": [
+        "jianying-cut",
+        "jianying-grade-chain"
+      ]
+    },
+    {
+      "utterance": "电影感",
+      "verb": "grade_apply",
+      "params": {
+        "spec": {
+          "adjustColor": {
+            "contrast": 0.22,
+            "saturation": -0.1,
+            "shadow": 0.16
+          },
+          "vignetting": {
+            "intensity": 0.35,
+            "param": 0.3
+          }
+        }
+      },
+      "skills": [
+        "jianying-cut",
+        "jianying-grade-chain"
+      ]
+    },
+    {
+      "utterance": "更锐",
+      "verb": "grade_apply",
+      "params": {
+        "spec": {
+          "sharpen": {
+            "intensity": 0.5
+          }
+        }
+      },
+      "skills": [
+        "jianying-cut"
+      ]
+    },
+    {
+      "utterance": "红色更艳",
+      "verb": "grade_apply",
+      "params": {
+        "spec": {
+          "hsl": {
+            "HSLRed": {
+              "hue": 0.56,
+              "saturation": 0.62,
+              "lightness": 0.55
+            }
+          }
+        }
+      },
+      "skills": [
+        "jianying-cut",
+        "jianying-grade-chain"
+      ]
+    },
+    {
+      "utterance": "把这轨静音",
+      "verb": "draft_patch",
+      "params": {
+        "op": "track.mute",
+        "params": {
+          "__placeholders": [
+            "trackId"
+          ]
+        }
+      },
+      "skills": [
+        "jianying-draft-edit"
+      ]
+    },
+    {
+      "utterance": "把这轨删了",
+      "verb": "draft_patch",
+      "params": {
+        "op": "track.delete",
+        "params": {
+          "__placeholders": [
+            "trackId"
+          ]
+        }
+      },
+      "skills": [
+        "jianying-draft-edit"
+      ]
+    },
+    {
+      "utterance": "加一条视频",
+      "verb": "draft_patch",
+      "params": {
+        "note": "说明行：没有对应的官方 op"
+      },
+      "skills": [
+        "jianying-draft-edit"
+      ]
+    },
+    {
+      "utterance": "加一条音频",
+      "verb": "draft_patch",
+      "params": {
+        "note": "说明行：没有对应的官方 op"
+      },
+      "skills": [
+        "jianying-draft-edit"
+      ]
+    },
+    {
+      "utterance": "加一段文字",
+      "verb": "draft_patch",
+      "params": {
+        "note": "说明行：没有对应的官方 op"
+      },
+      "skills": [
+        "jianying-draft-edit"
+      ]
+    },
+    {
+      "utterance": "**加字幕（带时码）**",
+      "verb": "draft_patch",
+      "params": {
+        "note": "说明行：没有对应的官方 op"
+      },
+      "skills": [
+        "jianying-draft-edit"
+      ]
+    },
+    {
+      "utterance": "这段音量调到 25%",
+      "verb": "draft_patch",
+      "params": {
+        "op": "video.setVolume",
+        "params": {
+          "__placeholders": [
+            "segmentId",
+            "volume"
+          ]
+        }
+      },
+      "skills": [
+        "jianying-draft-edit"
+      ]
+    },
+    {
+      "utterance": "这段静音",
+      "verb": "draft_patch",
+      "params": {
+        "op": "video.muteOn",
+        "params": {
+          "__placeholders": [
+            "segmentId"
+          ]
+        }
+      },
+      "skills": [
+        "jianying-draft-edit"
+      ]
+    },
+    {
+      "utterance": "把这段剪成两半",
+      "verb": "draft_patch",
+      "params": {
+        "note": "说明行：没有对应的官方 op"
+      },
+      "skills": [
+        "jianying-draft-edit"
+      ]
+    },
+    {
+      "utterance": "删掉这段",
+      "verb": "draft_patch",
+      "params": {
+        "op": "segment.delete",
+        "params": {
+          "__placeholders": [
+            "segmentId"
+          ]
+        }
+      },
+      "skills": [
+        "jianying-draft-edit"
+      ]
+    },
+    {
+      "utterance": "挪到别的位置",
+      "verb": "draft_patch",
+      "params": {
+        "note": "说明行：没有对应的官方 op"
+      },
+      "skills": [
+        "jianying-draft-edit"
+      ]
+    },
+    {
+      "utterance": "改这段的时间范围",
+      "verb": "draft_patch",
+      "params": {
+        "op": "segment.setTimeRange",
+        "params": {
+          "__placeholders": [
+            "segmentId"
+          ]
+        }
+      },
+      "skills": [
+        "jianying-draft-edit"
+      ]
+    },
+    {
+      "utterance": "撤销上一步",
+      "verb": "draft_patch",
+      "params": {},
+      "skills": [
+        "jianying-draft-edit"
+      ]
+    },
+    {
+      "utterance": "一次做多步",
+      "verb": "draft_patch",
+      "params": {
+        "note": "说明行：没有对应的官方 op"
+      },
+      "skills": [
+        "jianying-draft-edit"
+      ]
+    }
+  ]
+}
