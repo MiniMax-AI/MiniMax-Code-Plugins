@@ -4,3 +4,14 @@ coverage/
 *.log
 __pycache__/
 *.pyc
+
+# Credentials: never commit them.
+.env
+.env.*
+*.env
+!.env.example
+secrets/
+credentials.json
+*credentials.json
+*.pem
+*.p12
