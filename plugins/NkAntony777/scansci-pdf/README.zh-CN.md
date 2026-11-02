@@ -52,11 +52,16 @@ py -V:Astral/CPython3.11.17 -m venv .venv    # 任意 CPython 3.11；POSIX 下�
 .venv/Scripts/python -m pip install pytest cryptography
 ```
 
-日常校验，顺序与 workflow CI 一致（POSIX 下用 `.venv/bin/python`）：
+日常校验，顺序与 workflow CI 一致（POSIX 下用 `.venv/bin/python`）。
+`run_secure.py` 会拒绝从插件包内部的工作目录启动，因此依赖验证必须在外部项目工作区
+运行；pytest 则在引擎目录运行：
 
 ```bash
-.venv/Scripts/python -I run_secure.py --verify    # 源码清单 + 锁定的依赖版本
-.venv/Scripts/python -m pytest tests -q -rs       # 完整引擎回归套件
+ENGINE=<PLUGIN_ROOT>/vendor/scansci-pdf
+cd <PROJECT_WORKSPACE>  # 必须位于 <PLUGIN_ROOT> 之外
+$ENGINE/.venv/Scripts/python -I $ENGINE/run_secure.py --verify  # 源码清单 + 锁定的依赖版本
+cd $ENGINE
+.venv/Scripts/python -m pytest tests -q -rs                    # 完整引擎回归套件
 ```
 
 修改 `src/` 下源码或启动器/锁定文件后，重新生成源码哈希清单并与改动一起提交：

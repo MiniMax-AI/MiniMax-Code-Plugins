@@ -83,11 +83,16 @@ py -V:Astral/CPython3.11.17 -m venv .venv    # any CPython 3.11; POSIX: python3.
 .venv/Scripts/python -m pip install pytest cryptography
 ```
 
-Daily checks, in the same order as the workflow CI (POSIX: `.venv/bin/python`):
+Daily checks, in the same order as the workflow CI (POSIX: `.venv/bin/python`).
+`run_secure.py` rejects a working directory inside the plugin package, so run the
+verification from an external project workspace; run pytest from the engine directory:
 
 ```bash
-.venv/Scripts/python -I run_secure.py --verify    # source manifest + pinned dependency versions
-.venv/Scripts/python -m pytest tests -q -rs       # full engine regression suite
+ENGINE=<PLUGIN_ROOT>/vendor/scansci-pdf
+cd <PROJECT_WORKSPACE>  # outside <PLUGIN_ROOT>
+$ENGINE/.venv/Scripts/python -I $ENGINE/run_secure.py --verify  # source manifest + dependency versions
+cd $ENGINE
+.venv/Scripts/python -m pytest tests -q -rs                    # full engine regression suite
 ```
 
 After editing anything under `src/` or the launcher/lock files, regenerate the pinned source
