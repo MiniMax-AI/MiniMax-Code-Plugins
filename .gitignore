@@ -5,5 +5,16 @@ coverage/
 __pycache__/
 *.pyc
 
+# Credentials: never commit them.
+.env
+.env.*
+*.env
+!.env.example
+secrets/
+credentials.json
+*credentials.json
+*.pem
+*.p12
+
 # Stale widget backups from debugging sessions; never part of a build.
 *.bak-r16

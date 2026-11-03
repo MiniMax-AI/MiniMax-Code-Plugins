@@ -1,10 +1,10 @@
-# web-research
+# web-search
 
-End-to-end web research for MiniMax Code: search the web via Tavily (keyless, no API key required) and fetch each URL with a free-first cascade — **defuddle → Tavily `/extract` → mcode in-app browser**. One Skill, one Python entry point, no bash required.
+End-to-end web search and research for MiniMax Code: search the web via Tavily (keyless, no API key required) and fetch each URL with a free-first cascade — **defuddle → Tavily `/extract` → mcode in-app browser**. One Skill, one Python entry point, no bash required.
 
 ## The problem it solves
 
-Research inside an agent usually means three separate tool calls, three failure modes, and a manual paste-into-context step. This plugin collapses the whole flow into a single Skill invocation that the agent runs end-to-end and then summarises.
+Web research inside an agent usually means three separate tool calls, three failure modes, and a manual paste-into-context step. This plugin collapses the whole flow into a single Skill invocation that the agent runs end-to-end and then summarises.
 
 ## Try it
 
@@ -15,7 +15,7 @@ After installing the plugin, ask the agent:
 **Expected result**: a directory `./research-output/` containing `01-…md` through `05-…md`, each with a one-line tag (`[defuddle]` / `[tavily extract]` / `[browser required]`) on stderr. The agent then summarises the files in chat. Direct invocation:
 
 ```bash
-python3 skills/web-research/scripts/research.py "向量数据库 最新进展" 5 ./research-output
+python3 skills/web-search/scripts/research.py "向量数据库 最新进展" 5 ./research-output
 ```
 
 Single-URL form:
@@ -61,12 +61,12 @@ This plugin talks to three network destinations, in order:
 ## Files
 
 ```text
-plugins/<owner>/web-research/
+plugins/<owner>/web-search/
 ├── plugin.json
 ├── README.md
 ├── LICENSE
 └── skills/
-    └── web-research/
+    └── web-search/
         ├── SKILL.md
         └── scripts/
             ├── research.py
