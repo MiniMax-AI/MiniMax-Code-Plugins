@@ -1,0 +1,21 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "deja-vu",
+  "version": "0.23.1",
+  "description": "Search the session history MiniMax Code and other coding agents already keep on this machine: past decisions, fixes, commands and the files a session touched. Local index, no LLM, no network. Needs the deja CLI on PATH.",
+  "author": {
+    "name": "vshulcz",
+    "url": "https://github.com/vshulcz"
+  },
+  "homepage": "https://vshulcz.github.io/deja-vu/",
+  "repository": "https://github.com/vshulcz/deja-vu",
+  "license": "MIT",
+  "keywords": [
+    "minimax-code",
+    "mcode",
+    "memory",
+    "session-history",
+    "recall",
+    "mcp"
+  ]
+}
