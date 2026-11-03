@@ -244,6 +244,24 @@ const CASES = [
         replace: '        keep += s.slice(i);',
         expect: 'xaml comments: a comment marker survived the strip',
     },
+    {
+        // HTML5 里 "--!>" 也是合法的注释结束标记。只认 "-->" 的过滤器会把它
+        // 当成没闭合，CodeQL 的 js/bad-html-filtering-regexp 正是判这个。
+        name: 'the strip only knows "-->" -> a comment ended by "--!>" stays open',
+        file: SMOKE,
+        find: '    const m = /--!?>/.exec(s.slice(from));',
+        replace: '    const m = /-->/.exec(s.slice(from));',
+        expect: 'xaml comments: the strip does not recognise every HTML comment end tag',
+    },
+    {
+        // 结束标记有两个长度（"-->" 3 个字符，"--!>" 4 个），推进量按 3 走会
+        // 在 "--!>" 后面多留一个字符。这条就是当时真实犯的那个 bug。
+        name: 'the strip advances by the wrong length -> a character survives the comment',
+        file: SMOKE,
+        find: '        i = close.at + close.len;        // "-->" is 3 chars, "--!>" is 4',
+        replace: '        i = close.at + 3;        // "-->" is 3 chars, "--!>" is 4',
+        expect: 'xaml comments: the strip does not recognise every HTML comment end tag',
+    },
 ];
 
 async function runSmoke() {

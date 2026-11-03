@@ -92,6 +92,17 @@ const checkLiteralPaths = (s, where) => {
 // This walks the text instead. A paired comment is dropped whole; an
 // unpaired `<!--` drops everything after it. Either way the result carries
 // no comment marker, which is the property the assertions actually need.
+// Where the next HTML comment end tag starts, or -1.
+//
+// HTML5 accepts "--!>" as a comment end as well as "-->", so a filter that
+// only knows "-->" leaves such a comment open (CodeQL:
+// js/bad-html-filtering-regexp).
+const xmlCommentEndAt = (s, from) => {
+    const m = /--!?>/.exec(s.slice(from));
+    if (!m) return null;
+    return { at: from + m.index, len: m[0].length };
+};
+
 const stripXmlComments = (s) => {
     let keep = '';
     let i = 0;
@@ -99,22 +110,22 @@ const stripXmlComments = (s) => {
         const open = s.indexOf('<!--', i);
         if (open < 0) { keep += s.slice(i); break; }
         keep += s.slice(i, open);
-        const close = s.indexOf('-->', open + 4);
-        if (close < 0) break;            // unclosed: drop the rest
-        i = close + 3;
+        const close = xmlCommentEndAt(s, open + 4);
+        if (!close) break;               // unclosed: drop the rest
+        i = close.at + close.len;        // "-->" is 3 chars, "--!>" is 4
     }
     return keep;
 };
 
-// True when every `<!--` in the text has a `-->` after it, in order.
+// True when every `<!--` in the text has a comment end tag after it, in order.
 const xmlCommentsArePaired = (s) => {
     let i = 0;
     while (i < s.length) {
         const open = s.indexOf('<!--', i);
         if (open < 0) return true;
-        const close = s.indexOf('-->', open + 4);
-        if (close < 0) return false;
-        i = close + 3;
+        const close = xmlCommentEndAt(s, open + 4);
+        if (!close) return false;
+        i = close.at + close.len;
     }
     return true;
 };
@@ -2136,10 +2147,20 @@ const main = async () => {
                 out('PASS', 'xaml comments: every XML comment in the XAML is closed');
             }
             const xaml = stripXmlComments(xamlRaw);
-            if (!/<!--|-->/.test(xaml)) {
+            if (!/<!--|--!?>/.test(xaml)) {
                 out('PASS', 'xaml comments: the stripped XAML carries no comment marker');
             } else {
                 out('FAIL', 'xaml comments: a comment marker survived the strip -- a comment in the source can feed the material assertions');
+            }
+            // The strip has to know BOTH comment end tags. A probe is the
+            // only way to prove it: the widget's own XAML never uses "--!>",
+            // so without a probe a strip that only knew "-->" would look
+            // perfect here.
+            const probe = '<a><!-- c --!><b>keep</b>';
+            if (stripXmlComments(probe) === '<a><b>keep</b>') {
+                out('PASS', 'xaml comments: the strip recognises every HTML comment end tag');
+            } else {
+                out('FAIL', 'xaml comments: the strip does not recognise every HTML comment end tag -- "--!>" closes a comment too');
             }
 
             const numOf = (name) => {

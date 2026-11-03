@@ -730,7 +730,7 @@ a live MiniMax Code session. Empirical evidence (captured during development):
   screenshot shows the strip's own crisp text instead of glass and the run
   looks like it passed while proving nothing.
 - The material assertions are **negative-injection tested**:
-  `scripts/test-material-injection.mjs` mutates one line of the source 30
+  `scripts/test-material-injection.mjs` mutates one line of the source 32
   times (a hard-coded tint coming back, the capture affinity call removed,
   the measure/arrange step skipped, the grain opacity raised, the two poles'
   colour tables diverged, the hysteresis removed, the panel made thinner
@@ -738,16 +738,22 @@ a live MiniMax Code session. Empirical evidence (captured during development):
   log slot going back to one shared value, the convergence formula replaced
   by a fixed wash, the thickness factor shadowing the typed `$Thick`
   parameter, an XML comment left unclosed in the XAML, the XAML block
-  unreadable, the comment strip itself broken, …), checks that
+  unreadable, the comment strip itself broken, the strip knowing only one of
+  the two HTML comment end tags, the strip advancing by the wrong length, …),
+  checks that
   the expected assertion turns red each time, and confirms the suite is
   green again after the source is restored.
 - The XAML is stripped of its XML comments **before** the material
   assertions read it, so a comment in the source cannot feed them. The strip
   walks the text instead of running a regex: a paired comment is dropped
   whole, an unclosed `<!--` drops everything after it, so the result never
-  carries a comment marker. Two assertions say that out loud (every comment
-  in the XAML is closed; the stripped XAML carries no marker left), and a
-  third reports when the XAML block cannot be read at all.
+  carries a comment marker. It knows **both** HTML comment end tags
+  (`-->` and `--!>`) and advances by the tag's real length, so neither form
+  leaves a character behind. Three assertions say that out loud (every
+  comment in the XAML is closed; the stripped XAML carries no marker left;
+  the strip recognises every HTML comment end tag -- checked against a
+  probe, because the widget's own XAML never uses `--!>`), and a fourth
+  reports when the XAML block cannot be read at all.
 
 ## Limitations
 
