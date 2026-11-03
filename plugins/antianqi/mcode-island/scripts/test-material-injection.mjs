@@ -219,6 +219,31 @@ const CASES = [
         replace: '$null -eq $script:glassLoggedLum -or [Math]::Abs($L - $script:glassLoggedLum)',
         expect: 'glass poles: the luminance log slot is shared between the two surfaces',
     },
+    {
+        // 注释没闭合时，旧写法 replace(/<!--[\s\S]*?-->/g,'') 会把没配对的
+        // <!-- 原样留下 —— 消毒不完整，注释照样能喂绿后面的断言（CodeQL 的
+        // js/incomplete-sanitization 判的就是这个）。新写法必须能判死它。
+        name: 'an XML comment is never closed -> the assertions would read a half-deleted source',
+        file: WIDGET,
+        find: '  <Border x:Name="SessionPanel" Grid.Row="1" Visibility="Collapsed" Margin="0,14,0,0">',
+        replace: '  <!-- never closed\n  <Border x:Name="SessionPanel" Grid.Row="1" Visibility="Collapsed" Margin="0,14,0,0">',
+        expect: 'xaml comments: an XML comment in the XAML is never closed',
+    },
+    {
+        name: 'the XAML block cannot be read -> the material assertions would run against nothing',
+        file: WIDGET,
+        find: "$xaml = @'",
+        replace: "$xaml = @#",
+        expect: 'xaml read: the XAML block could not be read',
+    },
+    {
+        // 剥离动作本身坏了：断言必须能抓到"标记还在"。
+        name: 'the XAML strip stops removing comments -> a comment can feed the material assertions',
+        file: SMOKE,
+        find: '        keep += s.slice(i, open);',
+        replace: '        keep += s.slice(i);',
+        expect: 'xaml comments: a comment marker survived the strip',
+    },
 ];
 
 async function runSmoke() {

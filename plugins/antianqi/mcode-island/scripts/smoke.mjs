@@ -81,6 +81,44 @@ const checkLiteralPaths = (s, where) => {
     }
 };
 
+// Strip XML comments out of an XAML block.
+//
+// NOT `replace(/<!--[\s\S]*?-->/g, '')`: that regex only removes a
+// `<!--` that has a matching `-->`, so an unclosed `<!--` survives the
+// "sanitisation" intact -- the sanitisation is incomplete, and a comment in
+// the source can still feed the assertions below. CodeQL flags exactly that
+// as js/incomplete-sanitization.
+//
+// This walks the text instead. A paired comment is dropped whole; an
+// unpaired `<!--` drops everything after it. Either way the result carries
+// no comment marker, which is the property the assertions actually need.
+const stripXmlComments = (s) => {
+    let keep = '';
+    let i = 0;
+    while (i < s.length) {
+        const open = s.indexOf('<!--', i);
+        if (open < 0) { keep += s.slice(i); break; }
+        keep += s.slice(i, open);
+        const close = s.indexOf('-->', open + 4);
+        if (close < 0) break;            // unclosed: drop the rest
+        i = close + 3;
+    }
+    return keep;
+};
+
+// True when every `<!--` in the text has a `-->` after it, in order.
+const xmlCommentsArePaired = (s) => {
+    let i = 0;
+    while (i < s.length) {
+        const open = s.indexOf('<!--', i);
+        if (open < 0) return true;
+        const close = s.indexOf('-->', open + 4);
+        if (close < 0) return false;
+        i = close + 3;
+    }
+    return true;
+};
+
 const checkEntry = async (event, entry) => {
     const where = `hooks.json[${event}]`;
     if (typeof entry !== 'object' || entry === null) {
@@ -2089,7 +2127,20 @@ const main = async () => {
             const psCode = src.split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join('\n');
             // XAML 里的 XML 注释同理（材质层的说明都写在注释里）。
             const xamlMatch = src.match(/\$xaml\s*=\s*@'\r?\n([\s\S]*?)\r?\n'@/);
-            const xaml = xamlMatch ? xamlMatch[1].replace(/<!--[\s\S]*?-->/g, '') : '';
+            const xamlRaw = xamlMatch ? xamlMatch[1] : '';
+            if (!xamlMatch) {
+                out('FAIL', 'xaml read: the XAML block could not be read -- the material assertions would run against nothing');
+            } else if (!xmlCommentsArePaired(xamlRaw)) {
+                out('FAIL', 'xaml comments: an XML comment in the XAML is never closed -- the assertions below would be reading a half-deleted source');
+            } else {
+                out('PASS', 'xaml comments: every XML comment in the XAML is closed');
+            }
+            const xaml = stripXmlComments(xamlRaw);
+            if (!/<!--|-->/.test(xaml)) {
+                out('PASS', 'xaml comments: the stripped XAML carries no comment marker');
+            } else {
+                out('FAIL', 'xaml comments: a comment marker survived the strip -- a comment in the source can feed the material assertions');
+            }
 
             const numOf = (name) => {
                 const m = psCode.match(new RegExp('\\$script:' + name + '\\s*=\\s*([0-9.]+)'));
