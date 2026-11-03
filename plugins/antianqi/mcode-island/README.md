@@ -269,6 +269,12 @@ mcode-island/
 │           ├── subagent-stop.ps1
 │           ├── permission-request.ps1
 │           └── permission-denied.ps1
+├── scripts/                          # test suites (not needed at runtime)
+│   ├── smoke.mjs                     # static + material checks
+│   ├── test-material-injection.mjs   # negative-injection harness
+│   ├── test-session-tracker.ps1      # detector / redaction checks
+│   ├── test-substep-progress.mjs     # sub-step progress checks
+│   └── lib/Session-Tracker.ps1       # shared detector logic
 ├── skills/mcode-island/SKILL.md      # Skill consumed by the agent
 └── assets/                           # screenshots embedded above
 ```
@@ -297,7 +303,7 @@ binary, no symlink, no `node_modules`.
 | `sessions.json`  | `%APPDATA%\mcode-island\`             | rewritten every second    | the session list (titles, previews, states) |
 | `caller.json`    | `%APPDATA%\mcode-island\`             | rewritten every transition | originating terminal HWND (click fallback) |
 | `pin.json`       | `%APPDATA%\mcode-island\`             | until `mcode-island unpin` | manually pinned click target        |
-| `config.json`    | `%APPDATA%\mcode-island\`             | rewritten on drag         | pill position, size, opacity         |
+| `config.json`    | `%APPDATA%\mcode-island\`             | rewritten on drag         | pill position, size, opacity, material pole |
 | `config.json` -> `planApiTokenEnc` | `%APPDATA%\mcode-island\` | until `-Clear` or manual edit | 5h usage API token, DPAPI-encrypted (opt-in; see "Accounts") |
 | `widget.pid`     | `%APPDATA%\mcode-island\`             | rewritten on start        | widget process PID                   |
 | `island.log`     | `%APPDATA%\mcode-island\`             | append-only, never pruned  | state transition history             |
@@ -563,6 +569,99 @@ between the detector and the widget; the widget only reads it.
 The list height is also clamped to the work area, so it can never grow
 past the screen.
 
+## The material — Liquid Glass
+
+The pill is not a translucent rectangle. It is a **real frosted material**
+built to Apple's design language: [Human Interface Guidelines —
+Materials](https://developer.apple.com/design/human-interface-guidelines/materials)
+and [Color](https://developer.apple.com/design/human-interface-guidelines/color),
+as presented at WWDC25 (*Meet Liquid Glass*).
+
+The rules those documents set, and how the widget obeys them:
+
+| guideline | what the widget does |
+| --------- | -------------------- |
+| "Liquid Glass has no inherent color, and instead takes on colors from the content directly behind it" | the glass body starts as `Transparent` and is painted at runtime from a live screen capture; no hard-coded tint survives in the source |
+| "blurs and adjusts the luminosity of background content to maintain legibility" | the backdrop is captured, blurred, and its measured luminance drives both the tint and the shadow |
+| "Liquid Glass appears more opaque in larger elements" | the expanded panel is tinted heavier than the pill in every pole (2 separate `Thick` branches, factors 1.30 / 1.35) |
+| specular highlights scale with geometry | a one-pixel rim light on the top edge, a darker inner edge below it, and a soft drop shadow under the whole body |
+
+**How the frost is made.** The widget grabs the desktop behind itself
+(`SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` so the capture never
+includes the pill), downsamples it 4×, applies a WPF `BlurEffect`, and scales
+it back up — 24 physical pixels of blur radius, computed in physical pixels.
+A ≤3 % noise grain rides on top, so the frost has the slight tooth of a real
+material instead of the plastic look of a clean Gaussian.
+
+**Two poles.** Dark glass with white content is invisible over a white
+document: measured on a live screen, 30 %-white secondary text fell to
+**1.7 : 1** — effectively unreadable. So the material has two poles, and it
+switches between them the way macOS does:
+
+| pole | glass | content | used when |
+| ---- | ----- | ------- | --------- |
+| `dark` | deep, heavily veiled glass | white content, Apple dark-mode system colours | the background is dark (terminals, IDEs) |
+| `light` | pale, lightly veiled glass | dark content, macOS-style black-transparent labels | the background is bright (white documents, light apps) |
+
+The switch has **hysteresis** — bright past 0.60 to go light, dark past 0.58
+to go back — so a background flickering near the threshold does not make the
+pill strobe. The thresholds are not taste: the light pole needs 4.5 : 1 for
+its primary text, which requires a glass luminance of 0.227, which back-
+solves to a backdrop brightness of 0.58.
+
+**Each surface picks its own pole.** The pill and the expanded panel are two
+separate pieces of glass, and what is behind them can be wildly different —
+the pill can sit on a bright title bar while the panel below it covers a
+dark editor. So the polarity, the foreground colours and the grain are
+decided **per surface**, not once for the whole widget: each glass body
+measures its own backdrop and picks its own pole.
+
+This is not a detail. An earlier build shared one global polarity, and the
+panel's decision overwrote the pill's: the pill ended up as dark glass with
+dark text, and the two surfaces flipped each other every 100 ms — the widget
+looked broken. HIG "Materials" says the same thing in one line: each material
+adjusts its own luminosity to keep what is written on it legible.
+
+**Reading the log.** `widget.log` keeps one line per surface, so a polarity
+question is answerable without a debugger:
+
+```
+GLASS PILL POLE -> light        # the pill switched poles
+GLASS Pill L=0.837 pole=light    # ...at this backdrop brightness
+GLASS PANEL POLE -> dark         # the panel decided separately
+GLASS Panel L=0.528 pole=dark
+```
+
+The luminance slot is per surface too. Sharing one slot between the two
+surfaces meant the brightness line was almost never written for the second
+surface — and "why did the panel go white?" became unanswerable, because the
+panel's pole change was the only trace of it in the log.
+
+**Contrast is guaranteed, not hoped for.** All the material constants are
+named (`$script:glassVeilCap`, `$script:glassPoleLightOn`, …) rather than
+buried in expressions, so the smoke suite reads them, re-derives the worst
+case over the real backdrop, and recomputes the WCAG ratio. Current worst
+case: **5.35 : 1** primary text on the dark pole, **5.13 : 1** on the light
+pole, with secondary text at 2.70 : 1 / 2.98 : 1 (Apple's own translucent
+labels sit at that level on translucent materials — below WCAG AA by
+design, and the floor the suite enforces is 2.5 : 1).
+
+**Configuration.** `materialPole` in `config.json`:
+
+| value | meaning |
+| ----- | ------- |
+| `auto` (default) | switch poles from the measured backdrop brightness |
+| `dark` | always the dark pole |
+| `light` | always the light pole |
+
+Pinning a pole is useful for testing, and for users who want a fixed look.
+Note that pinning `light` over a dark background makes the content hard to
+read — that is the choice, not a bug.
+
+**Known trade-off.** `SetWindowDisplayAffinity` makes the widget invisible to
+screen recorders for the ~10–30 ms each capture window (every 2.5 s). A
+recording of the screen may occasionally drop a frame of the pill.
+
 ## Test evidence
 
 This plugin has been exercised on Windows 11 24H2 with PowerShell 5.1, against
@@ -591,6 +690,33 @@ a live MiniMax Code session. Empirical evidence (captured during development):
   wrapper no longer executes the command itself; the agent runs the command
   through mcode's own bash tool and passes the exit code to `wrap-tool.ps1
   -ExitCode`.
+- Material engine verified against a deterministic white and a deterministic
+  dark backdrop, in both poles: the pole switches on its own, the foreground
+  flips with it, the state label is no longer truncated, and the expanded
+  panel keeps the light-pole readability. The dark-pole leg was additionally
+  pinned to `dark` so the worst case (a fully white backdrop) could be
+  measured.
+- The **split backdrop** case verified on a live machine: a bright strip
+  under the pill and the dark terminal under the panel. The pill rendered as
+  pale glass with dark text while the panel rendered as deep glass with white
+  text — simultaneously, each reading its own backdrop, with no flicker in
+  the log (`Pill L=0.837 pole=light` / `Panel L=0.528 pole=dark`, stable over
+  several refresh cycles).
+  The harness proves the stacking before it grabs anything
+  (`WindowFromPoint` at the pill must resolve to the widget process, and the
+  island is raised with `SetWindowPos`/`HWND_TOPMOST` first) — without that
+  check the bright strip can end up *on top of* the island, in which case the
+  screenshot shows the strip's own crisp text instead of glass and the run
+  looks like it passed while proving nothing.
+- The material assertions are **negative-injection tested**:
+  `scripts/test-material-injection.mjs` mutates one line of the source 22
+  times (a hard-coded tint coming back, the capture affinity call removed,
+  the measure/arrange step skipped, the grain opacity raised, the two poles'
+  colour tables diverged, the hysteresis removed, the panel made thinner
+  than the pill, the two surfaces sharing one polarity again, the luminance
+  log slot going back to one shared value, …), checks that
+  the expected assertion turns red each time, and confirms the suite is
+  green again after the source is restored.
 
 ## Limitations
 

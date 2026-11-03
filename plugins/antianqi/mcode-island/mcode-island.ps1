@@ -74,6 +74,8 @@ try {
   Add-Type -AssemblyName PresentationCore
   Add-Type -AssemblyName WindowsBase
   Add-Type -AssemblyName System.Xaml
+  # 抓屏（CopyFromScreen）要用 System.Drawing 的 Bitmap/Graphics。
+  Add-Type -AssemblyName System.Drawing
   Dbg 'WPF loaded'
 } catch {
   Dbg "WPF LOAD FAIL: $($_.Exception.Message)"
@@ -104,6 +106,11 @@ public class WinAPI {
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassNameW(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
   [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint dwFlags);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool GetMonitorInfoW(IntPtr hMonitor, ref MONITORINFO lpmi);
+  // WDA_EXCLUDEFROMCAPTURE：把这个窗口从屏幕捕获里排除（抓屏时它变成透明）。
+  // 抓自己的屏幕来做磨砂时必须用它 —— 否则抓到的是"上一帧的自己"，模糊
+  // 之后会是一团脏影子。
+  [DllImport("user32.dll")] public static extern bool SetWindowDisplayAffinity(IntPtr hWnd, uint dwAffinity);
+  [DllImport("gdi32.dll")] public static extern bool DeleteObject(IntPtr hObject);
   [StructLayout(LayoutKind.Sequential)]
   public struct RECT { public int Left, Top, Right, Bottom; }
   [StructLayout(LayoutKind.Sequential)]
@@ -189,11 +196,14 @@ $defaultConfig = [PSCustomObject]@{
   height   = 70
   opacity  = 0.95
   autostart = $false
+  # 材质极性：auto = 按背后亮度自动切；dark / light = 钉死一极。
+  # 见下面"材质的两极"那一节。
+  materialPole = 'auto'
 }
 if (Test-Path $configFile) {
   try { $cfg = Get-Content $configFile -Raw -Encoding UTF8 | ConvertFrom-Json }
   catch { $cfg = $defaultConfig }
-  foreach ($p in @('x','y','width','height','opacity','autostart')) {
+  foreach ($p in @('x','y','width','height','opacity','autostart','materialPole')) {
     if (-not (Get-Member -InputObject $cfg -Name $p -ErrorAction SilentlyContinue)) {
       Add-Member -InputObject $cfg -NotePropertyName $p -NotePropertyValue $defaultConfig.$p
     }
@@ -202,6 +212,11 @@ if (Test-Path $configFile) {
   $cfg = $defaultConfig
   $cfg | ConvertTo-Json | Out-File -FilePath $configFile -Encoding UTF8
 }
+
+# 窗口比玻璃体大一圈的留白（投影要画在这圈里）。
+$script:glassMargin = 18
+# 面板比药丸厚，投影更远更重，下留白要多给一点。
+$script:glassMarginPanelBottom = 24
 
 # XAML —— 灵动岛 pill
 $xaml = @'
@@ -212,36 +227,83 @@ $xaml = @'
         Topmost="True" ShowInTaskbar="False" ResizeMode="NoResize"
         WindowStartupLocation="Manual" UseLayoutRounding="True" SnapsToDevicePixels="True"
         Focusable="False" ShowActivated="False">
-  <Grid>
+  <Grid x:Name="RootGrid">
     <Grid.RowDefinitions>
       <!-- row 0 是药丸本体，高度在运行时按 config 的 height 设置（默认 70） -->
       <RowDefinition x:Name="PillRow" Height="70"/>
       <!-- row 1 是 session 列表，收起时高度为 0 -->
       <RowDefinition x:Name="SessionListRow" Height="0"/>
     </Grid.RowDefinitions>
-  <Border x:Name="Pill" Grid.Row="0" CornerRadius="30"
-          Background="#CC1A1A20" BorderBrush="#33FFFFFF" BorderThickness="1"
-          Padding="22,6" Margin="0">
+  <!--
+    药丸本体 —— 一块 Liquid Glass。
+
+    规范来源：Apple HIG "Materials"（Liquid Glass / regular 变体）与
+    WWDC25 "Meet Liquid Glass"。三条硬规矩决定了下面这层结构：
+
+      1. **材质本身没有固有颜色**，颜色来自它背后的内容。
+         所以底色不是一块固定的深蓝灰，而是"背后那块屏幕抓下来模糊掉"
+         的结果（见 New-GlassCapture）。之前那种 #232734 的死灰，
+         是"一块染了色的矩形"，不是玻璃。
+      2. **regular 变体 = 模糊 + 按需调整明度**，目的是保证前景文字
+         始终可读。背后亮就多压一点暗，背后暗就抬一点亮（见
+         Apply-GlassMaterial）。压暗的量是算出来的，不是写死的。
+      3. **高光随几何走**（specular）。玻璃边缘会被光折出一道亮线，
+         这是苹果那套质感最显眼的一笔，也是"贴了张图"和"真玻璃"的
+         分界。
+
+    层次（从下往上）：
+      PillGlass.Background  抓屏 + 模糊出来的背景图 —— 玻璃的"体"
+      PillTint             自适应染色层：压暗/提亮 + 上下渐变做出厚度
+      PillGrain            极细颗粒，既是磨砂感也是 8bit 渐变的去带
+      PillRim              边缘高光（径向渐变，顶边最亮）
+      PillEdge             内侧厚度暗边（底边那圈"玻璃有厚度"的暗线）
+      内容                 文字与图标，永远画在材质之上
+
+    形状不是 Border 的 CornerRadius —— Border 不裁剪子元素，光靠
+    CornerRadius 画出来是方的。这里给整个 Grid 套一个 Clip（真正的
+    圆角/连续圆角路径），所有材质层一次性被裁成同一个形状。
+  -->
+  <Border x:Name="Pill" Grid.Row="0" Padding="0" Margin="0">
     <Border.Effect>
-      <DropShadowEffect Color="Black" Opacity="0.45" BlurRadius="22" ShadowDepth="3"/>
+      <DropShadowEffect x:Name="PillShadow" Color="Black" Opacity="0.45" BlurRadius="28" ShadowDepth="7"/>
     </Border.Effect>
-    <Grid>
+    <Grid x:Name="PillGlass" Background="#FF16181D">
+      <Path x:Name="PillTint" Fill="Transparent" Stroke="Transparent"/>
+      <Path x:Name="PillGrain" Fill="Transparent" Stroke="Transparent"/>
+      <Path x:Name="PillRim" Fill="Transparent" Stroke="Transparent" StrokeThickness="1"/>
+      <Path x:Name="PillEdge" Fill="Transparent" Stroke="Transparent" StrokeThickness="1"/>
+
+      <Border Padding="15,6">
+      <Grid>
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="Auto"/>
         <ColumnDefinition Width="*"/>
         <ColumnDefinition Width="Auto"/>
       </Grid.ColumnDefinitions>
 
-      <Grid Grid.Column="0" Width="22" Height="22" Margin="0,0,14,0">
-        <Ellipse x:Name="PulseRing" Width="22" Height="22" Fill="#FF6B7280" Opacity="0.0">
+      <Grid Grid.Column="0" Width="22" Height="22" Margin="0,0,10,0">
+        <Ellipse x:Name="PulseRing" Width="22" Height="22" Fill="#FF8E8E93" Opacity="0.0">
           <Ellipse.RenderTransform>
             <ScaleTransform x:Name="PulseScale" ScaleX="1" ScaleY="1"/>
           </Ellipse.RenderTransform>
           <Ellipse.RenderTransformOrigin>0.5,0.5</Ellipse.RenderTransformOrigin>
         </Ellipse>
-        <Ellipse x:Name="StatusDot" Width="12" Height="12"
+        <!--
+          状态点带一圈发光。
+
+          玻璃上的光是会晕开的：点本身是实心的高亮，周围一圈被它照亮。
+          纯色圆点在深色玻璃上读起来像"贴上去的"，带光晕才像是"嵌在
+          玻璃里、后面亮着"。
+          发光用 DropShadowEffect 做（零宽偏移 + 大模糊半径）。
+        -->
+        <Ellipse x:Name="StatusDot" Width="11" Height="11"
                  HorizontalAlignment="Center" VerticalAlignment="Center"
-                 Fill="#FF6B7280"/>
+                 Fill="#FF8E8E93">
+          <Ellipse.Effect>
+            <DropShadowEffect x:Name="StatusDotGlow" Color="#FF22D3EE" BlurRadius="9"
+                              ShadowDepth="0" Opacity="0"/>
+          </Ellipse.Effect>
+        </Ellipse>
       </Grid>
 
       <StackPanel Grid.Column="1" VerticalAlignment="Center">
@@ -253,29 +315,29 @@ $xaml = @'
             <ColumnDefinition Width="Auto"/>
           </Grid.ColumnDefinitions>
           <TextBlock Grid.Column="0" x:Name="StateText" Text="mcode"
-                     Foreground="#FFF5F5F7" FontSize="14" FontWeight="SemiBold"
+                     Foreground="#FFFFFFFF" FontSize="16" FontWeight="SemiBold"
                      TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
           <TextBlock Grid.Column="1" x:Name="ElapsedText" Text=""
-                     Foreground="#FF6B7280" FontSize="11"
-                     VerticalAlignment="Center" Margin="8,0,0,0"
+                     Foreground="#4DEBEBF5" FontSize="11"
+                     VerticalAlignment="Center" Margin="6,0,0,0"
                      FontFamily="Consolas, Segoe UI"/>
           <!-- 5h 用量：detector 拉 minimax /v1/coding_plan/remains，-1 = 未知 -->
           <TextBlock Grid.Column="2" x:Name="Usage5hText" Text=""
-                     Foreground="#FF6B7280" FontSize="11"
-                     VerticalAlignment="Center" Margin="8,0,0,0"
+                     Foreground="#4DEBEBF5" FontSize="11"
+                     VerticalAlignment="Center" Margin="6,0,0,0"
                      FontFamily="Consolas, Segoe UI"
                      ToolTip="mmx 5h 用量（来自 coding_plan/remains）"/>
         </Grid>
         <TextBlock x:Name="MessageText" Text="等待任务"
-                   Foreground="#FF9A9AA3" FontSize="11" Margin="0,1,0,0"
+                   Foreground="#99EBEBF5" FontSize="13" Margin="0,1,0,0"
                    TextTrimming="CharacterEllipsis" MaxWidth="240"/>
         <!-- 进度条：默认隐藏。
              - progress=0..100：determinate，显示 ProgressFill（ScaleX 比例填充，bright cyan 高对比）
              - progress=-1 且 state 是 active：indeterminate，显示 ProgressIndeterminate（半透明满宽 cyan 光带）
              - 其他：隐藏 -->
         <Grid x:Name="ProgressBar" Height="8" Margin="0,2,0,0" Visibility="Collapsed">
-          <Border Background="#44FFFFFF" CornerRadius="4"/>
-          <Border x:Name="ProgressFill" Background="#FF22D3EE" CornerRadius="4"
+          <Border x:Name="ProgressTrack" Background="#26FFFFFF" CornerRadius="4"/>
+          <Border x:Name="ProgressFill" Background="#FF0A84FF" CornerRadius="4"
                   HorizontalAlignment="Stretch" Visibility="Collapsed">
             <Border.RenderTransform>
               <ScaleTransform x:Name="ProgressScale" ScaleX="0" ScaleY="1"/>
@@ -284,7 +346,7 @@ $xaml = @'
           </Border>
           <Grid x:Name="ProgressIndeterminate" Visibility="Collapsed" ClipToBounds="True">
             <Rectangle x:Name="ProgressShimmer" Width="130" HorizontalAlignment="Left"
-                       Fill="#FF22D3EE">
+                       Fill="#FF0A84FF">
               <Rectangle.OpacityMask>
                 <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
                   <GradientStop Color="#00000000" Offset="0"/>
@@ -301,8 +363,10 @@ $xaml = @'
       </StackPanel>
 
       <TextBlock Grid.Column="2" x:Name="ActionIcon" Text=""
-                 Foreground="#FF9A9AA3" FontSize="13" Margin="14,0,0,0"
+                 Foreground="#99EBEBF5" FontSize="15" Margin="10,0,0,0"
                  VerticalAlignment="Center"/>
+      </Grid>
+      </Border>
     </Grid>
   </Border>
 
@@ -315,11 +379,28 @@ $xaml = @'
 
     代价是窗口要变高。row 0 的高度锁死为药丸高度，所以展开时药丸本身
     一动不动，列表在它下面长出来。
+
+    材质跟药丸同一套 Liquid Glass（模糊背景 + 自适应染色 + 高光边 +
+    厚度暗边），但**更厚**：HIG 明确说"越大的元素材质越不透明、阴影越深"，
+    面板比药丸大得多，再透就成了一块挡板的玻璃，看不见底下在干什么。
+
+    圆角按苹果的"连续圆角"走（不是正圆弧），实现见
+    New-RoundedRectGeometry 的 Smooth 参数。
+
+    内边距从 Border.Padding 挪到 SessionRows 的 Margin：材质层必须铺满
+    面板整个矩形，否则圆角处会露出一圈没被染色的透明缺口。
   -->
-  <Border x:Name="SessionPanel" Grid.Row="1" Visibility="Collapsed"
-          CornerRadius="12" Background="#F21A1A20" BorderBrush="#33FFFFFF"
-          BorderThickness="1" Padding="10,6" Margin="0,14,0,0">
-    <StackPanel x:Name="SessionRows"/>
+  <Border x:Name="SessionPanel" Grid.Row="1" Visibility="Collapsed" Margin="0,14,0,0">
+    <Border.Effect>
+      <DropShadowEffect x:Name="PanelShadow" Color="Black" Opacity="0.5" BlurRadius="34" ShadowDepth="10"/>
+    </Border.Effect>
+    <Grid x:Name="PanelGlass" Background="#FF16181D">
+      <Path x:Name="PanelTint" Fill="Transparent" Stroke="Transparent"/>
+      <Path x:Name="PanelGrain" Fill="Transparent" Stroke="Transparent"/>
+      <Path x:Name="PanelRim" Fill="Transparent" Stroke="Transparent" StrokeThickness="1"/>
+      <Path x:Name="PanelEdge" Fill="Transparent" Stroke="Transparent" StrokeThickness="1"/>
+      <StackPanel x:Name="SessionRows" Margin="14,10"/>
+    </Grid>
   </Border>
   </Grid>
 </Window>
@@ -345,6 +426,7 @@ $messageText   = $window.FindName('MessageText')
 $actionIcon    = $window.FindName('ActionIcon')
 $pill          = $window.FindName('Pill')
 $progressBar          = $window.FindName('ProgressBar')
+$progressTrack        = $window.FindName('ProgressTrack')
 $progressFill         = $window.FindName('ProgressFill')
 $progressScale        = $window.FindName('ProgressScale')
 $progressIndeterminate = $window.FindName('ProgressIndeterminate')
@@ -352,21 +434,931 @@ $progressShimmer      = $window.FindName('ProgressShimmer')
 $progressShimmerTransform = $window.FindName('ProgressShimmerTransform')
 $elapsedText          = $window.FindName('ElapsedText')
 $usage5hText          = $window.FindName('Usage5hText')
+$statusDotGlow        = $window.FindName('StatusDotGlow')
 # 多 session 列表（画在 pill 自己的窗口里）
 $script:sessionRowsPanel = $window.FindName('SessionPanel')
 $script:sessionRows      = $window.FindName('SessionRows')
 $script:sessionListRow  = $window.FindName('SessionListRow')
+
+# 玻璃体四周的留白：给投影留地方。
+#
+# 留白是窗口的一部分（透明的），所以药丸的屏幕位置 = 窗口位置 + 留白，
+# 而窗口位置 = 配置里的位置 - 留白。位置语义不变。
+#
+# 面板的下边距比药丸大：面板比药丸厚，投影也该更重更远。
+try {
+  $pillBorder = $window.FindName('Pill')
+  if ($pillBorder) { $pillBorder.Margin = New-Object System.Windows.Thickness($script:glassMargin) }
+  $panelBorder = $window.FindName('SessionPanel')
+  if ($panelBorder) { $panelBorder.Margin = New-Object System.Windows.Thickness($script:glassMargin, 6, $script:glassMargin, $script:glassMarginPanelBottom) }
+} catch {
+  Dbg "GLASS MARGIN FAIL: $($_.Exception.Message)"
+}
+
+# 磨砂颗粒层。
+#
+# 为什么需要它：半透明的深色面板，平涂的话读起来就是"一块染了色的矩形"；
+# 磨砂之所以是磨砂，靠的是表面那层把光打散的细颗粒。没有颗粒，再准的
+# 渐变和高光也只到"半透明"，到不了"磨砂"。
+#
+# 用 DrawingBrush 画一堆亚像素小白点平铺，而不是像素级噪点：
+#   - DrawingBrush 在 WPF 里是矢量，缩放不失真，也不会因为 DPI 变化
+#     出现摩尔纹；
+#   - 粒子数量少（几百个点铺一格），合成开销可以忽略；
+#   - 白点 + 极低不透明度 = 在深色玻璃上像是表面的一层细霜。
+function New-GrainBrush {
+  # 颗粒点是什么颜色随极走：深色玻璃上是白点（像一层细霜），浅色玻璃上
+  # 得反过来用黑点 —— 白点在白玻璃上等于没有。
+  param([int]$Tile = 64, [int]$Seed = 7, [int]$Dots = 260, [string]$Color = '#FFFFFFFF')
+  try {
+    $rnd = [Random]::new($Seed)
+    $geo = New-Object System.Windows.Media.GeometryGroup
+    for ($i = 0; $i -lt $Dots; $i++) {
+      $x = $rnd.NextDouble() * $Tile
+      $y = $rnd.NextDouble() * $Tile
+      $w = 0.5 + $rnd.NextDouble() * 1.1
+      $rect = New-Object System.Windows.Rect $x, $y, $w, $w
+      $geo.Children.Add((New-Object System.Windows.Media.RectangleGeometry $rect)) | Out-Null
+    }
+    $drawing = New-Object System.Windows.Media.GeometryDrawing
+    $drawing.Geometry = $geo
+    $drawing.Brush = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString($Color)))
+    $brush = New-Object System.Windows.Media.DrawingBrush
+    $brush.Drawing = $drawing
+    $brush.TileMode = [System.Windows.Media.TileMode]::Tile
+    $brush.ViewportUnits = [System.Windows.Media.BrushMappingMode]::Absolute
+    $brush.Viewport = New-Object System.Windows.Rect 0, 0, $Tile, $Tile
+    $brush.Stretch = [System.Windows.Media.Stretch]::None
+    return $brush
+  } catch {
+    Dbg "GRAIN FAIL: $($_.Exception.Message)"
+    return $null
+  }
+}
+
+# 把颗粒铺到两个玻璃体上。
+#
+# 两套笔刷：深色极用白点，浅色极用黑点。启动时先铺深色那套，换极时由
+# Update-GlassInk 换过去。
+$script:grainBrushDark  = $null
+$script:grainBrushLight = $null
+try {
+  $script:grainBrushDark  = New-GrainBrush -Color '#FFFFFFFF'
+  $script:grainBrushLight = New-GrainBrush -Color '#FF000000'
+  $grain = $script:grainBrushDark
+  if ($grain) {
+    foreach ($name in @('PillGrain', 'PanelGrain')) {
+      $target = $window.FindName($name)
+      if ($target) { $target.Fill = $grain; $target.Opacity = 0.015 }
+    }
+    Dbg 'GRAIN: applied'
+  }
+} catch {
+  Dbg "GRAIN APPLY FAIL: $($_.Exception.Message)"
+}
+
+# ---------------------------------------------------------------------------
+# Liquid Glass 材质引擎
+# ---------------------------------------------------------------------------
+#
+# 规范来源（三份一手材料）：
+#   - Apple HIG "Materials"（Liquid Glass / regular 变体，2025-09 修订）
+#   - Apple HIG "Color"（Liquid Glass color，2025-12 修订）
+#   - WWDC25 "Meet Liquid Glass"（session 219）
+#
+# 落到这个插件上是四件事：
+#
+#   1. **材质没有固有颜色**，颜色来自它背后的内容。所以底色不是画上去的
+#      深蓝灰，而是"背后那块屏幕抓下来模糊掉"的结果。之前那种固定色
+#      染上去，读起来是"一块染了色的矩形"，不是玻璃。
+#   2. **regular 变体 = 模糊 + 按需调整明度**，目的是保证前景文字始终
+#      可读。背后亮就多压一点暗，背后暗就抬一点亮 —— 压多少是**算出来
+#      的**，不是写死的。
+#   3. **高光随几何走**（specular）。玻璃边缘被光折出的那道亮线，是
+#      "贴了张图"和"真玻璃"的分界。
+#   4. **尺寸越大材质越厚**。面板比药丸大得多，就该更不透明、阴影更深
+#      （HIG 原文：larger elements appear more opaque）。
+#
+# 为什么自己抓屏：Windows 的系统磨砂在这个窗口上都实测无效 ——
+#   - layered 窗口（AllowsTransparency=True，这个窗口就是）拿不到
+#     DWM backdrop：SetWindowCompositionAttribute(ACCENT_ENABLE_BLURBEHIND)
+#     返回成功但背景照样清晰可见；
+#   - 非 layered 窗口能拿到 DWMWA_SYSTEMBACKDROP_TYPE，但 WPF 自己画的
+#     背景会把它盖成整块纯黑。
+# 三窗真机对照见 dwm-probe 的截图。所以只剩一条路：自己抓屏自己模糊。
+#
+# 两个细节决定成败：
+#   1. **抓屏时把自己排除掉**（SetWindowDisplayAffinity
+#      WDA_EXCLUDEFROMCAPTURE）。不排除的话抓到的是自己的上一帧，模糊
+#      之后是一团脏影子，而不是身后的桌面。实测：排除前采样点全是窗口
+#      自己的颜色，排除后立刻变成背后的桌面色。
+#   2. **坐标一律用物理像素**。PointToScreen 给的是设备像素；WPF 的
+#      Left/Top 是 DIP，缩放不是 100% 时两者不等，混用会错位。
+#
+# 模糊是"降采样 1/4 + BlurEffect + 放大"：磨砂要的是"柔而不糊"，而且
+# 比全尺寸模糊快一个数量级。
+$script:glassBackdrop = $null
+$script:glassLuminance = 0.0
+$script:glassLastUpdate = [DateTime]::MinValue
+$script:glassDragStamp = [DateTime]::MinValue
+
+# 材质几何参数。
+#
+# 药丸用正圆角（r = 高/2，就是个胶囊 —— 苹果灵动岛本身也是胶囊形）。
+# 面板用"连续圆角"（Smooth=1，超椭圆 n=5），这是苹果那套质感在
+# 大面积圆角上最显眼的一笔：正圆弧的角一眼就是"塑料片"。
+$script:glassRadiusPill  = 35.0
+$script:glassRadiusPanel = 18.0
+$script:glassSmoothPanel = 1.0
+
+# 背景多久重抓一次。玻璃要跟着背后的内容走（WWDC25：内容滚过下面时
+# 材质会跟着变），不然就成了一张拍好的静态贴图。
+$script:glassRefreshMs = 2500
+
+function Get-WindowDeviceScale {
+  # 100 DIP 在屏幕上到底是多少物理像素。
+  try {
+    $p0 = $window.PointToScreen([System.Windows.Point]::new(0, 0))
+    $p1 = $window.PointToScreen([System.Windows.Point]::new(100, 0))
+    $sx = [Math]::Abs($p1.X - $p0.X) / 100.0
+    $sy = [Math]::Abs($p1.Y - $p0.Y) / 100.0
+    if ($sx -lt 0.1 -or $sx -gt 10) { $sx = 1.0 }
+    if ($sy -lt 0.1 -or $sy -gt 10) { $sy = 1.0 }
+    return @($sx, $sy)
+  } catch {
+    return @(1.0, 1.0)
+  }
+}
+
+function New-RoundedRectGeometry {
+  # 圆角矩形路径。
+  #
+  # Smooth 是"连续圆角"开关：0 = 正圆弧，1 = 苹果那种连续圆角。
+  # 连续圆角用 n=5 的超椭圆逼近（iOS squircle 的标准近似），按 24 段
+  # 折线采样，1x 下与真曲线肉眼无差。
+  #
+  # Inset 把整条路径往里挪：画内缩的高光线和厚度暗线时要用。
+  param([double]$W, [double]$H, [double]$R, [double]$Smooth = 0.0, [double]$Inset = 0.0, [int]$Steps = 24)
+  try {
+    $w2 = $W - 2 * $Inset
+    $h2 = $H - 2 * $Inset
+    if ($w2 -le 2 -or $h2 -le 2) { return $null }
+    $r = [Math]::Min($R - $Inset, [Math]::Min($w2, $h2) / 2.0)
+    if ($r -le 0.5) {
+      $rect = New-Object System.Windows.Rect $Inset, $Inset, $w2, $h2
+      $g = New-Object System.Windows.Media.RectangleGeometry $rect
+      $g.Freeze()
+      return $g
+    }
+    # e = 1 是正圆弧；e = 2/n，超椭圆 n=5 时 e = 0.4。
+    $e = 1.0
+    if ($Smooth -gt 0.01) {
+      $n = 2.0 + 3.0 * [Math]::Min(1.0, $Smooth)
+      $e = 2.0 / $n
+    }
+    $half = [Math]::PI / 2.0
+    $pts = New-Object 'System.Collections.Generic.List[System.Windows.Point]'
+    # 右上角
+    for ($i = 0; $i -le $Steps; $i++) {
+      $t = $half * $i / $Steps
+      $s = [Math]::Pow([Math]::Sin($t), $e)
+      $c = [Math]::Pow([Math]::Cos($t), $e)
+      $pts.Add((New-Object System.Windows.Point ($Inset + $w2 - $r + $r * $s), ($Inset + $r - $r * $c)))
+    }
+    # 右下角
+    for ($i = 0; $i -le $Steps; $i++) {
+      $t = $half * $i / $Steps
+      $s = [Math]::Pow([Math]::Sin($t), $e)
+      $c = [Math]::Pow([Math]::Cos($t), $e)
+      $pts.Add((New-Object System.Windows.Point ($Inset + $w2 - $r + $r * $c), ($Inset + $h2 - $r + $r * $s)))
+    }
+    # 左下角
+    for ($i = 0; $i -le $Steps; $i++) {
+      $t = $half * $i / $Steps
+      $s = [Math]::Pow([Math]::Sin($t), $e)
+      $c = [Math]::Pow([Math]::Cos($t), $e)
+      $pts.Add((New-Object System.Windows.Point ($Inset + $r - $r * $s), ($Inset + $h2 - $r + $r * $c)))
+    }
+    # 左上角（最后一点回到起点，由 IsClosed 收口）
+    for ($i = 0; $i -lt $Steps; $i++) {
+      $t = $half * $i / $Steps
+      $s = [Math]::Pow([Math]::Sin($t), $e)
+      $c = [Math]::Pow([Math]::Cos($t), $e)
+      $pts.Add((New-Object System.Windows.Point ($Inset + $r - $r * $c), ($Inset + $r - $r * $s)))
+    }
+    $fig = New-Object System.Windows.Media.PathFigure
+    $fig.StartPoint = $pts[0]
+    $fig.IsClosed = $true
+    for ($i = 1; $i -lt $pts.Count; $i++) {
+      $seg = New-Object System.Windows.Media.LineSegment $pts[$i], $pts[$i]
+      $fig.Segments.Add($seg) | Out-Null
+    }
+    $geo = New-Object System.Windows.Media.PathGeometry
+    $geo.Figures.Add($fig) | Out-Null
+    $geo.Freeze()
+    return $geo
+  } catch {
+    Dbg "ROUNDRECT FAIL: $($_.Exception.Message)"
+    return $null
+  }
+}
+
+function New-GlassStop {
+  # 一个带透明度的渐变色标。
+  param([System.Windows.Media.Color]$Color, [double]$Offset, [double]$Alpha)
+  $a = [int][Math]::Max(0, [Math]::Min(255, [Math]::Round($Alpha * 255)))
+  $s = New-Object System.Windows.Media.GradientStop
+  $s.Color = [System.Windows.Media.Color]::FromArgb($a, $Color.R, $Color.G, $Color.B)
+  $s.Offset = $Offset
+  return $s
+}
+
+function Measure-Luminance {
+  # 一块图的整体亮度（0..1）。玻璃压多暗、抬多亮，全看它。
+  param($Bitmap)
+  try {
+    if (-not $Bitmap) { return 0.0 }
+    $w = $Bitmap.PixelWidth
+    $h = $Bitmap.PixelHeight
+    if ($w -le 0 -or $h -le 0) { return 0.0 }
+    $stride = $w * 4
+    $buf = New-Object byte[] ($stride * $h)
+    $Bitmap.CopyPixels($buf, $stride, 0)
+    # 每 4 个像素取 1 个，亮度用 Rec.709 的系数。
+    $sum = 0.0
+    $n = 0
+    for ($i = 0; $i -lt $buf.Length; $i += 16) {
+      $b = $buf[$i]; $g = $buf[$i + 1]; $r = $buf[$i + 2]
+      $sum += (0.2126 * $r + 0.7152 * $g + 0.0722 * $b)
+      $n++
+    }
+    if ($n -eq 0) { return 0.0 }
+    $v = $sum / $n / 255.0
+    if ($v -lt 0.0) { $v = 0.0 }
+    if ($v -gt 1.0) { $v = 1.0 }
+    return [double]$v
+  } catch {
+    return 0.0
+  }
+}
+
+function New-GlassCapture {
+  # 抓某个元素底下那块屏幕，模糊掉。
+  # 返回 @{ Brush = ImageBrush; Luminance = 0..1 }，失败返回 $null。
+  #
+  # 抓屏本身不在这里做排除：药丸和面板在同一个窗口里，排除一次、
+  # 连着抓两块，比抓两次省一半时间，也少一次窗口闪动。
+  param($Element)
+  try {
+    if (-not $Element) { return $null }
+    $w = $Element.ActualWidth
+    $h = $Element.ActualHeight
+    if ($w -lt 8 -or $h -lt 8) { return $null }
+    $scale = Get-WindowDeviceScale
+    $sx = [double]$scale[0]; $sy = [double]$scale[1]
+    # 元素左上角的物理像素位置。
+    $origin = $Element.PointToScreen([System.Windows.Point]::new(0, 0))
+    $devW = [int][Math]::Ceiling($w * $sx)
+    $devH = [int][Math]::Ceiling($h * $sy)
+    if ($devW -lt 8 -or $devH -lt 8) { return $null }
+    if ($devW -gt 4000 -or $devH -gt 4000) { return $null }
+
+    $bmp = $null
+    $src = $null
+    $ms = $null
+    try {
+      $bmp = New-Object System.Drawing.Bitmap $devW, $devH
+      $g = [System.Drawing.Graphics]::FromImage($bmp)
+      # CopyFromScreen 走的是屏幕 DC，坐标是物理像素。
+      $g.CopyFromScreen([int]$origin.X, [int]$origin.Y, 0, 0, (New-Object System.Drawing.Size $devW, $devH))
+      $g.Dispose()
+      # System.Drawing.Bitmap -> WPF BitmapSource。
+      #
+      # 走 MemoryStream 而不是 Imaging.CreateBitmapSourceFromHBitmap：
+      # 后者所在的 System.Windows.Media.Imaging.Imaging 在 .NET Framework
+      # 里是 internal，PowerShell 直接 [System.Windows.Media.Imaging.Imaging]
+      # 报"找不到类型"（.NET Core 才把它公开）。PNG 是无损的，像素一模一样。
+      $ms = New-Object System.IO.MemoryStream
+      $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+      $ms.Position = 0
+      $src = New-Object System.Windows.Media.Imaging.BitmapImage
+      $src.BeginInit()
+      $src.CacheOption = [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad
+      $src.StreamSource = $ms
+      $src.EndInit()
+      $src.Freeze()
+    } finally {
+      if ($ms) { $ms.Dispose() }
+      if ($bmp) { $bmp.Dispose() }
+    }
+
+    # 降采样 -> 模糊 -> 放大回来。
+    #
+    # 模糊半径按**物理像素**定：24px 的真实模糊，在 1/4 尺度上就是 6。
+    # 直接写 9 的话，在 70px 高的药丸上（缩小后只有 17px）那 9px 几乎
+    # 把整张图抹平了 —— 那不是磨砂，是一块纯色板。
+    $scaleDown = 4
+    $smallW = [int][Math]::Max(4, [int]($devW / $scaleDown))
+    $smallH = [int][Math]::Max(4, [int]($devH / $scaleDown))
+
+    $img = New-Object System.Windows.Controls.Image
+    $img.Source = $src
+    $img.Width = $smallW
+    $img.Height = $smallH
+    $img.Stretch = [System.Windows.Media.Stretch]::Fill
+    $blur = New-Object System.Windows.Media.Effects.BlurEffect
+    $blur.Radius = 6
+    $img.Effect = $blur
+    # 必须先 Measure + Arrange 再 Render。
+    #
+    # RenderTargetBitmap.Render() 只画"已经摆好"的视觉对象，不会替它做
+    # 布局。离屏的 Image 从没被排过版，Render 出来就是一张全黑 —— 实测
+    # 同一张图：不排版亮度 0.0，排版后 0.35。
+    $img.Measure((New-Object System.Windows.Size($smallW, $smallH)))
+    $img.Arrange((New-Object System.Windows.Rect(0, 0, $smallW, $smallH)))
+
+    $rtb = New-Object System.Windows.Media.Imaging.RenderTargetBitmap $smallW, $smallH, 96, 96, ([System.Windows.Media.PixelFormats]::Pbgra32)
+    $rtb.Render($img)
+
+    $brush = New-Object System.Windows.Media.ImageBrush $rtb
+    $brush.Stretch = [System.Windows.Media.Stretch]::Fill
+    $brush.TileMode = [System.Windows.Media.TileMode]::None
+    return @{ Brush = $brush; Luminance = (Measure-Luminance $rtb) }
+  } catch {
+    Dbg "GLASS CAPTURE FAIL: $($_.Exception.Message)"
+    return $null
+  }
+}
+
+function Update-GlassGeometry {
+  # 按元素当前实际尺寸重建材质几何。
+  # 尺寸会变（药丸高度可配、列表行数会变），所以每次都要重算。
+  param([string]$Prefix, [double]$Radius, [double]$Smooth)
+  try {
+    $glass = $window.FindName("${Prefix}Glass")
+    if (-not $glass) { return $false }
+    $w = $glass.ActualWidth
+    $h = $glass.ActualHeight
+    if ($w -lt 8 -or $h -lt 8) { return $false }
+    $geo     = New-RoundedRectGeometry $w $h $Radius $Smooth 0
+    $geoRim  = New-RoundedRectGeometry $w $h $Radius $Smooth 1.25
+    $geoEdge = New-RoundedRectGeometry $w $h $Radius $Smooth 3.5
+    if (-not $geo) { return $false }
+    # Clip 把整个玻璃体裁成同一个形状 —— Border 的 CornerRadius 不裁子元素，
+    # 光靠它画出来是方的。
+    $glass.Clip = $geo
+    $tint  = $window.FindName("${Prefix}Tint");  if ($tint)  { $tint.Data  = $geo }
+    $grain = $window.FindName("${Prefix}Grain"); if ($grain) { $grain.Data = $geo }
+    $rim   = $window.FindName("${Prefix}Rim");   if ($rim)   { $rim.Data = $geoRim;  $rim.StrokeThickness = 1.5 }
+    $edge  = $window.FindName("${Prefix}Edge");  if ($edge)  { $edge.Data = $geoEdge; $edge.StrokeThickness = 1.5 }
+    return $true
+  } catch {
+    Dbg "GLASS GEOMETRY FAIL: $($_.Exception.Message)"
+    return $false
+  }
+}
+
+# ---------------------------------------------------------------------------
+# 材质的两极：浅色玻璃 / 深色玻璃
+# ---------------------------------------------------------------------------
+#
+# HIG "Materials" 说 Liquid Glass 的 regular 变体是"模糊 + **按需调整背景明度**
+# 以保证文字可读"（adjusts the luminosity of background content to maintain
+# legibility of text）。这一条在本插件上不是装饰性的措辞，是硬指标：
+#
+# 背后是一张白纸时，深色玻璃 + 白字会糊成一片。实测（真机截图）：
+#   次级文字（60% 白）的对比度掉到 2.7:1，"3h25m 99%"（30% 白）掉到 1.7:1，
+#   后者基本看不见。深色玻璃在亮背景上"看起来像玻璃"，但字读不出来 ——
+#   而读不出来就没有质感可言。
+#
+# 苹果自己的解法不是"把深色玻璃压得更黑"，是让材质**换极**：macOS 的 Dock、
+# 菜单、控制中心在浅色桌面上就是浅色玻璃配深色内容（浅色模式下系统也把
+# 前景翻成深色）。所以这里也做两极：
+#
+#   dark  极：深色玻璃 + 白色内容。背后暗时的常态（终端、IDE）。
+#   light 极：浅色玻璃 + 深色内容。背后亮时切过去（白底文档、亮色应用）。
+#
+# 两极之间有**迟滞**：亮过 0.60 才切浅色，暗回 0.58 才切深色。没有迟滞，
+# 背景亮度在阈值附近抖一下，药丸就跟着闪一下。
+#
+# config.json 里的 materialPole 可以钉死一极（dark / light），默认 auto。
+#
+# 前景色是**跟着极走的**：深色玻璃上的白字搬到浅色玻璃上就是"白底白字"，
+# 所以换极的时候要重刷一遍（Update-GlassInk）。
+#
+# 药丸和展开面板是**两块独立的材质**，背后可能差得很远（药丸压在一段亮色
+# 标题栏上，面板底下却是一片深色编辑器）。所以极性是**每块面各判各的**：
+# $script:glassPole 给药丸，$script:glassPanelPole 给面板；墨色也一样 ——
+# 药丸的字用药丸的墨，列表行的字用面板的墨。
+#
+# 这不是洁癖，是修一个真实缺陷：早先只有一份全局极性，面板判出浅色极就把
+# 全局翻了，于是药丸变成"暗玻璃 + 深色字"，白字没了、深色字压在深色玻璃上
+# 一样看不见 —— 看起来就像渲染坏了。HIG "Materials" 写的也是每一块材质
+# 各自调整明度来保住可读性。
+$script:glassPole = 'dark'
+$script:glassPanelPole = 'dark'
+
+# 材质参数。
+#
+# 提出来命名，不是为了好看：这些数字是**对比度的保证**，藏在一堆表达式
+# 里的数字没人能核对。smoke.mjs 直接读这一段，然后按最坏背景重算前景/
+# 背景的对比度 —— 改这里的数字，对应的断言就会打红。
+#
+# 两极的阈值是算出来的，不是调出来的：
+#   - 浅色极：深色文字压在玻璃上要够 4.5:1，玻璃的相对亮度得在 0.227
+#     以上。按浅色极的染色公式反推，背后亮度得高于 0.58 才够，所以
+#     lightOff 不能低于这个数。
+#   - 深色极：白字压在压暗后的玻璃上，veil 上限 0.72 保证最坏情况下
+#     （背后全白）也有 5.3:1 以上。
+$script:glassPoleLightOn  = 0.60
+$script:glassPoleLightOff = 0.58
+$script:glassVeilFloor    = 0.10
+$script:glassVeilCap      = 0.72
+$script:glassVeilSlope    = 0.62
+$script:glassVeilKnee     = 0.20
+$script:glassVeilLightFloor = 0.06
+$script:glassVeilLightCap   = 0.26
+$script:glassVeilLightSlope = 0.28
+$script:glassVeilLightKnee  = 0.45
+# 染色分界：背后比它亮就走"亮背景"那套渐变（整体压暗 + 顶边柔光），
+# 比它暗走"暗背景"那套（顶边受光 + 底边压深）。两头都亮的那一档最容易
+# 出问题 —— 玻璃刚好比背景亮一点，文字就最难读，所以分界线取在中间。
+$script:glassTintSplit    = 0.42
+# 背后很暗时抬一点亮度，不然玻璃就是一团黑，看不出是块玻璃。
+$script:glassLiftKnee     = 0.30
+$script:glassLiftSlope    = 0.42
+$script:glassLiftCap      = 0.11
+
+# 前景色表。HIG "Color" 的系统色：暗色极用暗色模式那套，浅色极用 macOS
+# 浅色模式那套。
+#
+# 浅色极用的是 **黑色透明**（macOS 的 label / secondaryLabel / tertiaryLabel
+# 都是黑色加不同透明度），不是 iOS 那种灰加透明度：iOS 的那套是给"底就是
+# 纯白"设计的，而我们的磨砂玻璃永远不是纯白 —— 拿 iOS 的灰透明去压一层
+# 灰玻璃，次级文字的对比度会直接掉到 3 以下。
+$script:glassInkDark = @{
+  Primary   = '#FFFFFFFF'   # label
+  Secondary = '#99EBEBF5'   # secondaryLabel 60%
+  Tertiary  = '#4DEBEBF5'   # tertiaryLabel 30%
+  Muted     = '#FF8B93A1'
+  Dim       = '#FF8E8E93'   # systemGray
+  Warn      = '#FFFF9F0A'   # systemOrange
+  Danger    = '#FFFF453A'   # systemRed
+  Track     = '#26FFFFFF'
+  Accent    = '#FF0A84FF'   # systemBlue (dark)
+  Hover     = '#FFFF453A'
+}
+
+$script:glassInkLight = @{
+  Primary   = '#D9000000'   # macOS label: 85% 黑
+  Secondary = '#8C000000'   # secondaryLabel: 55% 黑
+  Tertiary  = '#4D000000'   # tertiaryLabel: 30% 黑
+  Muted     = '#FF6C6C70'
+  Dim       = '#FF6C6C70'
+  Warn      = '#FFC93400'   # systemOrange (light)
+  Danger    = '#FFD70015'   # systemRed (light)
+  Track     = '#1A000000'
+  Accent    = '#FF007AFF'   # systemBlue (light)
+  Hover     = '#FFFF3B30'   # systemRed (light)
+}
+
+# 浅色极的系统色。HIG "Color" 系统色表 light 一列。
+#
+# 注意这些不是把 dark 列调亮就行：浅色背景上要的是**深色**版本（label 色），
+# 否则一个黄点在白纸上等于没有。
+$stateMapLight = @{
+  idle     = @{ dot='#FF6C6C70'; ring='#FF6C6C70'; label='mcode';             icon='' }
+  thinking = @{ dot='#FFA88700'; ring='#FFA88700'; label='mcode · 思考中';     icon='' }
+  working  = @{ dot='#FF007AFF'; ring='#FF007AFF'; label='mcode · 执行中';     icon='⚙' }
+  waiting  = @{ dot='#FFC93400'; ring='#FFC93400'; label='mcode · 等待审批';  icon='?' }
+  done     = @{ dot='#FF248A3D'; ring='#FF248A3D'; label='mcode · 已完成';     icon='✓' }
+  error    = @{ dot='#FFD70015'; ring='#FFD70015'; label='mcode · 出错';       icon='✕' }
+}
+
+$familyMapLight = @{
+  shell  = '#FF248A3D'   # bash / shell  → 绿
+  read   = '#FF007AFF'   # read         → 蓝
+  write  = '#FFA88700'   # edit / write → 琥珀
+  search = '#FF8944AB'   # grep / glob  → 紫
+  task   = '#FF007E8A'   # task         → 青
+  web    = '#FFD6246D'   # web_search/fetch → 粉
+  plan   = '#FF8E8E93'   # todowrite    → 灰
+}
+
+# 药丸这一面的墨色（文字 / 强调色）。
+function Get-GlassInk {
+  if ($script:glassPole -eq 'light') { return $script:glassInkLight }
+  return $script:glassInkDark
+}
+
+# 面板这一面的墨色。两块面背后亮度不同，墨色就得分开。
+function Get-PanelInk {
+  if ($script:glassPanelPole -eq 'light') { return $script:glassInkLight }
+  return $script:glassInkDark
+}
+
+# 当前极的状态色表（点 / 环）。
+function Get-GlassStateMap {
+  if ($script:glassPole -eq 'light') { return $stateMapLight }
+  return $stateMap
+}
+
+# 面板的状态色表：列表行画在面板上，跟着面板的极走。
+function Get-PanelStateMap {
+  if ($script:glassPanelPole -eq 'light') { return $stateMapLight }
+  return $stateMap
+}
+
+# 当前极的家族色表。
+function Get-GlassFamilyMap {
+  if ($script:glassPole -eq 'light') { return $familyMapLight }
+  return $familyMap
+}
+
+function Resolve-GlassPole {
+  # 该用哪一极。
+  #
+  # auto 按背后亮度切，带迟滞：亮过 0.60 才切浅色，暗回 0.58 才切深色。
+  # 没有迟滞的话，背景亮度在阈值附近抖一下，药丸就跟着闪一下。
+  #
+  # 阈值不是随手取的，要跟**文字对比度**对齐：
+  #   - 浅色极：深色文字 #1C1C1E 压在玻璃上。要够 4.5:1，玻璃的相对亮度得
+  #     有 0.227 以上 —— 按浅色极的染色公式反推，背后亮度得高于 0.58 才
+  #     够，那段区间必须留在深色极（深色极把背景压暗，白字反而更清楚）。
+  #   - 深色极：白字压在压暗后的玻璃上，veil 上限 0.72 保证最坏情况下
+  #     （背后全白）也有 5.35:1 上下，怎么切都不会读不清。
+  # 所以 0.60 / 0.58 这对阈值是**算出来的**，不是调出来的。
+  #
+  # $Current 是**这块面自己**现在的极（药丸和面板各算各的），迟滞相对它
+  # 判断。这个函数不改任何全局状态：调用方拿到结果自己落。
+  #
+  # 配置里钉死（materialPole = dark / light）时不切：调试浅色极需要它，
+  # "我就想要固定外观"的用户也需要它。注意钉死浅色极、又把它压在深色
+  # 背景上，内容会看不清 —— 那是自己选的，不是 bug。
+  param([double]$L, [string]$Current)
+  $forced = ''
+  try { $forced = [string]$cfg.materialPole } catch { $forced = '' }
+  if ($forced -eq 'dark' -or $forced -eq 'light') { return $forced }
+  if ($Current -eq 'light') {
+    if ($L -lt $script:glassPoleLightOff) { return 'dark' }
+  } else {
+    if ($L -gt $script:glassPoleLightOn) { return 'light' }
+  }
+  return $Current
+}
+
+function Update-GlassGrain {
+  # 颗粒笔刷也跟极走：深色玻璃上白点，浅色玻璃上黑点。
+  # 每块面用自己那一极的笔刷 —— 药丸和面板可以是不同的极。
+  param([string]$Name, [string]$Pole)
+  try {
+    $gb = $script:grainBrushDark
+    if ($Pole -eq 'light') { $gb = $script:grainBrushLight }
+    if (-not $gb) { return }
+    $target = $window.FindName($Name)
+    if ($target) { $target.Fill = $gb }
+  } catch {
+    Dbg "GLASS GRAIN INK FAIL: $($_.Exception.Message)"
+  }
+}
+
+function Update-GlassInk {
+  # 把**药丸这一面**的前景色刷到药丸的文本控件上。
+  #
+  # 换极时必须重刷：深色玻璃上的白字搬到浅色玻璃上就是"白底白字"。
+  #
+  # 面板上的字不归这里管 —— 列表行的墨色跟面板自己的极走，见
+  # Update-SessionRowsInk。
+  $ink = Get-GlassInk
+  try {
+    if ($script:stateText)       { $script:stateText.Foreground         = C $ink.Primary }
+    if ($script:messageText)     { $script:messageText.Foreground       = C $ink.Secondary }
+    if ($script:actionIcon)      { $script:actionIcon.Foreground        = C $ink.Secondary }
+    if ($script:elapsedText)     { $script:elapsedText.Foreground       = C $ink.Tertiary }
+    if ($script:usage5hText)     { $script:usage5hText.Foreground       = C $ink.Tertiary }
+    if ($script:progressTrack)   { $script:progressTrack.Background     = C $ink.Track }
+    if ($script:progressFill)    { $script:progressFill.Background      = C $ink.Accent }
+    if ($script:progressShimmer) { $script:progressShimmer.Fill         = C $ink.Accent }
+  } catch {
+    Dbg "GLASS INK FAIL: $($_.Exception.Message)"
+  }
+  Update-GlassGrain 'PillGrain' $script:glassPole
+}
+
+function Update-GlassPanelGrain {
+  # 面板的颗粒笔刷，跟面板自己的极走。
+  Update-GlassGrain 'PanelGrain' $script:glassPanelPole
+}
+
+function Update-SessionRowsInk {
+  # 换极后重画列表行 —— 行里的颜色是建行那一刻定下的，不会自己跟着变。
+  #
+  # 只在列表本来就是展开的时候重画：没展开就别去动它（重画会把 pending
+  # 消解逻辑再跑一遍，没必要）。
+  try {
+    if (-not $script:sessionRowsPanel) { return }
+    if ($script:sessionRowsPanel.Visibility -ne [System.Windows.Visibility]::Visible) { return }
+    Show-SessionList | Out-Null
+  } catch {
+    Dbg "GLASS ROWS REINK FAIL: $($_.Exception.Message)"
+  }
+}
+
+function Apply-GlassMaterial {
+  # 按背后内容的亮度，决定玻璃怎么染、边缘怎么亮、阴影多重。
+  # 这是 HIG 那句 "the amount of tint shifts to keep buttons legible" 落地处。
+  param([string]$Prefix, [double]$Luminance, [bool]$Thick)
+  try {
+    $L = [Math]::Max(0.0, [Math]::Min(1.0, $Luminance))
+
+    # 先定极。换极了就把前景色重刷一遍（深色玻璃上的白字搬到浅色玻璃
+    # 上就是白底白字），展开着的列表也要重画 —— 行里的颜色是建行时定的。
+    #
+    # 每块面各判各的：药丸看药丸背后，面板看面板背后。两块面背后亮度可以
+    # 差很远，共用一个极就会出现"暗玻璃 + 深色字"那种看着像坏掉的状态。
+    $isPanel = ($Prefix -eq 'Panel')
+    $curPole = $script:glassPole
+    if ($isPanel) { $curPole = $script:glassPanelPole }
+    $pole = Resolve-GlassPole $L $curPole
+    if ($isPanel) {
+      if ($pole -ne $script:glassPanelPole) {
+        $script:glassPanelPole = $pole
+        Update-GlassPanelGrain
+        # 列表行的颜色是建行那一刻定下的，换极之后要重画。但重画会连带再
+        # 抓一次背景（Show-SessionList 末尾会调 Update-GlassBackdrop），不能
+        # 套在抓屏里做 —— 内层抓完就把"排除录屏"撤了，外层接着抓就抓到自
+        # 己。这里只记一个标记，由 Update-GlassBackdrop 在抓完之后统一处理。
+        $script:glassRowsNeedReink = $true
+      }
+    } else {
+      if ($pole -ne $script:glassPole) {
+        $script:glassPole = $pole
+        Update-GlassInk
+      }
+    }
+
+    $dark  = [System.Windows.Media.Color]::FromArgb(255, 0, 0, 0)
+    $white = [System.Windows.Media.Color]::FromArgb(255, 255, 255, 255)
+
+    if ($pole -eq 'light') {
+      # =================== 浅色极 ===================
+      #
+      # 浅色玻璃不需要压暗：背后本来就亮，要的是把内容翻成深色。反而要
+      # **压一点点暗**，让这块玻璃比周围的白"沉"一点 —— 否则白玻璃压在
+      # 白背景上，整块面板就没了，只剩一团影子。
+      #
+      # 浅色模式下的浮层就是靠这个立的：一点压暗 + 一圈细边 + 一道柔影，
+      # 而不是靠颜色。
+      $veil = 0.08
+      if ($L -gt $script:glassVeilLightKnee) { $veil = 0.08 + ($L - $script:glassVeilLightKnee) * $script:glassVeilLightSlope }
+      if ($veil -lt $script:glassVeilLightFloor) { $veil = $script:glassVeilLightFloor }
+      if ($veil -gt $script:glassVeilLightCap) { $veil = $script:glassVeilLightCap }
+      # 大元素 = 更厚的材质（HIG：larger elements appear more opaque）。
+      if ($Thick) { $veil = [Math]::Min(0.42, $veil * 1.30 + 0.07) }
+      $lift = 0.0
+
+      $tintBrush = New-Object System.Windows.Media.LinearGradientBrush
+      $tintBrush.StartPoint = New-Object System.Windows.Point 0, 0
+      $tintBrush.EndPoint   = New-Object System.Windows.Point 0, 1
+      # 顶边一道极淡的柔光：玻璃上表面把光反下来的那一道。
+      $tintBrush.GradientStops.Add((New-GlassStop $white 0.00 0.10)) | Out-Null
+      $tintBrush.GradientStops.Add((New-GlassStop $dark  0.18 ($veil * 0.70))) | Out-Null
+      $tintBrush.GradientStops.Add((New-GlassStop $dark  0.62 ($veil * 0.95))) | Out-Null
+      $tintBrush.GradientStops.Add((New-GlassStop $dark  1.00 ($veil * 1.30))) | Out-Null
+      $tintPath = $window.FindName("${Prefix}Tint")
+      if ($tintPath) { $tintPath.Fill = $tintBrush }
+
+      # 边缘：浅色玻璃上白色高光是看不见的（底就是白的）。真正让它立住
+      # 的是一条**极细的暗边** —— 浮层在浅色背景上的分界靠它。
+      $rimBrush = New-Object System.Windows.Media.RadialGradientBrush
+      $rimBrush.Center = New-Object System.Windows.Point 0.5, 0
+      $rimBrush.RadiusX = 0.70
+      $rimBrush.RadiusY = 1.30
+      $rimBrush.GradientStops.Add((New-GlassStop $dark 0.00 0.22)) | Out-Null
+      $rimBrush.GradientStops.Add((New-GlassStop $dark 0.45 0.07)) | Out-Null
+      $rimBrush.GradientStops.Add((New-GlassStop $dark 0.80 0.02)) | Out-Null
+      $rimBrush.GradientStops.Add((New-GlassStop $dark 1.00 0.00)) | Out-Null
+      $rimPath = $window.FindName("${Prefix}Rim")
+      if ($rimPath) { $rimPath.Stroke = $rimBrush }
+
+      # 底部厚度暗线：浅色玻璃上这条线要比深色极轻，否则发脏。
+      $edgeBrush = New-Object System.Windows.Media.LinearGradientBrush
+      $edgeBrush.StartPoint = New-Object System.Windows.Point 0, 0
+      $edgeBrush.EndPoint   = New-Object System.Windows.Point 0, 1
+      $edgeBrush.GradientStops.Add((New-GlassStop $dark 0.00 0.00)) | Out-Null
+      $edgeBrush.GradientStops.Add((New-GlassStop $dark 0.58 0.00)) | Out-Null
+      $edgeBrush.GradientStops.Add((New-GlassStop $dark 1.00 0.30)) | Out-Null
+      $edgePath = $window.FindName("${Prefix}Edge")
+      if ($edgePath) { $edgePath.Stroke = $edgeBrush }
+
+      # 阴影：浅色玻璃没有深色玻璃那层"自带暗底"撑着，全靠投影立住，
+      # 所以投影要更柔、更大。
+      $shadow = $window.FindName("${Prefix}Shadow")
+      if ($shadow) {
+        if ($Thick) { $shadow.Opacity = [Math]::Min(0.46, 0.20 + 0.18 * $L); $shadow.BlurRadius = 44; $shadow.ShadowDepth = 12 }
+        else { $shadow.Opacity = [Math]::Min(0.38, 0.16 + 0.16 * $L); $shadow.BlurRadius = 32; $shadow.ShadowDepth = 8 }
+      }
+    } else {
+      # =================== 深色极 ===================
+      #
+      # 压暗量：背后越亮压得越狠。
+      #
+      # HIG 原话：regular 变体"blurs and **adjusts the luminosity** of background
+      # content to maintain legibility of text" —— 不是"给玻璃加个颜色"，
+      # 是把背景的明度往可读的方向调。调多深由背景亮度决定，所以是算的。
+      #
+      # 下限 0.10：背后再暗也要压一点，否则玻璃和底下的黑地分不开。
+      # 上限 0.58：再黑就成了一块黑板，底下什么都看不见了。
+      $veil = $script:glassVeilFloor
+      if ($L -gt $script:glassVeilKnee) { $veil = $script:glassVeilFloor + ($L - $script:glassVeilKnee) * $script:glassVeilSlope }
+      if ($veil -lt $script:glassVeilFloor) { $veil = $script:glassVeilFloor }
+      if ($veil -gt $script:glassVeilCap) { $veil = $script:glassVeilCap }
+      # 大元素 = 更厚的材质（HIG：larger elements appear more opaque）。
+      # 面板比药丸大得多，再透就成了一块挡板的玻璃，看不见底下在干什么。
+      if ($Thick) { $veil = [Math]::Min(0.72, $veil * 1.35 + 0.10) }
+
+      # 背后很暗时抬一点亮度，不然玻璃就是一团黑，看不出是块玻璃。
+      $lift = 0.0
+      if ($L -lt $script:glassLiftKnee) { $lift = ($script:glassLiftKnee - $L) * $script:glassLiftSlope }
+      if ($lift -gt $script:glassLiftCap) { $lift = $script:glassLiftCap }
+
+      $tintBrush = New-Object System.Windows.Media.LinearGradientBrush
+      $tintBrush.StartPoint = New-Object System.Windows.Point 0, 0
+      $tintBrush.EndPoint   = New-Object System.Windows.Point 0, 1
+      if ($L -lt $script:glassTintSplit) {
+        # 背后暗：顶边受光、底边压深，玻璃才有厚度。
+        $tintBrush.GradientStops.Add((New-GlassStop $white 0.00 ($lift * 0.95))) | Out-Null
+        $tintBrush.GradientStops.Add((New-GlassStop $white 0.32 ($lift * 0.50))) | Out-Null
+        $tintBrush.GradientStops.Add((New-GlassStop $dark  0.72 ($veil * 0.85))) | Out-Null
+        $tintBrush.GradientStops.Add((New-GlassStop $dark  1.00 ($veil * 1.35))) | Out-Null
+      } else {
+        # 背后亮：整体压暗保证白字可读，但顶边留一道柔光 —— 玻璃上表面
+        # 把光反下来的那一道，是"有光泽"和"只是半透明"的分界。
+        $tintBrush.GradientStops.Add((New-GlassStop $white 0.00 0.10)) | Out-Null
+        $tintBrush.GradientStops.Add((New-GlassStop $dark  0.12 ($veil * 0.82))) | Out-Null
+        $tintBrush.GradientStops.Add((New-GlassStop $dark  0.40 ($veil * 0.98))) | Out-Null
+        $tintBrush.GradientStops.Add((New-GlassStop $dark  0.75 ($veil * 1.06))) | Out-Null
+        $tintBrush.GradientStops.Add((New-GlassStop $dark  1.00 ($veil * 1.30))) | Out-Null
+      }
+      $tintPath = $window.FindName("${Prefix}Tint")
+      if ($tintPath) { $tintPath.Fill = $tintBrush }
+
+      # 高光：玻璃边缘那道亮线（specular）。径向渐变，顶部最亮。
+      #
+      # 半径给得比元素小，亮线才集中在上边缘；给太大就变成一圈均匀的白
+      # 描边 —— 那是"贴纸"，不是玻璃。
+      $rimBrush = New-Object System.Windows.Media.RadialGradientBrush
+      $rimBrush.Center = New-Object System.Windows.Point 0.5, 0
+      $rimBrush.RadiusX = 0.70
+      $rimBrush.RadiusY = 1.30
+      $rimBrush.GradientStops.Add((New-GlassStop $white 0.00 0.85)) | Out-Null
+      $rimBrush.GradientStops.Add((New-GlassStop $white 0.35 0.34)) | Out-Null
+      $rimBrush.GradientStops.Add((New-GlassStop $white 0.75 0.09)) | Out-Null
+      $rimBrush.GradientStops.Add((New-GlassStop $white 1.00 0.03)) | Out-Null
+      $rimPath = $window.FindName("${Prefix}Rim")
+      if ($rimPath) { $rimPath.Stroke = $rimBrush }
+
+      # 厚度暗边：玻璃下缘把光折射开了，内侧有一圈暗线。
+      $edgeBrush = New-Object System.Windows.Media.LinearGradientBrush
+      $edgeBrush.StartPoint = New-Object System.Windows.Point 0, 0
+      $edgeBrush.EndPoint   = New-Object System.Windows.Point 0, 1
+      $edgeBrush.GradientStops.Add((New-GlassStop $dark 0.00 0.00)) | Out-Null
+      $edgeBrush.GradientStops.Add((New-GlassStop $dark 0.58 0.00)) | Out-Null
+      $edgeBrush.GradientStops.Add((New-GlassStop $dark 1.00 0.46)) | Out-Null
+      $edgePath = $window.FindName("${Prefix}Edge")
+      if ($edgePath) { $edgePath.Stroke = $edgeBrush }
+
+      # 阴影：背后越亮越忙，投影越重（WWDC25：内容滚过下面时阴影会加重）。
+      $shadow = $window.FindName("${Prefix}Shadow")
+      if ($shadow) {
+        if ($Thick) { $shadow.Opacity = [Math]::Min(0.72, 0.36 + 0.32 * $L) }
+        else { $shadow.Opacity = [Math]::Min(0.62, 0.30 + 0.28 * $L) }
+      }
+    }
+    # 亮度变化不大时不记日志：材质每 2.5s 刷一次，全记的话日志一天几万行。
+    # 换极是稀有事件，单独记一行 —— 排查"为什么药丸变白了"就看这条。
+    # 两块面各记各的：药丸和面板可能真的在不同极上。
+    if ($script:glassLoggedPoles[$Prefix] -ne $pole) {
+      $script:glassLoggedPoles[$Prefix] = $pole
+      Dbg ("GLASS " + $Prefix.ToUpper() + " POLE -> " + $pole)
+    }
+    if ($null -eq $script:glassLoggedLum[$Prefix] -or [Math]::Abs($L - $script:glassLoggedLum[$Prefix]) -gt 0.12) {
+      $script:glassLoggedLum[$Prefix] = $L
+      Dbg ("GLASS " + $Prefix + " L=" + [Math]::Round($L, 3) + " veil=" + [Math]::Round($veil, 3) + " lift=" + [Math]::Round($lift, 3) + " pole=" + $pole)
+    }
+    return $true
+  } catch {
+    Dbg "GLASS MATERIAL FAIL: $($_.Exception.Message)"
+    return $false
+  }
+}
+
+function Update-GlassBackdrop {
+  # 重新抓一次背景。展开时、窗口移动后、周期刷新时都要调。
+  try {
+    $pillGlass = $window.FindName('PillGlass')
+    if (-not $pillGlass) { return $false }
+    $panelGlass = $window.FindName('PanelGlass')
+
+    # 抓屏时把自己排除，否则抓到的是自己的上一帧。
+    $hwnd = [IntPtr]::Zero
+    $excluded = $false
+    try {
+      $hwnd = [System.Windows.Interop.WindowInteropHelper]::new($window).Handle
+      if ($hwnd -and [WinAPI]::SetWindowDisplayAffinity($hwnd, 0x00000011)) { $excluded = $true }
+    } catch {}
+
+    try {
+      $pillCap = New-GlassCapture $pillGlass
+      if ($pillCap) {
+        $pillGlass.Background = $pillCap.Brush
+        $script:glassBackdrop = $pillCap.Brush
+        $script:glassLuminance = $pillCap.Luminance
+        [void](Apply-GlassMaterial 'Pill' $pillCap.Luminance $false)
+      }
+      if ($panelGlass -and $panelGlass.Visibility -eq [System.Windows.Visibility]::Visible) {
+        $panelCap = New-GlassCapture $panelGlass
+        if ($panelCap) {
+          $panelGlass.Background = $panelCap.Brush
+          [void](Apply-GlassMaterial 'Panel' $panelCap.Luminance $true)
+        }
+      }
+    } finally {
+      if ($excluded -and $hwnd) { try { [void][WinAPI]::SetWindowDisplayAffinity($hwnd, 0) } catch {} }
+    }
+    $script:glassLastUpdate = [DateTime]::UtcNow
+    # 换极之后重画列表行。
+    #
+    # 必须放在抓屏之外：重画会调 Show-SessionList，而 Show-SessionList 末尾
+    # 又会调 Update-GlassBackdrop。套在抓屏里做，内层抓完就把"排除录屏"
+    # 撤掉了，外层接着抓就抓到自己的上一帧。
+    if ($script:glassRowsNeedReink) {
+      $script:glassRowsNeedReink = $false
+      Update-SessionRowsInk
+    }
+    return $true
+  } catch {
+    Dbg "GLASS UPDATE FAIL: $($_.Exception.Message)"
+    return $false
+  }
+}
+
+# 材质几何必须跟着元素的实际尺寸走。
+#
+# 尺寸会变：药丸高度可配、列表行数会变、窗口宽度可配。尺寸一变，
+# Clip 和那几条材质路径就跟真实形状对不上了（圆角错位、路径被裁掉
+# 一截）。所以每次都按当前 ActualWidth/ActualHeight 重算，尺寸没变
+# 就跳过 —— 每 400ms 一次的轮询里重建几何是浪费。
+$script:glassGeomSize = @{}
+# 亮度日志按面分开记：药丸一块、面板一块。
+#
+# 共用一个槽位是不行的 —— 亮度行只在变化超过 0.12 时才记，两块面轮流往
+# 同一个槽位里写，后写的那面几乎永远落不下自己的一行，于是"面板为什么变
+# 白了"这种事根本查不出（面板换了极，日志里却只有药丸的亮度）。
+$script:glassLoggedLum = @{}
+$script:glassLoggedPoles = @{}
+$script:glassRowsNeedReink = $false
+
+function Sync-GlassGeometry {
+  try {
+    $specs = @(
+      @{ P = 'Pill';  R = $script:glassRadiusPill;  S = 0.0 },
+      @{ P = 'Panel'; R = $script:glassRadiusPanel; S = $script:glassSmoothPanel }
+    )
+    foreach ($sp in $specs) {
+      $glass = $window.FindName("$($sp.P)Glass")
+      if (-not $glass) { continue }
+      if ($sp.P -eq 'Panel' -and $glass.Visibility -ne [System.Windows.Visibility]::Visible) { continue }
+      $w = [int]$glass.ActualWidth
+      $h = [int]$glass.ActualHeight
+      if ($w -lt 8 -or $h -lt 8) { continue }
+      $key = "$($sp.P)"
+      if ($script:glassGeomSize[$key] -eq "$w x $h") { continue }
+      if (Update-GlassGeometry $sp.P $sp.R $sp.S) {
+        $script:glassGeomSize[$key] = "$w x $h"
+      }
+    }
+    return $true
+  } catch {
+    Dbg "GLASS GEOM SYNC FAIL: $($_.Exception.Message)"
+    return $false
+  }
+}
 $script:pillHeight      = 70
 $script:listHideTimer   = $null
 
-# 状态配色
+# 状态配色。
+#
+# 用的是 Apple 暗色模式系统色（HIG "Color" 的系统色表，dark 一列），
+# 不是 Tailwind 那套。系统色不是随便挑的：它们被调校过，在玻璃这种
+# 半透明表面上、在深浅两种背景下都能站得住，而且彼此之间是可分辨的。
 $stateMap = @{
-  idle     = @{ dot='#FF6B7280'; ring='#FF6B7280'; label='mcode';             icon='' }
-  thinking = @{ dot='#FFEAB308'; ring='#FFEAB308'; label='mcode · 思考中';     icon='' }
-  working  = @{ dot='#FF3B82F6'; ring='#FF3B82F6'; label='mcode · 执行中';     icon='⚙' }
-  waiting  = @{ dot='#FFF59E0B'; ring='#FFF59E0B'; label='mcode · 等待审批';  icon='?' }
-  done     = @{ dot='#FF22C55E'; ring='#FF22C55E'; label='mcode · 已完成';     icon='✓' }
-  error    = @{ dot='#FFEF4444'; ring='#FFEF4444'; label='mcode · 出错';       icon='✕' }
+  idle     = @{ dot='#FF8E8E93'; ring='#FF8E8E93'; label='mcode';             icon='' }
+  thinking = @{ dot='#FFFFD60A'; ring='#FFFFD60A'; label='mcode · 思考中';     icon='' }
+  working  = @{ dot='#FF0A84FF'; ring='#FF0A84FF'; label='mcode · 执行中';     icon='⚙' }
+  waiting  = @{ dot='#FFFF9F0A'; ring='#FFFF9F0A'; label='mcode · 等待审批';  icon='?' }
+  done     = @{ dot='#FF30D158'; ring='#FF30D158'; label='mcode · 已完成';     icon='✓' }
+  error    = @{ dot='#FFFF453A'; ring='#FFFF453A'; label='mcode · 出错';       icon='✕' }
 }
 
 # ---------------------------------------------------------------------------
@@ -575,8 +1567,11 @@ function Format-RelativeTime([int64]$tsMs) {
 #   [●]  标题…………………………          3 分钟前
 #        摘要…………………………          运行中
 #
-# 状态点跨两行、垂直居中；标题和摘要都在中间列，所以天然左对齐。
-function Add-SessionRow([string]$id, [string]$title, [string]$phase, [string]$preview, [string]$lastTool, [int64]$lastAtMs, [bool]$isLast) {
+  # 状态点跨两行、垂直居中；标题和摘要都在中间列，所以天然左对齐。
+  #
+  # 颜色用**面板那一极**的系统色表：列表行画在面板上，面板是暗是亮由它
+  # 自己背后的亮度决定。药丸和面板可以是不同的极，所以不能共用一份。
+  function Add-SessionRow([string]$id, [string]$title, [string]$phase, [string]$preview, [string]$lastTool, [int64]$lastAtMs, [bool]$isLast) {
   if (-not $script:sessionRows) { return }
   # 状态 -> 文案 + 颜色。
   #
@@ -588,20 +1583,29 @@ function Add-SessionRow([string]$id, [string]$title, [string]$phase, [string]$pr
   #
   # "running" 是旧词表的值，留着当兼容：过渡期里 sessions.json 可能还是
   # 旧的。
+  # 文案在这里，颜色去 pill 那张表里取 —— 同一个状态在两个地方必须是同
+  # 一个颜色、同一句话。
+  #
+  # 之前这张表自带一套 Tailwind 色（#3B82F6 之类），跟 pill 用的 Apple 系
+  # 统色（#0A84FF）不是一回事，"颜色也跟着 pill 走"就成了空话：同一个
+  # "运行中"，药丸上是系统蓝、列表里是另一种蓝。现在两边共用一张表。
   $stateTextMap = @{
-    'working'  = @{ text = '运行中';   dot = '#FF3B82F6' }
-    'thinking' = @{ text = '思考中';   dot = '#FFEAB308' }
-    'waiting'  = @{ text = '等待审批'; dot = '#FFF59E0B' }
-    'idle'     = @{ text = '待回复';   dot = '#FF6B7280' }
-    'done'     = @{ text = '已完成';   dot = '#FF22C55E' }
-    'error'    = @{ text = '出错';     dot = '#FFEF4444' }
-    'stopped'  = @{ text = '已停止';   dot = '#FF4B5563' }
-    'running'  = @{ text = '运行中';   dot = '#FF3B82F6' }
+    'working'  = @{ text = '运行中';   state = 'working' }
+    'thinking' = @{ text = '思考中';   state = 'thinking' }
+    'waiting'  = @{ text = '等待审批'; state = 'waiting' }
+    'idle'     = @{ text = '待回复';   state = 'idle' }
+    'done'     = @{ text = '已完成';   state = 'done' }
+    'error'    = @{ text = '出错';     state = 'error' }
+    'stopped'  = @{ text = '已停止';   state = 'idle' }
+    'running'  = @{ text = '运行中';   state = 'working' }
   }
   $stateInfo = $stateTextMap[[string]$phase]
   if (-not $stateInfo) { $stateInfo = $stateTextMap['idle'] }
-  $dotHex = $stateInfo.dot
   $phaseText = $stateInfo.text
+  # 颜色跟**面板**当前极走：深色极用暗色系统色，浅色极用浅色系统色。
+  $smap = Get-PanelStateMap
+  $dotHex = $smap[$stateInfo.state].dot
+  if (-not $dotHex) { $dotHex = $smap['idle'].dot }
 
   # 第二行：正文优先。没有正文（最后一条恰好是 toolCall）就退到"正在
   # 调用的工具名"，总比空着强。
@@ -640,21 +1644,24 @@ function Add-SessionRow([string]$id, [string]$title, [string]$phase, [string]$pr
   $grid.RowDefinitions.Add($rowBot) | Out-Null
 
   $dot = New-Object System.Windows.Shapes.Ellipse
-  $dot.Width = 7; $dot.Height = 7
+  $dot.Width = 8; $dot.Height = 8
   $dot.Fill = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString($dotHex)))
   $dot.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
-  $dot.Margin = New-Object System.Windows.Thickness(0,0,9,0)
+  $dot.Margin = New-Object System.Windows.Thickness(0,0,10,0)
+
+  # 前景色跟着**面板**当前极走：深色极是白字，浅色极是深字。
+  $ink = Get-PanelInk
 
   $txt = New-Object System.Windows.Controls.TextBlock
   $txt.Text = if ($title) { $title } else { $id }
-  $txt.Foreground = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#FFF5F5F7')))
-  $txt.FontSize = 12.5
+  $txt.Foreground = C $ink.Primary
+  $txt.FontSize = 13
   $txt.TextTrimming = [System.Windows.TextTrimming]::CharacterEllipsis
   $txt.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
 
   $sub = New-Object System.Windows.Controls.TextBlock
   $sub.Text = $subText
-  $sub.Foreground = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#FF8B93A1')))
+  $sub.Foreground = C $ink.Secondary
   $sub.FontSize = 11
   $sub.TextTrimming = [System.Windows.TextTrimming]::CharacterEllipsis
   $sub.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
@@ -669,14 +1676,14 @@ function Add-SessionRow([string]$id, [string]$title, [string]$phase, [string]$pr
 
   $time = New-Object System.Windows.Controls.TextBlock
   $time.Text = (Format-RelativeTime $lastAtMs)
-  $time.Foreground = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#FF9CA3AF')))
-  $time.FontSize = 10
+  $time.Foreground = C $ink.Tertiary
+  $time.FontSize = 11
   $time.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Right
 
   $tag = New-Object System.Windows.Controls.TextBlock
   $tag.Text = $phaseText
   $tag.Foreground = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString($dotHex)))
-  $tag.FontSize = 10
+  $tag.FontSize = 11
   $tag.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Right
 
   $right.Children.Add($time) | Out-Null
@@ -692,8 +1699,8 @@ function Add-SessionRow([string]$id, [string]$title, [string]$phase, [string]$pr
   # 单独给 × 造一套焦点管理。
   $xMark = New-Object System.Windows.Controls.TextBlock
   $xMark.Text = '×'
-  $xMark.FontSize = 14
-  $xMark.Foreground = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#FF6B7280')))
+  $xMark.FontSize = 15
+  $xMark.Foreground = C $ink.Tertiary
   $xMark.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
   $xMark.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Center
   $xMark.Margin = New-Object System.Windows.Thickness(10,0,2,0)
@@ -702,7 +1709,7 @@ function Add-SessionRow([string]$id, [string]$title, [string]$phase, [string]$pr
 
   # hover 时变红：让它一眼看出这是个"会动手"的东西。
   $xIdleBrush = $xMark.Foreground
-  $xHotBrush = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#FFEF4444')))
+  $xHotBrush = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#FFFF453A')))
   # $args[0] 是 sender（这个 TextBlock），和下面 MouseLeftButtonDown 用
   # $args[1] 取事件参数是同一套写法。
   $xMark.Add_MouseEnter({ $args[0].Foreground = $xHotBrush }.GetNewClosure())
@@ -782,7 +1789,7 @@ function Add-SessionOverflowRow([int]$hidden) {
   if ($hidden -le 0) { return }
   $tb = New-Object System.Windows.Controls.TextBlock
   $tb.Text = '还有 ' + $hidden + ' 条'
-  $tb.Foreground = (New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString('#FF8B93A1')))
+  $tb.Foreground = C (Get-PanelInk).Muted
   $tb.FontSize = 10.5
   $tb.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Center
   $tb.Margin = New-Object System.Windows.Thickness(0,6,0,2)
@@ -809,11 +1816,25 @@ function Show-SessionList {
   #
   # 同时反过来收敛：某个 id 已经不在 sessions.json 里了，说明 detector 已经
   # 消费掉它、确认了消除 —— 这时把它从 pending 里划掉，pending 不会一直长。
+  #
+  # 但光靠"不在 sessions.json 里"这一条会漏掉一种情况：detector 把这个 id
+  # 消掉之后**又把它跟踪回来了**（同一个会话又活过来了）。中间"不在"的
+  # 那一刻正好夹在两次 Show-SessionList 之间，我们根本观察不到，于是这个
+  # id 永远留在 pending 里，这一行也就永远不再显示 —— 整个列表从此空着，
+  # 灵动岛看起来像坏了。
+  #
+  # 所以再加一条：pending 最多留 4 秒。detector 消费 ack 是秒级的，4 秒
+  # 足够它确认；到点还没确认，就当这个 id 回来了，别再藏了。
   if ($script:pendingDismiss.Count -gt 0) {
     $present = @{}
     foreach ($s in $items) { $present[[string]$s.id] = $true }
+    $now = [DateTime]::UtcNow
     foreach ($pid_ in @($script:pendingDismiss.Keys)) {
-      if (-not $present.ContainsKey($pid_)) { $script:pendingDismiss.Remove($pid_) }
+      $stamp = $script:pendingDismiss[$pid_]
+      $gone = (-not $present.ContainsKey($pid_))
+      $expired = $false
+      if ($stamp -is [datetime]) { $expired = (($now - $stamp).TotalSeconds -gt 4) }
+      if ($gone -or $expired) { $script:pendingDismiss.Remove($pid_) }
     }
     $items = @($items | Where-Object { -not $script:pendingDismiss.ContainsKey([string]$_.id) })
     if (-not $items -or $items.Count -eq 0) { Hide-SessionList; return }
@@ -847,17 +1868,16 @@ function Show-SessionList {
   # 列表高度不能按"行数 × 猜的行高"算。
   #
   # 那样算有两处错：摘要会换行，一项不止那么高；而且 SessionPanel 自己
-  # 还要占 Margin 14 + Padding 12 + Border 2。两行时内容需要 106px，row
-  # 只分到 94px，最后一行就被裁掉半行 —— 窗口底部还空着 14px，看起来
-  # 更莫名其妙。
+  # 还要占上下 Margin。两行时内容需要 106px，row 只分到 94px，最后一行
+  # 就被裁掉半行 —— 窗口底部还空着 14px，看起来更莫名其妙。
   #
   # 所以让布局自己算：row 1 改成 Auto，Grid 就按内容测量，再拿实际需要
   # 的高度去撑窗口。DesiredSize 是"内容需要多高"，不受窗口当前高度影响。
   $script:sessionRowsPanel.Visibility = [System.Windows.Visibility]::Visible
   $script:sessionListRow.Height = [System.Windows.GridLength]::Auto
   $script:sessionRowsPanel.UpdateLayout()
-  # DesiredSize 里没有 Margin，所以自己加上 SessionPanel 的 14px 上边距。
-  $listH = [int][Math]::Ceiling($script:sessionRowsPanel.DesiredSize.Height) + 14
+  # DesiredSize 里没有 Margin，所以自己加上面板的上边距(6)和下留白。
+  $listH = [int][Math]::Ceiling($script:sessionRowsPanel.DesiredSize.Height) + 6 + $script:glassMarginPanelBottom
   if ($listH -le 0) { $listH = ($sorted.Count * $script:sessionRowHeight) + 26 }
   # 兜底再夹一次：上面按行数裁过，但一行的高度会随字号/DIP 缩放变，理论上
   # 仍可能超出屏幕。窗口一旦比工作区高，底部（也就是最后几条）跑到屏幕外，
@@ -866,13 +1886,19 @@ function Show-SessionList {
     $wa = [WinAPI]::GetWorkAreaForWindow($window)
     if ($wa.Left -ne -1) {
       $maxH = ($wa.Bottom - $wa.Top) - $window.Top
-      if ($maxH -gt $script:pillHeight -and ($script:pillHeight + $listH) -gt $maxH) {
-        $listH = [int][Math]::Floor($maxH) - $script:pillHeight
+      $chrome = $script:pillHeight + 2 * $script:glassMargin
+      if ($maxH -gt $chrome -and ($chrome + $listH) -gt $maxH) {
+        $listH = [int][Math]::Floor($maxH) - $chrome
         Dbg ("session list clamped to the work area: listH=" + $listH)
       }
     }
   } catch {}
-  $window.Height = $script:pillHeight + $listH
+  $window.Height = $script:pillHeight + 2 * $script:glassMargin + $listH
+  # 窗口刚变高，底下那块屏幕变了 —— 磨砂背景要重抓一次，材质几何也要
+  # 按新尺寸重算（面板高度变了，圆角/路径必须跟上）。
+  # 放在设置 Height 之后：抓的是**当前**窗口尺寸对应的区域。
+  try { Sync-GlassGeometry } catch {}
+  try { [void](Update-GlassBackdrop) } catch {}
   Dbg ("session list shown: " + $sorted.Count + " hidden=" + $hidden + " winH=" + $window.Height + " listH=" + $listH)
 }
 
@@ -887,7 +1913,7 @@ function Hide-SessionList {
   if ($script:sessionListRow) {
     $script:sessionListRow.Height = New-Object System.Windows.GridLength(0)
   }
-  if ($window) { $window.Height = $script:pillHeight }
+  if ($window) { $window.Height = $script:pillHeight + 2 * $script:glassMargin }
 }
 
 # 宽限期之后才收起。鼠标从药丸移到列表会经过一段"两个窗口都不是"的地带，
@@ -1006,7 +2032,9 @@ function Invoke-SessionDismiss([string]$id) {
   if (-not (Write-AckSignal $id)) { return }
   # 先本地记下：detector 要到下一轮（最多 1 秒）才消费 ack，这期间这一行
   # 还在 sessions.json 里。不先藏掉，用户点了 × 而行还在屏幕上。
-  $script:pendingDismiss[$id] = $true
+  # 记时间戳而不只是 true：Show-SessionList 靠它判断"这个 pending 是不是
+  # 该过期了"（见那里的说明）。
+  $script:pendingDismiss[$id] = [DateTime]::UtcNow
   Dbg ("session dismissed without switching: " + $id)
   # 重画：这一行立刻消失，高度也跟着收。
   try { Show-SessionList } catch { Dbg "SESSION LIST REFRESH FAIL: $($_.Exception.Message)" }
@@ -1402,16 +2430,17 @@ function Activate-TerminalWindow {
 # family 名与 detector 的 $TOOL_FAMILIES 值一一对应；缺 family 时回落到 state 色。
 #
 # 色相分布刻意拉开：绿(shell) / 蓝(read) / 黄(write) / 紫(search) / 青(task) /
-# 粉(web) / 灰蓝(plan)。plan 早先用的是 #8B5CF6，和 search 的 #A855F7 在深色
-# pill 上几乎分不开，换成去饱和的灰蓝。
+# 粉(web) / 灰(plan)。同样是 Apple 暗色系统色，两两之间用 CIE76 dE 验过，
+# 最小的一对也远大于 20（"人眼看得出是不同颜色"的门槛）—— 早先 plan 用
+# 灰紫、和 search 只差一点点，在深色玻璃上基本分不开。
 $familyMap = @{
-  shell  = '#FF22C55E'   # bash / shell  → 绿
-  read   = '#FF3B82F6'   # read         → 蓝
-  write  = '#FFEAB308'   # edit / write → 黄
-  search = '#FFA855F7'   # grep / glob  → 紫
-  task   = '#FF06B6D4'   # task         → 青
-  web    = '#FFEC4899'   # web_search/fetch → 粉
-  plan   = '#FF94A3B8'   # todowrite    → 灰蓝
+  shell  = '#FF30D158'   # bash / shell  → 绿
+  read   = '#FF0A84FF'   # read         → 蓝
+  write  = '#FFFFD60A'   # edit / write → 黄
+  search = '#FFBF5AF2'   # grep / glob  → 紫
+  task   = '#FF40C8E0'   # task         → 青
+  web    = '#FFFF375F'   # web_search/fetch → 粉
+  plan   = '#FF8E8E93'   # todowrite    → 灰
 }
 
 # 颜色转 brush
@@ -1583,18 +2612,31 @@ function Update-State {
     [string]$Detail = '',
     [string]$Family = ''
   )
-  $s = $script:stateMap[$State]
-  if (!$s) { $s = $script:stateMap['idle'] }
+  # 状态色表跟当前极走：深色极用 Apple 暗色系统色，浅色极用浅色系统色。
+  $smap = Get-GlassStateMap
+  $fmap = Get-GlassFamilyMap
+  $s = $smap[$State]
+  if (!$s) { $s = $smap['idle'] }
   # 家族色只作用于 active 态（thinking/working/waiting），这样 done 绿 / error 红
   # 依然是"结果"语义，家族色只用来区分"在做什么"。
   $dotHex  = $s.dot
   $ringHex = $s.ring
   if ($Family -and $State -in @('thinking','working','waiting')) {
-    $famHex = $script:familyMap[$Family]
+    $famHex = $fmap[$Family]
     if ($famHex) { $dotHex = $famHex; $ringHex = $famHex }
   }
   $script:statusDot.Fill = C $dotHex
   $script:pulseRing.Fill = C $ringHex
+  # 发光跟着点的颜色走：在深色玻璃上，一个亮着的点会把它周围照亮。
+  # 只在"在跑"的状态点光 —— done 绿 / error 红是结果色，不该发光晕，
+  # 发光会被读成"还在动"。
+  if ($State -in @('thinking','working','waiting')) {
+    # Effect.Color 要的是 Color，不是 Brush —— C() 返回的是 Brush，不能直接用。
+    $script:statusDotGlow.Color = [System.Windows.Media.ColorConverter]::ConvertFromString($dotHex)
+    $script:statusDotGlow.Opacity = 0.85
+  } else {
+    $script:statusDotGlow.Opacity = 0.0
+  }
   $script:stateText.Text = $s.label
   $script:messageText.Text = Build-DisplayMessage -Message $Message -Step $Step -Total $Total -Detail $Detail
   $script:actionIcon.Text = $s.icon
@@ -1610,13 +2652,14 @@ function Update-State {
     if ($hasTime) { $parts += (Format-ResetMs $Usage5hResetMs) }
     if ($hasPct)  { $parts += ("{0}%" -f [int]$Usage5h) }
     $script:usage5hText.Text = $parts -join ' '
-    $col = if ($Usage5h -ge 50) { '#FF6B7280' }       # 剩 >= 50% 灰
-           elseif ($Usage5h -ge 20) { '#FFEAB308' }   # 剩 20-50% 黄
-           else { '#FFEF4444' }                       # 剩 < 20% 红
+    $ink = Get-GlassInk
+    $col = if ($Usage5h -ge 50) { $ink.Dim }            # 剩 >= 50% 灰
+           elseif ($Usage5h -ge 20) { $ink.Warn }       # 剩 20-50% 黄
+           else { $ink.Danger }                        # 剩 < 20% 红
     $script:usage5hText.Foreground = C $col
   } else {
     $script:usage5hText.Text = ''
-    $script:usage5hText.Foreground = C '#FF6B7280'
+    $script:usage5hText.Foreground = C (Get-GlassInk).Dim
   }
 
   # Elapsed timer：进入 active 启动/跨 state 重置，退出 active 停表并清空文字
@@ -2139,22 +3182,32 @@ function Assert-Topmost {
 }
 
 # 窗口定位
+#
+# 窗口比药丸大一圈，这一圈留白是给投影的。
+#
+# 之前窗口跟药丸一样大，DropShadowEffect 画出来的投影全被窗口边界裁掉
+# 了 —— 药丸看着像"贴在屏幕上"，而不是"浮在上面"。苹果那套材质最吃
+# 的就是这口投影。
+#
+# 留白是透明的，鼠标照常穿过去（layered 窗口按像素 alpha 命中）。
+# 位置语义不变：cfg.x/cfg.y 记的仍然是**药丸**的位置，窗口只是往左上
+# 挪了半个留白。旧配置不用迁移。
 $screen = [System.Windows.SystemParameters]::WorkArea
 if ($cfg.x -lt 0) {
-  $window.Left = [Math]::Floor(($screen.Width - $cfg.width) / 2) + $screen.Left
-  $window.Top  = $screen.Top + 14
+  $window.Left = [Math]::Floor(($screen.Width - $cfg.width) / 2) + $screen.Left - $script:glassMargin
+  $window.Top  = $screen.Top + 14 - $script:glassMargin
 } else {
-  $window.Left = $cfg.x
-  $window.Top  = $cfg.y
+  $window.Left = $cfg.x - $script:glassMargin
+  $window.Top  = $cfg.y - $script:glassMargin
 }
-$window.Width  = $cfg.width
-$window.Height = $cfg.height
-# 药丸高度锚点。row 0 锁死成这个高度，所以展开 session 列表时窗口变高、
-# 药丸本身一动不动，列表在它下面长出来。
-$script:pillHeight = $window.Height
+$window.Width  = $cfg.width + 2 * $script:glassMargin
+$window.Height = $cfg.height + 2 * $script:glassMargin
+# 药丸高度锚点。row 0 锁死成"药丸 + 上下留白"，所以展开 session 列表时
+# 窗口变高、药丸本身一动不动，列表在它下面长出来。
+$script:pillHeight = $cfg.height
 try {
   $pillRow = $window.FindName('PillRow')
-  if ($pillRow) { $pillRow.Height = New-Object System.Windows.GridLength($script:pillHeight) }
+  if ($pillRow) { $pillRow.Height = New-Object System.Windows.GridLength($script:pillHeight + 2 * $script:glassMargin) }
 } catch {}
 $window.Opacity = $cfg.opacity
 
@@ -2259,9 +3312,21 @@ $window.Add_MouseMove({
   } catch {
     Dbg "DRAG FAIL: $($_.Exception.Message)"
   }
+  # 拖动时玻璃也得跟着走：底下那块屏幕在变，不重抓的话，药丸里那团模糊
+  # 是"拖之前那块屏幕"，一眼就看出是贴图。
+  # 抓屏 + 模糊要十几毫秒，不能每个 MouseMove 都做 —— 250ms 一次够了，
+  # 拖动过程中本来也看不清细节。
+  try {
+    $now2 = [DateTime]::UtcNow
+    if (($now2 - $script:glassDragStamp).TotalMilliseconds -ge 250) {
+      $script:glassDragStamp = $now2
+      [void](Update-GlassBackdrop)
+    }
+  } catch {}
 })
 $window.Add_MouseLeftButtonUp({
   try { $window.ReleaseMouseCapture() } catch {}
+  $wasDrag = $script:didDrag
   try {
     if ($script:dragStart -and -not $script:didDrag) {
       Dbg 'CLICK detected'
@@ -2270,6 +3335,11 @@ $window.Add_MouseLeftButtonUp({
     }
   } catch {
     Dbg "CLICK FAIL: $($_.Exception.Message)"
+  }
+  # 拖完松手：位置变了，玻璃重抓一次（拖动过程中的节流刷新可能还差几十
+  # 毫秒没跟上）。
+  if ($wasDrag) {
+    try { [void](Update-GlassBackdrop) } catch {}
   }
   $script:dragStart = $null
   $script:didDrag = $false
@@ -2292,6 +3362,23 @@ $window.Add_MouseLeave({
 })
 
 
+# 第一次渲染之后：把材质几何建起来，并抓第一张背景。
+#
+# ContentRendered 而不是 Loaded：Loaded 时布局还没算完，
+# ActualWidth/ActualHeight 还不是最终值，材质路径会按错的尺寸建。
+# 第一帧玻璃还没抓到（抓屏要十几毫秒），所以 XAML 里给了一层保底底色，
+# 不然会闪一下"什么都没有"。
+$window.Add_ContentRendered({
+  try {
+    Sync-GlassGeometry
+    [void](Apply-GlassMaterial 'Pill' 0.25 $false)
+    [void](Update-GlassBackdrop)
+    Dbg 'glass material initialized'
+  } catch {
+    Dbg "GLASS INIT FAIL: $($_.Exception.Message)"
+  }
+})
+
 # FileSystemWatcher 监听 status.json（轮询版本，FSW 在 WPF 应用里经常抽风）
 $script:lastStatusMtime = $null
 $script:lastStatusSig = $null
@@ -2301,7 +3388,17 @@ $timer.Interval = [TimeSpan]::FromMilliseconds(400)
 $timer.Add_Tick({
   # 0) 自愈：被别的窗口压住就重新置顶（内部 1.5s 节流）
   Assert-Topmost
-  # 1) 处理 "show" 信号（"mcode-island show" 创建这个文件）
+  # 1) 玻璃跟着背后的内容走。Liquid Glass 不是一张静态贴图：内容在下面
+  #    滚动，玻璃的模糊和明度就该跟着变（WWDC25 明确讲了这个自适应）。
+  #    放在所有 return 之前，不然 status.json 没变化的那一轮就永远刷不到。
+  try {
+    if ($window.Visibility -eq [System.Windows.Visibility]::Visible -and
+        ([DateTime]::UtcNow - $script:glassLastUpdate).TotalMilliseconds -ge $script:glassRefreshMs) {
+      Sync-GlassGeometry
+      [void](Update-GlassBackdrop)
+    }
+  } catch {}
+  # 2) 处理 "show" 信号（"mcode-island show" 创建这个文件）
   if (Test-Path $showSignalFile) {
     try { Remove-Item $showSignalFile -Force -ErrorAction SilentlyContinue } catch {}
     $window.Dispatcher.Invoke([Action]{
@@ -2389,8 +3486,9 @@ $window.Add_Closing({
   try { Hide-SessionList } catch {}
   try {
     $cur = Get-Content $script:configFile -Raw -Encoding UTF8 | ConvertFrom-Json
-    $cur.x = $window.Left
-    $cur.y = $window.Top
+    # 记的是**药丸**的位置：窗口往左上偏了半个留白，加回去。
+    $cur.x = $window.Left + $script:glassMargin
+    $cur.y = $window.Top + $script:glassMargin
     $cur | ConvertTo-Json | Out-File -Path $script:configFile -Encoding UTF8
   } catch {}
   $window.Hide()
