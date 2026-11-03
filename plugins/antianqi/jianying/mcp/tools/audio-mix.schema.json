@@ -1,0 +1,27 @@
+{
+  "name": "audio_mix",
+  "description": "按草稿的音频结构重做混音并与画面合流（官方语义 + EBU R128 归一到 −14 LUFS）。",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "draft": {
+        "type": "string",
+        "description": "草稿目录"
+      },
+      "video": {
+        "type": "string",
+        "description": "画面 mp4（无声或待替换音轨）"
+      },
+      "out": {
+        "type": "string",
+        "description": "输出 mp4"
+      }
+    },
+    "required": [
+      "draft",
+      "video",
+      "out"
+    ],
+    "additionalProperties": false
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "render_frames",
+  "description": "用官方渲染器把草稿渲成帧序列 / mp4（画面来自官方渲染器，不是我们自己算）。",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "draft": {
+        "type": "string",
+        "description": "草稿目录"
+      },
+      "outDir": {
+        "type": "string",
+        "description": "输出目录"
+      },
+      "fps": {
+        "type": "number",
+        "default": 12
+      }
+    },
+    "required": [
+      "draft",
+      "outDir"
+    ],
+    "additionalProperties": false
+  }
+}

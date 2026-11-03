@@ -1,0 +1,19 @@
+{
+  "name": "draft_commit",
+  "description": "把当前 session 的改动落盘到草稿。会做【素材路径重定位】并断言真草稿 sha 未变。改动来源是 draft_patch 存下的快照（动词之间通过插件状态目录共享状态）。",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "sessionId": {
+        "type": "string",
+        "description": "draft_open 返回的 sessionId"
+      },
+      "realDraft": {
+        "type": "string",
+        "description": "真草稿目录（只读）。用于落盘前后 sha 逐字节断言——真草稿被改动就判失败。"
+      }
+    },
+    "required": ["sessionId"],
+    "additionalProperties": false
+  }
+}
