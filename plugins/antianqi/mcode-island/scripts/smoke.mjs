@@ -2298,18 +2298,10 @@ const main = async () => {
             const P = {
                 lightOn: needNum('glassPoleLightOn'),
                 lightOff: needNum('glassPoleLightOff'),
-                veilFloor: needNum('glassVeilFloor'),
-                veilCap: needNum('glassVeilCap'),
-                veilSlope: needNum('glassVeilSlope'),
-                veilKnee: needNum('glassVeilKnee'),
-                veilLightFloor: needNum('glassVeilLightFloor'),
-                veilLightCap: needNum('glassVeilLightCap'),
-                veilLightSlope: needNum('glassVeilLightSlope'),
-                veilLightKnee: needNum('glassVeilLightKnee'),
-                tintSplit: needNum('glassTintSplit'),
-                liftKnee: needNum('glassLiftKnee'),
-                liftSlope: needNum('glassLiftSlope'),
-                liftCap: needNum('glassLiftCap'),
+                targetDark: needNum('glassTargetByteDark'),
+                targetLight: needNum('glassTargetByteLight'),
+                thickDark: needNum('glassThickDark'),
+                thickLight: needNum('glassThickLight'),
             };
             const allNum = Object.values(P).every((v) => v !== null);
             if (!allNum) {
@@ -2334,31 +2326,29 @@ const main = async () => {
                         const expr = m[3].trim();
                         let factor = null, lit = null, over = null;
                         const vm = expr.match(/^\$veil\s*\*\s*([0-9.]+)$/);
+                        const vb = expr.match(/^\$veil$/);
                         const lm = expr.match(/^\$lift\s*\*\s*([0-9.]+)$/);
+                        const lb = expr.match(/^\$lift$/);
                         const pm = expr.match(/^([0-9.]+)$/);
                         if (vm) { factor = parseFloat(vm[1]); over = 'veil'; }
+                        else if (vb) { factor = 1; over = 'veil'; }
                         else if (lm) { factor = parseFloat(lm[1]); over = 'lift'; }
+                        else if (lb) { factor = 1; over = 'lift'; }
                         else if (pm) { lit = parseFloat(pm[1]); }
                         stops.push({ kind: m[1], offset: parseFloat(m[2]), factor, lit, over });
                     }
                     return stops;
                 };
-                const sliceBetween = (text, startMarker, endMarker) => {
-                    const a = text.indexOf(startMarker);
-                    if (a < 0) return '';
-                    const b = text.indexOf(endMarker, a + startMarker.length);
-                    if (b < 0) return '';
-                    return text.slice(a + startMarker.length, b);
-                };
-                const lightBlock = sliceBetween(psCode, "if ($pole -eq 'light') {", '\n    } else {');
-                const darkRest = psCode.slice(psCode.indexOf("\n    } else {", psCode.indexOf("if ($pole -eq 'light') {")));
-                const darkBackdrop = sliceBetween(darkRest, 'if ($L -lt $script:glassTintSplit) {', '\n      } else {');
-                const brightBackdrop = sliceBetween(darkRest, '\n      } else {', '\n      $rimBrush = New-Object');
-                const stopsLight = tintStops(lightBlock);
-                const stopsDarkBack = tintStops(darkBackdrop);
-                const stopsBrightBack = tintStops(brightBackdrop);
-                if (stopsLight.length >= 3 && stopsDarkBack.length >= 3 && stopsBrightBack.length >= 3) {
-                    out('PASS', `glass tint: the three tint gradients are readable (light ${stopsLight.length}, dark-backdrop ${stopsDarkBack.length}, bright-backdrop ${stopsBrightBack.length} stops)`);
+                // 两套渐变：背后比目标亮（混黑）/ 比目标暗（混白）。两极共用，
+                // 差的只是目标灰度。
+                // 锚点只能用代码：psCode 已经把注释行剥掉了（注释会喂绿断言）。
+                const veilBranch = psCode.indexOf('if ($veil -gt 0.0) {');
+                const veilElse = veilBranch < 0 ? -1 : psCode.indexOf('\n    } else {', veilBranch);
+                const tintAfter = veilElse < 0 ? -1 : psCode.indexOf('$tintPath = $window.FindName', veilElse);
+                const stopsBlack = veilBranch < 0 || veilElse < 0 ? [] : tintStops(psCode.slice(veilBranch, veilElse));
+                const stopsWhite = veilElse < 0 || tintAfter < 0 ? [] : tintStops(psCode.slice(veilElse, tintAfter));
+                if (stopsBlack.length >= 4 && stopsWhite.length >= 4) {
+                    out('PASS', `glass tint: the two tint gradients are readable (washed-black ${stopsBlack.length}, washed-white ${stopsWhite.length} stops)`);
                 } else {
                     out('FAIL', 'glass tint: the tint gradients could not be parsed -- the contrast model would be vacuous');
                 }
@@ -2389,21 +2379,13 @@ const main = async () => {
                     const c = c1 + (c2 - c1) * t;
                     return backdrop * (1 - a) + c * a;
                 };
-                const veilOf = (L) => {
-                    let v = P.veilFloor;
-                    if (L > P.veilKnee) v = P.veilFloor + (L - P.veilKnee) * P.veilSlope;
-                    return Math.min(P.veilCap, Math.max(P.veilFloor, v));
-                };
-                const veilLightOf = (L) => {
-                    let v = 0.08;
-                    if (L > P.veilLightKnee) v = 0.08 + (L - P.veilLightKnee) * P.veilLightSlope;
-                    return Math.min(P.veilLightCap, Math.max(P.veilLightFloor, v));
-                };
-                const liftOf = (L) => {
-                    let v = 0;
-                    if (L < P.liftKnee) v = (P.liftKnee - L) * P.liftSlope;
-                    return Math.min(P.liftCap, Math.max(0, v));
-                };
+                // 收敛模型：先定目标灰度，再反推要混多少。
+                //   背后比目标亮 -> 混黑 veil = 1 - target / L
+                //   背后比目标暗 -> 混白 lift = (target - L) / (1 - L)
+                // 混完之后玻璃落在目标灰度上，跟背后是什么无关。
+                const mixOf = (L, target) => (L > target
+                    ? { veil: 1 - target / L, lift: 0 }
+                    : { veil: 0, lift: (target - L) / (1 - L) });
                 // sRGB -> WCAG
                 const lin = (c) => { c /= 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
                 const lum = (rgb) => 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);
@@ -2424,12 +2406,12 @@ const main = async () => {
                 for (let i = 0; i <= 600; i++) {
                     const L = i / 600;
                     const backdrop = 255 * L;
-                    // 深色极：背景比 glassTintSplit 暗走一套，亮走另一套。
-                    if (L <= P.lightOn) {
-                        const veil = veilOf(L), lift = liftOf(L);
-                        const stops = L < P.tintSplit ? stopsDarkBack : stopsBrightBack;
-                        const gTitle = glassAt(stops, TITLE_OFF, veil, lift, backdrop);
-                        const gBody = glassAt(stops, BODY_OFF, veil, lift, backdrop);
+                    // 深色极：玻璃收敛到目标灰度，不管背后是白纸还是黑终端。
+                    {
+                        const m = mixOf(L, P.targetDark);
+                        const stops = m.veil > 0 ? stopsBlack : stopsWhite;
+                        const gTitle = glassAt(stops, TITLE_OFF, m.veil, m.lift, backdrop);
+                        const gBody = glassAt(stops, BODY_OFF, m.veil, m.lift, backdrop);
                         const p = ratio(over(inkRgb(inkDark.Primary), gTitle), [gTitle, gTitle, gTitle]);
                         const s = Math.min(
                             ratio(over(inkRgb(inkDark.Secondary), gTitle), [gTitle, gTitle, gTitle]),
@@ -2438,11 +2420,12 @@ const main = async () => {
                         if (p < worst.darkPrimary) worst.darkPrimary = p;
                         if (s < worst.darkSecondary) worst.darkSecondary = s;
                     }
-                    // 浅色极：只在亮到 lightOff 以上才成立。
-                    if (L >= P.lightOff) {
-                        const veil = veilLightOf(L);
-                        const gTitle = glassAt(stopsLight, TITLE_OFF, veil, 0, backdrop);
-                        const gBody = glassAt(stopsLight, BODY_OFF, veil, 0, backdrop);
+                    // 浅色极：同一个模型，目标灰度换成浅的那档。
+                    {
+                        const m = mixOf(L, P.targetLight);
+                        const stops = m.veil > 0 ? stopsBlack : stopsWhite;
+                        const gTitle = glassAt(stops, TITLE_OFF, m.veil, m.lift, backdrop);
+                        const gBody = glassAt(stops, BODY_OFF, m.veil, m.lift, backdrop);
                         const p = ratio(over(inkRgb(inkLight.Primary), gTitle), [gTitle, gTitle, gTitle]);
                         const s = Math.min(
                             ratio(over(inkRgb(inkLight.Secondary), gTitle), [gTitle, gTitle, gTitle]),
@@ -2487,12 +2470,15 @@ const main = async () => {
             //
             // 两极各有一处 Thick 分支，都要检查：只要有一极的系数掉到 1
             // 以下，那一极的面板就比药丸还透，玻璃的厚度感就没了。
-            const thickBranches = [...psCode.matchAll(/if \(\$Thick\) \{ \$veil = \[Math\]::Min\(([0-9.]+), \$veil \* ([0-9.]+) \+ ([0-9.]+)\) \}/g)]
-                .map((m) => ({ cap: parseFloat(m[1]), factor: parseFloat(m[2]), add: parseFloat(m[3]) }));
-            if (thickBranches.length >= 2 && thickBranches.every((t) => t.factor > 1 && t.add >= 0)) {
-                out('PASS', `glass depth: the panel is tinted heavier than the pill in every pole (${thickBranches.length} thick branches, factors ${thickBranches.map((t) => t.factor).join('/')})`);
+            // 新模型里"更厚"不是把染色系数调大，而是把**目标灰度**推得更靠近
+            // 材料自己的颜色：深色极更黑，浅色极更白。
+            const thickDarkOk = /\$target\s*=\s*\$target\s*\*\s*\(1\.0\s*-\s*\$thickMix\)/.test(psCode);
+            const thickLightOk = /\$target\s*=\s*\$target\s*\+\s*\(1\.0\s*-\s*\$target\)\s*\*\s*\$thickMix/.test(psCode);
+            const thickOk = thickDarkOk && thickLightOk && P.thickDark > 0 && P.thickLight > 0;
+            if (thickOk) {
+                out('PASS', `glass depth: the panel is thicker than the pill in both poles (dark ${P.thickDark}, light ${P.thickLight})`);
             } else {
-                out('FAIL', `glass depth: the panel is not tinted heavier than the pill in every pole (${thickBranches.length} thick branches found; each must scale the veil up)`);
+                out('FAIL', `glass depth: the panel is not thicker than the pill (dark branch ${thickDarkOk}, light branch ${thickLightOk}) -- the large element would stay as transparent as the pill`);
             }
 
             // --- 6.10 XAML 里不能有硬编码的材质色 ----------------------
@@ -2593,6 +2579,61 @@ const main = async () => {
                     out('PASS', 'glass poles: each surface logs its own luminance (the panel would never get a brightness line of its own)');
                 } else {
                     out('FAIL', 'glass poles: the luminance log slot is shared between the two surfaces -- the panel would almost never get a brightness line of its own');
+                }
+            }
+
+            // --- 6.12 收敛到目标灰度（"统一黑色"）------------------------
+            //
+            // HIG "Materials": regular 变体 "blurs and **adjusts the luminosity**
+            // of background content to maintain legibility of text"。所以算法
+            // 必须是"先定目标灰度，再反推混多少"，而不是"压固定比例的黑"。
+            //
+            // 不这么做的后果真机见过：白底上玻璃停在中灰（字节 106 ≈ #6A6A6A），
+            // 深色字压上去就是一团脏灰 —— 用户嫌它"灰突突"。
+            {
+                const converges = /\$veil\s*=\s*1\.0\s*-\s*\(\$target\s*\/\s*\$L\)/.test(psCode)
+                    && /\$lift\s*=\s*\(\$target\s*-\s*\$L\)\s*\/\s*\(1\.0\s*-\s*\$L\)/.test(psCode);
+                if (converges) {
+                    out('PASS', 'glass convergence: the glass mixes towards a target grey instead of a fixed black wash');
+                } else {
+                    out('FAIL', 'glass convergence: the material does not solve for a target grey -- the glass lands on a mid grey over a bright backdrop');
+                }
+
+                // 深色极的目标必须落在"真黑"那一档：macOS 那个 Dynamic Island
+                // 是 #1C1C1E（字节 28 ≈ 0.11），再深就糊成一团分不出玻璃。
+                const darkTarget = P.targetDark;
+                if (darkTarget !== null && darkTarget >= 0.09 && darkTarget <= 0.15) {
+                    out('PASS', `glass convergence: the dark pole converges on the island black (target ${darkTarget}, ~#${Math.round(255 * darkTarget).toString(16).padStart(2, '0').toUpperCase()})`);
+                } else {
+                    out('FAIL', `glass convergence: the dark pole target ${darkTarget} is not the island black (0.09..0.15) -- the glass would read as grey, not as a black slab`);
+                }
+
+                // 默认必须是统一的黑玻璃：浅色极在白底上"灰突突"就是它惹的。
+                const defaultIsDark = /materialPole\s*=\s*'dark'/.test(psCode);
+                if (defaultIsDark) {
+                    out('PASS', 'glass convergence: the default material is the unified black glass');
+                } else {
+                    out('FAIL', 'glass convergence: the default material is not the black glass -- the island would still switch to a grey material over a bright backdrop');
+                }
+
+                // 参数名不许和局部名撞车。
+                //
+                // PowerShell 的变量名不区分大小写，而且参数的类型约束还在：
+                // 参数是 [bool]$Thick，函数体里再写 $thick = 0.25 会被强制转成
+                // $true，接着 (1.0 - $thick) 算出 0，目标灰度被乘成 0 —— 玻璃
+                // 成了纯黑（veil 恒等于 1）。
+                //
+                // 这类坑静态断言看不出来（数值都"对"，只是被转换了），所以只能
+                // 把"参数名和局部名不撞车"这条纪律本身锁住。
+                const applyStart = psCode.indexOf('function Apply-GlassMaterial {');
+                const applyEnd = psCode.indexOf('\nfunction ', applyStart + 10);
+                const applyBody = applyStart < 0 ? '' : psCode.slice(applyStart, applyEnd < 0 ? undefined : applyEnd);
+                const thickIsTyped = /param\([^)]*\[bool\]\$Thick\)/.test(applyBody);
+                const thickShadowed = /\$thick(?![\w])\s*=/i.test(applyBody);
+                if (thickIsTyped && !thickShadowed) {
+                    out('PASS', 'glass convergence: the thickness factor does not shadow the typed parameter ($Thick)');
+                } else {
+                    out('FAIL', 'glass convergence: the thickness factor shadows the [bool]$Thick parameter -- PowerShell would coerce it and the target grey would collapse to 0');
                 }
             }
         }

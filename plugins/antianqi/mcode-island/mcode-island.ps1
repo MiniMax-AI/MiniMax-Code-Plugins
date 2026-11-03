@@ -196,9 +196,10 @@ $defaultConfig = [PSCustomObject]@{
   height   = 70
   opacity  = 0.95
   autostart = $false
-  # 材质极性：auto = 按背后亮度自动切；dark / light = 钉死一极。
+  # 材质极性：dark（默认）= 统一的黑玻璃；light = 钉死浅色玻璃；
+  # auto = 按背后亮度在两极之间自动切。
   # 见下面"材质的两极"那一节。
-  materialPole = 'auto'
+  materialPole = 'dark'
 }
 if (Test-Path $configFile) {
   try { $cfg = Get-Content $configFile -Raw -Encoding UTF8 | ConvertFrom-Json }
@@ -833,15 +834,20 @@ function Update-GlassGeometry {
 #
 # 苹果自己的解法不是"把深色玻璃压得更黑"，是让材质**换极**：macOS 的 Dock、
 # 菜单、控制中心在浅色桌面上就是浅色玻璃配深色内容（浅色模式下系统也把
-# 前景翻成深色）。所以这里也做两极：
+# 前景翻成深色）。所以这里保留两极：
 #
-#   dark  极：深色玻璃 + 白色内容。背后暗时的常态（终端、IDE）。
-#   light 极：浅色玻璃 + 深色内容。背后亮时切过去（白底文档、亮色应用）。
+#   dark  极：深色玻璃 + 白色内容。**默认**，统一的黑玻璃。
+#   light 极：浅色玻璃 + 深色内容。钉死时才用。
 #
-# 两极之间有**迟滞**：亮过 0.60 才切浅色，暗回 0.58 才切深色。没有迟滞，
-# 背景亮度在阈值附近抖一下，药丸就跟着闪一下。
+# 但**默认是 dark**：浅色极在白底上被嫌"灰突突"。于是材质改成**收敛到目标
+# 灰度** —— 不管背后是白纸还是黑终端，玻璃都停在同一个灰度上（深色极
+# 0.115 ≈ #1D1D1D，就是 macOS 那个 Dynamic Island 的黑）。底下是什么，岛
+# 都是同一块黑，这才叫"统一"。
 #
-# config.json 里的 materialPole 可以钉死一极（dark / light），默认 auto。
+# 两极之间有**迟滞**（只在 auto 模式下用得上）：亮过 0.60 才切浅色，暗回
+# 0.58 才切深色。没有迟滞，背景亮度在阈值附近抖一下，药丸就跟着闪一下。
+#
+# config.json 里的 materialPole：dark（默认）/ light / auto。
 #
 # 前景色是**跟着极走的**：深色玻璃上的白字搬到浅色玻璃上就是"白底白字"，
 # 所以换极的时候要重刷一遍（Update-GlassInk）。
@@ -864,30 +870,33 @@ $script:glassPanelPole = 'dark'
 # 里的数字没人能核对。smoke.mjs 直接读这一段，然后按最坏背景重算前景/
 # 背景的对比度 —— 改这里的数字，对应的断言就会打红。
 #
-# 两极的阈值是算出来的，不是调出来的：
-#   - 浅色极：深色文字压在玻璃上要够 4.5:1，玻璃的相对亮度得在 0.227
-#     以上。按浅色极的染色公式反推，背后亮度得高于 0.58 才够，所以
-#     lightOff 不能低于这个数。
-#   - 深色极：白字压在压暗后的玻璃上，veil 上限 0.72 保证最坏情况下
-#     （背后全白）也有 5.3:1 以上。
+# 玻璃的**目标灰度**（0..1，按 sRGB 字节算，不是 WCAG 相对亮度）。
+#
+# HIG "Materials" 原话：regular 变体 "blurs and **adjusts the luminosity** of
+# background content to maintain legibility of text"。所以算法是"先定目标
+# 灰度，再反推要混多少黑（背后更亮）或多少白（背后更暗）"，而不是"压固定
+# 比例的黑"。
+#
+# 混完之后玻璃落在目标灰度上，**跟背后是什么无关** —— 白纸和黑终端底下都
+# 是同一块黑。这就是"统一黑色"：macOS 那个 Dynamic Island 就是这么做的，
+# 它不跟着背景变。
+#
+# 早先那套是"压固定比例的黑"，背后全白时玻璃停在中灰（字节 106 ≈ #6A6A6A），
+# 深色字再压上去就成了脏灰 —— 用户嫌它"灰突突"。改成收敛到目标灰度之后，
+# 白底上就是真正的黑玻璃。
+#
+# 深色极取 0.115（字节 29 ≈ #1D1D1D，接近 macOS 的 #1C1C1E），白字压上去
+# 有 16.9:1。浅色极取 0.90（字节 230 ≈ #E6E6E6），深色字压上去有 12.7:1。
+$script:glassTargetByteDark  = 0.115
+$script:glassTargetByteLight = 0.90
+# 大元素 = 更厚的材质（HIG: larger elements appear more opaque）：厚就是更
+# 靠近材料自己的颜色。深色极往黑走，浅色极往白走。
+$script:glassThickDark  = 0.25
+$script:glassThickLight = 0.25
+# 两极之间有**迟滞**（只在 auto 模式下用得上）：亮过 0.60 才切浅色，暗回
+# 0.58 才切深色。没有迟滞，背景亮度在阈值附近抖一下，药丸就跟着闪一下。
 $script:glassPoleLightOn  = 0.60
 $script:glassPoleLightOff = 0.58
-$script:glassVeilFloor    = 0.10
-$script:glassVeilCap      = 0.72
-$script:glassVeilSlope    = 0.62
-$script:glassVeilKnee     = 0.20
-$script:glassVeilLightFloor = 0.06
-$script:glassVeilLightCap   = 0.26
-$script:glassVeilLightSlope = 0.28
-$script:glassVeilLightKnee  = 0.45
-# 染色分界：背后比它亮就走"亮背景"那套渐变（整体压暗 + 顶边柔光），
-# 比它暗走"暗背景"那套（顶边受光 + 底边压深）。两头都亮的那一档最容易
-# 出问题 —— 玻璃刚好比背景亮一点，文字就最难读，所以分界线取在中间。
-$script:glassTintSplit    = 0.42
-# 背后很暗时抬一点亮度，不然玻璃就是一团黑，看不出是块玻璃。
-$script:glassLiftKnee     = 0.30
-$script:glassLiftSlope    = 0.42
-$script:glassLiftCap      = 0.11
 
 # 前景色表。HIG "Color" 的系统色：暗色极用暗色模式那套，浅色极用 macOS
 # 浅色模式那套。
@@ -982,11 +991,10 @@ function Resolve-GlassPole {
   # 没有迟滞的话，背景亮度在阈值附近抖一下，药丸就跟着闪一下。
   #
   # 阈值不是随手取的，要跟**文字对比度**对齐：
-  #   - 浅色极：深色文字 #1C1C1E 压在玻璃上。要够 4.5:1，玻璃的相对亮度得
-  #     有 0.227 以上 —— 按浅色极的染色公式反推，背后亮度得高于 0.58 才
-  #     够，那段区间必须留在深色极（深色极把背景压暗，白字反而更清楚）。
-  #   - 深色极：白字压在压暗后的玻璃上，veil 上限 0.72 保证最坏情况下
-  #     （背后全白）也有 5.35:1 上下，怎么切都不会读不清。
+  #   - 浅色极：深色文字压在玻璃上，要够 4.5:1，玻璃的相对亮度得在 0.227
+  #     以上 —— 按浅色极的染色公式反推，背后亮度得高于 0.58 才够。
+  #   - 深色极：白字压在收敛后的玻璃上。玻璃固定落在目标灰度 0.115 上，
+  #     白字有 16.9:1，怎么切都不会读不清。
   # 所以 0.60 / 0.58 这对阈值是**算出来的**，不是调出来的。
   #
   # $Current 是**这块面自己**现在的极（药丸和面板各算各的），迟滞相对它
@@ -1100,137 +1108,124 @@ function Apply-GlassMaterial {
     $dark  = [System.Windows.Media.Color]::FromArgb(255, 0, 0, 0)
     $white = [System.Windows.Media.Color]::FromArgb(255, 255, 255, 255)
 
+    # =================== 目标灰度 ===================
+    #
+    # 两极共用同一套算法，差的只是这个目标值。
+    #
+    # HIG "Materials" 原话：regular 变体 "blurs and **adjusts the luminosity**
+    # of background content to maintain legibility of text" —— 不是"盖一块半
+    # 透明板"，是把背景的明度调到文字读得清的那个值。
+    #
+    # 所以这里不按"压多少黑"算，而是反过来：**先定一个目标灰度，再反推要混
+    # 多少黑（背后比目标亮）或多少白（背后比目标暗）**：
+    #
+    #   背后比目标亮 -> 混黑：veil = 1 - target / L
+    #   背后比目标暗 -> 混白：lift = (target - L) / (1 - L)
+    #
+    # 混完之后玻璃落在目标灰度上，**跟背后是什么无关** —— 底下是白纸还是
+    # 深色终端，岛都是同一块黑。这才是"统一黑色"：macOS 那个 Dynamic Island
+    # 就是这么做的，它不跟着背景变。
+    #
+    # 之前那套是"压固定比例的黑"，背后全白时玻璃停在中灰（字节 106 ≈ #6A6A6A），
+    # 深色字压上去就成了脏灰 —— 用户嫌它"灰突突"。
+    # 局部变量**不能**叫 $thick：函数参数是 [bool]$Thick，而 PowerShell 的
+    # 变量名不区分大小写、参数的类型约束还在 —— $thick = 0.25 会被强制转成
+    # $true，接着 (1.0 - $thick) 算出 0，目标灰度被乘成 0，玻璃成了纯黑
+    # （veil 恒等于 1）。这个坑静态断言看不出来，只能靠"参数名和局部名不撞
+    # 车"这条纪律，所以这里用 $thickMix。
+    $target = $script:glassTargetByteDark
+    $thickMix = $script:glassThickDark
     if ($pole -eq 'light') {
-      # =================== 浅色极 ===================
-      #
-      # 浅色玻璃不需要压暗：背后本来就亮，要的是把内容翻成深色。反而要
-      # **压一点点暗**，让这块玻璃比周围的白"沉"一点 —— 否则白玻璃压在
-      # 白背景上，整块面板就没了，只剩一团影子。
-      #
-      # 浅色模式下的浮层就是靠这个立的：一点压暗 + 一圈细边 + 一道柔影，
-      # 而不是靠颜色。
-      $veil = 0.08
-      if ($L -gt $script:glassVeilLightKnee) { $veil = 0.08 + ($L - $script:glassVeilLightKnee) * $script:glassVeilLightSlope }
-      if ($veil -lt $script:glassVeilLightFloor) { $veil = $script:glassVeilLightFloor }
-      if ($veil -gt $script:glassVeilLightCap) { $veil = $script:glassVeilLightCap }
-      # 大元素 = 更厚的材质（HIG：larger elements appear more opaque）。
-      if ($Thick) { $veil = [Math]::Min(0.42, $veil * 1.30 + 0.07) }
-      $lift = 0.0
+      $target = $script:glassTargetByteLight
+      $thickMix = $script:glassThickLight
+    }
+    # 大元素 = 更厚的材质（HIG：larger elements appear more opaque）。
+    # 厚就是更靠近材料自己的颜色：深色极更黑，浅色极更白。
+    if ($Thick) {
+      if ($pole -eq 'light') { $target = $target + (1.0 - $target) * $thickMix }
+      else { $target = $target * (1.0 - $thickMix) }
+    }
+    $veil = 0.0
+    $lift = 0.0
+    if ($L -gt $target) {
+      $veil = 1.0 - ($target / $L)
+    } else {
+      $lift = ($target - $L) / (1.0 - $L)
+    }
 
-      $tintBrush = New-Object System.Windows.Media.LinearGradientBrush
-      $tintBrush.StartPoint = New-Object System.Windows.Point 0, 0
-      $tintBrush.EndPoint   = New-Object System.Windows.Point 0, 1
-      # 顶边一道极淡的柔光：玻璃上表面把光反下来的那一道。
-      $tintBrush.GradientStops.Add((New-GlassStop $white 0.00 0.10)) | Out-Null
-      $tintBrush.GradientStops.Add((New-GlassStop $dark  0.18 ($veil * 0.70))) | Out-Null
-      $tintBrush.GradientStops.Add((New-GlassStop $dark  0.62 ($veil * 0.95))) | Out-Null
-      $tintBrush.GradientStops.Add((New-GlassStop $dark  1.00 ($veil * 1.30))) | Out-Null
-      $tintPath = $window.FindName("${Prefix}Tint")
-      if ($tintPath) { $tintPath.Fill = $tintBrush }
+    # =================== 染色层 ===================
+    $tintBrush = New-Object System.Windows.Media.LinearGradientBrush
+    $tintBrush.StartPoint = New-Object System.Windows.Point 0, 0
+    $tintBrush.EndPoint   = New-Object System.Windows.Point 0, 1
+    if ($veil -gt 0.0) {
+      # 背后比目标亮：往玻璃上混黑。
+      #
+      # 整块玻璃都压到目标灰度附近，只有底边更沉一点 —— 厚度感来自这一道。
+      # 顶边**不要**放白色色标：渐变会在白与黑之间插值出中灰，顶端于是浮起
+      # 一条发白的带子，看着像玻璃在发光，而不是玻璃的边缘。亮边归 rim 上那
+      # 条真高光线管（那是一条线，不是一片）。
+      $tintBrush.GradientStops.Add((New-GlassStop $dark  0.00 ($veil * 0.98))) | Out-Null
+      $tintBrush.GradientStops.Add((New-GlassStop $dark  0.34 ($veil))) | Out-Null
+      $tintBrush.GradientStops.Add((New-GlassStop $dark  0.70 ($veil * 1.03))) | Out-Null
+      $tintBrush.GradientStops.Add((New-GlassStop $dark  1.00 ($veil * 1.06))) | Out-Null
+    } else {
+      # 背后比目标暗：往玻璃上混白。
+      # 上面多混一点（受光），下面少混一点（厚度压深），玻璃才立得住。
+      $tintBrush.GradientStops.Add((New-GlassStop $white 0.00 ($lift * 1.00))) | Out-Null
+      $tintBrush.GradientStops.Add((New-GlassStop $white 0.30 ($lift * 0.88))) | Out-Null
+      $tintBrush.GradientStops.Add((New-GlassStop $white 0.68 ($lift * 0.76))) | Out-Null
+      $tintBrush.GradientStops.Add((New-GlassStop $white 1.00 ($lift * 0.64))) | Out-Null
+    }
+    $tintPath = $window.FindName("${Prefix}Tint")
+    if ($tintPath) { $tintPath.Fill = $tintBrush }
 
-      # 边缘：浅色玻璃上白色高光是看不见的（底就是白的）。真正让它立住
-      # 的是一条**极细的暗边** —— 浮层在浅色背景上的分界靠它。
-      $rimBrush = New-Object System.Windows.Media.RadialGradientBrush
-      $rimBrush.Center = New-Object System.Windows.Point 0.5, 0
-      $rimBrush.RadiusX = 0.70
-      $rimBrush.RadiusY = 1.30
+    # =================== 边缘 ===================
+    #
+    # 暗玻璃上是白色高光（specular）；浅玻璃上白高光是看不见的（底就是
+    # 白的），真正让它立住的是一条**极细的暗边** —— 浮层在浅色背景上的
+    # 分界靠它。
+    $rimBrush = New-Object System.Windows.Media.RadialGradientBrush
+    $rimBrush.Center = New-Object System.Windows.Point 0.5, 0
+    $rimBrush.RadiusX = 0.70
+    $rimBrush.RadiusY = 1.30
+    if ($pole -eq 'light') {
       $rimBrush.GradientStops.Add((New-GlassStop $dark 0.00 0.22)) | Out-Null
       $rimBrush.GradientStops.Add((New-GlassStop $dark 0.45 0.07)) | Out-Null
       $rimBrush.GradientStops.Add((New-GlassStop $dark 0.80 0.02)) | Out-Null
       $rimBrush.GradientStops.Add((New-GlassStop $dark 1.00 0.00)) | Out-Null
-      $rimPath = $window.FindName("${Prefix}Rim")
-      if ($rimPath) { $rimPath.Stroke = $rimBrush }
+    } else {
+      $rimBrush.GradientStops.Add((New-GlassStop $white 0.00 0.55)) | Out-Null
+      $rimBrush.GradientStops.Add((New-GlassStop $white 0.35 0.24)) | Out-Null
+      $rimBrush.GradientStops.Add((New-GlassStop $white 0.75 0.07)) | Out-Null
+      $rimBrush.GradientStops.Add((New-GlassStop $white 1.00 0.02)) | Out-Null
+    }
+    $rimPath = $window.FindName("${Prefix}Rim")
+    if ($rimPath) { $rimPath.Stroke = $rimBrush }
 
-      # 底部厚度暗线：浅色玻璃上这条线要比深色极轻，否则发脏。
-      $edgeBrush = New-Object System.Windows.Media.LinearGradientBrush
-      $edgeBrush.StartPoint = New-Object System.Windows.Point 0, 0
-      $edgeBrush.EndPoint   = New-Object System.Windows.Point 0, 1
-      $edgeBrush.GradientStops.Add((New-GlassStop $dark 0.00 0.00)) | Out-Null
-      $edgeBrush.GradientStops.Add((New-GlassStop $dark 0.58 0.00)) | Out-Null
-      $edgeBrush.GradientStops.Add((New-GlassStop $dark 1.00 0.30)) | Out-Null
-      $edgePath = $window.FindName("${Prefix}Edge")
-      if ($edgePath) { $edgePath.Stroke = $edgeBrush }
+    # =================== 厚度暗边 ===================
+    # 玻璃下缘把光折射开了，内侧有一圈暗线。浅色玻璃上这条线要比深色极
+    # 轻，否则发脏。
+    $edgeBottom = 0.46
+    if ($pole -eq 'light') { $edgeBottom = 0.30 }
+    $edgeBrush = New-Object System.Windows.Media.LinearGradientBrush
+    $edgeBrush.StartPoint = New-Object System.Windows.Point 0, 0
+    $edgeBrush.EndPoint   = New-Object System.Windows.Point 0, 1
+    $edgeBrush.GradientStops.Add((New-GlassStop $dark 0.00 0.00)) | Out-Null
+    $edgeBrush.GradientStops.Add((New-GlassStop $dark 0.58 0.00)) | Out-Null
+    $edgeBrush.GradientStops.Add((New-GlassStop $dark 1.00 $edgeBottom)) | Out-Null
+    $edgePath = $window.FindName("${Prefix}Edge")
+    if ($edgePath) { $edgePath.Stroke = $edgeBrush }
 
-      # 阴影：浅色玻璃没有深色玻璃那层"自带暗底"撑着，全靠投影立住，
-      # 所以投影要更柔、更大。
-      $shadow = $window.FindName("${Prefix}Shadow")
-      if ($shadow) {
+    # =================== 投影 ===================
+    # 背后越亮越忙，投影越重（WWDC25：内容滚过下面时阴影会加重）。
+    # 浅色玻璃没有深色玻璃那层"自带暗底"撑着，全靠投影立住，所以要更柔、
+    # 更大。
+    $shadow = $window.FindName("${Prefix}Shadow")
+    if ($shadow) {
+      if ($pole -eq 'light') {
         if ($Thick) { $shadow.Opacity = [Math]::Min(0.46, 0.20 + 0.18 * $L); $shadow.BlurRadius = 44; $shadow.ShadowDepth = 12 }
         else { $shadow.Opacity = [Math]::Min(0.38, 0.16 + 0.16 * $L); $shadow.BlurRadius = 32; $shadow.ShadowDepth = 8 }
-      }
-    } else {
-      # =================== 深色极 ===================
-      #
-      # 压暗量：背后越亮压得越狠。
-      #
-      # HIG 原话：regular 变体"blurs and **adjusts the luminosity** of background
-      # content to maintain legibility of text" —— 不是"给玻璃加个颜色"，
-      # 是把背景的明度往可读的方向调。调多深由背景亮度决定，所以是算的。
-      #
-      # 下限 0.10：背后再暗也要压一点，否则玻璃和底下的黑地分不开。
-      # 上限 0.58：再黑就成了一块黑板，底下什么都看不见了。
-      $veil = $script:glassVeilFloor
-      if ($L -gt $script:glassVeilKnee) { $veil = $script:glassVeilFloor + ($L - $script:glassVeilKnee) * $script:glassVeilSlope }
-      if ($veil -lt $script:glassVeilFloor) { $veil = $script:glassVeilFloor }
-      if ($veil -gt $script:glassVeilCap) { $veil = $script:glassVeilCap }
-      # 大元素 = 更厚的材质（HIG：larger elements appear more opaque）。
-      # 面板比药丸大得多，再透就成了一块挡板的玻璃，看不见底下在干什么。
-      if ($Thick) { $veil = [Math]::Min(0.72, $veil * 1.35 + 0.10) }
-
-      # 背后很暗时抬一点亮度，不然玻璃就是一团黑，看不出是块玻璃。
-      $lift = 0.0
-      if ($L -lt $script:glassLiftKnee) { $lift = ($script:glassLiftKnee - $L) * $script:glassLiftSlope }
-      if ($lift -gt $script:glassLiftCap) { $lift = $script:glassLiftCap }
-
-      $tintBrush = New-Object System.Windows.Media.LinearGradientBrush
-      $tintBrush.StartPoint = New-Object System.Windows.Point 0, 0
-      $tintBrush.EndPoint   = New-Object System.Windows.Point 0, 1
-      if ($L -lt $script:glassTintSplit) {
-        # 背后暗：顶边受光、底边压深，玻璃才有厚度。
-        $tintBrush.GradientStops.Add((New-GlassStop $white 0.00 ($lift * 0.95))) | Out-Null
-        $tintBrush.GradientStops.Add((New-GlassStop $white 0.32 ($lift * 0.50))) | Out-Null
-        $tintBrush.GradientStops.Add((New-GlassStop $dark  0.72 ($veil * 0.85))) | Out-Null
-        $tintBrush.GradientStops.Add((New-GlassStop $dark  1.00 ($veil * 1.35))) | Out-Null
       } else {
-        # 背后亮：整体压暗保证白字可读，但顶边留一道柔光 —— 玻璃上表面
-        # 把光反下来的那一道，是"有光泽"和"只是半透明"的分界。
-        $tintBrush.GradientStops.Add((New-GlassStop $white 0.00 0.10)) | Out-Null
-        $tintBrush.GradientStops.Add((New-GlassStop $dark  0.12 ($veil * 0.82))) | Out-Null
-        $tintBrush.GradientStops.Add((New-GlassStop $dark  0.40 ($veil * 0.98))) | Out-Null
-        $tintBrush.GradientStops.Add((New-GlassStop $dark  0.75 ($veil * 1.06))) | Out-Null
-        $tintBrush.GradientStops.Add((New-GlassStop $dark  1.00 ($veil * 1.30))) | Out-Null
-      }
-      $tintPath = $window.FindName("${Prefix}Tint")
-      if ($tintPath) { $tintPath.Fill = $tintBrush }
-
-      # 高光：玻璃边缘那道亮线（specular）。径向渐变，顶部最亮。
-      #
-      # 半径给得比元素小，亮线才集中在上边缘；给太大就变成一圈均匀的白
-      # 描边 —— 那是"贴纸"，不是玻璃。
-      $rimBrush = New-Object System.Windows.Media.RadialGradientBrush
-      $rimBrush.Center = New-Object System.Windows.Point 0.5, 0
-      $rimBrush.RadiusX = 0.70
-      $rimBrush.RadiusY = 1.30
-      $rimBrush.GradientStops.Add((New-GlassStop $white 0.00 0.85)) | Out-Null
-      $rimBrush.GradientStops.Add((New-GlassStop $white 0.35 0.34)) | Out-Null
-      $rimBrush.GradientStops.Add((New-GlassStop $white 0.75 0.09)) | Out-Null
-      $rimBrush.GradientStops.Add((New-GlassStop $white 1.00 0.03)) | Out-Null
-      $rimPath = $window.FindName("${Prefix}Rim")
-      if ($rimPath) { $rimPath.Stroke = $rimBrush }
-
-      # 厚度暗边：玻璃下缘把光折射开了，内侧有一圈暗线。
-      $edgeBrush = New-Object System.Windows.Media.LinearGradientBrush
-      $edgeBrush.StartPoint = New-Object System.Windows.Point 0, 0
-      $edgeBrush.EndPoint   = New-Object System.Windows.Point 0, 1
-      $edgeBrush.GradientStops.Add((New-GlassStop $dark 0.00 0.00)) | Out-Null
-      $edgeBrush.GradientStops.Add((New-GlassStop $dark 0.58 0.00)) | Out-Null
-      $edgeBrush.GradientStops.Add((New-GlassStop $dark 1.00 0.46)) | Out-Null
-      $edgePath = $window.FindName("${Prefix}Edge")
-      if ($edgePath) { $edgePath.Stroke = $edgeBrush }
-
-      # 阴影：背后越亮越忙，投影越重（WWDC25：内容滚过下面时阴影会加重）。
-      $shadow = $window.FindName("${Prefix}Shadow")
-      if ($shadow) {
         if ($Thick) { $shadow.Opacity = [Math]::Min(0.72, 0.36 + 0.32 * $L) }
         else { $shadow.Opacity = [Math]::Min(0.62, 0.30 + 0.28 * $L) }
       }

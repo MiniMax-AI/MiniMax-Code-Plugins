@@ -28,18 +28,49 @@ const SMOKE = join(ROOT, 'scripts', 'smoke.mjs');
 
 const CASES = [
     {
-        name: 'light-pole threshold too low -> light pole would run on a mid backdrop',
+        // 这条守的是"浅色极在**暗**背景下也要读得清"。老模型里浅色极只在
+        // 亮背景才成立（对比度只在那半边复算），收敛模型之后两极在所有背景
+        // 上都可读，这条不能丢。
+        name: 'the pale glass stops being readable over a dark backdrop',
         file: WIDGET,
-        find: '$script:glassPoleLightOff = 0.58',
-        replace: '$script:glassPoleLightOff = 0.30',
+        find: 'New-GlassStop $white 0.68 ($lift * 0.76)',
+        replace: 'New-GlassStop $white 0.68 ($lift * 0.05)',
+        expect: 'glass contrast: the light pole drops the secondary text',
+    },
+    {
+        name: 'the dark target grey is too bright -> white text on the glass stops being readable',
+        file: WIDGET,
+        find: '$script:glassTargetByteDark  = 0.115',
+        replace: '$script:glassTargetByteDark  = 0.55',
+        expect: 'glass contrast: the dark pole drops the primary text',
+    },
+    {
+        name: 'the dark target is no longer the island black -> the glass reads as a grey plate again',
+        file: WIDGET,
+        find: '$script:glassTargetByteDark  = 0.115',
+        replace: '$script:glassTargetByteDark  = 0.30',
+        expect: 'glass convergence: the dark pole target',
+    },
+    {
+        name: 'the light target collapses -> the pale glass stops being readable',
+        file: WIDGET,
+        find: '$script:glassTargetByteLight = 0.90',
+        replace: '$script:glassTargetByteLight = 0.30',
         expect: 'glass contrast: the light pole drops the primary text',
     },
     {
-        name: 'dark-pole veil cap too low -> the glass stays too bright for white text',
+        name: 'the convergence formula is gone -> the glass falls back to a fixed black wash',
         file: WIDGET,
-        find: '$script:glassVeilCap      = 0.72',
-        replace: '$script:glassVeilCap      = 0.20',
-        expect: 'glass contrast: the dark pole drops the primary text',
+        find: '$veil = 1.0 - ($target / $L)',
+        replace: '$veil = 0.85',
+        expect: 'glass convergence: the material does not solve for a target grey',
+    },
+    {
+        name: 'the default material is no longer the unified black -> a bright backdrop gets the grey one',
+        file: WIDGET,
+        find: "materialPole = 'dark'",
+        replace: "materialPole = 'auto'",
+        expect: 'glass convergence: the default material is not the black glass',
     },
     {
         name: 'light-pole primary ink turned white -> white on a light glass',
@@ -98,11 +129,18 @@ const CASES = [
         expect: 'glass colour maps: light pole family colours',
     },
     {
+        name: 'the thickness factor shadows the typed parameter -> the target grey collapses to zero',
+        file: WIDGET,
+        find: '$thickMix = $script:glassThickDark',
+        replace: '$thick = $script:glassThickDark',
+        expect: 'glass convergence: the thickness factor shadows the [bool]$Thick parameter',
+    },
+    {
         name: 'panel no longer thicker than the pill -> a big panel stays as transparent as the pill',
         file: WIDGET,
-        find: '$veil = [Math]::Min(0.72, $veil * 1.35 + 0.10)',
-        replace: '$veil = [Math]::Min(0.72, $veil * 0.50 + 0.10)',
-        expect: 'glass depth: the panel is not tinted heavier than the pill',
+        find: '$target = $target * (1.0 - $thickMix)',
+        replace: '$target = $target * (1.0 + $thickMix)',
+        expect: 'glass depth: the panel is not thicker than the pill',
     },
     {
         name: 'a material layer gets a baked-in colour -> the material stops taking its colour from behind',
