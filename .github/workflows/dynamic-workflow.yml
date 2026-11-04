@@ -1,6 +1,7 @@
 name: Dynamic Workflow
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - 'plugins/hetaoBackend/mcode-dynamic-workflows/**'
@@ -27,6 +28,8 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: plugins/hetaoBackend/mcode-dynamic-workflows/package-lock.json
+      - name: Record the exact checked-out revision
+        run: git rev-parse HEAD
       - run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
       - run: npm test
       - run: npm run build
@@ -44,5 +47,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+      - name: Record the exact checked-out revision
+        run: git rev-parse HEAD
       - run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
       - run: node --test checks/process-tree.check.mjs
