@@ -1,0 +1,16 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "trace-mcp": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "trace-mcp@3.31.5"],
+      "env": {
+        "TRACE_MCP_NO_DAEMON": "1",
+        "TRACE_MCP_NO_AUTO_UPDATE": "1",
+        "TRACE_MCP_TELEMETRY": "off",
+        "TRACE_MCP_DAEMON_PORT": "48171"
+      }
+    }
+  }
+}
