@@ -165,4 +165,3 @@ the manifest and re-run the suite.
   The helper scripts referenced by `scansci-sort` are shipped under
   `vendor/scansci-pdf/scripts/`.
 - Plugin `1.18.0-minimax.2` vendors engine `1.18.0.post2`, based on upstream v1.18.0.
-
