@@ -757,9 +757,9 @@ a live MiniMax Code session. Empirical evidence (captured during development):
   screenshot shows the strip's own crisp text instead of glass and the run
   looks like it passed while proving nothing.
 - The material assertions are **negative-injection tested**:
-  `scripts/test-material-injection.mjs` mutates one line of the source 32
-  times (a hard-coded tint coming back, the capture affinity call removed,
-  the measure/arrange step skipped, the grain opacity raised, the two poles'
+  `scripts/test-material-injection.mjs` mutates one line of a **copy** of the
+  source 38 times (a hard-coded tint coming back, the capture affinity call
+  removed, the measure/arrange step skipped, the grain opacity raised, the two poles'
   colour tables diverged, the hysteresis removed, the panel made thinner
   than the pill, the two surfaces sharing one polarity again, the luminance
   log slot going back to one shared value, the convergence formula replaced
@@ -769,7 +769,13 @@ a live MiniMax Code session. Empirical evidence (captured during development):
   the two HTML comment end tags, the strip advancing by the wrong length, …),
   checks that
   the expected assertion turns red each time, and confirms the suite is
-  green again after the source is restored.
+  green again after the source is restored. The copy is not an optimisation:
+  the harness used to rewrite the checked-in file in place, and `node --test`
+  runs every suite in the repository in parallel -- a sibling suite that read
+  the widget mid-write saw a half-written file and reported a function that
+  is in the source as missing. A watcher now re-reads the working-tree
+  sources for the whole run and fails if any of them moved, so that race
+  cannot come back.
 - The XAML is stripped of its XML comments **before** the material
   assertions read it, so a comment in the source cannot feed them. The strip
   walks the text instead of running a regex: a paired comment is dropped

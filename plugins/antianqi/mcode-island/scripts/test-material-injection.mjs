@@ -11,23 +11,57 @@
 //
 //   node scripts/test-material-injection.mjs
 //
-// It rewrites mcode-island.ps1 while it runs, so keep the working tree clean
-// before starting; the file is restored even if the run is interrupted
-// between cases (the restore happens in a finally block).
+// It mutates a COPY of the plugin, never the working tree.
+//
+// The old version rewrote plugins/antianqi/mcode-island/mcode-island.ps1 in
+// place. `node --test` runs every suite in the repository in PARALLEL, so a
+// sibling suite that read the widget while this harness was writing it saw
+// a HALF-WRITTEN file -- writeFile truncates before it writes -- and the
+// reader reported "function Build-DisplayMessage not found" for a function
+// that is in the file. That is a race, not a test failure, and it took the
+// ubuntu CI job down. Working on a copy removes the race for good: the
+// checked-in sources are never open for writing, so a parallel reader always
+// sees a complete file, and an interrupted run cannot leave the tree
+// half-mutated.
 
 import { readFile, writeFile } from 'node:fs/promises';
+import { mkdtempSync, cpSync, rmSync, existsSync, mkdirSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
 
 const exec = promisify(execFile);
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const WIDGET = join(ROOT, 'mcode-island.ps1');
-const SMOKE = join(ROOT, 'scripts', 'smoke.mjs');
-const SAFE = join(ROOT, 'scripts', 'lib', 'Safe-Traversal.ps1');
-const TRACKER = join(ROOT, 'scripts', 'lib', 'Session-Tracker.ps1');
-const DETECTOR = join(ROOT, 'mcode-status-detect.ps1');
+const REPO_ROOT = resolve(ROOT, '..', '..', '..');
+
+// The copy mirrors the repository layout on purpose: smoke.mjs imports the
+// shared validator from the repository root, five levels up from its own
+// file (../../../../../scripts/lib/validation.mjs). A flat temp directory
+// would resolve that import to the wrong place and silently drop the
+// hooks.json schema check from the copy's run.
+const TMP = mkdtempSync(join(tmpdir(), 'mcode-island-injection-'));
+const TMP_PLUGIN = join(TMP, 'plugins', 'antianqi', 'mcode-island');
+cpSync(ROOT, TMP_PLUGIN, { recursive: true });
+const VALIDATOR = join(REPO_ROOT, 'scripts', 'lib', 'validation.mjs');
+if (existsSync(VALIDATOR)) {
+    mkdirSync(join(TMP, 'scripts', 'lib'), { recursive: true });
+    cpSync(VALIDATOR, join(TMP, 'scripts', 'lib', 'validation.mjs'));
+}
+
+// The working-tree sources the harness would rewrite if it still worked in
+// place. The watcher below proves that it never touches them.
+const REAL_WIDGET = join(ROOT, 'mcode-island.ps1');
+const REAL_SAFE = join(ROOT, 'scripts', 'lib', 'Safe-Traversal.ps1');
+const REAL_TRACKER = join(ROOT, 'scripts', 'lib', 'Session-Tracker.ps1');
+const REAL_DETECTOR = join(ROOT, 'mcode-status-detect.ps1');
+
+const WIDGET = join(TMP_PLUGIN, 'mcode-island.ps1');
+const SMOKE = join(TMP_PLUGIN, 'scripts', 'smoke.mjs');
+const SAFE = join(TMP_PLUGIN, 'scripts', 'lib', 'Safe-Traversal.ps1');
+const TRACKER = join(TMP_PLUGIN, 'scripts', 'lib', 'Session-Tracker.ps1');
+const DETECTOR = join(TMP_PLUGIN, 'mcode-status-detect.ps1');
 
 const CASES = [
     {
@@ -318,12 +352,44 @@ const CASES = [
 
 async function runSmoke() {
     try {
-        const { stdout } = await exec('node', [SMOKE], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024 });
+        const { stdout } = await exec('node', [SMOKE], { cwd: TMP_PLUGIN, maxBuffer: 64 * 1024 * 1024 });
         return { code: 0, out: stdout };
     } catch (e) {
         return { code: e.code ?? 1, out: `${e.stdout || ''}${e.stderr || ''}` };
     }
 }
+
+// --- the working tree must stay byte-identical while the harness runs ----
+//
+// The regression test for the ubuntu CI failure: `node --test` runs every
+// suite in the repository at once, and a sibling suite that reads a file
+// while this harness writes it sees a half-written file. The watch below
+// re-reads the working-tree sources for the whole run and fails if any of
+// them moved.
+const WATCHED = [REAL_WIDGET, REAL_SAFE, REAL_TRACKER, REAL_DETECTOR];
+const baseline = new Map();
+for (const p of WATCHED) baseline.set(p, await readFile(p, 'utf8'));
+
+let violation = null;
+let watching = true;
+const watcher = (async () => {
+    while (watching) {
+        for (const p of WATCHED) {
+            let now;
+            try {
+                now = await readFile(p, 'utf8');
+            } catch (e) {
+                violation = `${p} (${e.message})`;
+                return;
+            }
+            if (now !== baseline.get(p)) {
+                violation = p;
+                return;
+            }
+        }
+        await new Promise((r) => setTimeout(r, 20));
+    }
+})();
 
 let bad = 0;
 for (const c of CASES) {
@@ -359,6 +425,17 @@ if (fails.length) {
     console.log(`leftover failures:\n${fails.join('\n')}`);
     bad++;
 }
+
+watching = false;
+await watcher;
+if (violation) {
+    console.log(`[FAIL] the injection harness never rewrites the working tree -- ${violation} changed while the harness ran`);
+    bad++;
+} else {
+    console.log(`[OK  ] the injection harness never rewrites the working tree`);
+}
+
+try { rmSync(TMP, { recursive: true, force: true }); } catch { /* best effort */ }
 if (bad) {
     console.log(`INJECTION HARNESS: ${bad} problem(s)`);
     process.exit(1);
