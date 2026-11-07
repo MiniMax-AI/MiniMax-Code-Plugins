@@ -2,7 +2,7 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "mcode-island",
   "version": "0.5.0",
-  "description": "Windows 桌面灵动岛 (Dynamic Island) 状态窗口：让 mcode agent 把工作状态（idle/thinking/working/waiting/done/error）实时推送到屏幕顶部悬浮 pill，agent 自己忙的时候用户不用切回 mcode 也能看到进度。v0.5.0 增加多会话列表：鼠标停在 pill 上会展开当前所有在跑的会话，每行显示会话的真实名字（取自运行时 SQLite 的会话名）、最后一条消息、相对时间和状态词；点一行会切回那个会话所在的 Windows Terminal 标签并把终端带到前台，而且不会为同一个会话再开一个终端。v0.4.0 扩展 status.json schema 增加 step/total/detail 三个字段并更新 widget 渲染：agent 现在可以推送 'step 3/12 · fill username field' 这类 sub-step 进度，Computer Use 多步循环、长任务分阶段展示。Backward compat：所有新字段 optional。v0.3.0 增加 io.minimax.mcode 客户端扩展（Hooks 草案），与 MiniMax-Code-Plugins PR #20 的 portable Hooks 提案对齐；mcode 0.2.4+ Runtime 触发，registry 接受后零改动生效。",
+  "description": "Windows 桌面灵动岛 (Dynamic Island) 状态窗口：让 mcode agent 把工作状态（idle/thinking/working/waiting/done/error）实时推送到屏幕顶部悬浮 pill，agent 自己忙的时候用户不用切回 mcode 也能看到进度。v0.5.0 增加多会话列表：鼠标停在 pill 上会展开当前所有在跑的会话，每行显示会话标题（取自会话日志里的首条提问，脱敏并截断）、最后一条消息、相对时间和状态词；点一行会切回那个会话所在的 Windows Terminal 标签并把终端带到前台，不会为同一个会话再开一个终端；每行右侧的 × 只把这一行从列表里去掉，不切会话。列表有界：数据侧最多 20 个会话，widget 最多画 12 行，sessions.json 本身不超过 64 KB，超出的按最后活动时间淘汰最旧的。日志扫描有边界：不跟随 junction/符号链接，每次打开前校验规范化路径仍在 sessions 根目录内，不在就跳过。展开面板的高度不会越开越长。v0.4.0 扩展 status.json schema 增加 step/total/detail 三个字段并更新 widget 渲染：agent 现在可以推送 'step 3/12 · fill username field' 这类 sub-step 进度，Computer Use 多步循环、长任务分阶段展示。Backward compat：所有新字段 optional。v0.3.0 增加 io.minimax.mcode 客户端扩展（Hooks 草案），与 MiniMax-Code-Plugins PR #20 的 portable Hooks 提案对齐；mcode 0.2.4+ Runtime 触发，registry 接受后零改动生效。",
   "author": {
     "name": "antianqi",
     "url": "https://github.com/antianqi"
