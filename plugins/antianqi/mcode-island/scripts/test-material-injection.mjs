@@ -319,6 +319,15 @@ const CASES = [
         expect: 'glass layout:',
     },
     {
+        // review 第 4 条要的是"有界的数据"。条数上限管不了文件大小：每条会话
+        // 还带着 titles 历史，dismissed 那张表也没有条数上限。写盘前要按字节
+        // 砍一遍 —— 这一条把那个砍法去掉，文件就又会长回去。
+        name: 'the sessions.json byte cap goes away -> the file grows with the title history',
+        file: TRACKER,
+        find: "    $json = Limit-SessionsJson $items $script:dismissedSessions $script:MAX_SESSIONS_JSON_BYTES",
+        replace: "    $json = [PSCustomObject]@{ sessions = $items; dismissed = $script:dismissedSessions; ts = (Get-Date).ToString('o') } | ConvertTo-Json -Compress -Depth 6",
+        expect: 'Write-SessionsFile does not apply the byte cap',
+    },    {
         // round-24 review (hetaoBackend)：AllDirectories 会跟着 reparse point
         // 走进 sessions root 之外。盲递归回来，遍历就又不设防了。
         name: 'the tracker goes back to a blind AllDirectories recursion',

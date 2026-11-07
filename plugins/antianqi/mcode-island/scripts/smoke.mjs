@@ -788,6 +788,30 @@ const main = async () => {
             out('PASS', 'mcode-island.ps1: the ack is written through Write-AckSignal');
         }
         const trackerSrc = await readFile(join(PLUGIN_ROOT, 'scripts', 'lib', 'Session-Tracker.ps1'), 'utf8');
+        // (k3) sessions.json has a byte budget, not just a row budget.
+        //
+        // The row cap bounds how many sessions are tracked; it does not bound
+        // the file, because every row also carries its title history and the
+        // dismissed map has no cap at all. The write path has to measure the
+        // serialized bytes and drop the oldest rows until it fits.
+        const byteCap = trackerSrc.match(/\$script:MAX_SESSIONS_JSON_BYTES\s*=\s*(\d+)/);
+        const writeBody = (trackerSrc.match(/function\s+Write-SessionsFile[\s\S]*?\n\}\n/) || [''])[0];
+        const limitBody = (trackerSrc.match(/function\s+Limit-SessionsJson[\s\S]*?\n\}\n/) || [''])[0];
+        if (!byteCap) {
+            out('FAIL', 'scripts/lib/Session-Tracker.ps1: no $script:MAX_SESSIONS_JSON_BYTES -- the sessions.json file size is unbounded');
+        } else if (+byteCap[1] < 4096 || +byteCap[1] > 1048576) {
+            out('FAIL', `scripts/lib/Session-Tracker.ps1: $script:MAX_SESSIONS_JSON_BYTES = ${byteCap[1]} is outside 4KB..1MB`);
+        } else if (!writeBody) {
+            out('FAIL', 'scripts/lib/Session-Tracker.ps1: Write-SessionsFile body not found');
+        } else if (!/\$json\s*=\s*Limit-SessionsJson\b/.test(writeBody)) {
+            out('FAIL', 'scripts/lib/Session-Tracker.ps1: Write-SessionsFile does not apply the byte cap -- the file grows with the title history');
+        } else if (!limitBody) {
+            out('FAIL', 'scripts/lib/Session-Tracker.ps1: Limit-SessionsJson body not found');
+        } else if (!/GetByteCount/.test(limitBody)) {
+            out('FAIL', 'scripts/lib/Session-Tracker.ps1: Limit-SessionsJson does not measure the bytes -- it cannot enforce a byte budget');
+        } else {
+            out('PASS', 'scripts/lib/Session-Tracker.ps1: sessions.json is capped in bytes at the write path');
+        }
         const ackBody = (trackerSrc.match(/function\s+Read-AckSignal[\s\S]*?\n\}\n/) || [''])[0];
         if (!ackBody) {
             out('FAIL', 'scripts/lib/Session-Tracker.ps1: Read-AckSignal body not found');

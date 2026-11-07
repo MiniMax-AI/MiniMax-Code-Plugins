@@ -557,14 +557,18 @@ The list is fed by the detector, which writes `sessions.json` next to
 `status.json` in `%APPDATA%\mcode-island\`. That file is the contract
 between the detector and the widget; the widget only reads it.
 
-**The list is bounded.** Two limits, on purpose:
+**The list is bounded.** Three limits, on purpose:
 
 - the detector keeps at most **20** sessions (`MAX_SESSIONS`), dropping the
   ones that have been idle the longest;
 - the widget draws at most **12** rows (`MAX_SESSION_ROWS`) and says
   "还有 N 条" underneath, rather than silently dropping them — a row that
   vanished without a word would be read as "that is all there is", which
-  is the exact question the list exists to answer.
+  is the exact question the list exists to answer;
+- `sessions.json` itself is capped at **64 KB** (`MAX_SESSIONS_JSON_BYTES`).
+  The row cap does not bound the file: every row also carries its title
+  history, and the dismissed map has no cap at all — so the write path
+  measures the serialized bytes and drops the oldest rows until it fits.
 
 The list height is also clamped to the work area, so it can never grow
 past the screen.
@@ -758,7 +762,7 @@ a live MiniMax Code session. Empirical evidence (captured during development):
   looks like it passed while proving nothing.
 - The material assertions are **negative-injection tested**:
   `scripts/test-material-injection.mjs` mutates one line of a **copy** of the
-  source 38 times (a hard-coded tint coming back, the capture affinity call
+  source 39 times (a hard-coded tint coming back, the capture affinity call
   removed, the measure/arrange step skipped, the grain opacity raised, the two poles'
   colour tables diverged, the hysteresis removed, the panel made thinner
   than the pill, the two surfaces sharing one polarity again, the luminance

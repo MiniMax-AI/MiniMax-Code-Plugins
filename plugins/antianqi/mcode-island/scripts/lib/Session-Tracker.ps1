@@ -112,6 +112,14 @@ $script:STALE_RUNNING_MS = 5 * 60 * 1000
 # $script:MAX_SESSION_ROWS）。
 $script:MAX_SESSIONS = 20
 
+# sessions.json 这个文件本身的上限（字节）。
+#
+# 上面那个数管"有多少条"，这个管"这个文件多大"。条数上限够不着文件大小：
+# 每条会话还带着 titles 历史（最多 8 条），dismissed 那张表也没有条数上限，
+# 两者都随使用时长慢慢长。写盘前再按字节砍一遍，砍的顺序是会话优先、
+# dismissed 最后。
+$script:MAX_SESSIONS_JSON_BYTES = 65536
+
 # 会话 id 的形状。
 #
 # 这个值来自两处，都不是我们生成的：
@@ -703,6 +711,47 @@ function Update-SessionTracker {
   }
 }
 
+# 把 sessions.json 压到字节上限以内。
+#
+# 砍的顺序有讲究：会话按最后活动时间从旧到新丢（用户最可能还在看的留着），
+# 都丢完了还不够才清 dismissed。返回最终要写盘的 JSON 文本。
+function Limit-SessionsJson($items, $dismissed, [int64]$maxBytes) {
+  $utf8 = [System.Text.Encoding]::UTF8
+  # WriteAllText 带 BOM，文件比字符串多这几个字节，一起算进上限。
+  $overhead = $utf8.GetPreamble().Length
+  $keep = @($items)
+  $dismiss = @{}
+  foreach ($k in @($dismissed.Keys)) { $dismiss[$k] = $dismissed[$k] }
+  $dropped = 0
+  while ($true) {
+    $payload = [PSCustomObject]@{
+      sessions = $keep
+      dismissed = $dismiss
+      ts = (Get-Date).ToString('o')
+    }
+    $json = $payload | ConvertTo-Json -Compress -Depth 6
+    if (($utf8.GetByteCount($json) + $overhead) -le $maxBytes) {
+      if ($dropped -gt 0) {
+        Log-Line ("sessions.json byte cap: dropped " + $dropped + " row(s) (limit " + $maxBytes + " bytes)")
+      }
+      return $json
+    }
+    if ($keep.Count -gt 0) {
+      $oldest = @($keep | Sort-Object { [int64]$_.lastAtMs })[0]
+      $oldestId = [string]$oldest.id
+      $keep = @($keep | Where-Object { [string]$_.id -ne $oldestId })
+      $dropped++
+      continue
+    }
+    if ($dismiss.Count -gt 0) {
+      $dismiss = @{}
+      continue
+    }
+    # 会话和 dismissed 都清空了还是超：上限小得离谱，写一个空壳。
+    return '{"sessions":[],"dismissed":{},"ts":"' + (Get-Date).ToString('o') + '"}'
+  }
+}
+
 # 写 sessions.json。
 #
 # 只有 detector 写这个文件，所以不存在 agent 侧整份覆盖把它抹掉的问题。
@@ -729,15 +778,11 @@ function Write-SessionsFile {
       titles = @($e.Titles | Where-Object { $_ })
     }
   }
-  $payload = [PSCustomObject]@{
-    sessions = $items
-    dismissed = $script:dismissedSessions
-    ts = (Get-Date).ToString('o')
-  }
   $lock = Enter-StatusLock
   try {
     $file = Join-Path $configDir 'sessions.json'
-    $json = $payload | ConvertTo-Json -Compress -Depth 6
+    # 字节上限：条数上限管"有多少条"，这个管"这个文件多大"。
+    $json = Limit-SessionsJson $items $script:dismissedSessions $script:MAX_SESSIONS_JSON_BYTES
     $tmp = "$file.tmp"
     [System.IO.File]::WriteAllText($tmp, $json, [System.Text.Encoding]::UTF8)
     Move-Item -Path $tmp -Destination $file -Force

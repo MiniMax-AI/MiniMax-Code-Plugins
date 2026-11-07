@@ -699,6 +699,61 @@ if ($junctionMade) {
   Check 'junction 外面的会话不进列表' (-not $script:trackedSessions.Contains($outsideId)) ('外部 id 出现在列表里')
 }
 
+
+# --- 17. sessions.json 的字节上限 ----------------------------------------
+#
+# review 第 4 条要的是"有界的数据"。条数上限够不着文件大小：每条会话还带着
+# titles 历史，dismissed 那张表也没有条数上限，两样都随使用时长慢慢长。所以
+# 写盘前再按字节砍一遍。
+#
+# 这里把上限压到 1KB，让它必然触发（8 条长会话远超 1KB），然后看三件事：
+# 文件真被砍到界内、最新的会话还在、最旧的被丢了。上限放开后应该又能写全。
+$defaultJsonBytes = $script:MAX_SESSIONS_JSON_BYTES
+Check '生产默认字节上限是个真实的界' ($defaultJsonBytes -ge 4096 -and $defaultJsonBytes -le 1048576) ("得到: " + $defaultJsonBytes)
+
+$script:trackedSessions.Clear()
+$script:dismissedSessions.Clear()
+$script:MAX_SESSIONS = 1000
+# 把前面各组留下的夹具日志统一退到 10 分钟前：它们不该参与这一组的淘汰
+# 排序，否则"最新"会变成上一组留下的那几条，而不是这一组造的。
+foreach ($f in @([System.IO.Directory]::EnumerateFiles($sessionsRoot, '*.jsonl', 'AllDirectories'))) {
+  [System.IO.File]::SetLastWriteTimeUtc($f, [DateTime]::UtcNow.AddMinutes(-10))
+}
+$byteIds = @()
+$byteFiles = @()
+foreach ($i in 1..8) {
+  $byteIds += "sess-byte-$i"
+  $long = (('L' * 300) + " $i")
+  $byteFiles += (New-Session "sess-byte-$i" @((Line-User $long), (Line-User $long)))
+}
+Update-SessionTracker
+foreach ($i in 1..8) {
+  # 和第 14 组一样：显式拉开最后活动时间，"最新"才是确定的 newest。
+  [System.IO.File]::SetLastWriteTimeUtc($byteFiles[$i - 1], [DateTime]::UtcNow.AddMinutes(-1 * (10 - $i)))
+}
+Update-SessionTracker
+$inList = @($byteIds | Where-Object { $script:trackedSessions.Contains($_) })
+Check '8 个长会话都进了列表' ($inList.Count -eq 8) ("得到: " + ($inList -join ','))
+
+$script:MAX_SESSIONS_JSON_BYTES = 1024
+Write-SessionsFile -Force
+$jsonPath = Join-Path $configDir 'sessions.json'
+$jsonBytes = (Get-Item -LiteralPath $jsonPath).Length
+Check 'sessions.json 不超过字节上限' ($jsonBytes -le 1024) ("得到: " + $jsonBytes + " 字节")
+$parsed = ([System.IO.File]::ReadAllText($jsonPath) | ConvertFrom-Json)
+$fileIds = @(@($parsed.sessions) | ForEach-Object { [string]$_.id })
+Check 'sessions.json 还是合法 JSON' ($null -ne $parsed) '解析失败'
+Check '最新的会话留在了文件里' ($fileIds -contains 'sess-byte-8') ("留下: " + ($fileIds -join ','))
+Check '最旧的会话被丢出了文件' (-not ($fileIds -contains 'sess-byte-1')) ("留下: " + ($fileIds -join ','))
+
+$script:MAX_SESSIONS_JSON_BYTES = $defaultJsonBytes
+Write-SessionsFile -Force
+$parsed2 = ([System.IO.File]::ReadAllText($jsonPath) | ConvertFrom-Json)
+$kept8 = @(@($parsed2.sessions) | ForEach-Object { [string]$_.id })
+$inFile = @($byteIds | Where-Object { $kept8 -contains $_ })
+Check '上限放开后 8 个会话都写进去了' ($inFile.Count -eq 8) ("得到: " + ($inFile -join ','))
+$script:trackedSessions.Clear()
+$script:dismissedSessions.Clear()
 Write-Output "1..$script:n"
 Write-Output "# pass $script:n  fail $script:fail"
 if ($script:fail -gt 0) { exit 1 }
