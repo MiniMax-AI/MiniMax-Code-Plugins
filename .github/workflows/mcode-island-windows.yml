@@ -475,6 +475,15 @@ jobs:
       # it was in no workflow: the feature's core tests only ran when
       # somebody remembered to run them by hand. A suite that is not wired
       # into CI is a suite that rots.
+      #
+      # Round-24 review (hetaoBackend, 2026-11-04): this suite now also
+      # carries the session-traversal boundary regression. It builds a real
+      # junction pointing at a directory OUTSIDE the sessions root, puts a
+      # session there, and proves the outside session never reaches the list
+      # -- and it proves the fixture itself still fools the old blind
+      # recursion, so the assertion cannot pass for the wrong reason. A
+      # junction is a Windows reparse point, so this case belongs to this
+      # windows-latest job and not to the ubuntu one.
       - name: Session tracker suite
         run: |
           [Console]::OutputEncoding = [System.Text.Encoding]::UTF8

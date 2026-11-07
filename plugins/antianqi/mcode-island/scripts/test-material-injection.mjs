@@ -25,6 +25,9 @@ const exec = promisify(execFile);
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const WIDGET = join(ROOT, 'mcode-island.ps1');
 const SMOKE = join(ROOT, 'scripts', 'smoke.mjs');
+const SAFE = join(ROOT, 'scripts', 'lib', 'Safe-Traversal.ps1');
+const TRACKER = join(ROOT, 'scripts', 'lib', 'Session-Tracker.ps1');
+const DETECTOR = join(ROOT, 'mcode-status-detect.ps1');
 
 const CASES = [
     {
@@ -280,6 +283,36 @@ const CASES = [
         find: '      <Canvas x:Name="PanelMaterial">',
         replace: '      <Grid x:Name="PanelMaterial">',
         expect: 'glass layout:',
+    },
+    {
+        // round-24 review (hetaoBackend)：AllDirectories 会跟着 reparse point
+        // 走进 sessions root 之外。盲递归回来，遍历就又不设防了。
+        name: 'the tracker goes back to a blind AllDirectories recursion',
+        file: TRACKER,
+        find: "  foreach ($dir in (Get-SafeSessionEntries -Root $root -Pattern '*session_*')) {",
+        replace: "  foreach ($dir in [System.IO.Directory]::EnumerateDirectories($root, '*session_*', 'AllDirectories')) {",
+        expect: 'traversal: scripts/lib/Session-Tracker.ps1 still recurse with AllDirectories',
+    },
+    {
+        name: 'the detector goes back to a blind AllDirectories recursion',
+        file: DETECTOR,
+        find: "  foreach ($f in (Get-SafeSessionEntries -Root $sessionsRoot -Pattern '*.jsonl' -Files)) {",
+        replace: "  foreach ($f in [System.IO.Directory]::EnumerateFiles($sessionsRoot, '*.jsonl', 'AllDirectories')) {",
+        expect: 'traversal: mcode-status-detect.ps1 still recurse with AllDirectories',
+    },
+    {
+        name: 'the traversal stops rejecting reparse points -> a junction is followed out of the root',
+        file: SAFE,
+        find: '                if (Test-PathIsReparsePoint $d) { continue }',
+        replace: '                if ($false) { continue }',
+        expect: 'traversal: scripts/lib/Safe-Traversal.ps1 (it never rejects a reparse point)',
+    },
+    {
+        name: 'the traversal stops checking containment -> a candidate outside the root is opened',
+        file: SAFE,
+        find: '                if (-not (Test-PathContained $rootFull $d)) { continue }',
+        replace: '                if ($false) { continue }',
+        expect: 'traversal: scripts/lib/Safe-Traversal.ps1 (it never checks containment)',
     },
 ];
 

@@ -49,6 +49,17 @@ $script:SEED_WINDOW_MS = 30 * 60 * 1000
 # 那就不脱敏（而不是崩）。
 $script:canRedact = [bool](Get-Command Protect-SecretText -ErrorAction SilentlyContinue)
 
+# Safe traversal of the sessions root (round-24 review). The helper lives in
+# scripts/lib/Safe-Traversal.ps1 and is loaded by the detector before this
+# file, the same way Protect-Text.ps1 is.
+#
+# A lib that is dot-sourced on its own does not have it. That case reads
+# NOTHING rather than falling back to the blind recursion it replaced: that
+# recursion follows reparse points, so a junction under the sessions root
+# could hand it a log from outside it. Fail closed. The check happens where
+# the traversal runs, not once at load time, so the order of the dot-sources
+# cannot change the verdict.
+
 # 活动窗口：日志刚被写过，session 才算"有活动"。
 #
 # 这个窗口只决定"能不能进列表"，不决定进列表之后显示什么：
@@ -152,7 +163,12 @@ function Get-SessionIdFromDir($dir) {
 function Get-SessionLogGroups($root) {
   $groups = @{}
   if (-not $root -or !(Test-Path -LiteralPath $root)) { return $groups }
-  foreach ($dir in [System.IO.Directory]::EnumerateDirectories($root, '*session_*', 'AllDirectories')) {
+  # Round-24 review (hetaoBackend): SearchOption.AllDirectories follows
+  # reparse points, so a junction under the sessions root could redirect the
+  # walk outside it. Get-SafeSessionEntries refuses reparse-point entries and
+  # checks canonical containment before a candidate is handed back.
+  if (-not (Get-Command Get-SafeSessionEntries -ErrorAction SilentlyContinue)) { return $groups }
+  foreach ($dir in (Get-SafeSessionEntries -Root $root -Pattern '*session_*')) {
     $log = $null
     $mtime = [DateTime]::MinValue
     foreach ($name in @($FNAME_LEDGER, $FNAME_MESSAGES)) {

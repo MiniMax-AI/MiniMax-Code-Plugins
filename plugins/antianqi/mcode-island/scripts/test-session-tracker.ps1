@@ -54,7 +54,13 @@ Invoke-Expression (Extract-Function $detect 'Get-ToolKey')
 Invoke-Expression (Extract-Function $detect 'Test-IsAskUser')
 
 # The store lib (the lock) and the tracker lib.
+#
+# Safe-Traversal.ps1 has to be loaded BEFORE Session-Tracker.ps1: the tracker
+# refuses to walk the sessions tree without it (fail closed), and the tracker
+# lib checks for it at the point of use, so the order here is what a reader
+# has to know.
 . (Join-Path (Join-Path $pluginRoot 'scripts') (Join-Path 'lib' 'Status-Store.ps1'))
+. (Join-Path (Join-Path $pluginRoot 'scripts') (Join-Path 'lib' 'Safe-Traversal.ps1'))
 . (Join-Path (Join-Path $pluginRoot 'scripts') (Join-Path 'lib' 'Session-Tracker.ps1'))
 
 # 脱敏用的是真的那个 lib（scripts/lib/Protect-Text.ps1）：生产里 detector 也是
@@ -637,6 +643,60 @@ Write-SessionsFile -Force
 $diskText = [System.IO.File]::ReadAllText((Join-Path $configDir 'sessions.json'))
 foreach ($s in $shapes) {
   Check ($s.Name + '：sessions.json 里没有原文') (-not $diskText.Contains([string]$s.Secret)) 'sessions.json 里出现了 canary'
+}
+
+# --- 越界：junction 指向 sessions root 之外，不能被读到 ---------------------
+#
+# round-24 review (hetaoBackend)：以前的两个 scanner 都用
+# EnumerateDirectories / EnumerateFiles(..., 'AllDirectories')，而微软的文档
+# 写明 AllDirectories **包含 reparse point**（符号链接、junction、挂载点）：
+# https://learn.microsoft.com/en-us/dotnet/api/system.io.searchoption
+#
+# 所以 sessions 目录底下放一个 junction，递归就会顺着它走进外面：detector
+# 会读到外面那个 jsonl，会话列表会把别人的会话内容显示在灵动岛上。
+#
+# 这里真的造一个 junction，指向 fixture 外面一个目录，里面放一个 session，
+# 然后断言它进不了列表。
+$outsideId = 'outsidesecret'
+$outsideB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($outsideId))
+$outsideRoot = Join-Path $fixture 'outside-sessions'
+$outsideSession = Join-Path $outsideRoot ('2026-10-23-session_' + $outsideB64)
+New-Item -ItemType Directory -Path $outsideSession -Force | Out-Null
+[System.IO.File]::WriteAllText(
+  (Join-Path $outsideSession 'messages.jsonl'),
+  ((Line-User 'OUTSIDE-CANARY') -join "`n"),
+  (New-Object System.Text.UTF8Encoding($false)))
+# junction 得起个匹配 *session_* 的名字：遍历的 pattern 在每一层都生效，
+# 只有匹配上的目录才会被当成 session 目录。
+$junctionPath = Join-Path $dayDir '2026-10-23-session_junctionlink'
+$junctionMade = $false
+try {
+  New-Item -ItemType Junction -Path $junctionPath -Target $outsideRoot -ErrorAction Stop | Out-Null
+  $junctionMade = $true
+} catch {
+  Check 'junction 造得出来（否则后面几条断言没有意义）' $false ('造 junction 失败: ' + $_.Exception.Message)
+}
+if ($junctionMade) {
+  # 先证明它确实是 reparse point（PS 5.1 的 FileInfo 没有 Target 属性）
+  $jAttr = [System.IO.File]::GetAttributes($junctionPath)
+  Check 'junction 确实是 reparse point' (($jAttr -band [System.IO.FileAttributes]::ReparsePoint) -eq [System.IO.FileAttributes]::ReparsePoint) ('得到: ' + $jAttr)
+  # 夹具自证：旧的盲递归**确实**会被骗到。这条要是红，说明这个夹具根本没骗
+  # 过旧代码，后面的断言就是假绿。
+  $blindDirs = @([System.IO.Directory]::EnumerateDirectories($sessionsRoot, '*session_*', 'AllDirectories')) |
+    Where-Object { $_ -like ('*' + $outsideB64 + '*') }
+  Check '这个夹具真的骗得过旧的盲递归（否则后面的断言是假绿）' ($blindDirs.Count -gt 0) ('旧式递归也看不到外部 session，夹具无效: ' + ($blindDirs -join ';'))
+  # 安全遍历：不返回 junction 底下的东西
+  $safeFiles = @(Get-SafeSessionEntries -Root $sessionsRoot -Pattern '*.jsonl' -Files)
+  $leakedFiles = @($safeFiles | Where-Object { $_ -like ('*' + $outsideB64 + '*') })
+  Check '安全遍历不返回 junction 外面的日志' ($leakedFiles.Count -eq 0) ('泄漏: ' + ($leakedFiles -join ';'))
+  $safeDirs = @(Get-SafeSessionEntries -Root $sessionsRoot -Pattern '*session_*')
+  $leakedDirs = @($safeDirs | Where-Object { $_ -like ('*' + $outsideB64 + '*') })
+  Check '安全遍历不返回 junction 外面的 session 目录' ($leakedDirs.Count -eq 0) ('泄漏: ' + ($leakedDirs -join ';'))
+  # 列表：外部会话进不来
+  $script:trackedSessions.Clear()
+  $script:dismissedSessions.Clear()
+  Update-SessionTracker
+  Check 'junction 外面的会话不进列表' (-not $script:trackedSessions.Contains($outsideId)) ('外部 id 出现在列表里')
 }
 
 Write-Output "1..$script:n"

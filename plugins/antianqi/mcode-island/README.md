@@ -569,6 +569,22 @@ between the detector and the widget; the widget only reads it.
 The list height is also clamped to the work area, so it can never grow
 past the screen.
 
+## The session list's file boundary
+
+The tracker and the detector both walk the sessions tree to find the session
+logs. That walk is **bounded**: it never uses `SearchOption.AllDirectories`
+— which, per Microsoft's own documentation, *follows reparse points*
+(symbolic links, junctions, mounted volumes) — and it refuses any candidate
+that is a reparse point or that does not stay under the canonical sessions
+root. A junction under the sessions root therefore cannot hand the widget a
+log from somewhere else on the machine.
+
+`scripts/test-session-tracker.ps1` proves it on Windows: it builds a real
+junction pointing at a directory outside the sessions root, puts a session
+there, and checks that the session never reaches the list — and that the old
+blind recursion *would* have found it, so the assertion cannot pass for the
+wrong reason.
+
 ## The material — Liquid Glass
 
 The pill is not a translucent rectangle. It is a **real frosted material**

@@ -2600,6 +2600,55 @@ const main = async () => {
                 out('FAIL', `glass layout: ${outsideCanvas.join(', ')} are not inside a Canvas -- a Path measures as big as its Data, so the panel height sticks to the previous one`);
             }
 
+            // --- 6.10c 会话日志的遍历边界 ------------------------------
+            //
+            // round-24 review (hetaoBackend)：两个 scanner 以前都用
+            // EnumerateXxx(..., AllDirectories)，而微软的文档写明
+            // AllDirectories **包含 reparse point**（符号链接、junction、
+            // 挂载点）：
+            // https://learn.microsoft.com/en-us/dotnet/api/system.io.searchoption
+            //
+            // sessions 目录底下放一个 junction，递归就会顺着它走进外面，
+            // 读到不属于这个用户的日志。所以源码里不能再有这种盲递归：
+            // 两个 scanner 都得走 scripts/lib/Safe-Traversal.ps1 那个有界的
+            // 遍历 —— 它拒绝 reparse point，并且在打开之前验证 canonical
+            // containment。
+            const safeLibPath = join(PLUGIN_ROOT, 'scripts', 'lib', 'Safe-Traversal.ps1');
+            const safeLibExists = await exists(safeLibPath);
+            if (safeLibExists) {
+                out('PASS', 'traversal: the bounded traversal lib exists');
+            } else {
+                out('FAIL', 'traversal: scripts/lib/Safe-Traversal.ps1 is missing -- the scanners have no bounded way to walk the sessions root');
+            }
+            const blindWalk = [];
+            const notBounded = [];
+            if (safeLibExists) {
+                const safeText = await readFile(safeLibPath, 'utf8');
+                const safeCode = safeText.split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join('\n');
+                if (/AllDirectories/.test(safeCode)) blindWalk.push('scripts/lib/Safe-Traversal.ps1');
+                if (!/TopDirectoryOnly/.test(safeCode)) blindWalk.push('scripts/lib/Safe-Traversal.ps1 (it does not walk one level at a time)');
+                // 检查的是**调用点**，不是函数定义：定义里带着 ReparsePoint /
+                // Test-PathContained 这两个词，而调用点才是真正在把关的地方。
+                if (!/Test-PathIsReparsePoint\s+\$d/.test(safeCode)) blindWalk.push('scripts/lib/Safe-Traversal.ps1 (it never rejects a reparse point)');
+                if (!/Test-PathContained\s+\$rootFull\s+\$d/.test(safeCode)) blindWalk.push('scripts/lib/Safe-Traversal.ps1 (it never checks containment)');
+                for (const rel of ['scripts/lib/Session-Tracker.ps1', 'mcode-status-detect.ps1']) {
+                    const text = await readFile(join(PLUGIN_ROOT, ...rel.split('/')), 'utf8');
+                    const code = text.split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join('\n');
+                    if (/AllDirectories/.test(code)) blindWalk.push(rel);
+                    if (!/Get-SafeSessionEntries/.test(code)) notBounded.push(rel);
+                }
+            }
+            if (blindWalk.length === 0 && safeLibExists) {
+                out('PASS', 'traversal: no scanner walks the sessions root with a blind AllDirectories recursion');
+            } else {
+                out('FAIL', `traversal: ${blindWalk.join(', ')} still recurse with AllDirectories -- it follows reparse points out of the sessions root`);
+            }
+            if (notBounded.length === 0 && safeLibExists) {
+                out('PASS', 'traversal: both scanners go through the bounded traversal');
+            } else {
+                out('FAIL', `traversal: ${notBounded.join(', ')} do not use Get-SafeSessionEntries`);
+            }
+
             // --- 6.11 每块面各判各的极 ----------------------------------
             // HIG "Materials": 每块材质各自调整明度来保住可读性。药丸和展开
             // 面板背后可能差得很远（药丸压着一段亮色标题栏，面板底下却是一
