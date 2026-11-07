@@ -11,7 +11,9 @@ the terminal in the background and still see exactly what your agent is doing.
 |:----:|:--------:|:-------:|:-------:|:----:|:-----:|
 | ![idle](assets/state-idle.png) | ![thinking](assets/state-thinking.png) | ![working](assets/state-working.png) | ![waiting](assets/state-waiting.png) | ![done](assets/state-done.png) | ![error](assets/state-error.png) |
 
-The pill is a single 320×60 WPF window, always-on-top, click-to-focus. The
+The pill is a single 320×60 WPF window, always-on-top, click-to-focus: the click goes
+back to the desktop app window, to a manually pinned window, or to the
+originating terminal. The
 widget polls `%APPDATA%\mcode-island\status.json` every 400 ms; the agent (or a
 thin wrapper) just writes JSON to that file.
 
@@ -90,6 +92,35 @@ optional `-Message`. A separate `mcode-status-detect.ps1` polls the runtime's
 pill still moves even when the agent forgets to push. See
 [`SKILL.md`](skills/mcode-island/SKILL.md) for the agent-side call patterns.
 
+#### Which session the detector follows
+
+**The session that wrote its log most recently.** The detector scans every
+session log under the runtime's session store and picks the file with the
+newest mtime, then infers the state from that file's last complete line.
+
+This is a deliberate decision, not an accident. The conversation the user is
+looking at is the one writing to the log, so "whoever wrote last" is the
+active conversation. Anything smarter — pinning a session id, asking the
+runtime which window is focused — needs a signal the runtime does not expose
+to a plugin, and guessing one would make the pill wrong in the common case
+to make it right in the rare one.
+
+**Known boundary.** When several conversations run at the same time (a
+desktop session plus a CLI session, or two desktop windows), the detector
+follows whichever wrote last, so the pill can briefly show a neighbouring
+conversation's state. The detector deliberately does not try to disambiguate
+this. Two guards keep the damage small:
+
+- the state is re-derived on every change, so the pill corrects itself as
+  soon as the followed session writes again;
+- a log line that cannot be parsed never falls back to another session's
+  message (the reader grows its window until a complete line is found, and
+  a read failure reports "no new information" instead of a foreign state).
+
+This is also why the Marketplace build needs the detector: its package ships
+no Hook material, so the detector is the only source of state that does not
+depend on the agent cooperating.
+
 ## Copyable example
 
 ### One-line install and run
@@ -156,6 +187,28 @@ alternative:
 & "%PLUGIN_DIR%\mcode-island\notify-island.ps1" -State error    -Message "npm test failed"
 ```
 
+For sub-step progress (Computer Use iterative loops, multi-step plans),
+pass `-Step` / `-Total` / `-Detail` so the pill shows what the agent is
+doing *right now*:
+
+```powershell
+& "%PLUGIN_DIR%\mcode-island\notify-island.ps1" -State working -Message "Computer Use" `
+                                              -Step 3 -Total 12 -Detail "fill username field"
+# → pill renders: "step 3/12 · fill username field"
+
+& "%PLUGIN_DIR%\mcode-island\notify-island.ps1" -State working -Message "Bash" `
+                                              -Step 5 -Detail "npm install"
+# → pill renders: "step 5 · npm install"
+
+& "%PLUGIN_DIR%\mcode-island\notify-island.ps1" -State done -Message "Bash ok"
+# → pill renders: "Bash ok"  (no step → legacy behavior, backward compat)
+```
+
+All three params are optional and backward compatible. The detail field
+replaces the message in the rendered pill when present (avoids stacking
+"Bash ok · fill username"). See `skills/mcode-island/SKILL.md` for the
+full semantics and the contract with the widget renderer.
+
 ## Quick start
 
 1. **Install** — copy this folder into your `~/.minimax/plugins/mcode-island/`
@@ -194,7 +247,7 @@ mcode-island/
 ├── stop-island.ps1                   # stop the widget
 ├── status-island.ps1                 # print widget PID + recent log
 ├── show-island.ps1                   # re-raise hidden widget
-├── pin-island.ps1                    # lock click-to-focus target
+├── pin-island.ps1                    # pin the click target to the foreground window
 ├── autostart.ps1                     # register / unregister Windows logon
 ├── notify-island.ps1                 # state-push helper (Mode B)
 ├── wrap-tool.ps1                     # all-in-one bash wrapper
@@ -216,6 +269,12 @@ mcode-island/
 │           ├── subagent-stop.ps1
 │           ├── permission-request.ps1
 │           └── permission-denied.ps1
+├── scripts/                          # test suites (not needed at runtime)
+│   ├── smoke.mjs                     # static + material checks
+│   ├── test-material-injection.mjs   # negative-injection harness
+│   ├── test-session-tracker.ps1      # detector / redaction checks
+│   ├── test-substep-progress.mjs     # sub-step progress checks
+│   └── lib/Session-Tracker.ps1       # shared detector logic
 ├── skills/mcode-island/SKILL.md      # Skill consumed by the agent
 └── assets/                           # screenshots embedded above
 ```
@@ -232,7 +291,7 @@ binary, no symlink, no `node_modules`.
 | .NET WPF runtime  | 4.x (ships with Windows 10/11)                        |
 | mcode             | any version (Mode B works everywhere); 0.2.4+ activates Mode A |
 | execution policy  | `Bypass` for this directory; not changed globally    |
-| network access    | **optional** — see "Network access" below. The widget itself is offline. `mcode-status-detect.ps1` only contacts `https://api.minimax.io/v1/coding_plan/remains` when a token is configured (see "Accounts" + "Data use"). |
+| network access    | **optional** — see "Network access" below. The widget itself is offline. `mcode-status-detect.ps1` only contacts `https://api.minimaxi.com/v1/coding_plan/remains` when a token is configured (see "Accounts" + "Data use"). |
 | accounts          | **optional** — see "Accounts" below. No account is required to run the widget; a token is only needed if you want the optional 5-hour usage readout in the pill. |
 | paid services     | **none added by this plugin** — the 5h usage endpoint is part of the user's existing MiniMax account, not a separate service |
 
@@ -241,33 +300,71 @@ binary, no symlink, no `node_modules`.
 | data             | location                              | lifetime                  | purpose                              |
 | ---------------- | ------------------------------------- | ------------------------- | ------------------------------------ |
 | `status.json`    | `%APPDATA%\mcode-island\`             | rewritten every transition | widget polling                       |
-| `caller.json`    | `%APPDATA%\mcode-island\`             | rewritten every transition | click-to-focus target HWND           |
-| `config.json`    | `%APPDATA%\mcode-island\`             | rewritten on drag         | pill position, size, opacity         |
-| `config.json` -> `planApiToken` | `%APPDATA%\mcode-island\` | until `-Clear` or manual edit | 5h usage API token (opt-in; see "Accounts") |
+| `sessions.json`  | `%APPDATA%\mcode-island\`             | rewritten every second    | the session list (titles, previews, states) |
+| `caller.json`    | `%APPDATA%\mcode-island\`             | rewritten every transition | originating terminal HWND (click fallback) |
+| `pin.json`       | `%APPDATA%\mcode-island\`             | until `mcode-island unpin` | manually pinned click target        |
+| `config.json`    | `%APPDATA%\mcode-island\`             | rewritten on drag         | pill position, size, opacity, material pole |
+| `config.json` -> `planApiTokenEnc` | `%APPDATA%\mcode-island\` | until `-Clear` or manual edit | 5h usage API token, DPAPI-encrypted (opt-in; see "Accounts") |
 | `widget.pid`     | `%APPDATA%\mcode-island\`             | rewritten on start        | widget process PID                   |
 | `island.log`     | `%APPDATA%\mcode-island\`             | append-only, never pruned  | state transition history             |
 | `widget.log`     | `%APPDATA%\mcode-island\`             | append-only, never pruned  | widget internal debug                |
 | `show.signal`    | `%APPDATA%\mcode-island\`             | transient                 | "raise hidden window" signal        |
 | `HKCU\...\Run`   | Windows registry                      | until disabled            | logon auto-start                     |
 
-**Telemetry: none.** **No data is sent off-machine unless the optional
-`planApiToken` is configured (see "Network access" below).** The widget
-itself is offline and never reads or writes anything outside `%APPDATA%\mcode-island\`.
+**Telemetry: none.** **No data is sent off-machine unless a token is
+configured (see "Network access" below).** The widget itself is offline
+and never reads or writes anything outside `%APPDATA%\mcode-island\`.
+
+**The session list reads the session logs the runtime already writes on
+this machine** (`<dataDir>/v2/sessions/**/messages.jsonl`): the first user
+message of a session for its title, the last message for its preview and
+state, and the log's mtime for its liveness. Titles and previews are
+truncated and redacted before they are written to `sessions.json` or drawn
+on screen. The runtime's own database is not read, and the MiniMax Code
+programme is not used to run anything.
 
 ## Network access
 
-The widget is fully offline. The only network caller in this plugin is
-`mcode-status-detect.ps1` (Mode B detector), and it only makes a request
-when ALL of the following are true:
+**The 5h usage readout does not need the network.** The MiniMax Code
+runtime already resolves the token plan with the user's own login (the
+mcode launcher's "MCode status" panel renders it, footer: "Local view -
+credentials hidden"). When the runtime writes that result to a local file,
+the plugin reads it and never touches a credential.
 
-1. A token is configured (env `MINIMAX_OAUTH_TOKEN` or `MINIMAX_API_KEY`,
-   or `set-token.ps1 <token>` which writes to `config.json:planApiToken`).
+```
+%APPDATA%\mcode-island\usage.json
+```
+
+```json
+{
+  "fetchedAtMs": 1792800000000,
+  "fiveHour": { "remainingPercent": 58, "resetAtMs": 1792800000000, "unlimited": false },
+  "weekly":    { "remainingPercent": 40, "resetAtMs": 1792900000000, "unlimited": false },
+  "video":     { "remainingCount": 12, "totalCount": 40 }
+}
+```
+
+`scripts/lib/Plan-Usage.ps1` reads it. `MCODE_PLAN_USAGE_FILE` overrides
+the path; `~/.minimax/usage.json` is read as a fallback. `fiveHour` is
+required, `weekly` and `video` are optional.
+
+When that file is absent, the plugin falls back to asking the API itself,
+and the only network caller in this plugin is `mcode-status-detect.ps1`
+(Mode B detector). It only makes a request when ALL of the following are
+true:
+
+1. A token is configured — either `set-token.ps1 <token>`, which encrypts
+   it into `config.json:planApiTokenEnc`, or an environment variable
+   (`MINIMAX_OAUTH_TOKEN` / `MINIMAX_API_KEY`) that the user has
+   explicitly opted in to with `set-token.ps1 -AllowEnvToken`. An ambient
+   environment variable is not consent to send it to an API, so the
+   environment is not read by default.
 2. The detector is running (`mcode-island detect-on`, the default).
 3. At least 60 seconds have elapsed since the last call (rate-limited).
 
 When all three are true, the detector makes **one** GET to:
 
-- `https://api.minimax.io/v1/coding_plan/remains` (HTTPS, no credentials in
+- `https://api.minimaxi.com/v1/coding_plan/remains` (HTTPS, no credentials in
   the URL, no fragment, body is a small JSON object)
 
 The response is parsed and only two numbers are written to
@@ -287,15 +384,26 @@ the 5-hour usage readout in the pill.
 
 | token type        | how it enters the plugin                                | where it is stored                                | how it is removed                            |
 | ----------------- | -------------------------------------------------------- | -------------------------------------------------- | -------------------------------------------- |
-| `MINIMAX_OAUTH_TOKEN` (env) | set by the user in their shell or mcode config | process env (not on disk)                          | unset env / close shell                      |
-| `MINIMAX_API_KEY` (env)     | same as above                                          | process env                                       | same as above                                |
-| `config.json:planApiToken`   | `set-token.ps1 <token>`                                | `%APPDATA%\mcode-island\config.json` (plaintext)  | `set-token.ps1 -Clear` or edit the file      |
+| `MINIMAX_OAUTH_TOKEN` (env) | set by the user in their shell or mcode config | process env (not on disk), read only after `set-token.ps1 -AllowEnvToken` | unset env / close shell / `set-token.ps1 -NoEnvToken` |
+| `MINIMAX_API_KEY` (env)     | same as above                                          | process env, same opt-in                          | same as above                                |
+| `config.json:planApiTokenEnc` | `set-token.ps1 <token>`                               | `%APPDATA%\mcode-island\config.json`, DPAPI-encrypted (CurrentUser scope) | `set-token.ps1 -Clear` or edit the file      |
 
 The token is **never logged, never written to any other file, and never
-sent to a host other than `api.minimax.io`**. `set-token.ps1` only writes
+sent to a host other than `api.minimaxi.com`**. `set-token.ps1` only writes
 to `config.json`; it makes no network call. The detector only reads the
 token to attach as an `Authorization: Bearer ...` header on the single
 GET documented above.
+
+The token is stored encrypted with Windows DPAPI (CurrentUser scope):
+only the same Windows user on the same machine can decrypt it, so
+copying `config.json` elsewhere yields nothing usable. A `config.json`
+written by an older version, which kept the token in the clear under
+`planApiToken`, is migrated in place on the next detector start: the
+token is encrypted and the plaintext field is removed. No action is
+required from the user.
+
+The request carries the `Authorization` header and nothing else. It does
+not claim to be a MiniMax-owned surface.
 
 ## CLI reference
 
@@ -304,8 +412,8 @@ mcode-island                REM start the widget (no-op if already running)
 mcode-island stop           REM stop the widget
 mcode-island status         REM show widget PID, session, last 5 log lines
 mcode-island show           REM re-raise a hidden widget
-mcode-island pin            REM lock click-to-focus target to current foreground
-mcode-island unpin          REM clear focus target
+mcode-island pin            REM pin the click target to the current foreground window
+mcode-island unpin          REM clear the pinned click target
 mcode-island autostart-on   REM register for Windows logon
 mcode-island autostart-off  REM unregister
 ```
@@ -316,20 +424,292 @@ invoke `.ps1` more easily than `.cmd`.
 
 ## How click-to-focus works
 
-When the agent calls `notify-island.ps1`, the helper probes the process chain
-for an attached console window, and falls back to the first ancestor with a
-`MainWindowHandle`. The discovered HWND / PID is written to `caller.json`. When
-the user clicks the pill, the widget uses `SetForegroundWindow` on that HWND.
+The click target is resolved on every click. **This install prefers the
+caller's terminal**, the way the CLI has always behaved:
 
-If the auto-detected HWND is wrong (common on Windows Terminal with multiple
-tabs), run `mcode-island pin` from inside the tab you want to return to. The
-CLI grabs the foreground window *before* the widget steals focus, so this is
-the most reliable fix.
+| # | target              | how it is found                        | what the click does              |
+| - | ------------------- | -------------------------------------- | -------------------------------- |
+| 1 | a manual pin        | `pin.json` (written by `mcode-island pin`) | focuses that window        |
+| 2 | the caller's terminal | `caller.json` (written by `notify-island.ps1`) | shows it, or hides it if it is already visible |
+| 3 | the desktop app     | a process named `MiniMax Inside Code` / `MiniMax Code` / `Mavis` in the widget's own session | focuses the app window (only when there is no caller window) |
+
+**The two builds prefer different targets, on purpose.** The CLI runtime
+loads the `io.minimax.mcode` hooks, so the agent pushes the state itself and
+the click keeps the CLI habit: one click hides the terminal, the next brings
+it back. The Marketplace package ships no Hook material, the agent is hosted
+by the desktop app, and there the terminal belongs to the app session — hiding
+it leaves a static pill behind — so that build focuses the app window instead.
+
+Both are the same code: the source carries one switch,
+`$script:clickPrefers`, and the Marketplace builder flips that exact line to
+`'app'` (and fails the build when it cannot find it). The pin still wins in
+both builds — an explicit `mcode-island pin` is the user's own choice and
+outranks the preference.
+
+`mcode-island pin` stores the foreground window in `pin.json`, a separate file
+from `caller.json`: `caller.json` is rewritten on every status transition, so
+a pin stored there would not survive the next push. The pin is the escape
+hatch for the case where the desktop app is open next to a CLI session and the
+user wants the click to go to their terminal.
+
+When the auto-detected HWND is wrong (common on Windows Terminal with
+multiple tabs), run `mcode-island pin` from inside the tab you want to return
+to. The CLI grabs the foreground window *before* the widget steals focus, so
+this is the most reliable fix. `mcode-island unpin` clears it.
 
 The widget is also intentionally hard to kill. Alt+F4 sends `WM_CLOSE`, which
 the widget intercepts in `WndProc` and treats as Hide rather than Close. To
 re-raise the hidden window: `mcode-island show`. To kill it for real:
 `mcode-island stop`.
+
+## The session list
+
+Resting the mouse on the pill expands a list of **every session that is
+currently live**, not just the one the detector happens to be following.
+The detector follows a single session — the one that wrote its log most
+recently — but on a machine with a CLI session, a desktop-app session and
+a couple of side agents, the interesting thing is usually the *other* one.
+
+```
+   ●  剪映插件开发                          3 分钟前
+      执行 bash                              运行中
+```
+
+Each row carries four things:
+
+| part      | where it comes from |
+| --------- | ------------------- |
+| status dot | the same state vocabulary the pill uses, same color |
+| title     | the first thing the user said in that session, truncated to 40 characters |
+| preview   | the last thing that session said, truncated to 120 characters |
+| timestamp | how long ago that session last moved, plus its state word |
+
+**What is read, and what is not.** The list is fed by the detector, which
+reads the session logs the runtime already writes on this machine:
+
+- **the first user message** of a session — its title;
+- **the last message** of a session — its preview and its state;
+- **the log's mtime** — how long ago the session moved, and whether it is
+  still alive.
+
+Nothing else is read. In particular the widget does **not** read the
+runtime's own database, and it does **not** borrow the MiniMax Code
+programme to run anything: the title is simply the first thing the user
+said, which is what the app itself shows in its own sidebar.
+
+**Truncated and redacted before it is stored or shown.** A title and a
+preview are things a user said — they can contain a key. Both are cut to a
+fixed length and passed through the same secret redactor the plugin uses
+for log output **before** they are written to `sessions.json` and before
+they are drawn on screen.
+
+**The state words are the pill's words.** The list does not invent its
+own vocabulary: `working` / `thinking` / `waiting` / `idle` / `done` /
+`error` are rendered with the same text and the same color as on the
+pill, so the two places never disagree. The one addition is **已停止**
+("stopped"), which is not a message type but a liveness fallback: a
+session that has not moved for five minutes is no longer "running",
+even though nothing said otherwise.
+
+**The list is cleaned up.** The list is "the sessions that are alive
+now", not a history. A session that has not moved for 30 minutes is
+dropped from the list and from `sessions.json`; a session that moves
+again comes back. Without that, a morning of twenty conversations would
+leave twenty rows on the pill and twenty conversations' worth of text in
+the state file.
+
+**Clicking a row goes back to that session — it never opens a second
+one.** The widget first looks for the Windows Terminal tab that runs it
+and selects that tab. If the session lives in the desktop app instead,
+the widget switches the app to that conversation: the app's sidebar row
+is a button whose accessible name is the session name, so the widget
+finds the sidebar's conversation list and invokes the row there (the
+search is scoped to that list, not to the whole window). If neither
+matches, the widget raises the terminal window rather than starting a new
+`mcode --session <id>`. A second terminal for the same session is exactly
+the bug this feature is meant to avoid.
+
+Clicking a row also dismisses it: the session leaves the list and stays
+out of it until it starts its next round.
+
+**The × on each row dismisses it without going anywhere.** Clicking the
+row body means "take me back to that session". The × means "I am done with
+this one" — and those are different intentions. Sometimes the rows in the
+list are conversations you have already dealt with, and you do not want to
+be dragged out of whatever you are doing to get rid of them.
+
+So the × dismisses the row and nothing else:
+
+- it does **not** switch to the session, and does not open a terminal;
+- it does **not** close the list — the row disappears, the list shrinks,
+  and the next row's × is right there, so several rows can be dismissed in
+  a row;
+- it **gives the focus back** to the window that had it. Pressing the
+  mouse button hands the focus to the pill; for "jump to that session"
+  that is fine, but for "just dismiss this" it would cost the user their
+  editor's focus. The widget captures the foreground window when the
+  mouse enters the pill and hands it back afterwards.
+
+Dismissal uses the same rule as a row click: the session stays out of the
+list until it starts its next round, then it comes back on its own.
+
+The list is fed by the detector, which writes `sessions.json` next to
+`status.json` in `%APPDATA%\mcode-island\`. That file is the contract
+between the detector and the widget; the widget only reads it.
+
+**The list is bounded.** Three limits, on purpose:
+
+- the detector keeps at most **20** sessions (`MAX_SESSIONS`), dropping the
+  ones that have been idle the longest;
+- the widget draws at most **12** rows (`MAX_SESSION_ROWS`) and says
+  "还有 N 条" underneath, rather than silently dropping them — a row that
+  vanished without a word would be read as "that is all there is", which
+  is the exact question the list exists to answer;
+- `sessions.json` itself is capped at **64 KB** (`MAX_SESSIONS_JSON_BYTES`).
+  The row cap does not bound the file: every row also carries its title
+  history, and the dismissed map has no cap at all — so the write path
+  measures the serialized bytes and drops the oldest rows until it fits.
+
+The list height is also clamped to the work area, so it can never grow
+past the screen.
+
+## The session list's file boundary
+
+The tracker and the detector both walk the sessions tree to find the session
+logs. That walk is **bounded**: it never uses `SearchOption.AllDirectories`
+— which, per Microsoft's own documentation, *follows reparse points*
+(symbolic links, junctions, mounted volumes) — and it refuses any candidate
+that is a reparse point or that does not stay under the canonical sessions
+root. A junction under the sessions root therefore cannot hand the widget a
+log from somewhere else on the machine.
+
+`scripts/test-session-tracker.ps1` proves it on Windows: it builds a real
+junction pointing at a directory outside the sessions root, puts a session
+there, and checks that the session never reaches the list — and that the old
+blind recursion *would* have found it, so the assertion cannot pass for the
+wrong reason.
+
+## The material — Liquid Glass
+
+The pill is not a translucent rectangle. It is a **real frosted material**
+built to Apple's design language: [Human Interface Guidelines —
+Materials](https://developer.apple.com/design/human-interface-guidelines/materials)
+and [Color](https://developer.apple.com/design/human-interface-guidelines/color),
+as presented at WWDC25 (*Meet Liquid Glass*).
+
+The rules those documents set, and how the widget obeys them:
+
+| guideline | what the widget does |
+| --------- | -------------------- |
+| "Liquid Glass has no inherent color, and instead takes on colors from the content directly behind it" | the glass body starts as `Transparent` and is painted at runtime from a live screen capture; no hard-coded tint survives in the source |
+| "blurs and adjusts the luminosity of background content to maintain legibility" | the backdrop is captured and blurred, and the glass is mixed towards a **target grey** that keeps the text legible whatever is behind it |
+| "Liquid Glass appears more opaque in larger elements" | the expanded panel converges on a *darker* target grey than the pill, so the large element reads as a thicker slab of the same material |
+| specular highlights scale with geometry | a one-pixel rim light on the top edge, a darker inner edge below it, and a soft drop shadow under the whole body |
+
+**The material layers paint; they do not measure.** The four material
+paths (`Tint`, `Grain`, `Rim`, `Edge`) are drawn with a geometry that
+covers the whole glass body, and a WPF `Path` measures as big as its `Data`.
+Inside the layout they would hold the panel at the height of the *previous*
+frame: the expanded panel sits in an `Auto` row, so its height would be
+`max(last material rectangle, content height)` — the content could shrink
+and the panel would not, and every open made the black slab a little taller
+until it ran off the bottom of the screen. The layers therefore live in a
+`Canvas`, which does not measure its children: they paint, and nothing
+else.
+
+**How the frost is made.** The widget grabs the desktop behind itself
+(`SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` so the capture never
+includes the pill), downsamples it 4×, applies a WPF `BlurEffect`, and scales
+it back up — 24 physical pixels of blur radius, computed in physical pixels.
+A ≤3 % noise grain rides on top, so the frost has the slight tooth of a real
+material instead of the plastic look of a clean Gaussian.
+
+**One material: black glass, whatever is behind it.** The rule that
+decides everything is HIG's *"adjusts the luminosity of background content"*.
+The widget does not lay a translucent plate over the screen; it **solves for
+a target grey** and mixes the backdrop towards it:
+
+    behind is brighter than the target  ->  mix in black:  veil = 1 - target / L
+    behind is darker than the target    ->  mix in white:  lift = (target - L) / (1 - L)
+
+The dark pole targets **0.115** (byte 29 ≈ `#1D1D1D`, the black macOS's
+Dynamic Island uses), so the glass lands on the same grey whether it sits on
+a white document or on a black terminal. That is the *unified* look: the
+island is one black slab, and only the frost shows what is behind it.
+
+The earlier build mixed in a *fixed* proportion of black instead. Over a
+white page the glass then settled at byte 106 (≈ `#6A6A6A`) — a mid grey
+— and the dark labels on top of it turned to mud. Solving for a target
+instead of guessing a wash is what removes the grey.
+
+| pole | target grey | content | used when |
+| ---- | ----------- | ------- | --------- |
+| `dark` (default) | 0.115 — island black | white content, Apple dark-mode system colours | always, unless pinned otherwise |
+| `light` | 0.90 — near-white | dark content, macOS-style black-transparent labels | pinned explicitly |
+
+The pale pole is still there for people who want the island to blend into a
+light document, and it now converges on near-white the same way. The pole
+switch has **hysteresis** — bright past 0.60 to go light, dark past 0.58 to
+go back — so a background flickering near the threshold does not make the
+pill strobe.
+
+**Each surface picks its own pole.** The pill and the expanded panel are two
+separate pieces of glass, and what is behind them can be wildly different —
+the pill can sit on a bright title bar while the panel below it covers a
+dark editor. So the polarity, the foreground colours and the grain are
+decided **per surface**, not once for the whole widget: each glass body
+measures its own backdrop and picks its own pole.
+
+This is not a detail. An earlier build shared one global polarity, and the
+panel's decision overwrote the pill's: the pill ended up as dark glass with
+dark text, and the two surfaces flipped each other every 100 ms — the widget
+looked broken. HIG "Materials" says the same thing in one line: each material
+adjusts its own luminosity to keep what is written on it legible.
+
+**Reading the log.** `widget.log` keeps one line per surface, so a polarity
+question is answerable without a debugger:
+
+```
+GLASS PILL POLE -> light        # the pill switched poles
+GLASS Pill L=0.837 pole=light    # ...at this backdrop brightness
+GLASS PANEL POLE -> dark         # the panel decided separately
+GLASS Panel L=0.528 pole=dark
+```
+
+The luminance slot is per surface too. Sharing one slot between the two
+surfaces meant the brightness line was almost never written for the second
+surface — and "why did the panel go white?" became unanswerable, because the
+panel's pole change was the only trace of it in the log.
+
+**Contrast is guaranteed, not hoped for.** All the material constants are
+named (`$script:glassTargetByteDark`, `$script:glassThickDark`, …) rather
+than buried in expressions, so the smoke suite reads them, re-derives the
+worst case over the real backdrop, and recomputes the WCAG ratio. Current
+worst case: **16.57 : 1** primary text on the dark pole, **10.56 : 1** on the
+light pole, with secondary text at **5.86 : 1** / **3.88 : 1**.
+
+Converging on a target grey is what buys those numbers. Because the glass
+lands on the same grey over *every* backdrop, the contrast is a property of
+the material, not of whatever happens to be behind it — which is also why
+the old "secondary text below WCAG AA on a bright backdrop" trade-off is
+gone: on the dark pole the secondary text now clears 4.5 : 1 as well.
+
+**Configuration.** `materialPole` in `config.json`:
+
+| value | meaning |
+| ----- | ------- |
+| `dark` (default) | the unified black glass, whatever is behind it |
+| `light` | the pale glass with dark content |
+| `auto` | switch between the two from the measured backdrop brightness |
+
+The default is `dark`, because that is what the Dynamic Island does on
+macOS: it does not change colour with the page underneath it. `auto` is
+there for people who want the island to blend into a light document, and
+`light` to pin the pale material outright.
+
+**Known trade-off.** `SetWindowDisplayAffinity` makes the widget invisible to
+screen recorders for the ~10–30 ms each capture window (every 2.5 s). A
+recording of the screen may occasionally drop a frame of the pill.
 
 ## Test evidence
 
@@ -343,11 +723,74 @@ a live MiniMax Code session. Empirical evidence (captured during development):
   `waiting` → `working` → `done` on a real `bash npm test` run.
 - Click-to-focus round-trip verified: from a Feishu tab, click the pill, focus
   jumps to the originating Windows Terminal tab (HWND consistent).
+- Per-row × verified on a live machine with real mouse input: the row is
+  removed from `sessions.json` within a second, the list stays open and
+  shrinks by one row, the foreground window is unchanged before and after
+  the click (`pid` and `hwnd` identical), and a second × dismisses a second
+  row — two dismissals in one second both land, which is what the
+  multi-id `ack.signal` is for.
+- Click-target order verified against the live desktop app: with
+  `MiniMax Inside Code` running, the click resolves to the app window
+  (`mode=focus`, never hidden); with a `pin.json` present it resolves to the
+  pinned window; with neither, it falls back to the caller's terminal with
+  the original show/hide toggle (`mode=toggle`).
 - `wrap-tool.ps1` exit-code semantics: 0 → `done`, 1 → `waiting` (default;
   configurable via `-WaitingExitCodes`), other → `error`. As of v0.2.1 the
   wrapper no longer executes the command itself; the agent runs the command
   through mcode's own bash tool and passes the exit code to `wrap-tool.ps1
   -ExitCode`.
+- Material engine verified against a deterministic white backdrop on a live
+  machine: the island renders as **black glass** over the white page — not
+  the mid grey (`#6A6A6A`) the fixed-wash model produced — with white text
+  and a visible frost. Pixel-sampled on that screenshot: a blue shape behind
+  the glass comes through as `rgb(15,29,43)`, i.e. 11.5 % of `rgb(0,122,255)`
+  — the frost transmits the backdrop while keeping its hue, which is the
+  whole point of adjusting luminance instead of washing grey over it.
+- The same island over a dark terminal is the same black slab: the terminal's
+  clock and text come through the panel blurred, so the frost still reads
+  while the material stays black.
+- The **split backdrop** case verified on a live machine: a bright strip
+  under the pill and the dark terminal under the panel, each surface reading
+  its own backdrop and picking its own pole — simultaneously, with no flicker
+  in the log (`Pill L=0.837 pole=light` / `Panel L=0.528 pole=dark`, stable over
+  several refresh cycles).
+  The harness proves the stacking before it grabs anything
+  (`WindowFromPoint` at the pill must resolve to the widget process, and the
+  island is raised with `SetWindowPos`/`HWND_TOPMOST` first) — without that
+  check the bright strip can end up *on top of* the island, in which case the
+  screenshot shows the strip's own crisp text instead of glass and the run
+  looks like it passed while proving nothing.
+- The material assertions are **negative-injection tested**:
+  `scripts/test-material-injection.mjs` mutates one line of a **copy** of the
+  source 44 times (a hard-coded tint coming back, the capture affinity call
+  removed, the measure/arrange step skipped, the grain opacity raised, the two poles'
+  colour tables diverged, the hysteresis removed, the panel made thinner
+  than the pill, the two surfaces sharing one polarity again, the luminance
+  log slot going back to one shared value, the convergence formula replaced
+  by a fixed wash, the thickness factor shadowing the typed `$Thick`
+  parameter, an XML comment left unclosed in the XAML, the XAML block
+  unreadable, the comment strip itself broken, the strip knowing only one of
+  the two HTML comment end tags, the strip advancing by the wrong length, the dismiss mark no longer focusable, the keyboard handler never attached, the keyboard handler no longer dismissing, the keyboard handler dropping Space, the keyboard handler dropping Return, …),
+  checks that
+  the expected assertion turns red each time, and confirms the suite is
+  green again after the source is restored. The copy is not an optimisation:
+  the harness used to rewrite the checked-in file in place, and `node --test`
+  runs every suite in the repository in parallel -- a sibling suite that read
+  the widget mid-write saw a half-written file and reported a function that
+  is in the source as missing. A watcher now re-reads the working-tree
+  sources for the whole run and fails if any of them moved, so that race
+  cannot come back.
+- The XAML is stripped of its XML comments **before** the material
+  assertions read it, so a comment in the source cannot feed them. The strip
+  walks the text instead of running a regex: a paired comment is dropped
+  whole, an unclosed `<!--` drops everything after it, so the result never
+  carries a comment marker. It knows **both** HTML comment end tags
+  (`-->` and `--!>`) and advances by the tag's real length, so neither form
+  leaves a character behind. Three assertions say that out loud (every
+  comment in the XAML is closed; the stripped XAML carries no marker left;
+  the strip recognises every HTML comment end tag -- checked against a
+  probe, because the widget's own XAML never uses `--!>`), and a fourth
+  reports when the XAML block cannot be read at all.
 
 ## Limitations
 

@@ -47,7 +47,7 @@ exit /b 0
 exit /b %errorlevel%
 
 :unpin
-%PS% -Command "Remove-Item -Path (Join-Path $env:APPDATA 'mcode-island\caller.json') -ErrorAction SilentlyContinue; Write-Output 'unpinned: caller.json cleared'"
+%PS% -Command "Remove-Item -Path (Join-Path $env:APPDATA 'mcode-island\pin.json'),(Join-Path $env:APPDATA 'mcode-island\caller.json') -ErrorAction SilentlyContinue; Write-Output 'unpinned: pin.json and caller.json cleared'"
 exit /b %errorlevel%
 
 :autostart_on
