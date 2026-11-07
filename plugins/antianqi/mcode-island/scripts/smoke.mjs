@@ -749,8 +749,10 @@ const main = async () => {
             out('FAIL', 'mcode-island.ps1: the dismiss mark is not focusable -- Tab cannot reach it');
         } else if (!/Invoke-SessionDismiss/.test(xMarkKey)) {
             out('FAIL', 'mcode-island.ps1: the keyboard handler does not dismiss the row');
-        } else if (!/'Enter'/.test(xMarkKey) || !/'Space'/.test(xMarkKey)) {
-            out('FAIL', 'mcode-island.ps1: the keyboard handler accepts neither Enter nor Space');
+        } else if (!/'Return'/.test(xMarkKey) || !/'Enter'/.test(xMarkKey)) {
+            out('FAIL', 'mcode-island.ps1: the keyboard handler ignores the Enter key -- WPF calls the main one Return, the keypad one Enter');
+        } else if (!/'Space'/.test(xMarkKey)) {
+            out('FAIL', 'mcode-island.ps1: the keyboard handler ignores Space');
         } else {
             out('PASS', 'mcode-island.ps1: the dismiss mark is focusable and Enter/Space dismiss the row');
         }

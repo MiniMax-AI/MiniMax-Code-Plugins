@@ -375,16 +375,23 @@ const CASES = [
     {
         name: 'the keyboard handler no longer dismisses -> the row survives the key press',
         file: WIDGET,
-        find: '    Dbg ("session dismissed by keyboard: " + $id)\n    Invoke-SessionDismiss $id',
-        replace: '    Dbg ("session dismissed by keyboard: " + $id)',
+        find: '    Dbg ("session dismissed by keyboard: " + $key + " " + $id)\n    Invoke-SessionDismiss $id',
+        replace: '    Dbg ("session dismissed by keyboard: " + $key + " " + $id)',
         expect: 'the keyboard handler does not dismiss the row',
     },
     {
         name: 'the keyboard handler drops Space -> half of the keys do nothing',
         file: WIDGET,
-        find: "if ($key -ne 'Enter' -and $key -ne 'Space') { return }",
-        replace: "if ($key -ne 'Enter') { return }",
-        expect: 'the keyboard handler accepts neither Enter nor Space',
+        find: "if ($key -ne 'Return' -and $key -ne 'Enter' -and $key -ne 'Space') { return }",
+        replace: "if ($key -ne 'Return' -and $key -ne 'Enter') { return }",
+        expect: 'the keyboard handler ignores Space',
+    },
+    {
+        name: 'the keyboard handler drops Return -> the main Enter key does nothing',
+        file: WIDGET,
+        find: "if ($key -ne 'Return' -and $key -ne 'Enter' -and $key -ne 'Space') { return }",
+        replace: "if ($key -ne 'Enter' -and $key -ne 'Space') { return }",
+        expect: 'the keyboard handler ignores the Enter key',
     },
 ];
 

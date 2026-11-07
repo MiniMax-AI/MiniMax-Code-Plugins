@@ -1759,9 +1759,11 @@ function Format-RelativeTime([int64]$tsMs) {
   # 会话。Tab 在几行 × 之间移动（列表里可聚焦的就是它们）。
   $xMark.Add_KeyDown({
     $key = [string]$args[1].Key
-    if ($key -ne 'Enter' -and $key -ne 'Space') { return }
+    # WPF 把主键盘的 Enter 报成 Return，数字键盘上那个才叫 Enter —— 两种都收，
+    # 少收一种就等于键盘这条路是死的。
+    if ($key -ne 'Return' -and $key -ne 'Enter' -and $key -ne 'Space') { return }
     $args[1].Handled = $true
-    Dbg ("session dismissed by keyboard: " + $id)
+    Dbg ("session dismissed by keyboard: " + $key + " " + $id)
     Invoke-SessionDismiss $id
   }.GetNewClosure())
 
