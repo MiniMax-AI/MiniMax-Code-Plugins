@@ -1727,6 +1727,10 @@ function Format-RelativeTime([int64]$tsMs) {
   $xMark.Margin = New-Object System.Windows.Thickness(10,0,2,0)
   $xMark.Cursor = [System.Windows.Input.Cursor]::Hand
   $xMark.ToolTip = '从列表中消除（不跳转）'
+  # 键盘可达：TextBlock 默认不可聚焦，Tab 走不到它，Enter/Space 也没有人会按。
+  # 这个列表整个是浮层，本来就得用鼠标唤出，但一旦 × 拿到了焦点，键盘必须也
+  # 能干活 —— 否则"消除"就只剩一种输入方式。
+  $xMark.Focusable = $true
 
   # hover 时变红：让它一眼看出这是个"会动手"的东西。
   $xIdleBrush = $xMark.Foreground
@@ -1746,6 +1750,18 @@ function Format-RelativeTime([int64]$tsMs) {
   # Invoke-SessionDismiss 末尾的 Restore-ForegroundAfterAction）。
   $xMark.Add_MouseLeftButtonDown({
     $args[1].Handled = $true
+    Invoke-SessionDismiss $id
+  }.GetNewClosure())
+
+  # 键盘：Enter / Space 等同于点一下 ×。
+  #
+  # 焦点在 × 上时按这两个键，消掉这一行 —— 和鼠标点一下是同一件事，不切换
+  # 会话。Tab 在几行 × 之间移动（列表里可聚焦的就是它们）。
+  $xMark.Add_KeyDown({
+    $key = [string]$args[1].Key
+    if ($key -ne 'Enter' -and $key -ne 'Space') { return }
+    $args[1].Handled = $true
+    Dbg ("session dismissed by keyboard: " + $id)
     Invoke-SessionDismiss $id
   }.GetNewClosure())
 

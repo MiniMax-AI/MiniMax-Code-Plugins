@@ -731,6 +731,30 @@ const main = async () => {
             }
         }
 
+        // The dismiss mark must also be keyboard-operable.
+        //
+        // A plain TextBlock is not focusable: Tab cannot reach it and
+        // Enter/Space do nothing, so the dismiss would be mouse-only. The
+        // panel is an overlay the user reaches with the mouse in the first
+        // place, but once the mark has the focus the keyboard has to work
+        // too.
+        // The keyboard handler has to be sliced out on its own: the mouse
+        // handler right above it also calls Invoke-SessionDismiss, so a
+        // wider window would let the mouse handler feed this assertion.
+        const xMarkKey = (rowCode.match(/\$xMark\.Add_KeyDown\(\{[\s\S]*?\}\.GetNewClosure\(\)/) || [''])[0];
+        const xMarkSetup = (rowCode.match(/\$xMark\s*=[\s\S]*?\$xMark\.Add_KeyDown\(\{/) || [''])[0];
+        if (!xMarkKey) {
+            out('FAIL', 'mcode-island.ps1: the dismiss mark has no keyboard handler -- Enter/Space would do nothing');
+        } else if (!/Focusable\s*=\s*\$true/.test(xMarkSetup)) {
+            out('FAIL', 'mcode-island.ps1: the dismiss mark is not focusable -- Tab cannot reach it');
+        } else if (!/Invoke-SessionDismiss/.test(xMarkKey)) {
+            out('FAIL', 'mcode-island.ps1: the keyboard handler does not dismiss the row');
+        } else if (!/'Enter'/.test(xMarkKey) || !/'Space'/.test(xMarkKey)) {
+            out('FAIL', 'mcode-island.ps1: the keyboard handler accepts neither Enter nor Space');
+        } else {
+            out('PASS', 'mcode-island.ps1: the dismiss mark is focusable and Enter/Space dismiss the row');
+        }
+
         // The dismiss path itself must not switch sessions: it only writes
         // the ack, records the pending dismissal and redraws.
         const dismissBody = (widget.match(/function Invoke-SessionDismiss[\s\S]*?\n\}\n/) || [''])[0];

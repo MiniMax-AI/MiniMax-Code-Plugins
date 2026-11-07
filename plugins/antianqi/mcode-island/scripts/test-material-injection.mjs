@@ -357,6 +357,35 @@ const CASES = [
         replace: '                if ($false) { continue }',
         expect: 'traversal: scripts/lib/Safe-Traversal.ps1 (it never checks containment)',
     },
+    {
+        // 键盘可达这条断言有四个分支，每一个都得能被抓住：抓不住就等于没写。
+        name: 'the dismiss mark stops being focusable -> Tab can no longer reach it',
+        file: WIDGET,
+        find: '  $xMark.Focusable = $true',
+        replace: '  $xMark.Focusable = $false',
+        expect: 'the dismiss mark is not focusable',
+    },
+    {
+        name: 'the keyboard handler is never attached -> Enter and Space do nothing',
+        file: WIDGET,
+        find: '  $xMark.Add_KeyDown({',
+        replace: '  $xMark.Add_KeyDownX({',
+        expect: 'the dismiss mark has no keyboard handler',
+    },
+    {
+        name: 'the keyboard handler no longer dismisses -> the row survives the key press',
+        file: WIDGET,
+        find: '    Dbg ("session dismissed by keyboard: " + $id)\n    Invoke-SessionDismiss $id',
+        replace: '    Dbg ("session dismissed by keyboard: " + $id)',
+        expect: 'the keyboard handler does not dismiss the row',
+    },
+    {
+        name: 'the keyboard handler drops Space -> half of the keys do nothing',
+        file: WIDGET,
+        find: "if ($key -ne 'Enter' -and $key -ne 'Space') { return }",
+        replace: "if ($key -ne 'Enter') { return }",
+        expect: 'the keyboard handler accepts neither Enter nor Space',
+    },
 ];
 
 async function runSmoke() {

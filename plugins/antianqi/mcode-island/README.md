@@ -762,7 +762,7 @@ a live MiniMax Code session. Empirical evidence (captured during development):
   looks like it passed while proving nothing.
 - The material assertions are **negative-injection tested**:
   `scripts/test-material-injection.mjs` mutates one line of a **copy** of the
-  source 39 times (a hard-coded tint coming back, the capture affinity call
+  source 43 times (a hard-coded tint coming back, the capture affinity call
   removed, the measure/arrange step skipped, the grain opacity raised, the two poles'
   colour tables diverged, the hysteresis removed, the panel made thinner
   than the pill, the two surfaces sharing one polarity again, the luminance
@@ -770,7 +770,7 @@ a live MiniMax Code session. Empirical evidence (captured during development):
   by a fixed wash, the thickness factor shadowing the typed `$Thick`
   parameter, an XML comment left unclosed in the XAML, the XAML block
   unreadable, the comment strip itself broken, the strip knowing only one of
-  the two HTML comment end tags, the strip advancing by the wrong length, …),
+  the two HTML comment end tags, the strip advancing by the wrong length, the dismiss mark no longer focusable, the keyboard handler never attached, the keyboard handler no longer dismissing, the keyboard handler dropping Space, …),
   checks that
   the expected assertion turns red each time, and confirms the suite is
   green again after the source is restored. The copy is not an optimisation:
