@@ -586,6 +586,17 @@ The rules those documents set, and how the widget obeys them:
 | "Liquid Glass appears more opaque in larger elements" | the expanded panel converges on a *darker* target grey than the pill, so the large element reads as a thicker slab of the same material |
 | specular highlights scale with geometry | a one-pixel rim light on the top edge, a darker inner edge below it, and a soft drop shadow under the whole body |
 
+**The material layers paint; they do not measure.** The four material
+paths (`Tint`, `Grain`, `Rim`, `Edge`) are drawn with a geometry that
+covers the whole glass body, and a WPF `Path` measures as big as its `Data`.
+Inside the layout they would hold the panel at the height of the *previous*
+frame: the expanded panel sits in an `Auto` row, so its height would be
+`max(last material rectangle, content height)` — the content could shrink
+and the panel would not, and every open made the black slab a little taller
+until it ran off the bottom of the screen. The layers therefore live in a
+`Canvas`, which does not measure its children: they paint, and nothing
+else.
+
 **How the frost is made.** The widget grabs the desktop behind itself
 (`SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` so the capture never
 includes the pill), downsamples it 4×, applies a WPF `BlurEffect`, and scales

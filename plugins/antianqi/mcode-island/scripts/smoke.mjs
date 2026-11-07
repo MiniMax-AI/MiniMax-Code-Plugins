@@ -2570,6 +2570,36 @@ const main = async () => {
                 out('FAIL', `glass layers: ${badMaterial.join(', ')} carry a baked-in colour instead of being painted at runtime`);
             }
 
+            // --- 6.10b 材质层不能参与测量 ------------------------------
+            //
+            // Path 的 DesiredSize 来自 Data 的 Bounds，而材质的四条 Path 的
+            // Data 正是"整块玻璃那么大"的矩形。放在 Grid 里它们就参与测量：
+            // 面板所在的是 Auto 行，于是面板高度 = max(上一次的材质矩形,
+            // 内容高度) —— 内容变矮时高度不降，材质矩形永远停在上一轮，
+            // 面板只增不减，最后黑成一条到底的长条。
+            //
+            // Canvas 不测量子元素（DesiredSize 是 0）。材质层必须住在
+            // Canvas 里：只画，不撑。
+            const materialCanvas = (prefix) => {
+                const open = xaml.indexOf(`<Canvas x:Name="${prefix}Material">`);
+                if (open < 0) return null;
+                const close = xaml.indexOf('</Canvas>', open);
+                if (close < 0) return null;
+                return { open, close };
+            };
+            const zones = { Pill: materialCanvas('Pill'), Panel: materialCanvas('Panel') };
+            const outsideCanvas = [];
+            for (const name of materialPaths) {
+                const idx = xaml.indexOf(`x:Name="${name}"`);
+                const zone = name.startsWith('Pill') ? zones.Pill : zones.Panel;
+                if (idx < 0 || !zone || idx < zone.open || idx > zone.close) outsideCanvas.push(name);
+            }
+            if (outsideCanvas.length === 0) {
+                out('PASS', 'glass layout: every material path lives in a Canvas -- it paints without taking part in measuring');
+            } else {
+                out('FAIL', `glass layout: ${outsideCanvas.join(', ')} are not inside a Canvas -- a Path measures as big as its Data, so the panel height sticks to the previous one`);
+            }
+
             // --- 6.11 每块面各判各的极 ----------------------------------
             // HIG "Materials": 每块材质各自调整明度来保住可读性。药丸和展开
             // 面板背后可能差得很远（药丸压着一段亮色标题栏，面板底下却是一

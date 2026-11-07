@@ -269,10 +269,24 @@ $xaml = @'
       <DropShadowEffect x:Name="PillShadow" Color="Black" Opacity="0.45" BlurRadius="28" ShadowDepth="7"/>
     </Border.Effect>
     <Grid x:Name="PillGlass" Background="#FF16181D">
-      <Path x:Name="PillTint" Fill="Transparent" Stroke="Transparent"/>
-      <Path x:Name="PillGrain" Fill="Transparent" Stroke="Transparent"/>
-      <Path x:Name="PillRim" Fill="Transparent" Stroke="Transparent" StrokeThickness="1"/>
-      <Path x:Name="PillEdge" Fill="Transparent" Stroke="Transparent" StrokeThickness="1"/>
+      <!--
+        材质层放进 Canvas，不直接放在 Grid 里。
+
+        Path 的 DesiredSize 来自 Data 的 Bounds，而这几条 Path 的 Data 正是
+        "整块玻璃那么大"的矩形。放在 Grid 里它们就参与测量：药丸这面所在
+        的行高是固定的，撑不大；面板那面所在的却是 Auto 行，于是面板高度
+        变成 max(上一次的材质矩形, 内容高度) —— 内容变矮时高度不降，材质
+        矩形永远停在上一轮，面板于是只增不减，最后黑成一条到底的长条。
+
+        Canvas 不测量它的子元素：DesiredSize 是 0。材质层只负责画，不再
+        负责撑布局。
+      -->
+      <Canvas x:Name="PillMaterial">
+        <Path x:Name="PillTint" Fill="Transparent" Stroke="Transparent"/>
+        <Path x:Name="PillGrain" Fill="Transparent" Stroke="Transparent"/>
+        <Path x:Name="PillRim" Fill="Transparent" Stroke="Transparent" StrokeThickness="1"/>
+        <Path x:Name="PillEdge" Fill="Transparent" Stroke="Transparent" StrokeThickness="1"/>
+      </Canvas>
 
       <Border Padding="15,6">
       <Grid>
@@ -396,10 +410,14 @@ $xaml = @'
       <DropShadowEffect x:Name="PanelShadow" Color="Black" Opacity="0.5" BlurRadius="34" ShadowDepth="10"/>
     </Border.Effect>
     <Grid x:Name="PanelGlass" Background="#FF16181D">
-      <Path x:Name="PanelTint" Fill="Transparent" Stroke="Transparent"/>
-      <Path x:Name="PanelGrain" Fill="Transparent" Stroke="Transparent"/>
-      <Path x:Name="PanelRim" Fill="Transparent" Stroke="Transparent" StrokeThickness="1"/>
-      <Path x:Name="PanelEdge" Fill="Transparent" Stroke="Transparent" StrokeThickness="1"/>
+      <!-- 同样放进 Canvas：面板这面的行高是 Auto，材质层一旦参与测量，
+           面板高度就永远停在上一轮（见 PillMaterial 上面的说明）。 -->
+      <Canvas x:Name="PanelMaterial">
+        <Path x:Name="PanelTint" Fill="Transparent" Stroke="Transparent"/>
+        <Path x:Name="PanelGrain" Fill="Transparent" Stroke="Transparent"/>
+        <Path x:Name="PanelRim" Fill="Transparent" Stroke="Transparent" StrokeThickness="1"/>
+        <Path x:Name="PanelEdge" Fill="Transparent" Stroke="Transparent" StrokeThickness="1"/>
+      </Canvas>
       <StackPanel x:Name="SessionRows" Margin="14,10"/>
     </Grid>
   </Border>
@@ -812,6 +830,14 @@ function Update-GlassGeometry {
     $grain = $window.FindName("${Prefix}Grain"); if ($grain) { $grain.Data = $geo }
     $rim   = $window.FindName("${Prefix}Rim");   if ($rim)   { $rim.Data = $geoRim;  $rim.StrokeThickness = 1.5 }
     $edge  = $window.FindName("${Prefix}Edge");  if ($edge)  { $edge.Data = $geoEdge; $edge.StrokeThickness = 1.5 }
+    # 材质层住在 Canvas 里，位置由 Canvas 管。Canvas 不测子元素，所以这
+    # 几条 Path 只画不撑；但坐标还是得落在 (0,0)，否则 Path 的 Data 矩形
+    # 会从原点偏移出去。
+    foreach ($layer in @($tint, $grain, $rim, $edge)) {
+      if (-not $layer) { continue }
+      [System.Windows.Controls.Canvas]::SetLeft($layer, 0)
+      [System.Windows.Controls.Canvas]::SetTop($layer, 0)
+    }
     return $true
   } catch {
     Dbg "GLASS GEOMETRY FAIL: $($_.Exception.Message)"

@@ -225,8 +225,10 @@ const CASES = [
         // js/incomplete-sanitization 判的就是这个）。新写法必须能判死它。
         name: 'an XML comment is never closed -> the assertions would read a half-deleted source',
         file: WIDGET,
-        find: '  <Border x:Name="SessionPanel" Grid.Row="1" Visibility="Collapsed" Margin="0,14,0,0">',
-        replace: '  <!-- never closed\n  <Border x:Name="SessionPanel" Grid.Row="1" Visibility="Collapsed" Margin="0,14,0,0">',
+        // 注入点必须在最后一个注释之后：XAML 里的注释是按顺序配对的，
+        // 在中间插一个 <!-- 会被后面某个 --> 配上，那就不是"没闭合"了。
+        find: '</Window>',
+        replace: '  <!-- never closed\n</Window>',
         expect: 'xaml comments: an XML comment in the XAML is never closed',
     },
     {
@@ -261,6 +263,23 @@ const CASES = [
         find: '        i = close.at + close.len;        // "-->" is 3 chars, "--!>" is 4',
         replace: '        i = close.at + 3;        // "-->" is 3 chars, "--!>" is 4',
         expect: 'xaml comments: the strip does not recognise every HTML comment end tag',
+    },
+    {
+        // 材质层放回 Grid 里：Path 的 DesiredSize 来自 Data 的 Bounds，
+        // 也就是"整块玻璃那么大"。于是它参与测量，面板高度被撑到上一轮，
+        // 内容变矮时高度不降 —— 黑条只会越来越长。
+        name: 'the pill material paths go back into the Grid -> they take part in measuring again',
+        file: WIDGET,
+        find: '      <Canvas x:Name="PillMaterial">',
+        replace: '      <Grid x:Name="PillMaterial">',
+        expect: 'glass layout:',
+    },
+    {
+        name: 'the panel material paths go back into the Grid -> the panel height sticks to the previous one',
+        file: WIDGET,
+        find: '      <Canvas x:Name="PanelMaterial">',
+        replace: '      <Grid x:Name="PanelMaterial">',
+        expect: 'glass layout:',
     },
 ];
 
