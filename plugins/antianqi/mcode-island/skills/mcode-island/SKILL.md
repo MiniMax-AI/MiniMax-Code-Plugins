@@ -26,9 +26,25 @@ theme. Six states with distinct color and motion:
 | `done`     | green          | ✓    | step finished, more to do        |
 | `error`    | red            | ✕    | tool or step failed              |
 
-Click the pill to switch focus back to the originating terminal tab. Run
-`mcode-island pin` from inside a terminal to fix the focus target explicitly
-(useful when the auto-detected HWND is wrong, e.g. Windows Terminal multi-tab).
+Click the pill to go back to where the work happens. The target is resolved on
+every click, in this order:
+
+1. **A manual pin** (`mcode-island pin`) — that window is focused.
+2. **The originating terminal** (`caller.json`) — one click hides it, the next
+   brings it back maximized. This is the CLI habit, and this install keeps it.
+3. **The desktop app window** (`MiniMax Inside Code` / `MiniMax Code` /
+   `Mavis`) — focused, never hidden, and only when there is no caller window
+   to go back to.
+
+The Marketplace build ships the other order: there the agent is hosted by the
+desktop app, so hiding the terminal behind it would leave the user staring at
+a static pill, and the click focuses the app window instead. Both builds are
+the same code — the source carries one switch, `$script:clickPrefers`, and the
+Marketplace builder flips it.
+Run `mcode-island pin` from inside a terminal to override the target
+explicitly (useful when the auto-detected HWND is wrong, e.g. Windows Terminal
+multi-tab, or when the desktop app is open next to a CLI session).
+`mcode-island unpin` clears the pin.
 
 ## Two ways to drive the pill
 
@@ -130,6 +146,33 @@ $plugin = "<plugin install dir>"   # directory that contains notify-island.ps1
 & "$plugin\notify-island.ps1" -State waiting  -Message "permission prompt"
 ```
 
+For sub-step progress (Computer Use iterative loops, multi-step plans,
+long-running tool sequences) push `-Step` / `-Total` / `-Detail` so the pill
+shows what the agent is doing *right now* instead of only the coarse state:
+
+```powershell
+& "$plugin\notify-island.ps1" -State working -Message "Computer Use" `
+                              -Step 3 -Total 12 -Detail "fill username field"
+# → pill renders: "step 3/12 · fill username field"
+
+& "$plugin\notify-island.ps1" -State working -Message "Bash" `
+                              -Step 5 -Detail "npm install"
+# → pill renders: "step 5 · npm install"  (total omitted → no "/N")
+
+& "$plugin\notify-island.ps1" -State done -Message "Bash ok"
+# → pill renders: "Bash ok"  (no step → legacy behavior, fully backward compat)
+```
+
+Semantics:
+- `-Step` is 1-based; omit (or pass `-1`) to keep the coarse state-only display.
+- `-Total` is optional; pass `-1` or omit when the iteration count is unknown.
+- `-Detail` is free text. When present, it replaces `Message` in the pill
+  ("step 3/12 · detail") to avoid stacking ("Bash ok · fill username"). When
+  absent, only the step number renders.
+
+All three params are optional and the schema is backward compatible — old
+callers that omit them see no behavior change.
+
 `<plugin install dir>` is the directory that contains `notify-island.ps1`.
 Substitute the absolute path your user installed the plugin at. The Skill body
 deliberately avoids hard-coded paths so any user / any install location works.
@@ -137,10 +180,11 @@ deliberately avoids hard-coded paths so any user / any install location works.
 ## Expected result
 
 After each push (or after each hook fires), the widget on the user's primary
-display updates within ~400 ms (one polling cycle). On click, the originating
-terminal tab regains focus. The widget is intentionally hard to kill: Alt+F4
-hides it, not closes it, and `mcode-island show` re-raises the hidden window
-in under 1 second.
+display updates within ~400 ms (one polling cycle). On click, the widget
+focuses the pinned window, or the originating terminal tab (which it hides
+and restores — see the click-target order above). The widget is intentionally
+hard to kill: Alt+F4 hides it, not closes it, and `mcode-island show` re-raises
+the hidden window in under 1 second.
 
 ## User-side management
 
@@ -149,8 +193,8 @@ mcode-island                  REM start the widget (idempotent)
 mcode-island stop             REM stop the widget
 mcode-island status           REM show PID + recent log
 mcode-island show             REM re-raise hidden widget
-mcode-island pin              REM lock focus target to current foreground window
-mcode-island unpin            REM clear focus target
+mcode-island pin              REM pin the click target to the current foreground window
+mcode-island unpin            REM clear the pinned click target
 mcode-island autostart-on     REM register for Windows logon
 mcode-island autostart-off    REM unregister
 ```
@@ -172,6 +216,7 @@ All widget state lives under `%APPDATA%\mcode-island\`:
 | ---------------- | ----------------------------------------------------- |
 | `status.json`    | current state (widget polls this every 400 ms)        |
 | `caller.json`    | originating terminal HWND / PID (for click-to-focus)  |
+| `pin.json`       | manually pinned click target (survives status pushes) |
 | `config.json`    | pill position, size, opacity (saved on drag)          |
 | `widget.pid`     | widget process PID (used by start/stop/status)        |
 | `island.log`     | append-only state transition history                  |
@@ -180,7 +225,7 @@ All widget state lives under `%APPDATA%\mcode-island\`:
 
 No data leaves the local machine *unless* an opt-in 5-hour usage token is
 configured. See the **Network access** + **Accounts** sections in
-`README.md` for the exact host (`api.minimax.io/v1/coding_plan/remains`),
+`README.md` for the exact host (`api.minimaxi.com/v1/coding_plan/remains`),
 the rate limit (one GET per 60 s), and the storage locations
 (`config.json:planApiToken` or env `MINIMAX_OAUTH_TOKEN` / `MINIMAX_API_KEY`).
 When no token is configured the plugin makes no network requests at all.

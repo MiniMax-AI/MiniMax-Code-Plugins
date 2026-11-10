@@ -15,3 +15,6 @@ credentials.json
 *credentials.json
 *.pem
 *.p12
+
+# Stale widget backups from debugging sessions; never part of a build.
+*.bak-r16

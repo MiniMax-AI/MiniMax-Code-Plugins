@@ -32,12 +32,38 @@ function Build-Command([string]$Launcher) {
 
 switch ($Action) {
   'Enable' {
-    New-Item -Path $runKey -Force | Out-Null
+    # 只在 Run 键不存在时创建它。
+    #
+    # 之前这里是无条件 New-Item -Path $runKey -Force：对一个已经存在的
+    # HKCU\...\Run 键，-Force 会重建这个键，于是把用户注册在它下面的
+    # 其它开机自启项（Everything / OneDrive / 各种代理客户端 …）一起清掉。
+    # 现在只在键缺失时创建，并且用 New-ItemProperty 只写自己的那一个值，
+    # 绝不碰同键下的其它值。
+    if (-not (Test-Path $runKey)) {
+      New-Item -Path $runKey -Force | Out-Null
+    }
+
+    # 记录同键下的其它值，写完再核对一遍，确保一个都没少。
+    $othersBefore = @((Get-Item -Path $runKey -ErrorAction SilentlyContinue).GetValueNames() |
+      Where-Object { $entries.Keys -notcontains $_ })
+
     foreach ($name in $entries.Keys) {
       $cmd = Build-Command $entries[$name]
-      Set-ItemProperty -Path $runKey -Name $name -Value $cmd
+      # -Force 只影响这一个具名值：不存在则建，存在则覆盖。
+      New-ItemProperty -Path $runKey -Name $name -Value $cmd -PropertyType String -Force | Out-Null
       Write-Output "ENABLED: $runKey\$name"
       Write-Output "  Value: $cmd"
+    }
+
+    $othersAfter = @((Get-Item -Path $runKey -ErrorAction SilentlyContinue).GetValueNames() |
+      Where-Object { $entries.Keys -notcontains $_ })
+    $lost = @($othersBefore | Where-Object { $othersAfter -notcontains $_ })
+    if ($lost.Count -gt 0) {
+      Write-Output "ERROR: unrelated Run entries disappeared: $($lost -join ', ')"
+      exit 1
+    }
+    if ($othersAfter.Count -gt 0) {
+      Write-Output "  (kept $($othersAfter.Count) unrelated Run entr(y|ies))"
     }
   }
   'Disable' {
