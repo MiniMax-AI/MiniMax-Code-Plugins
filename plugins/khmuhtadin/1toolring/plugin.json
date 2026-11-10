@@ -1,0 +1,24 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "1toolring",
+  "version": "0.1.0",
+  "description": "Pay-per-call access to thousands of tools from third-party providers through one 1ToolRing key: web search, maps and places, shopping and prices, market data, web pages, images, weather and more.",
+  "author": {
+    "name": "Khaisa Studio",
+    "url": "https://1toolring.com"
+  },
+  "license": "MIT",
+  "homepage": "https://1toolring.com",
+  "repository": "https://github.com/khmuhtadin/1toolring-mcp",
+  "keywords": [
+    "minimax-code",
+    "plugin",
+    "mcp",
+    "search",
+    "maps",
+    "shopping",
+    "market-data",
+    "web-scraping",
+    "pay-per-call"
+  ]
+}
