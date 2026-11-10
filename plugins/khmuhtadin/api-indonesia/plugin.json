@@ -1,0 +1,23 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "api-indonesia",
+  "version": "0.1.0",
+  "description": "Official Indonesian public data through one MCP server: regions down to villages and postal codes, holidays, prayer times, schools, hospitals, earthquakes, weather, exchange rates, minimum wage and more.",
+  "author": {
+    "name": "Khaisa Studio",
+    "url": "https://apiindonesia.id"
+  },
+  "license": "MIT",
+  "homepage": "https://apiindonesia.id",
+  "repository": "https://github.com/khmuhtadin/api-indonesia-examples",
+  "keywords": [
+    "minimax-code",
+    "plugin",
+    "mcp",
+    "indonesia",
+    "government-data",
+    "regions",
+    "holidays",
+    "geodata"
+  ]
+}
