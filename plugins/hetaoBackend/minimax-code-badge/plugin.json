@@ -1,0 +1,21 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "minimax-code-badge",
+  "version": "0.1.0",
+  "description": "Append a \"powered by MiniMax Code\" badge to the end of GitHub pull request descriptions, with an idempotent gh-based writer and bundled SVG/PNG fallbacks.",
+  "author": {
+    "name": "hetaoBackend",
+    "url": "https://github.com/hetaoBackend"
+  },
+  "homepage": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins/tree/main/plugins/hetaoBackend/minimax-code-badge",
+  "repository": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins",
+  "license": "Apache-2.0",
+  "keywords": [
+    "minimax-code",
+    "plugin",
+    "github",
+    "pull-request",
+    "badge",
+    "shields-io"
+  ]
+}
