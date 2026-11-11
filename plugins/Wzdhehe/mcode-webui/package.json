@@ -1,0 +1,45 @@
+{
+  "name": "mcode-webui",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "HTTP/SSE wrapper for mcode exec --output-format stream-json. Zero deps, Node 22+.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "node --experimental-test-module-mocks --test test/*.test.js",
+    "coverage": "c8 --reporter=text --reporter=lcov node --experimental-test-module-mocks --test test/*.test.js",
+    "lint": "eslint server/ test/",
+    "format": "prettier --write server/ test/",
+    "setup:plugin": "node scripts/setup-plugin-layout.mjs",
+    "package:plugin": "node scripts/package-plugin.mjs",
+    "validate:plugin": "node scripts/validate-plugin.mjs",
+    "verify": "node scripts/verify.mjs"
+  },
+  "engines": {
+    "node": ">=22.19 <23 || >=24 <27"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "c8": "^12.0.0",
+    "eslint": "^10.8.1",
+    "globals": "^17.11.0",
+    "prettier": "^3.9.6"
+  },
+  "c8": {
+    "include": [
+      "server/**/*.js"
+    ],
+    "exclude": [
+      "server/lib/mcode-acp.js",
+      "server/lib/mcode-exec.js",
+      "server/lib/mcode-rpc.js",
+      "server/acp.mjs"
+    ],
+    "reporter": [
+      "text",
+      "lcov"
+    ]
+  }
+}
