@@ -6,7 +6,7 @@ import { resolveMcode } from './availability.mjs';
 import { readFile } from 'node:fs/promises';
 import { check } from './common.mjs';
 import { previewTopology } from './topology.mjs';
-import { waitEvents,createToolHandler } from './tools.mjs';
+import { waitEvents,createToolHandler,parseEventCursor } from './tools.mjs';
 export async function startHTTP(engine,{port=0,webRoot=new URL('../web/',import.meta.url),exampleRoot=new URL('../examples/',import.meta.url)}={}){
  const reportStyleHash=createHash('sha256').update(REPORT_STYLES).digest('base64');
  let origin;
@@ -28,7 +28,7 @@ export async function startHTTP(engine,{port=0,webRoot=new URL('../web/',import.
       if(req.method==='GET'&&url.pathname==='/api/scheduler')return json(engine.schedulerStatus());
       if(req.method==='GET'&&url.pathname==='/api/runs')return json(engine.store.list().map(({script,input,result,fingerprints,...r})=>r));
       const match=url.pathname.match(/^\/api\/runs\/([a-f0-9-]+)(?:\/(wait|pause|cancel|resume|edit|approve|repair))?$/);
-      if(match&&req.method==='GET'){if(match[2]==='wait')return json(await waitEvents(engine,match[1],Math.max(0,Number(url.searchParams.get('after'))||0),20000));return json(engine.snapshot(match[1]));}
+      if(match&&req.method==='GET'){if(match[2]==='wait')return json(await waitEvents(engine,match[1],parseEventCursor(url.searchParams.get('after')),20000));return json(engine.snapshot(match[1]));}
       if(req.method==='POST'){
        check(req.headers['content-type']?.startsWith('application/json'),'需要 application/json');req.setEncoding('utf8');let body='';for await(const chunk of req){body+=chunk;check(Buffer.byteLength(body)<=700_000,'请求过大');}const data=JSON.parse(body||'{}');
        if(url.pathname==='/api/templates')return json(engine.saveTemplate(data.runId,data),201);

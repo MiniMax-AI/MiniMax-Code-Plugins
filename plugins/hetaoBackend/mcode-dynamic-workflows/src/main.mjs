@@ -89,7 +89,11 @@ if(values.stdio&&process.env.MCODE_WORKFLOW_CHILD==='1'){
    const temp=endpointPath+'.'+process.pid+'.tmp';await writeFile(temp,JSON.stringify({pid:process.pid,url:panel.url,workspace,serviceProtocol:2}),{mode:0o600});await rename(temp,endpointPath);
   }catch(e){await engine?.close();await panel?.close();store.close();throw e;}
   process.stdout.write(`Workflow Studio: ${panel.url}\n`);
-  let closing=false;async function close(){if(closing)return;closing=true;await engine.close();await panel.close();store.close();process.exitCode=0;}
+  let closing=false;async function close(){if(closing)return;closing=true;const errors=[];
+   for(const cleanup of [()=>engine.close(),()=>panel.close(),()=>store.close()])try{await cleanup();}catch(error){errors.push(error);}
+   process.exitCode=errors.length?1:0;
+   if(errors.length)process.stderr.write(`Workflow shutdown failed: ${errors.map(e=>e.message).join('; ')}\n`);
+  }
   process.once('SIGINT',()=>void close());process.once('SIGTERM',()=>void close());
  }
 }
