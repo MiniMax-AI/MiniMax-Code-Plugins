@@ -1,0 +1,21 @@
+{
+  "name": "glasser",
+  "version": "0.1.0",
+  "description": "Discover and inspect paid data API endpoints with the Glasser CLI, then execute only user-approved requests.",
+  "author": {
+    "name": "Xinwei Liao",
+    "url": "https://github.com/Coding-jpg"
+  },
+  "homepage": "https://glasser.ai/",
+  "repository": "https://github.com/glasser-ai/plugins",
+  "license": "MIT",
+  "keywords": [
+    "data research",
+    "seo",
+    "company research",
+    "glasser"
+  ],
+  "skills": [
+    "./skills/SKILL.md"
+  ]
+}
