@@ -1,0 +1,27 @@
+{
+  "name": "draft_open",
+  "description": "打开一个剪映草稿（默认只读副本）。返回 sessionId 与草稿信息。绝不改真草稿。",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "draft": {
+        "type": "string",
+        "description": "草稿目录路径或草稿名"
+      },
+      "copy": {
+        "type": "boolean",
+        "default": true,
+        "description": "默认 true=开副本。false=开真草稿（只读用途，且需 allowReal）"
+      },
+      "allowReal": {
+        "type": "boolean",
+        "default": false,
+        "description": "允许开真草稿。默认 false；true 时若 copy 仍为 true 则拒绝"
+      }
+    },
+    "required": [
+      "draft"
+    ],
+    "additionalProperties": false
+  }
+}

@@ -1,0 +1,902 @@
+// jianying MCP server 的客户端验收脚本
+// 用法: node selftest-mcp.mjs
+// 环境: JYAI_HOME 指向 JYAI 仓库
+import { spawn, execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const SRV = path.join(HERE, '..', 'mcp', 'server.mjs');
+const JYAI = process.env.JYAI_HOME || path.join(process.env.USERPROFILE, 'JYAI');
+const SRC = path.join(JYAI, 'out', 'p47', 'full1080-with-audio.mp4');
+const OUT = path.join(JYAI, 'out', 'p67', 'mcp-test');
+// ★ 2026-10-21：不再用【别的跑】留下的帧目录当基线（out/p1-e2e-clean）。
+//   官方渲染器同态重渲染就有噪声（实测 17/108 帧变、最差 MAD 123.55），
+//   拿它当"改动可见"的证据站不住脚 ⇒ 改成【本次自产】的合成帧，确定性可复跑。
+const FR_BASE = path.join(OUT, 'frames-base');
+const FR_NOISE = path.join(OUT, 'frames-noise');
+const FR_BIG = path.join(OUT, 'frames-big');
+const FR_CLIP = path.join(OUT, 'frames-clip');
+
+function which(cmd) {
+  const exts = process.platform === 'win32' ? ['.exe', '.cmd', '.bat', ''] : [''];
+  for (const d of (process.env.PATH || '').split(path.delimiter)) {
+    if (!d) continue;
+    for (const e of exts) {
+      const p = path.join(d, cmd + e);
+      try { if (fs.existsSync(p) && fs.statSync(p).isFile()) return p; } catch { /* ignore */ }
+    }
+  }
+  return cmd;
+}
+const FFMPEG = which('ffmpeg');
+const FFPROBE = (() => {
+  const d = path.dirname(which('ffmpeg'));
+  const p = path.join(d, process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe');
+  return fs.existsSync(p) ? p : 'ffprobe';
+})();
+// Python（烘 3D LUT 用；绝不写死盘符）
+const PYTHON = (() => {
+  for (const c of ['python', 'python3']) {
+    try {
+      const p = which(c);
+      if (p) return p;
+    } catch { /* ignore */ }
+  }
+  return process.platform === 'win32' ? 'python' : 'python3';
+})();
+function sh(args) {
+  return new Promise((resolve) => {
+    const c = spawn(FFMPEG, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let se = '';
+    c.stderr.on('data', (d) => { se += d; });
+    c.on('close', (code) => resolve({ code, stderr: se }));
+  });
+}
+// 任意可执行文件版本（ffprobe 等）—— sh() 写死了 FFMPEG
+// ★ 注意：ffprobe 的 -show_entries 结果走【stdout】；只有错误信息走 stderr
+//   （2026-10-22 自检抓到的假失败：只收 stderr ⇒ streams 解析成空字符串）
+function shBin(bin, args) {
+  return new Promise((resolve) => {
+    const c = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let so = '', se = '';
+    c.stdout.on('data', (d) => { so += d; });
+    c.stderr.on('data', (d) => { se += d; });
+    c.on('close', (code) => resolve({ code, stdout: so, stderr: se }));
+  });
+}
+// 合成一组确定性的帧（纯色 + 亮度偏移）⇒ 噪声基线 / 真改动 / 新增削波 各一组
+// ★ 基色里放一个接近白的（F0F0F0）⇒ 用来复现"绝对值削波口径"那个坑（§76.5）
+async function synthFrames(dir, brightness) {
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  const colors = ['F0F0F0', '606060', '808080'];
+  for (let i = 0; i < colors.length; i++) {
+    const f = path.join(dir, String(i).padStart(5, '0') + '.png');
+    const args = ['-y', '-v', 'error', '-f', 'lavfi', '-i', `color=c=0x${colors[i]}:s=64x64`];
+    if (brightness) args.push('-vf', `eq=brightness=${brightness}`);
+    args.push('-frames:v', '1', f);
+    const r = await sh(args);
+    if (r.code !== 0) return 0;
+  }
+  return colors.length;
+}
+
+// ★ 逐帧稳定性用例（§82）：造三组帧
+//   base   : 3 帧原样
+//   unstable: 只有第 1 帧被大幅扰动（模拟"官方预览渲染在该帧非确定"）
+//   changed : 只有第 2 帧被小幅真实改动
+//   ⇒ 期望：第 1 帧被判为不稳定并排除；第 2 帧的稳定改动仍被检出 ⇒ 判"可见"
+async function synthFramesPerFrame(dir, { unstableIndex = null, unstableBright = null, changedIndex = null, changedBright = null } = {}) {
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  const colors = ['606060', '808080', 'A0A0A0'];
+  for (let i = 0; i < colors.length; i++) {
+    let bright = null;
+    if (i === unstableIndex) bright = unstableBright;
+    if (i === changedIndex) bright = changedBright;
+    const f = path.join(dir, String(i).padStart(5, '0') + '.png');
+    const args = ['-y', '-v', 'error', '-f', 'lavfi', '-i', `color=c=0x${colors[i]}:s=64x64`];
+    if (bright !== null) args.push('-vf', `eq=brightness=${bright}`);
+    args.push('-frames:v', '1', f);
+    const r = await sh(args);
+    if (r.code !== 0) return 0;
+  }
+  return colors.length;
+}
+
+const child = spawn(process.execPath, [SRV], {
+  env: { ...process.env, JYAI_HOME: JYAI, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
+  stdio: ['pipe', 'pipe', 'inherit'],
+});
+let buf = '';
+const pending = new Map();
+child.stdout.on('data', (d) => {
+  buf += d.toString();
+  let i;
+  while ((i = buf.indexOf('\n')) >= 0) {
+    const line = buf.slice(0, i); buf = buf.slice(i + 1);
+    if (!line.trim()) continue;
+    let m; try { m = JSON.parse(line); } catch { continue; }
+    if (m.id !== undefined && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); }
+  }
+});
+let id = 0;
+function call(method, params) {
+  const myId = ++id;
+  return new Promise((resolve) => {
+    pending.set(myId, resolve);
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: myId, method, params }) + '\n');
+  });
+}
+
+let PASS = 0, FAIL = 0;
+function check(name, ok, detail) {
+  if (ok) { PASS++; console.log(`  [PASS] ${name}${detail ? '  — ' + detail : ''}`); }
+  else { FAIL++; console.log(`  [FAIL] ${name}${detail ? '  — ' + detail : ''}`); }
+}
+
+const textOf = (r) => (r.result?.content || []).map((c) => c.text || '').join('\n');
+
+(async () => {
+  console.log('=== jianying MCP server 验收 ===\n');
+
+  // 1. 握手 + 工具清单
+  const init = await call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
+  check('initialize 握手', init.result?.serverInfo?.name === 'jianying', `serverInfo=${JSON.stringify(init.result?.serverInfo)}`);
+  const list = await call('tools/list', {});
+  const tools = list.result?.tools || [];
+  check('tools/list 返回 10 个动词', tools.length === 10, `实际 ${tools.length}：${tools.map((t) => t.name).join(', ')}`);
+  const noSchema = tools.filter((t) => !t.inputSchema || t.inputSchema.type !== 'object');
+
+  // ★★★ 安全：会话状态不得读/写 PLUGIN_DATA 之外（PR #72 review 的合并阻塞项）
+  //   9 种恶意 sessionId × 3 个动词 + 写路径检查 + 阳性对照（证明探针有区分力）
+  const secMod = await import('./security-probe.mjs');
+  const sec = await secMod.runSecurityProbe();
+  const secBad = sec.cases.filter((c) => !c.ok);
+  check('★★★ 会话状态越界探针（读/写 PLUGIN_DATA 之外全被拒）', sec.fail === 0,
+    secBad.length ? secBad.map((c) => c.name).join(' | ') : `${sec.pass} PASS / ${sec.fail} FAIL`);
+  check('每个动词都有 inputSchema', noSchema.length === 0, noSchema.map((t) => t.name).join(',') || '全部有');
+  const ga = tools.find((t) => t.name === 'grade_apply');
+  const nodeKeys = Object.keys(ga?.inputSchema?.properties?.spec?.properties || {});
+  check('grade_apply 的 spec 枚举了节点', nodeKeys.length >= 10, `${nodeKeys.length} 个节点：${nodeKeys.join(',')}`);
+
+  // 2. 入参 schema 硬校验：未知键必须被拒（防静默失效）
+  const bad = await call('tools/call', { name: 'grade_apply', arguments: { src: SRC, outDir: OUT, spec: { adjustColor: { brightness: 0.1 }, not_a_node: { x: 1 } } } });
+  const badTxt = textOf(bad);
+  check('★ 非法 spec 键被拒绝', bad.result?.isError === true && /未知键|不合法/.test(badTxt), badTxt.split('\n').slice(0, 2).join(' / '));
+
+  const bad2 = await call('tools/call', { name: 'grade_apply', arguments: { src: SRC, outDir: OUT, spec: { adjustColor: { brightness: 5 } } } });
+  check('★ 越界参数被拒绝', bad2.result?.isError === true && /最大|不合法/.test(textOf(bad2)), textOf(bad2).split('\n').slice(0, 2).join(' / '));
+
+  // 3. 正常调色：必须出片 + 探针全非零
+  const g = await call('tools/call', { name: 'grade_apply', arguments: {
+    src: SRC, outDir: OUT, frames: 4,
+    spec: { adjustColor: { brightness: 0.12, contrast: 0.08 }, logWheel: { shadow: { r: 0.10, g: 0.04, b: 0, s: 0.05 } } },
+  } });
+  const gTxt = textOf(g);
+  const gOk = !g.result?.isError;
+  check('grade_apply 正常出片', gOk, gOk ? gTxt.replace(/\s+/g, ' ').slice(0, 150) : gTxt.slice(0, 200));
+  if (gOk) {
+    const j = JSON.parse(gTxt);
+    check('grade_apply 内建探针：所有节点非零', Object.entries(j.probe).filter(([k]) => k !== '_full_chain').every(([, v]) => v > 0), JSON.stringify(j.probe));
+    check('grade_apply 调色改变量 > 0', j.gradeChangeMad > 0, `MAD=${j.gradeChangeMad}`);
+  }
+
+  // 4. verify_diff：本次自产的合成帧（不依赖别的跑的残留目录）
+  //    base = 原帧；noise = 亮度 −0.01（模拟渲染噪声）；big = 亮度 −0.06（模拟真改动）
+  const nBase = await synthFrames(FR_BASE, 0);
+  const nNoise = await synthFrames(FR_NOISE, -0.01);
+  const nBig = await synthFrames(FR_BIG, -0.06);
+  const nClip = await synthFrames(FR_CLIP, 0.2);   // ★ 0xF0F0F0 @ +0.2 ⇒ 255 ⇒ 真削波（实测 +0.03 只到 244，不削）
+  check('合成帧目录就绪', nBase > 0 && nNoise > 0 && nBig > 0 && nClip > 0,
+    `base=${nBase} noise=${nNoise} big=${nBig} clip=${nClip}`);
+
+  // 4a. 未校准：噪声也会被判成"可见"（这正是要暴露的问题）
+  const v0 = await call('tools/call', { name: 'verify_diff', arguments: {
+    beforeDir: FR_BASE, afterDir: FR_NOISE, checks: ['visibility'] } });
+  const v0j = (() => { try { return JSON.parse(textOf(v0)); } catch { return null; } })();
+  const vis0 = v0j?.checks?.visibility || {};
+  check('verify_diff 未校准时会标注 calibrated=false',
+    vis0.calibrated === false && /未校准/.test(vis0.note || ''),
+    `maxMad=${vis0.maxMad} threshold=${vis0.threshold} note=${(vis0.note || '').slice(0, 40)}…`);
+
+  // 4b. ★ 校准后：噪声 ⇒ 必须判"不可见"；且【白底不算新增削波】（增量口径）
+  const v1 = await call('tools/call', { name: 'verify_diff', arguments: {
+    beforeDir: FR_BASE, afterDir: FR_NOISE, noiseDir: FR_NOISE, checks: ['visibility', 'picture'] } });
+  const v1j = (() => { try { return JSON.parse(textOf(v1)); } catch { return null; } })();
+  const vis = v1j?.checks?.visibility || {};
+  check('★ verify_diff 校准后：噪声 ⇒ 判 FAIL（不可见）',
+    v1.result?.isError === true && v1j?.verdict === 'FAIL' && vis.calibrated === true,
+    `maxMad=${vis.maxMad} 噪声底=${vis.noiseMad} 判据线=${vis.noiseBar}`);
+  const pic = v1j?.checks?.picture || {};
+  check('verify_diff 画质维度：白底不算【新增】削波（增量口径）',
+    Array.isArray(pic.meanDrift) && pic.meanDrift.length === 3
+    && Math.abs(pic.clipDelta ?? 1) < 1e-6 && Math.abs(pic.underDelta ?? 1) < 1e-6
+    && !(v1j?.problems || []).some((p) => /削波|死黑/.test(p)),
+    `clip=${pic.clipRatio} clipΔ=${pic.clipDelta} underΔ=${pic.underDelta} drift=${JSON.stringify(pic.meanDrift)}`);
+
+  // 4c. ★★ 负向注入：真改动 ⇒ 必须判"可见"（证明这条判据不是恒 FAIL）
+  const v1b = await call('tools/call', { name: 'verify_diff', arguments: {
+    beforeDir: FR_BASE, afterDir: FR_BIG, noiseDir: FR_NOISE, checks: ['visibility'] } });
+  const v1bj = (() => { try { return JSON.parse(textOf(v1b)); } catch { return null; } })();
+  const visb = v1bj?.checks?.visibility || {};
+  check('★★ verify_diff 负向注入：真改动 ⇒ 判 PASS（可见）',
+    v1b.result?.isError !== true && v1bj?.verdict === 'PASS' && visb.calibrated === true,
+    `maxMad=${visb.maxMad} 噪声底=${visb.noiseMad} 倍数=${visb.madOverNoise}`);
+
+  // 4d. ★★ 负向注入：把白底【推上去】⇒ 必须报"新增削波"（证明增量口径不是恒 0）
+  const v1c = await call('tools/call', { name: 'verify_diff', arguments: {
+    beforeDir: FR_BASE, afterDir: FR_CLIP, noiseDir: FR_NOISE, checks: ['visibility', 'picture'] } });
+  const v1cj = (() => { try { return JSON.parse(textOf(v1c)); } catch { return null; } })();
+  const picc = v1cj?.checks?.picture || {};
+  check('★★ verify_diff 负向注入：白底被推爆 ⇒ 必须报「新增削波」',
+    (picc.clipDelta ?? 0) > 0.02 && (v1cj?.problems || []).some((p) => /削波/.test(p)),
+    `clip=${picc.clipRatio} clipΔ=${picc.clipDelta} problems=${JSON.stringify(v1cj?.problems)}`);
+
+  // 4e. ★★ 逐帧稳定性（§82）：噪声集中在少数帧 ⇒ 不稳定帧排除，稳定帧的改动仍要检出
+  const FR_PF_BASE = path.join(OUT, 'frames-pf-base');
+  const FR_PF_UNSTABLE = path.join(OUT, 'frames-pf-unstable');
+  const FR_PF_CHANGED = path.join(OUT, 'frames-pf-changed');
+  await synthFramesPerFrame(FR_PF_BASE, {});
+  await synthFramesPerFrame(FR_PF_UNSTABLE, { unstableIndex: 1, unstableBright: -0.5 });
+  await synthFramesPerFrame(FR_PF_CHANGED, { changedIndex: 2, changedBright: -0.2 });
+  const v1d = await call('tools/call', { name: 'verify_diff', arguments: {
+    beforeDir: FR_PF_BASE, afterDir: FR_PF_CHANGED, noiseDir: FR_PF_UNSTABLE, checks: ['visibility'] } });
+  const v1dj = (() => { try { return JSON.parse(textOf(v1d)); } catch { return null; } })();
+  const visd = v1dj?.checks?.visibility || {};
+  check('★★ verify_diff 逐帧稳定性：不稳定帧被单独标出',
+    visd.unstableFrameCount === 1 && (visd.unstableFrames || []).includes(1),
+    `unstableFrames=${JSON.stringify(visd.unstableFrames)} visibleFrameCount=${visd.visibleFrameCount}`);
+  check('★★ verify_diff 逐帧稳定性：稳定帧上的真实改动仍被判为可见',
+    v1d.result?.isError !== true && v1dj?.verdict === 'PASS' && (visd.visibleMaxMad ?? 0) > 0,
+    `verdict=${v1dj?.verdict} visibleMaxMad=${visd.visibleMaxMad} @frame${visd.visibleFrame}`);
+
+  // 5. ★ 阴性：同一目录对同一目录 ⇒ 必须 FAIL（判据要有判别力）
+  const v2 = await call('tools/call', { name: 'verify_diff', arguments: { beforeDir: FR_BASE, afterDir: FR_BASE } });
+  check('★ verify_diff 对无变化必须 FAIL', v2.result?.isError === true, textOf(v2).replace(/\s+/g, ' ').slice(0, 140));
+
+  // 6. draft_open 护栏：allowReal=true 但 copy 仍为 true ⇒ 拒绝
+  const d1 = await call('tools/call', { name: 'draft_open', arguments: { draft: 'x', copy: true, allowReal: true } });
+  check('★ draft_open 护栏：allowReal 与 copy 冲突时拒绝', d1.result?.isError === true, textOf(d1).slice(0, 120));
+
+  // 7. ★ make_film：一条命令出成片（官方画面 + 我们的调色/混音 + ffmpeg 编码）
+  //    结构性断言 + 阴性断言永远跑；真 e2e 需要草稿库（env JYAI_DRAFT_LIB）+ 剪映在跑
+  //    ⇒ 没有草稿库时【显式 SKIP 且不计入 PASS】（不做假绿）
+  const FILM_LIB = process.env.JYAI_DRAFT_LIB || '';
+  const FILM_DRAFT = process.env.JYAI_FILM_DRAFT || (FILM_LIB ? path.join(FILM_LIB, 'JYAI能力批测9a-纯视频探针') : '');
+  const FILM_OUT = path.join(OUT, 'film');
+  const mf = tools.find((t) => t.name === 'make_film');
+  check('tools/list 暴露 make_film', !!mf, mf ? Object.keys(mf.inputSchema?.properties || {}).join(',') : '缺失');
+  check('make_film schema 含 draft/outDir/lut/denoise/beautify',
+    !!mf && ['draft', 'outDir', 'lut', 'denoise', 'beautify'].every((k) => k in (mf.inputSchema?.properties || {})),
+    mf ? Object.keys(mf.inputSchema?.properties || {}).join(',') : '');
+
+  const mfBad = await call('tools/call', { name: 'make_film', arguments: { outDir: FILM_OUT } });
+  check('★ make_film 缺必填参数被拒', mfBad.result?.isError === true, textOf(mfBad).replace(/\s+/g, ' ').slice(0, 120));
+
+  const mfNoDraft = await call('tools/call', { name: 'make_film', arguments: { draft: path.join(OUT, '__no_such_draft__'), outDir: FILM_OUT } });
+  check('★ make_film 草稿不存在 ⇒ 报错（证明这个动词不是空壳）',
+    mfNoDraft.result?.isError === true, textOf(mfNoDraft).replace(/\s+/g, ' ').slice(0, 120));
+
+  // ★ 2026-10-23：剪映【刚启动】时 VE host 还没起来 ⇒ 第一次跑会误报一堆失败
+  //   （实测：刚起的剪映上 37 PASS / 3 FAIL，第二次跑就 43/0 ⇒ 是环境预热，不是代码）
+  //   ⇒ 这里先等 VE 管道就绪（最多 ~30s），就绪才跑 e2e；等不到就整段 SKIP（不计入 PASS）。
+  let veReady = false;
+  if (FILM_DRAFT && fs.existsSync(FILM_DRAFT)) {
+    for (let i = 0; i < 12; i++) {
+      const probe = await call('tools/call', { name: 'draft_open', arguments: { draft: FILM_DRAFT, copy: true } });
+      if (probe.result?.isError !== true) { veReady = true; break; }
+      await new Promise((r) => setTimeout(r, 2500));
+    }
+    if (!veReady) console.log('  ★ 剪映 VE 管道 30 秒内没就绪（剪映在跑吗？）');
+  }
+
+  if (FILM_DRAFT && fs.existsSync(FILM_DRAFT) && veReady) {
+    // e2e ①：双流草稿（素材齐全）⇒ 必须出"画面+音轨"，且内建验收（响度/时长断言）判通过
+    //   fps 取 6（帧数减半、时长不变 ⇒ 音画对齐不受影响，只为省时间）
+    const mfRun = await call('tools/call', { name: 'make_film', arguments: { draft: FILM_DRAFT, outDir: FILM_OUT, fps: 6, denoise: 'auto' } });
+    const mfTxt = textOf(mfRun);
+    const mfOk = mfRun.result?.isError !== true;
+    check('★★ make_film 真出片（官方渲染器画面 + 我们的混音链）', mfOk,
+      mfOk ? mfTxt.replace(/\s+/g, ' ').slice(0, 200) : mfTxt.replace(/\s+/g, ' ').slice(0, 200));
+    if (mfOk) {
+      const film = path.join(FILM_OUT, 'film.mp4');
+      const has = fs.existsSync(film);
+      check('make_film 成片文件落盘', has, film);
+      if (has) {
+        const st = await shBin(FFPROBE, ['-v', 'error', '-show_entries', 'stream=codec_type,codec_name,width,height,channels',
+          '-of', 'default=noprint_wrappers=1', film]);
+        const types = [...String(st.stdout || '').matchAll(/codec_type=(\w+)/g)].map((m) => m[1]);
+        // ★ 双流是【条件断言】：该草稿的音频素材文件可能不在磁盘上（环境状态）⇒ 那时只要求出片成功
+        const audioMissing = /音频素材缺失\s*\d+\s*个/.test(mfTxt) || /无音轨 ⇒ 响度不判定/.test(mfTxt);
+        if (audioMissing) {
+          console.log(`  [SKIP] make_film 双流断言 —— 该草稿的音频素材不在磁盘上（环境状态）⇒ 视频流已验: ${types.join(',')}`);
+          check('★ make_film 至少出了视频流', types.includes('video'), `streams=${types.join(',')}`);
+        } else {
+          check('★★ make_film 成片双流齐备（video+audio）', types.includes('video') && types.includes('audio'),
+            `streams=${types.join(',')} size=${fs.statSync(film).size}B`);
+        }
+        check('★★ make_film 内建验收判通过（响度/时长断言）', /验收通过/.test(mfTxt),
+          (mfTxt.match(/整体响度[^\n]*/) || ['(无响度行)'])[0].trim());
+      }
+    }
+    // ★ e2e ②（无音轨）：现在 e2e 草稿本身就是【纯视频、无可用音轨】的
+    //   （草稿库清理后，带音频的测试稿已不存在 ⇒ 9a-纯视频探针 顶上）
+    //   ⇒ 断言：这种草稿也必须出片、且【不能】判失败（2026-10-22 抓到的真缺陷）
+    check('★★ make_film：草稿无可用音轨 ⇒ 仍出片（纯画面），不判失败',
+      mfOk && /验收通过/.test(mfTxt) && !/✘ 验收不通过/.test(mfTxt),
+      (mfTxt.match(/整体响度[^\n]*/) || ['(无响度行)'])[0].trim());
+    // e2e ③：★★ 我们自己给曲线（grade.curves）⇒ ① 烘出的 cube 必须【不是恒等】
+    //   （判据不依赖渲染确定性：只查 cube）② 少一条通道必须【报错】（不许静默恒等）
+    const CURVE = [0, 0, 0.1, 0.0533, 0.2, 0.1067, 0.3, 0.16, 0.4067, 0.3933, 0.5133, 0.6267,
+      0.62, 0.86, 0.7467, 0.9067, 0.8733, 0.9533, 1, 1, 1, 1, 1, 1];
+    const four = { red: CURVE, green: CURVE, blue: CURVE, luma: CURVE };
+    const gOut = path.join(OUT, 'film-grade');
+    const gRun = await call('tools/call', {
+      name: 'make_film',
+      arguments: { draft: FILM_DRAFT, outDir: gOut, fps: 6, denoise: 'off', grade: { curves: four } },
+    });
+    const gTxt = textOf(gRun);
+    check('★★ make_film 接受 grade（我们自己给曲线）', gRun.result?.isError !== true,
+      gRun.result?.isError !== true ? 'ok' : gTxt.replace(/\s+/g, ' ').slice(0, 200));
+    const cube = path.join(gOut, 'grade.cube');
+    if (fs.existsSync(cube)) {
+      // cube 与 identity 的最大偏差 ⇒ > 0.01 才算真的烘出了曲线
+      // （.cube 行序：R 最快 ⇒ index i ⇒ r=i%N, g=(i//N)%N, b=i//(N*N)；恒等值=(r,g,b)/(N-1)）
+      const dev = await shBin(PYTHON, ['-c', [
+        'import sys',
+        'p = sys.argv[1]',
+        'N = 0',
+        'rows = []',
+        'for line in open(p, encoding="utf-8", errors="ignore"):',
+        '    if line.startswith("LUT_3D_SIZE"):',
+        '        N = int(line.split()[1]); continue',
+        '    if line.startswith("#") or line.startswith("DOMAIN"):',
+        '        continue',
+        '    t = line.split()',
+        '    if len(t) >= 3:',
+        '        rows.append((float(t[0]), float(t[1]), float(t[2])))',
+        'm = 0.0',
+        'den = max(N - 1, 1)',
+        'for i, v in enumerate(rows):',
+        '    r = i % N; g = (i // N) % N; b = i // (N * N)',
+        '    m = max(m, abs(v[0]-r/den), abs(v[1]-g/den), abs(v[2]-b/den))',
+        'print("%.6f" % m)',
+      ].join('\n'), cube]);
+      const dv = parseFloat(String(dev.stdout || '').trim());
+      check('★★ grade 烘出的 cube 不是恒等（曲线真的被应用了）', Number.isFinite(dv) && dv > 0.01,
+        `maxDev(identity)=${dv}`);
+    } else {
+      check('★★ grade 烘出的 cube 不是恒等（曲线真的被应用了）', false, 'grade.cube 没产出');
+    }
+    const badRun = await call('tools/call', {
+      name: 'make_film',
+      arguments: { draft: FILM_DRAFT, outDir: path.join(OUT, 'film-grade-bad'), fps: 6, denoise: 'off',
+        grade: { curves: { red: CURVE } } },   // ★ 只给一条通道 ⇒ 必须报错，不许静默恒等
+    });
+    check('★★ grade 少一条曲线通道 ⇒ 明确报错（不许静默烘成恒等）',
+      badRun.result?.isError === true, textOf(badRun).replace(/\s+/g, ' ').slice(-200));
+    // ★ 渲染期算子（sharpen/vignetting/particle）3D LUT 表达不了 ⇒ 写进来必须报错（不许静默忽略）
+    const rnRun = await call('tools/call', {
+      name: 'make_film',
+      arguments: { draft: FILM_DRAFT, outDir: path.join(OUT, 'film-grade-rn'), fps: 6, denoise: 'off',
+        grade: { sharpen: { intensity: 0.6 } } },
+    });
+    check('★★ grade 含渲染期算子(sharpen) ⇒ 明确报错（指向 grade_apply），不许静默忽略',
+      rnRun.result?.isError === true && /grade_apply|渲染期/.test(textOf(rnRun)),
+      textOf(rnRun).replace(/\s+/g, ' ').slice(-200));
+
+    // ── ★★ 2026-10-22 审计：参数名拼错 ⇒ 过去【静默烘成恒等 LUT】─────
+    //   实测：make_film --grade '{"adjustColor":{"brightnessX":0.1}}' 产出的 cube
+    //   与【空 spec】的 cube 逐字节相同（md5 3abf7454…）⇒ 调色根本没发生，但出片"成功"、验收"通过"。
+    //   根因：make-film.schema.json 里 grade 的每个节点只写了 {type:object}（弱校验），
+    //   而烘焙器也不认识拼错的键 ⇒ 两层都不拦。
+    const typoRun = await call('tools/call', {
+      name: 'make_film',
+      arguments: { draft: FILM_DRAFT, outDir: path.join(OUT, 'film-grade-typo'), fps: 6, denoise: 'off',
+        grade: { adjustColor: { brightnessX: 0.1 } } },
+    });
+    check('★★ grade 参数名拼错 ⇒ 明确报错（不许静默烘成恒等 LUT）',
+      typoRun.result?.isError === true && /未知键|不合法/.test(textOf(typoRun)),
+      textOf(typoRun).replace(/\s+/g, ' ').slice(-200));
+    // ★ 越界数值同样必须被拒（强度语义是 −1..1，界面 0..100 要换算）
+    const rangeRun = await call('tools/call', {
+      name: 'make_film',
+      arguments: { draft: FILM_DRAFT, outDir: path.join(OUT, 'film-grade-range'), fps: 6, denoise: 'off',
+        grade: { adjustColor: { brightness: 5 } } },
+    });
+    check('★★ grade 数值越界 ⇒ 明确报错（强度语义是 −1..1）',
+      rangeRun.result?.isError === true && /最大|不合法/.test(textOf(rangeRun)),
+      textOf(rangeRun).replace(/\s+/g, ' ').slice(-200));
+    // ★★★ 绕过 schema 直接调烘焙器 ⇒ 同样必须报错（防线在【实现层】，不只靠 schema）
+    const bakeDirect = await shBin(PYTHON, ['-c', [
+      'import importlib.util, sys',
+      'spec = importlib.util.spec_from_file_location("b", sys.argv[1])',
+      'm = importlib.util.module_from_spec(spec)',
+      'spec.loader.exec_module(m)',
+      'm.bake({"adjustColor": {"brightnessX": 0.1}})',
+      'print("NO_ERROR_BAKED")',
+    ].join('\n'), path.join(JYAI, 'tools', 'jyai-gl-bake.py')]);
+    const bdTxt = `${bakeDirect.stdout || ''}\n${bakeDirect.stderr || ''}`;
+    check('★★★ 绕过 schema 直接调烘焙器：拼错参数名 ⇒ 同样报错（防线在实现层）',
+      !/NO_ERROR_BAKED/.test(bdTxt) && /不认识的参数/.test(bdTxt),
+      bdTxt.replace(/\s+/g, ' ').slice(-200));
+
+    // ── ★★ MCP 层全动词冒烟（2026-10-22 审计补：此前 5 个动词【从未走过 MCP 层】）
+    //   draft_read / draft_patch / draft_commit / render_frames / audio_mix
+    const SMOKE = path.join(OUT, 'mcp-smoke');
+    // ★ video.add 需要一个【真的能读的视频源】（传草稿 json 会得 video_source_unreadable）
+    const FILM_MEDIA = process.env.JYAI_TEST_MEDIA
+      || path.join(process.env.LOCALAPPDATA || '', 'Temp', 'jy-media-probe.mp4');
+    if (!fs.existsSync(FILM_MEDIA)) {
+      // 造一个 1 秒的测试视频（不依赖用户素材）
+      const ff = path.join(path.dirname(FFMPEG), process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
+      try {
+        execFileSync(ff,
+          ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=gray:s=320x180:r=12:d=1',
+            '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=mono', '-shortest',
+            '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', FILM_MEDIA],
+          { windowsHide: true, stdio: 'ignore' });
+      } catch { /* 造不出来就跳过该用例 */ }
+    }
+    const op1 = await call('tools/call', { name: 'draft_open', arguments: { draft: FILM_DRAFT, copy: true } });
+    const opTxt = textOf(op1);
+    const sid1 = (opTxt.match(/ve-session-\d+/) || [])[0] || '';
+    check('★★ MCP: draft_open 走通并给出 sessionId', op1.result?.isError !== true && !!sid1, sid1 || opTxt.slice(0, 120));
+
+    const rd1 = await call('tools/call', { name: 'draft_read', arguments: { sessionId: sid1 } });
+    const rdTxt = textOf(rd1);
+    check('★★ MCP: draft_read(sessionId) 读回草稿结构',
+      rd1.result?.isError !== true && /"tracks"|"segments"/.test(rdTxt), rdTxt.replace(/\s+/g, ' ').slice(0, 100));
+
+    const rd2 = await call('tools/call', { name: 'draft_read', arguments: { path: path.join(FILM_DRAFT, 'draft_content.json'), root: FILM_DRAFT } });
+    check('★★ MCP: draft_read(path+root) 读回草稿结构',
+      rd2.result?.isError !== true && /"tracks"|"segments"/.test(textOf(rd2)), textOf(rd2).replace(/\s+/g, ' ').slice(0, 100));
+
+    // ★ 回归：scope 已从 schema 移除 ⇒ 传它必须被【拒】（不许静默接受）
+    const rdScope = await call('tools/call', { name: 'draft_read', arguments: { path: path.join(FILM_DRAFT, 'draft_content.json'), root: FILM_DRAFT, scope: 'segments' } });
+    check('★★ MCP: draft_read 传 scope 被拒（后端不支持 ⇒ 别装成能用）',
+      rdScope.result?.isError === true && /未知键/.test(textOf(rdScope)), textOf(rdScope).replace(/\s+/g, ' ').slice(0, 120));
+
+    const pt1 = await call('tools/call', {
+      name: 'draft_patch',
+      arguments: { op: 'video.add', sessionId: sid1, params: { path: FILM_MEDIA, startTime: 0, sourceDuration: 1000000, trackIndex: 9 } },
+    });
+    check('★★ MCP: draft_patch(video.add) 被官方接受',
+      fs.existsSync(FILM_MEDIA) && pt1.result?.isError !== true && /accepted"?\s*:\s*true/.test(textOf(pt1)),
+      textOf(pt1).replace(/\s+/g, ' ').slice(0, 120));
+
+    const cm1 = await call('tools/call', { name: 'draft_commit', arguments: { sessionId: sid1, realDraft: FILM_DRAFT } });
+    check('★★ MCP: draft_commit 落盘且真草稿未变',
+      cm1.result?.isError !== true && /"committed"\s*:\s*true/.test(textOf(cm1))
+      && /"realDraftUnchanged"\s*:\s*true/.test(textOf(cm1)), textOf(cm1).replace(/\s+/g, ' ').slice(0, 140));
+
+    // ★★ 护栏负向注入（2026-10-24）：真草稿在【会话期间】被改 ⇒ 必须拒绝落盘
+    //   ★ 原护栏只是"落盘前 vs 落盘后"，抓不到这一种 ⇒ 我们会把用户的修改【覆盖】掉。
+    //   用草稿库里的【临时副本】当假真草稿 ⇒ 绝不动用户自己的草稿（结束时删掉）。
+    {
+      const tmpReal = path.join(FILM_LIB, 'JYAI自检-真草稿护栏-' + Date.now());
+      try {
+        fs.cpSync(FILM_DRAFT, tmpReal, { recursive: true });
+        const ropen = await call('tools/call', { name: 'draft_open', arguments: { draft: tmpReal, copy: true } });
+        const rsid = (textOf(ropen).match(/ve-session-\d+/) || [])[0];
+        const rread = await call('tools/call', { name: 'draft_read', arguments: { sessionId: rsid } });
+        let rseg = null;
+        try {
+          const oj = JSON.parse(textOf(rread));
+          const dd = oj?.draft || oj;
+          rseg = ((dd?.tracks || []).flatMap((tr) => tr.segments || [])[0] || {}).id || null;
+        } catch { /* 结构变了 ⇒ 跳过 */ }
+        if (!rseg) {
+          console.log('  [SKIP] 真草稿会话期被改 ⇒ 拒绝落盘 —— 没找到 segmentId（结构变了）⇒ 【不计入 PASS】');
+        } else {
+          await call('tools/call', {
+            name: 'draft_patch',
+            arguments: { op: 'video.setVolume', sessionId: rsid, params: { segmentId: rseg, volume: 0.2 } },
+          });
+          // ★ 故意改"真草稿"（会话期间）⇒ 模拟另一个窗口/用户改了它
+          fs.appendFileSync(path.join(tmpReal, 'draft_content.json'), ' ');
+          const rcommit = await call('tools/call', {
+            name: 'draft_commit', arguments: { sessionId: rsid, realDraft: tmpReal },
+          });
+          const rct = textOf(rcommit);
+          check('★★★ 护栏负向注入：真草稿在会话期间被改 ⇒ 必须拒绝落盘（否则会覆盖用户的修改）',
+            rcommit.result?.isError === true && /会话期间被改动过|sha 不一致/.test(rct),
+            rct.replace(/\s+/g, ' ').slice(0, 200));
+        }
+      } catch (e) {
+        check('★★★ 护栏负向注入：真草稿在会话期间被改 ⇒ 必须拒绝落盘', false, String(e).slice(0, 160));
+      } finally {
+        try { fs.rmSync(tmpReal, { recursive: true, force: true }); } catch { /* ignore */ }
+      }
+    }
+
+    const rf1 = await call('tools/call', { name: 'render_frames', arguments: { draft: FILM_DRAFT, outDir: SMOKE, fps: 6 } });
+    const framesOk = fs.existsSync(path.join(SMOKE, 'frames')) &&
+      fs.readdirSync(path.join(SMOKE, 'frames')).some(f => /^\d+\.png$/.test(f));
+    check('★★ MCP: render_frames 产出帧序列', rf1.result?.isError !== true && framesOk,
+      textOf(rf1).replace(/\s+/g, ' ').slice(0, 120));
+
+    // ★★ draft_read 能读【加密】草稿（官方管道解密回退）
+    //   ★ 用户自己的真草稿在磁盘上是【加密封装】⇒ 之前走磁盘根本读不出来 ⇒ 这一条是刚需
+    const ENC_FIX = path.join(FILM_LIB, 'JYAI能力批测-加密草稿夹具', 'draft_content.json');
+    if (fs.existsSync(ENC_FIX)) {
+      const encRead = await call('tools/call', {
+        name: 'draft_read',
+        arguments: { path: ENC_FIX, root: FILM_LIB },
+      });
+      const encTxt = textOf(encRead);
+      check('★★ MCP: draft_read 能读【加密】草稿（官方管道解密回退）',
+        encRead.result?.isError !== true && /"tracks"/.test(encTxt),
+        encTxt.replace(/\s+/g, ' ').slice(0, 140));
+    } else {
+      console.log('  [SKIP] 加密草稿读取 —— 夹具不在草稿库（JYAI能力批测-加密草稿夹具）⇒ 【不计入 PASS】');
+    }
+
+    const am1 = await call('tools/call', {
+      name: 'audio_mix',
+      arguments: { draft: FILM_DRAFT, video: path.join(FILM_DRAFT, 'draft_content.json'), out: path.join(SMOKE, 'mix.mp4') },
+    });
+    const amTxt = textOf(am1);
+    // ★ 这个草稿没有可用音轨 ⇒ 预期是"明确报 nothing to mix"（输入问题），而不是别的错
+    check('★★ MCP: audio_mix 在无音轨草稿上明确报输入问题（nothing to mix），不静默出坏片',
+      am1.result?.isError === true ? /nothing to mix/.test(amTxt) : fs.existsSync(path.join(SMOKE, 'mix.mp4')),
+      amTxt.replace(/\s+/g, ' ').slice(0, 140));
+
+    // ── ★★★ run_pipeline：编排器（一条命令走完一条路线）──
+    //   路线定义在 references/pipeline-profiles.json ⇒ 这里跑【grade-and-render】
+    //   ★ 编排器渲的是【剪映当前打开的草稿】⇒ 先 open 目标草稿
+    const rpOpen = await call('tools/call', { name: 'draft_open', arguments: { draft: FILM_DRAFT, copy: true } });
+    const rpSid = (textOf(rpOpen).match(/ve-session-\d+/) || [])[0];
+    const rp = await call('tools/call', {
+      name: 'run_pipeline',
+      arguments: {
+        profile: 'grade-and-render',
+        draft: FILM_DRAFT,
+        outDir: path.join(SMOKE, 'pipeline'),
+        grade: { adjustColor: { temperature: 0.15 } },
+        fps: 6, denoise: 'auto',
+      },
+    });
+    const rpTxt = textOf(rp);
+    check('★★★ run_pipeline：按路线走完（grade-and-render）⇒ 编排器判 PASS 且出片存在',
+      rp.result?.isError !== true && /"verdict"\s*:\s*"PASS"/.test(rpTxt)
+      && fs.existsSync(path.join(SMOKE, 'pipeline', 'film.mp4')),
+      rpTxt.replace(/\s+/g, ' ').slice(0, 200));
+    // ★ 阴性：未知路线必须被拒（不许静默跑别的）
+    const rpBad = await call('tools/call', {
+      name: 'run_pipeline', arguments: { profile: 'no-such-profile', draft: FILM_DRAFT },
+    });
+    check('★★★ run_pipeline：未知路线 ⇒ 明确报错（不许静默跑别的路线）',
+      rpBad.result?.isError === true && /未知路线|不在允许集合/.test(textOf(rpBad)),
+      textOf(rpBad).replace(/\s+/g, ' ').slice(0, 140));
+
+    // ── ★★★ 第 9 条路线：曲线类调色并出片（grade-chain-then-render）──
+    //   ★ grade_apply 是【唯一一条能做曲线/HSL/色轮的路】（make_film 的 --grade 只能做强度型）
+    //   ★ 断言两件事：① 逐节点探针都非零（每个节点单独打开画面都变了 ⇒ 调色真的生效）
+    //                ② capture 取到的产物路径真实存在（编排器能把"上一步的产物"传给下一步）
+    const grRp = await call('tools/call', {
+      name: 'run_pipeline',
+      arguments: {
+        profile: 'grade-chain-then-render', draft: FILM_DRAFT,
+        outDir: path.join(SMOKE, 'pipeline-grade'),
+        grade: {
+          adjustColor: { brightness: 0.12, contrast: 0.08 },
+          logWheel: { shadow: { r: 0.10, g: 0.04, b: 0, s: 0.05 } },
+        },
+      },
+    });
+    const grTxt = textOf(grRp);
+    const grObj = (() => { try { return JSON.parse(grTxt); } catch { return null; } })();
+    const grStep = (grObj?.steps || []).find((s) => s.verb === 'grade_apply');
+    const grProbe = grStep?.result?.probe || {};
+    const grNodes = Object.entries(grProbe).filter(([k]) => k !== '_full_chain');
+    check('★★★ run_pipeline：曲线类调色并出片（grade-chain-then-render）⇒ 逐节点探针非零 + 调色改变量 > 0 + 产物存在',
+      grObj?.verdict === 'PASS' && grNodes.length > 0 && grNodes.every(([, v]) => v > 0)
+      && grStep?.result?.gradeChangeMad > 0
+      && !!grObj?.vars?.$graded && fs.existsSync(grObj.vars.$graded),
+      `节点=${grNodes.map(([k, v]) => `${k}:${(+v).toFixed(4)}`).join(',')}`
+      + ` 改变量=${grStep?.result?.gradeChangeMad?.toFixed?.(4)}`
+      + ` 产物=${String(grObj?.vars?.$graded || '(缺)').split('\\').pop()}`);
+
+    // ── ★★★ 单版审片路线（2026-10-24 新增）："审一下这版" ──
+    //   ★ 这条路线只读不改（审片不授权修改）⇒ 断言里也要体现
+    //   ★ 三条断言各挑一个方向：① 噪声底量出来了 ② 没判的维度【点名】了 ③ 真草稿没被动过
+    const revRp = await call('tools/call', {
+      name: 'run_pipeline',
+      arguments: {
+        profile: 'review-only', draft: FILM_DRAFT,
+        outDir: path.join(SMOKE, 'pipeline-review'),
+      },
+    });
+    const revTxt = textOf(revRp);
+    const revObj = (() => { try { return JSON.parse(revTxt); } catch { return null; } })();
+    const revStep = (revObj?.steps || []).find((s) => s.verb === 'verify_diff');
+    const revChecks = revStep?.result?.checks || {};
+    const revUndet = (revStep?.result?.undetermined || []).map((u) => u.check);
+    // ★ 断言三件事：① 噪声底量出来了 ② 没判的维度【被点名】了 ③ 响度要么达标、要么明说"未判定"
+    //   （纯画面片没有音轨 ⇒ integratedLufs 为 null ⇒ 这时必须落在 undetermined 里，不能装作"响度正常"）
+    const lufs = revChecks.audio?.after?.integratedLufs;
+    const lufsOk = typeof lufs === 'number' ? Math.abs(lufs + 14) <= 0.5 : revUndet.includes('audio');
+    check('★★★ run_pipeline：单版审片（review-only）⇒ 噪声底量出来 + 没判的维度被点名 + 响度要么达标要么点名',
+      revObj?.verdict === 'PASS' && revUndet.includes('visibility')
+      && revChecks.visibility && typeof revChecks.visibility.noiseMad === 'number'
+      && revChecks.audio && 'after' in revChecks.audio && lufsOk
+      && revChecks.timeline?.single === true
+      && !!revChecks.draft_integrity,
+      `未判定=[${revUndet.join(',')}]`
+      + ` 噪声底=${revChecks.visibility?.noiseMad} 响度=${lufs === undefined ? '未测' : lufs}`
+      + ` 段数=${revChecks.timeline?.after?.segments}`);
+
+    // ── ★★★ 两版对照审片（2026-10-24 新增）："把改前改后对着看一遍" ──
+    //   ★ 用两份夹具当改前/改后（纯视频 vs 带音轨）⇒ 两版【画面一样、音轨不同】
+    //   ⇒ 正期望：画面判"不可见"（证明判据不是恒真）+ 时间线段数差 1 + 响度两版都量到
+    const AUDIO_DRAFT = FILM_LIB ? path.join(FILM_LIB, 'JYAI能力批测-带音轨夹具') : '';
+    if (!AUDIO_DRAFT || !fs.existsSync(AUDIO_DRAFT)) {
+      check('★★★ run_pipeline：两版对照审片（review-compare）⇒ 需要第二份草稿',
+        false, `没找到第二份草稿（${AUDIO_DRAFT || '(没有 JYAI_DRAFT_LIB)'}）`);
+    } else {
+      const cmpRp = await call('tools/call', {
+        name: 'run_pipeline',
+        arguments: {
+          profile: 'review-compare', draft: FILM_DRAFT, draftAfter: AUDIO_DRAFT,
+          outDir: path.join(SMOKE, 'pipeline-compare'),
+        },
+      });
+      const cmpTxt = textOf(cmpRp);
+      const cmpObj = (() => { try { return JSON.parse(cmpTxt); } catch { return null; } })();
+      const cmpStep = (cmpObj?.steps || []).find((s) => s.verb === 'verify_diff');
+      const cc = cmpStep?.result?.checks || {};
+      // ★ 断言：① 跑完了（verify_diff 步骤执行了）② 画面判"不可见"（两版画面确实一样 ⇒ 判据有区分力）
+      //        ③ 时间线段数差 = 1（两版结构不同 ⇒ 逐段对照生效）④ 两版响度都量到了
+      check('★★★ run_pipeline：两版对照审片（review-compare）⇒ 画面判"不可见"（判据有区分力）+ 段数差 1 + 响度两版都测到',
+        !!cmpStep && cc.visibility && /不可见/.test(cc.visibility.verdict || '')
+        && cc.timeline?.segmentsDelta === 1
+        && typeof cc.audio?.before?.integratedLufs === 'number'
+        && typeof cc.audio?.after?.integratedLufs === 'number',
+        `画面=${cc.visibility?.verdict} 噪声底=${cc.visibility?.noiseMad}`
+        + ` 段数Δ=${cc.timeline?.segmentsDelta}`
+        + ` 响度 ${cc.audio?.before?.integratedLufs}→${cc.audio?.after?.integratedLufs}`
+        + ` problems=${JSON.stringify(cmpStep?.result?.problems || []).slice(0, 80)}`);
+    }
+
+    // ★ 缺参预检：一次点名【全部】缺参，并标出哪些必须问用户（别跑到一半才说缺）
+    const needRp = await call('tools/call', {
+      name: 'run_pipeline',
+      arguments: { profile: 'talk-cut-then-render', draft: FILM_DRAFT },   // ★ 故意不给 srt / outDir
+    });
+    const needTxt = textOf(needRp);
+    check('★★★ run_pipeline：缺参 ⇒ 一次性点名全部缺参，并标出"必须由用户提供"的',
+      needRp.result?.isError === true && /\$srt/.test(needTxt) && /\$outDir/.test(needTxt)
+      && /必须由用户提供/.test(needTxt),
+      needTxt.replace(/\s+/g, ' ').slice(0, 200));
+
+    // ── ★★★ 第二条【脚本步骤】路线：加字幕并出片（2026-10-24 新增）──
+    //   ★ 价值有两个：① 字幕是高频真实需求 ② 这是【第二个脚本步骤】⇒ 证明脚本步骤机制不是
+    //     只为 talk-cut 打的补丁；③ 字幕脚本自己会按 ±1 帧核对时码 ⇒ 它自证"字幕真的落进去了"
+    const SUB_SRT = path.join(OUT, 'sub.srt');
+    fs.writeFileSync(SUB_SRT,
+      '1\n00:00:00,200 --> 00:00:00,900\n今天我们讲剪映插件\n\n'
+      + '2\n00:00:01,200 --> 00:00:02,000\n编排器怎么等人确认\n', 'utf8');
+    const subRp = await call('tools/call', {
+      name: 'run_pipeline',
+      arguments: {
+        profile: 'subtitle-then-render', draft: FILM_DRAFT, srt: SUB_SRT,
+        outDir: path.join(SMOKE, 'pipeline-sub'),
+      },
+    });
+    const subTxt = textOf(subRp);
+    check('★★★ run_pipeline：加字幕并出片（subtitle-then-render）⇒ PASS + 字幕时码吻合 + 成片存在',
+      subRp.result?.isError !== true && /"verdict"\s*:\s*"PASS"/.test(subTxt)
+      && /时码吻合\s*2\/2/.test(subTxt)
+      && fs.existsSync(path.join(SMOKE, 'pipeline-sub', 'film.mp4')),
+      subTxt.replace(/\s+/g, ' ').slice(-220));
+
+    // ── ★★★ 编排器的【产物传递】：出片 → 按草稿重做混音（2026-10-24 新增）──
+    //   ★ 测的是 produces 机制：上一步的成片路径要能喂给下一步（否则"混音"这步拿不到画面）
+    //   ★ 环境决定断言：草稿【没有音轨】时，混音必然失败 ⇒ 这时断言【诚实失败】（不许出片成功）
+    //     ；给了 JYAI_FILM_DRAFT_AUDIO（有音轨的草稿）才断言成功路径。
+    const MIX_LIB = process.env.JYAI_DRAFT_LIB || '';
+    const MIX_DRAFT = process.env.JYAI_FILM_DRAFT_AUDIO
+      || (MIX_LIB ? path.join(MIX_LIB, 'JYAI能力批测-带音轨夹具') : '');
+    const mixRp = await call('tools/call', {
+      name: 'run_pipeline',
+      arguments: {
+        profile: 'render-and-mix', draft: MIX_DRAFT,
+        outDir: path.join(SMOKE, 'pipeline-mix'),
+      },
+    });
+    const mixTxt = textOf(mixRp);
+    const mixHasFilm = fs.existsSync(path.join(SMOKE, 'pipeline-mix', 'film.mp4'));
+    const mixHasMixed = fs.existsSync(path.join(SMOKE, 'pipeline-mix', 'mixed.mp4'));
+    if (MIX_DRAFT && fs.existsSync(MIX_DRAFT) && mixHasFilm && mixHasMixed) {
+      check('★★★ run_pipeline：出片并重做混音（render-and-mix）⇒ PASS + 混音成片存在',
+        mixRp.result?.isError !== true && /"verdict"\s*:\s*"PASS"/.test(mixTxt),
+        mixTxt.replace(/\s+/g, ' ').slice(-200));
+    } else {
+      // ★ 阴性：草稿没有音轨 ⇒ 官方回 "nothing to mix" ⇒ 路线必须【判失败并说清原因】
+      //   （绝不能"没有音轨也照样出片成功"—— 那是不装成功）
+      check('★★★ run_pipeline：草稿没有音轨 ⇒ 混音路线必须明确失败（不装成功）',
+        /nothing to mix|"verdict"\s*:\s*"FAIL"/.test(mixTxt),
+        mixTxt.replace(/\s+/g, ' ').slice(-200));
+    }
+
+    // ── ★★★ run_pipeline 的【人工确认点 + 两段式续跑】（2026-10-24 新增）──
+    //   路线 talk-cut-then-render 里有一步带 confirm:true ⇒ 跑完那一步必须【停下来等人】，
+    //   后面几步一步都不跑；确认后用 resume{token, confirm:true} 续跑。
+    //   ★ 三个断言各挑一个方向：① 停下来（AWAIT_CONFIRM）② 没确认就不许跑（REFUSED）③ 确认后才跑完（PASS）
+    //   ★ 阴性对照：REFUSED 那一次必须【证明】后面的脚本步骤没被执行（不是"看起来没跑"）
+    const GATE_SRT = path.join(OUT, 'gate.srt');
+    fs.writeFileSync(GATE_SRT,
+      '1\n00:00:00,200 --> 00:00:00,900\n嗯，那个，就是\n\n'
+      + '2\n00:00:01,000 --> 00:00:02,000\n今天我们讲剪映插件的编排器\n\n'
+      + '3\n00:00:02,200 --> 00:00:02,600\n嗯\n', 'utf8');
+    const g1 = await call('tools/call', {
+      name: 'run_pipeline',
+      arguments: {
+        profile: 'talk-cut-then-render', draft: FILM_DRAFT, srt: GATE_SRT,
+        outDir: path.join(SMOKE, 'pipeline-gate'),
+      },
+    });
+    const g1Txt = textOf(g1);
+    let g1Obj = null;
+    try { g1Obj = JSON.parse(g1Txt); } catch { /* 不是 JSON */ }
+    const gateOk = g1Obj && g1Obj.verdict === 'AWAIT_CONFIRM' && g1Obj.gate
+      && g1Obj.gate.artifact && fs.existsSync(g1Obj.gate.artifact)
+      && g1Obj.gate.artifactSha && g1Obj.gate.pendingSteps > 0;
+    check('★★★ run_pipeline：带确认点的路线 ⇒ 停在关卡（AWAIT_CONFIRM）+ 产物已生成',
+      !!gateOk,
+      gateOk ? `第 ${g1Obj.gate.step} 步 · 产物 ${path.basename(g1Obj.gate.artifact)} · 还有 ${g1Obj.gate.pendingSteps} 步没跑`
+        : g1Txt.replace(/\s+/g, ' ').slice(0, 200));
+    const gToken = g1Obj?.resume?.token || '';
+    // ★ 阴性①：不确认 ⇒ 必须拒绝，而且【关卡后面的步骤一步都没跑】
+    const g2 = await call('tools/call', {
+      name: 'run_pipeline', arguments: { profile: 'talk-cut-then-render', resume: { token: gToken } },
+    });
+    const g2Obj = (() => { try { return JSON.parse(textOf(g2)); } catch { return null; } })();
+    const g2Steps = (g2Obj?.steps || []).map((s) => s.script || s.verb).filter(Boolean);
+    check('★★★ run_pipeline：没 confirm ⇒ 拒绝执行（REFUSED），且关卡后的脚本一步都没跑',
+      g2Obj?.verdict === 'REFUSED' && !g2Steps.includes('talk-cut-apply.mjs'),
+      g2Obj ? `verdict=${g2Obj.verdict} · 已跑步骤=[${g2Steps.join(',')}]` : textOf(g2).slice(0, 160));
+    // ★ 阴性②：token 不存在 ⇒ 必须明确报错（不许默默从头跑）
+    const BAD_TOKEN = '0'.repeat(16);       // 形态合法但状态里没有 ⇒ 只能报"找不到"
+    const gBad = await call('tools/call', {
+      name: 'run_pipeline', arguments: { profile: 'talk-cut-then-render', resume: { token: BAD_TOKEN, confirm: true } },
+    });
+    check('★★★ run_pipeline：不存在的 token ⇒ 明确报错（不许默默从头跑）',
+      gBad.result?.isError === true && /找不到流水线状态|token/.test(textOf(gBad)),
+      textOf(gBad).replace(/\s+/g, ' ').slice(0, 160));
+    // ★ 阳性：确认后 ⇒ 续跑到底（apply 步骤必须【自证】剪掉了 2/2 个区间）
+    const g3 = await call('tools/call', {
+      name: 'run_pipeline', arguments: { profile: 'talk-cut-then-render', resume: { token: gToken, confirm: true } },
+    });
+    const g3Obj = (() => { try { return JSON.parse(textOf(g3)); } catch { return null; } })();
+    const g3Txt = textOf(g3);
+    const g3Ok = g3Obj && g3Obj.verdict === 'PASS'
+      && g3Obj.steps.some((s) => s.script === 'talk-cut-apply.mjs' && s.ok === true)
+      && /已验证剪掉\s*2\/2/.test(g3Txt);
+    check('★★★ run_pipeline：确认后续跑 ⇒ 走完（PASS），且 apply 自证"2/2 个区间已剪掉"',
+      !!g3Ok,
+      g3Ok ? 'verdict=PASS · apply 自证 2/2' : g3Txt.replace(/\s+/g, ' ').slice(-260));
+
+    // ── ★★★ 覆盖度补强（2026-10-23）：verify_diff 的【语义判据】路径 ──
+    //   beforeDraft / afterDraft / expect —— 这是 jianying-draft-edit 文档教的主工作流第⑤步，
+    //   但【从未被任何测试触及】（"未测参数清单"查出来的）⇒ 文档教的流程没人验证过。
+    //   做法：开副本 → 读改前的明文 → patch 改一处音量 → 读改后的明文 → verify_diff 断言字段变了。
+    let semParsed = null;
+    try {
+      const semOpen = await call('tools/call', { name: 'draft_open', arguments: { draft: FILM_DRAFT, copy: true } });
+      const semSid = (textOf(semOpen).match(/ve-session-\d+/) || [])[0];
+      const beforeTxt = textOf(await call('tools/call', { name: 'draft_read', arguments: { sessionId: semSid } }));
+      const beforeObj = JSON.parse(beforeTxt);
+      // ★ draft_read 返回的是【{draft:{...}} 包装】⇒ 先拆包装再找 tracks
+      const d0 = beforeObj?.draft || beforeObj || {};
+      const segs = (d0.tracks || []).flatMap((t) => t.segments || []);
+      const seg = segs[0] || (d0.segments || [])[0] || null;
+      const segId = seg?.id || seg?.segment_id || seg?.segmentId || null;
+      if (!segId) {
+        console.log('  [SKIP] verify_diff 语义判据 —— 草稿里没找到 segmentId（结构变了）⇒ 【不计入 PASS】');
+      } else {
+        // ★ verify_diff 的 readDraft 取的是【顶层 tracks】⇒ 存裸草稿，不是 {draft:{...}} 包装
+        semParsed = { semSid, segId, beforeJson: JSON.stringify(d0, null, 2) };
+      }
+    } catch (e) {
+      console.log(`  [SKIP] verify_diff 语义判据 —— 解析草稿失败（${String(e).slice(0, 90)}）⇒ 【不计入 PASS】`);
+    }
+    if (semParsed) {
+      const { semSid, segId, beforeJson } = semParsed;
+      const beforeFile = path.join(SMOKE, 'before-draft.json');
+      const afterFile = path.join(SMOKE, 'after-draft.json');
+      // ★★ 关键（2026-10-24 审计修正）：先做【第一次】patch 把基线变成【运行时展开形态】
+      //   —— 剪映自己存的草稿是【精简形态】（段 11 键、没有 volume），
+      //      官方返回的是【展开形态】（段 52 键、有 volume）
+      //   ⇒ 只做一次 patch 时，"改前(精简) vs 改后(展开)" 的 diff 里混着几十个形态字段
+      //      ⇒ 旧版判据会把形态噪音当成"volume 变了" ⇒ 【假绿】
+      //   ⇒ 现在连做两次 patch：before/after 都是展开形态 ⇒ 判定才精确
+      const patch1 = await call('tools/call', {
+        name: 'draft_patch',
+        arguments: { op: 'video.setVolume', sessionId: semSid, params: { segmentId: segId, volume: 0.25 } },
+      });
+      const beforeExpandedTxt = textOf(await call('tools/call', { name: 'draft_read', arguments: { sessionId: semSid } }));
+      let beforeExpandedJson = beforeExpandedTxt;
+      try {
+        const bo = JSON.parse(beforeExpandedTxt);
+        beforeExpandedJson = JSON.stringify(bo?.draft || bo || {}, null, 2);
+      } catch { /* ignore */ }
+      fs.writeFileSync(beforeFile, beforeExpandedJson, 'utf8');
+      const patchRes = await call('tools/call', {
+        name: 'draft_patch',
+        arguments: { op: 'video.setVolume', sessionId: semSid, params: { segmentId: segId, volume: 0.5 } },
+      });
+      const afterTxt = textOf(await call('tools/call', { name: 'draft_read', arguments: { sessionId: semSid } }));
+      let afterJson = afterTxt;
+      try {
+        const afterObj = JSON.parse(afterTxt);
+        afterJson = JSON.stringify(afterObj?.draft || afterObj || {}, null, 2);
+      } catch { /* 保持原样，让 verify_diff 去报"读不出来" */ }
+      fs.writeFileSync(afterFile, afterJson, 'utf8');
+      const sem = await call('tools/call', {
+        name: 'verify_diff',
+        arguments: {
+          checks: ['timeline'],
+          beforeDraft: beforeFile, afterDraft: afterFile,
+          expect: { segmentFieldChanged: 'volume' },
+        },
+      });
+      const semTxt = textOf(sem);
+      check('★★★ MCP: verify_diff 语义判据（beforeDraft/afterDraft/expect）⇒ 判得"volume 变了"',
+        patch1.result?.isError !== true && patchRes.result?.isError !== true
+        && sem.result?.isError !== true && /"verdict"\s*:\s*"PASS"/.test(semTxt),
+        semTxt.replace(/\s+/g, ' ').slice(0, 220));
+      // ★ 阴性对照：两份草稿【相同】⇒ 必须判 FAIL（否则这条判据没有区分力）
+      const neg = await call('tools/call', {
+        name: 'verify_diff',
+        arguments: {
+          checks: ['timeline'],
+          beforeDraft: beforeFile, afterDraft: beforeFile,
+          expect: { segmentFieldChanged: 'volume' },
+        },
+      });
+      const negTxt = textOf(neg);
+      check('★★★ MCP: verify_diff 语义判据的阴性对照（没改动 ⇒ 必须判 FAIL）',
+        neg.result?.isError === true && /"verdict"\s*:\s*"FAIL"/.test(negTxt),
+        negTxt.replace(/\s+/g, ' ').slice(0, 200));
+    }
+  } else {
+    console.log('  [SKIP] 真 e2e（MCP 层冒烟 + make_film 出片）—— 需要 env JYAI_DRAFT_LIB（草稿库）'
+      + '+ 剪映在跑且 VE 管道就绪；未满足 ⇒ 【不计入 PASS】');
+  }
+
+  // ★★★ 意图路由：在一批带标注的真实用户句上量准确率（top-1/top-3）
+  //   ★ 低于阈值直接判失败 ⇒ 路由表退化会立刻被发现（不是"看起来能用"）
+  {
+    const intentMod = await import('./selftest-intent.mjs');
+    const ir = intentMod.runIntentCheck();
+    check('★★★ 意图路由准确率（带标注测试集：top-1 ≥ 80% · top-3 ≥ 90%）+ 拒答集不硬猜 + 判决模式',
+      ir.ok,
+      `top-1 ${(ir.acc1 * 100).toFixed(1)}% · top-3 ${(ir.acc3 * 100).toFixed(1)}%`
+      + ` · 拒答集 ${ir.refusalTotal} 句硬猜 ${ir.hardGuesses.length}（须 0）`
+      + ` · 判决 ${ir.decided}/${ir.total}（对 ${ir.decisionRight}）明确句被拒 ${ir.refusedOnClear} 模糊句被硬判 ${ir.decidedOnVague}`
+      + (ir.misses.length ? ` · 未命中：${ir.misses.map((m) => m.u).join('、')}` : '')
+      + (ir.hardGuesses.length ? ` · 硬猜：${ir.hardGuesses.map((g) => g.u).join('、')}` : ''));
+  }
+
+  // ★★★ 参数覆盖（schema 声明了、但此前【从未被端到端验证过】的那批参数）
+  //   覆盖：grade_apply.noLut · verify_diff.noiseK/threshold/beforeVideo/afterVideo
+  //         make_film.lut · make_film.maxFrames
+  if (FILM_LIB) {
+    const pmod = await import('./selftest-params.mjs');
+    const pr = await pmod.runParamsCheck();
+    const prBad = pr.cases.filter((c) => !c.ok);
+    check('★★★ 参数覆盖（7 个从未验证过的参数 + 阳性前置）', pr.fail === 0,
+      prBad.length ? prBad.map((c) => c.name).join(' | ') : `${pr.pass} PASS / ${pr.fail} FAIL`);
+  } else {
+    console.log('  [SKIP] 参数覆盖 —— 需要 env JYAI_DRAFT_LIB（草稿库）⇒ 【不计入 PASS】');
+  }
+
+  console.log(`\n=== ${PASS} PASS / ${FAIL} FAIL ===`);
+  child.kill();
+  process.exit(FAIL === 0 ? 0 : 1);
+})();

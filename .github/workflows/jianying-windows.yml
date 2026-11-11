@@ -1,0 +1,69 @@
+name: jianying (windows-latest)
+
+on:
+  pull_request:
+    paths:
+      - 'plugins/antianqi/jianying/**'
+      - '.github/workflows/jianying-windows.yml'
+      - 'test/jianying.test.mjs'
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/antianqi/jianying/**'
+      - '.github/workflows/jianying-windows.yml'
+      - 'test/jianying.test.mjs'
+  # Manual dispatch: lets the maintainer or the PR author run the same
+  # windows-latest job outside a PR. The fork-to-upstream PR cannot trigger
+  # Actions without explicit maintainer approval, and first-time-contributor
+  # protection is on, so this is the way to capture a real Windows run.
+  workflow_dispatch:
+
+# The repository-wide `validate` job runs on ubuntu-latest and checks the
+# package shape (manifests, Skills, MCP transports, docs, placeholders, path
+# safety). The `jianying` Plugin is Windows-only: its runtime needs a live
+# Jianying instance, a local named pipe and a Windows toolchain, none of
+# which exist on a GitHub-hosted Linux runner.
+#
+# This workflow is the scoped Windows counterpart, and it follows the rule
+# recorded in .github/workflows/ci.yml: a non-tool-map Windows Plugin adds its
+# own paths-filtered workflow that runs exactly one focused test file, rather
+# than re-introducing a `validate-windows` job that scans the whole
+# repository (that job was dropped in round-9 because it failed on files this
+# PR does not own).
+#
+# The test below is static and cross-platform: it asserts the manifest shape,
+# that every Skill path in the v0.4 manifest resolves AND that its frontmatter
+# name equals its directory name (a mismatch is silently dropped by the
+# runtime, with no diagnostic), that script invocations are anchored to
+# ${PLUGIN_ROOT}, and that the Plugin ships no network client, no credential
+# literal, no telemetry and no contributor machine path.
+#
+# The runtime-dependent parts (the verb self-tests, the end-to-end draft edit,
+# the official renderer) need a real Windows desktop with Jianying 11.6
+# installed, so they are documented in the PR description as manual evidence
+# rather than pretended into CI.
+
+permissions:
+  contents: read
+
+jobs:
+  jianying-windows:
+    name: jianying on windows-latest (package shape, Skill paths, no hardcoded paths)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node (system)
+        run: |
+          node --version
+          npm --version
+
+      - name: Run jianying focused test suite
+        run: |
+          cd '${{ github.workspace }}'
+          node --test test/jianying.test.mjs
