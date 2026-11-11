@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "vividsites": {
+      "type": "streamable-http",
+      "url": "https://www.vividsites.app/api/connector"
+    }
+  }
+}

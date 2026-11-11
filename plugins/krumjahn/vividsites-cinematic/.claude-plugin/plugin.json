@@ -1,0 +1,24 @@
+{
+  "name": "vividsites-cinematic",
+  "version": "0.1.0",
+  "description": "Find cinematic landing-page designs, compare previews, and implement a chosen VividSites build prompt with editable UI components. Requires a paid VividSites library account and a separately configured MCP connection.",
+  "author": {
+    "name": "VividSites",
+    "url": "https://github.com/krumjahn"
+  },
+  "homepage": "https://www.vividsites.app/?utm_source=minimax&utm_medium=plugin&utm_campaign=cinematic-landing-page",
+  "repository": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins.git",
+  "license": "MIT",
+  "keywords": [
+    "website",
+    "landing-page",
+    "cinematic",
+    "design",
+    "components",
+    "mcp",
+    "vividsites"
+  ],
+  "skills": [
+    "./skills"
+  ]
+}
