@@ -46,3 +46,4 @@ jobs:
           node-version: 22
       - run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
       - run: node --test checks/process-tree.check.mjs
+      - run: node --test checks/win-launcher.check.mjs

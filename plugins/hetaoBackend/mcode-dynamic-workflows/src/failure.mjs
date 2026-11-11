@@ -10,3 +10,13 @@ export function agentFailure(status,{maxSteps,timeoutMs,exitCode=null,cause='',s
  return detail;
 }
 export function failureError(details,usage=null){return Object.assign(new Error(details.message),{details,usage});}
+// Executor/engine-layer failure codes: the CLI never produced a usable
+// execution (could not be started, exited without a completion protocol,
+// broke the stream protocol, left cleanup unconfirmed, or exited nonzero
+// against a success event). Incident 2026-09-20: when every dispatched agent
+// dies this way the run must finish 'failed' with the sample in
+// errorDetails — never a gaps/success verdict. Business failures the script
+// handles by reading r.status (provider errors, invalid schema, step limits,
+// timeouts of a live CLI) stay outside this set: those are the script's own
+// semantics and keep completed_with_gaps behavior.
+export const EXECUTOR_FAILURE_CODES=new Set(['MCODE_START_FAILED','MCODE_MISSING_RESULT','MCODE_PROTOCOL_ERROR','MCODE_CLEANUP_UNCONFIRMED','MCODE_EXIT']);
