@@ -19,6 +19,8 @@ export const TOOLS=[
  {name:'workflow_cancel',description:'取消本插件工作流，等待在途 exec 退出；不取消其他 MCode 会话。',inputSchema:obj(id,['runId'])},
  {name:'workflow_pause',description:'停止派发并中断在途调用，保留已完成节点，可恢复。',inputSchema:obj(id,['runId'])},
  {name:'workflow_resume',description:'原脚本与原输入恢复，复用已成功节点。可调整 maxSteps/stepTimeoutMs/runTimeoutMs/maxCalls 后重试，成功节点复用，失败节点从头执行。异常退出需要用户先确认旧 Agent 已停止。',inputSchema:obj({...id,confirmStopped:{type:'boolean'},...LIMIT_SCHEMAS,maxCalls:{type:'integer',minimum:1,maximum:100}},['runId'])},
+ {name:'workflow_delete',description:'删除已完成的工作流到回收站（墓碑软删）：事件、节点与结果全部保留，可随时恢复；运行中或待审核的工作流拒绝删除；重复删除幂等。到期后由归档轮转回收存储，事件链永不删除。',inputSchema:obj({...id,by:{type:'string',description:'删除来源（studio/cli/mcp），默认 mcp'}},['runId'])},
+ {name:'workflow_restore',description:'从回收站或归档恢复工作流：回收站恢复清除墓碑；已轮转归档的从本机归档库导回节点数据。返回恢复后的运行状态；已归档未恢复前 workflow_status 不返回该运行。',inputSchema:obj({...id,by:{type:'string',description:'恢复来源（studio/cli/mcp），默认 mcp'}},['runId'])},
  {name:'workflow_dashboard',description:'返回可收藏的本机可视化面板地址，无需 token。服务独立于聊天会话，重启后复用端口。',inputSchema:obj({})}
 ];
 export function summary(snapshot){return {...snapshot,script:undefined,input:undefined,fingerprints:undefined,requestHash:undefined,steps:snapshot.steps?.map(({prompt,input,output,rawOutput,requestHash,...s})=>s),result:undefined};}
@@ -34,6 +36,8 @@ export function createToolHandler(engine,getURL){return async(name,args={})=>{
  case 'workflow_wait':{const t=args.timeoutMs??25000,a=args.afterSequence??0;check(Number.isInteger(t)&&t>=0&&t<=25000&&Number.isInteger(a)&&a>=0,'等待参数无效');return waitEvents(engine,args.runId,a,t);}
  case 'workflow_cancel':return summary(await engine.stop(args.runId));
  case 'workflow_pause':return summary(await engine.stop(args.runId,'paused'));
+ case 'workflow_delete':return await engine.deleteRun(args.runId,{by:args.by??'mcp'});
+ case 'workflow_restore':return await engine.restoreRun(args.runId,{by:args.by??'mcp'});
  case 'workflow_resume':return summary(await engine.resume(args.runId,args));
  case 'workflow_dashboard':return {url:getURL(),localOnly:true};
  default:throw new Error('未知工具');}

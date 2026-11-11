@@ -22,7 +22,7 @@ test('packaged public MCP creates review drafts and repairs with reused results 
  const done=async id=>{for(let i=0;i<100;i++){const r=await call('workflow_status',{runId:id});if(!['running','queued'].includes(r.status))return r;await new Promise(r=>setTimeout(r,30));}throw Error('run did not finish');};
  try{
  await request('initialize',{protocolVersion:'2024-11-05',capabilities:{},clientInfo:{name:'public-package-test',version:'1'}});child.stdin.write(JSON.stringify({jsonrpc:'2.0',method:'notifications/initialized'})+'\n');
- assert.equal((await request('tools/list')).tools.length,11);url=(await call('workflow_dashboard')).url;
+ assert.equal((await request('tools/list')).tools.length,13);url=(await call('workflow_dashboard')).url;
  const script=`const a=await ctx.agent({id:'evidence',prompt:'demo evidence'});throw Error('Synthesis needs a guard');`;
  const original=await call('workflow_start',{requestId:'original',name:'Public demo',executor:'demo',script});assert.equal(original.status,'pending_review');assert.equal(original.attempts,0);
  await post(`/api/runs/${original.id}/approve`,{revision:1});assert.equal((await done(original.id)).status,'failed');
