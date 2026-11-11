@@ -19,25 +19,30 @@ export async function startHTTP(engine,{port=0,webRoot=new URL('../web/',import.
     if(url.pathname.startsWith('/api/')){
       // A custom header forces cross-origin browser requests through a denied CORS preflight.
       if(req.headers['x-workflow-client']!=='1'||['cross-site','same-site'].includes(req.headers['sec-fetch-site']))return json({error:'请从本地 Workflow Studio 面板访问。'},403);
-      if(req.method==='GET'&&url.pathname==='/api/config')return json({serviceProtocol:2,features:{workflowRepair:true},pid:process.pid,workspace:engine.options.workspace,executor:engine.options.command,defaults:engine.defaults,scheduler:engine.schedulerStatus(),mcodeAvailable:!!(await resolveMcode(engine.options.command??'mcode')),example:await readFile(new URL('audit.js',exampleRoot),'utf8')});
+      if(req.method==='GET'&&url.pathname==='/api/config')return json({serviceProtocol:2,features:{workflowRepair:true,trashManagement:true,rerunLineage:true},pid:process.pid,workspace:engine.options.workspace,executor:engine.options.command,defaults:engine.defaults,scheduler:engine.schedulerStatus(),mcodeAvailable:!!(await resolveMcode(engine.options.command??'mcode')),example:await readFile(new URL('audit.js',exampleRoot),'utf8')});
       if(req.method==='GET'&&url.pathname==='/api/templates')return json(engine.store.templates().map(({definition,...t})=>({...t,objective:definition.metadata?.objective??''})));
       const template=url.pathname.match(/^\/api\/templates\/([a-f0-9-]+)$/);
       if(template&&req.method==='GET'){const value=engine.store.template(template[1]);check(value,'模板不存在');return json(value);}
       const report=url.pathname.match(/^\/api\/runs\/([a-f0-9-]+)\/report$/);
       if(report&&req.method==='GET'){const run=engine.snapshot(report[1]),file=exportReport(run,run.steps,{format:url.searchParams.get('format')??'html',language:url.searchParams.get('language')??'en'});res.writeHead(200,{'Content-Type':file.contentType,'Content-Disposition':`attachment; filename="${file.filename}"`,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});return res.end(file.body);}
       if(req.method==='GET'&&url.pathname==='/api/scheduler')return json(engine.schedulerStatus());
-      if(req.method==='GET'&&url.pathname==='/api/runs')return json(engine.store.list().map(({script,input,result,fingerprints,...r})=>r));
-      const match=url.pathname.match(/^\/api\/runs\/([a-f0-9-]+)(?:\/(wait|pause|cancel|resume|edit|approve|repair))?$/);
-      if(match&&req.method==='GET'){if(match[2]==='wait')return json(await waitEvents(engine,match[1],Math.max(0,Number(url.searchParams.get('after'))||0),20000));return json(engine.snapshot(match[1]));}
+      if(req.method==='GET'&&url.pathname==='/api/trash')return json({trashRetentionDays:engine.trashRetentionDays()});
+      if(req.method==='GET'&&url.pathname==='/api/runs'){if(url.searchParams.get('trash')==='1')return json(engine.store.listTrash().map(({script,input,result,fingerprints,...r})=>r));return json(engine.store.list().map(({script,input,result,fingerprints,...r})=>r));}
+      const match=url.pathname.match(/^\/api\/runs\/([a-f0-9-]+)(?:\/(wait|pause|cancel|resume|edit|approve|repair|restore|lineage))?$/);
+      if(match&&req.method==='GET'){if(match[2]==='wait')return json(await waitEvents(engine,match[1],Math.max(0,Number(url.searchParams.get('after'))||0),20000));if(match[2]==='lineage')return json(engine.lineage(match[1],{results:url.searchParams.get('results')==='1'}));return json(engine.snapshot(match[1]));}
+      if(match&&req.method==='DELETE')return json(await engine.deleteRun(match[1],{by:url.searchParams.get('by')??'studio'}));
       if(req.method==='POST'){
        check(req.headers['content-type']?.startsWith('application/json'),'需要 application/json');req.setEncoding('utf8');let body='';for await(const chunk of req){body+=chunk;check(Buffer.byteLength(body)<=700_000,'请求过大');}const data=JSON.parse(body||'{}');
        if(url.pathname==='/api/templates')return json(engine.saveTemplate(data.runId,data),201);
        if(template){check(data.action==='delete','模板操作无效');check(engine.store.deleteTemplate(template[1]),'模板不存在');return json({deleted:true});}
        if(url.pathname==='/api/scheduler')return json(engine.configureScheduler(data));
+       if(url.pathname==='/api/trash')return json(engine.configureTrash(data));
+       if(url.pathname==='/api/archive/rotate')return json(engine.rotateArchive({verify:data.verify===true}));
        if(url.pathname==='/api/tools')return json(await createToolHandler(engine,()=>`${origin}/`)(data.name,data.arguments));
        if(url.pathname==='/api/validate')return json(assertValidDependencies(previewTopology(data.script)));
        if(url.pathname==='/api/runs')return json(await engine.start(data),201);
        if(match&&match[2]==='repair')return json(await engine.repair(match[1],data));
+       if(match&&match[2]==='restore')return json(await engine.restoreRun(match[1],{by:data.by??'studio'}));
        if(match&&match[2]==='edit')return json(await engine.update(match[1],data));
        if(match&&match[2]==='approve')return json(await engine.approve(match[1],data));
        if(match&&match[2]==='resume')return json(await engine.resume(match[1],data));
