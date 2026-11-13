@@ -1,6 +1,6 @@
 # 远程工具工作流
 
-1. 从位于 `https://klingai.com/mcp` 的远程 `kling-ai` server 读取 `tools/list`；生成前调用 `who_am_i`，只使用目标模型声明的参数、默认值、枚举和素材输入。
+1. 从位于 `https://klingai.com/mcp/plugin` 的远程 `kling-ai` server 读取 `tools/list`；生成前调用 `who_am_i`，只使用目标模型声明的参数、默认值、枚举和素材输入。
 2. 对于附带媒体，调用远程上传工具，并将它返回的引用传给生成请求。
 3. 补齐会实质影响结果的缺失输入后，使用 `{model, arguments[], inputs[], rationale, taskTraceId}` 信封只调用一次选定的远程生成工具，并保留其 `generationId`。同一目标链路复用 UUIDv7 `taskTraceId`。不要增加积分警告或单独的确认步骤。
 4. 返回同一次调用的当前状态、任务编号和文本或结构化回落，不为等待完成而循环调用状态工具。

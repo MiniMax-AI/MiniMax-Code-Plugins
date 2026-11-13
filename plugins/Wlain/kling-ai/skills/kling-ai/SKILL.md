@@ -5,7 +5,7 @@ description: 当用户希望通过 MiniMax Code 中的可灵 AI 生成或查询�
 
 # 可灵 AI
 
-只使用本包在 `https://klingai.com/mcp` 配置的可灵国内远程 MCP。
+只使用本包在 `https://klingai.com/mcp/plugin` 配置的可灵国内远程 MCP。
 
 ## 请求路由
 

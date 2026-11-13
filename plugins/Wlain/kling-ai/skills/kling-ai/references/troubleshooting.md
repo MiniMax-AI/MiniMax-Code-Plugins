@@ -2,13 +2,13 @@
 
 ## 安装后缺少 Skills 或 MCP 工具
 
-确认加载的是包含 `plugin.json`、`mcp.json` 和 `skills/` 的完整 Plugin 目录。MiniMax Code 应发现 `kling-ai`、`kling-ai-generate-image` 和 `kling-ai-generate-video` 三个 Skill，并且只有一个小写 `kling-ai` MCP server 指向 `https://klingai.com/mcp`。重新加载插件后新建会话以刷新工具快照。
+确认加载的是包含 `plugin.json`、`mcp.json` 和 `skills/` 的完整 Plugin 目录。MiniMax Code 应发现 `kling-ai`、`kling-ai-generate-image` 和 `kling-ai-generate-video` 三个 Skill，并且只有一个小写 `kling-ai` MCP server 指向 `https://klingai.com/mcp/plugin`。重新加载插件后新建会话以刷新工具快照。
 
 如果 Plugin 显示已加载但第三方 MCP 工具没有进入 Agent 工具面，记录 MiniMax Code 版本、平台和 MCP 诊断后停止。不要让 Skill 用 shell、`curl` 或第二个本地 MCP server 绕过宿主工具注入。
 
 ## 未授权或未进入浏览器 OAuth
 
-MiniMax 的公开 Agent Plugins 1.0 子集不能在 `mcp.json` 中声明通用 OAuth。本包依赖宿主对受保护资源执行标准发现、动态客户端注册和 S256 PKCE。若连接 `https://klingai.com/mcp` 后没有进入浏览器授权，记录诊断并停止；不要添加静态 `client_id`，不要手工粘贴 API Key、Token、Cookie 或授权头。
+MiniMax 的公开 Agent Plugins 1.0 子集不能在 `mcp.json` 中声明通用 OAuth。本包依赖宿主对受保护资源执行标准发现、动态客户端注册和 S256 PKCE。若连接 `https://klingai.com/mcp/plugin` 后没有进入浏览器授权，记录诊断并停止；不要添加静态 `client_id`，不要手工粘贴 API Key、Token、Cookie 或授权头。
 
 `kling-ai` 是包内 server key，`Plugin-MiniMaxCode` 是非秘密集成标识；两者都不应被当成 OAuth `client_name` 强行覆盖宿主注册信息。
 

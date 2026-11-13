@@ -1,6 +1,6 @@
 # 可灵 AI
 
-通过可灵国内远程 MCP，在 MiniMax Code 中创建和查询图片、视频与动作任务。插件只连接 `https://klingai.com/mcp`，不启动本地 MCP server，也不包含 API Key、Token 或 Cookie。
+通过可灵国内远程 MCP，在 MiniMax Code 中创建和查询图片、视频与动作任务。插件只连接 `https://klingai.com/mcp/plugin`，不启动本地 MCP server，也不包含 API Key、Token 或 Cookie。
 
 ## 试一试
 
@@ -20,11 +20,11 @@
 
 ## 要求与当前兼容性
 
-- 中国大陆可灵账号；服务端点固定为 `https://klingai.com/mcp`。
+- 中国大陆可灵账号；服务端点固定为 `https://klingai.com/mcp/plugin`。
 - 真实生成可能消耗账号灵感值，具体以可灵账号和实时工具说明为准。
 - 需要 MiniMax Code 支持受保护远程 MCP 的 OAuth discovery、动态客户端注册或宿主管理的预注册客户端，以及 Authorization Code + S256 PKCE。
 
-MiniMax Code 3.0.67 可以发现本插件和三个 Skills，但当前公开 runtime 没有在远程 MCP 返回标准 `401` 后启动浏览器 OAuth，因而无法完成 `tools/list` 和工具注入。MiniMax Code 的公开 Agent Plugin 契约也说明 generic OAuth 尚不是公开能力。该兼容性问题正在 [MiniMax Code issue #120](https://github.com/MiniMax-AI/minimax-code/issues/120) 跟踪；在宿主完成支持和真实联调前，本贡献只能作为 Draft 评审，不宣称实时 MCP 已可用。
+MiniMax Code 3.0.67 可以发现本插件和三个 Skills，但当前公开 runtime 没有在远程 MCP 返回标准 `401` 后启动浏览器 OAuth，因而无法完成 `tools/list` 和工具注入。MiniMax Code 的公开 Agent Plugin 契约也说明 generic OAuth 尚不是公开能力。相关历史问题 [MiniMax Code issue #120](https://github.com/MiniMax-AI/minimax-code/issues/120) 已于 2026-10-19 按旧版本积压清理关闭，并非可灵 OAuth 联调通过。维护者曾说明后续版本恢复了非内建 MCP 加载，但这不等于本插件的 OAuth、`tools/list` 和工具注入已验证。2026-11-13 本地安装仍为 3.0.67，未在新版本完成授权联调；在宿主支持和真实联调得到验证前，本贡献只供兼容性评审，不宣称实时 MCP 已可用。
 
 ## OAuth 与安全边界
 
@@ -35,7 +35,7 @@ MiniMax Code 3.0.67 可以发现本插件和三个 Skills，但当前公开 runt
 
 ## 数据与网络
 
-- 业务网络目标是 `https://klingai.com/mcp`，以及可灵工具响应中明确返回的一次性上传地址或结果地址。
+- 业务网络目标是 `https://klingai.com/mcp/plugin`，以及可灵工具响应中明确返回的一次性上传地址或结果地址。
 - 用户提示词、明确提供的参考素材和生成参数会发送给可灵以完成所请求的操作。
 - 账号凭据由宿主管理，不进入插件文件、对话或日志。
 - 工具返回的签名地址可能包含临时访问能力，不应复制到诊断日志或公开 Issue。
@@ -68,3 +68,7 @@ npm run check
 ## 许可证
 
 [MIT](./LICENSE)
+
+## 2026-11-13 端点复核
+
+已将配置与 Skills 中的国内服务地址统一为 `https://klingai.com/mcp/plugin`。匿名 `initialize` 返回预期 `401` 和 OAuth protected-resource metadata challenge。该检查只证明端点与授权发现入口可达，不证明 MiniMax Code 已完成 OAuth、`tools/list`、工具注入或生成；未进行付费生成。国内、海外账号、积分和任务分别管理，本插件仅配置国内服务。

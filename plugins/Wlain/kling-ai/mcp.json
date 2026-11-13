@@ -3,7 +3,7 @@
   "mcpServers": {
     "kling-ai": {
       "type": "streamable-http",
-      "url": "https://klingai.com/mcp",
+      "url": "https://klingai.com/mcp/plugin",
       "headers": {
         "X-Kling-Integration": "Plugin-MiniMaxCode"
       }

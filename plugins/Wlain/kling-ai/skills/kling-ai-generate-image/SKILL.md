@@ -5,7 +5,7 @@ description: 通过 MiniMax Code 中的 Kling AI 生成高质量图像。支持�
 
 # Kling AI 图像生成
 
-将创意需求转化为一条规格明确的 Kling 图像请求。仅使用在 `https://klingai.com/mcp` 配置的 MCP 所提供的实时工具和模式定义。
+将创意需求转化为一条规格明确的 Kling 图像请求。仅使用在 `https://klingai.com/mcp/plugin` 配置的 MCP 所提供的实时工具和模式定义。
 
 ## 使用约定
 
