@@ -1,0 +1,18 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "xc-compliance",
+  "version": "0.1.0",
+  "description": "面向出口欧盟的制造商和卖家，核对产品资料、报告型号、标签说明书与责任人安排，并查询可追溯的官方法规摘录和历史风险通报。",
+  "author": {
+    "name": "xc-compliance"
+  },
+  "homepage": "https://www.xc-compliance.com/agent-hub?lang=zh",
+  "license": "Apache-2.0",
+  "keywords": [
+    "eu",
+    "compliance",
+    "gpsr",
+    "manufacturers",
+    "exporters"
+  ]
+}
