@@ -1,0 +1,24 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "brewpage",
+  "version": "1.1.1",
+  "description": "Draft, publish and update HTML pages, Markdown, files and built sites from your agent with BrewPage. Share the returned HTTPS link. Publishing works without an account, and compatible MCP clients can connect a BrewPage account.",
+  "author": {
+    "name": "Maksim Kochetkov",
+    "email": "info@brewpage.app",
+    "url": "https://brewpage.app"
+  },
+  "homepage": "https://brewpage.app",
+  "repository": "https://github.com/kochetkov-ma/brewpage-publish-plugins",
+  "license": "MIT",
+  "keywords": [
+    "brewpage",
+    "publishing",
+    "html-hosting",
+    "markdown",
+    "static-site",
+    "file-sharing",
+    "ai-artifacts",
+    "mcp"
+  ]
+}
