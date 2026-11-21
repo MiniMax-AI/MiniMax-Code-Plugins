@@ -1,0 +1,18 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "deepwiki",
+  "version": "0.3.0",
+  "description": "Read AI-generated documentation and ask questions about public GitHub repositories through the public DeepWiki MCP server - no authentication required. Private repositories and wiki generation live in the devin plugin.",
+  "author": {
+    "name": "fangfuzha",
+    "url": "https://github.com/fangfuzha"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "documentation",
+    "github",
+    "repository",
+    "mcp",
+    "deepwiki"
+  ]
+}
