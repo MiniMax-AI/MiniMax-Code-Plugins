@@ -1,0 +1,18 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "context7",
+  "version": "0.1.0",
+  "description": "Query Context7 for version-accurate library and framework documentation instead of relying on memory.",
+  "author": {
+    "name": "fangfuzha",
+    "url": "https://github.com/fangfuzha"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "documentation",
+    "library",
+    "framework",
+    "mcp",
+    "context7"
+  ]
+}
