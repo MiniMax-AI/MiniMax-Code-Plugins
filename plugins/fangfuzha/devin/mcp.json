@@ -1,0 +1,13 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "devin": {
+      "type": "streamable-http",
+      "url": "https://mcp.devin.ai/mcp",
+      "headers": {
+        "Authorization": "Bearer ${DEEVIN_API_KEY}",
+        "X-Org-Id": "${DEEVIN_ORG_ID}"
+      }
+    }
+  }
+}
