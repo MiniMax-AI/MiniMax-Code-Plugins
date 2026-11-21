@@ -1,0 +1,19 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "devin",
+  "version": "0.1.0",
+  "description": "Read documentation, ask questions and generate wikis for public and private GitHub repositories through the Devin MCP server, plus the organization-wide devin_* tools. Supersedes the deepwiki plugin.",
+  "author": {
+    "name": "fangfuzha",
+    "url": "https://github.com/fangfuzha"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "documentation",
+    "github",
+    "repository",
+    "wiki",
+    "mcp",
+    "devin"
+  ]
+}
