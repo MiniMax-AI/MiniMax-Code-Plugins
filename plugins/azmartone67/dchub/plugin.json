@@ -1,0 +1,25 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "dchub",
+  "version": "2.12.60",
+  "description": "DC Hub is the orchestration layer for data center and energy intelligence. Call execute_plan first: it chains the right tools and returns one dated, cited answer on power and grid headroom, interconnection queues, time-to-power, facilities, fiber, energy prices, site selection and markets, including the Data Center Power Index (DCPI). DCHUB_API_KEY is optional.",
+  "author": {
+    "name": "Martone Advisors LLC",
+    "email": "jonathan@dchub.cloud",
+    "url": "https://dchub.cloud"
+  },
+  "homepage": "https://dchub.cloud/connect",
+  "repository": "https://github.com/azmartone67/dchub-mcp-server",
+  "license": "MIT",
+  "keywords": [
+    "data-center",
+    "energy",
+    "power-grid",
+    "interconnection-queue",
+    "site-selection",
+    "colocation",
+    "fiber",
+    "dcpi",
+    "mcp"
+  ]
+}
