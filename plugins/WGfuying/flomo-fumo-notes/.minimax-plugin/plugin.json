@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "name": "flomo-fumo-notes",
+  "displayName": "flomo 浮墨笔记",
+  "version": "0.1.0",
+  "description": "连接 flomo 浮墨笔记官方 MCP，把对话中的想法整理成符合个人写法的 memo 草稿，确认后写入 flomo；并可回顾旧笔记，生成每日回声。",
+  "author": "WGfuying",
+  "icon": "icon.png",
+  "darkIcon": "icon-dark.png",
+  "category": "Productivity",
+  "exampleQueries": [
+    "把刚才关于我产品的想法整理成一条 flomo memo",
+    "帮我找出我关于读书的所有 flomo 笔记",
+    "看看昨天我记了什么，生成一条回声",
+    "搜一下我关于 AI 和独立开发相关的 flomo 记录"
+  ],
+  "apps": [],
+  "mcpServers": [
+    "mcp.json"
+  ],
+  "skills": [
+    "skills/flomo-capture/SKILL.md",
+    "skills/flomo-daily-echo/SKILL.md"
+  ],
+  "agents": [
+    "agents/flomo-curator.md"
+  ]
+}

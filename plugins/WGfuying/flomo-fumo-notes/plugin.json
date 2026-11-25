@@ -1,0 +1,19 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "flomo-fumo-notes",
+  "version": "0.1.0",
+  "description": "Connect the official flomo MCP server to turn conversations into memo drafts written in the user's own voice, and to revisit older notes for a daily echo. Ships the flomo-capture and flomo-daily-echo Skills plus the flomo MCP server definition.",
+  "author": {
+    "name": "WGfuying",
+    "url": "https://github.com/WGfuying"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "minimax-code",
+    "plugin",
+    "flomo",
+    "notes",
+    "mcp",
+    "productivity"
+  ]
+}
