@@ -1,0 +1,55 @@
+Business Source License 1.1
+
+Parameters
+
+Licensor: 
+    Stably AI
+Licensed Work: 
+    BugX (including its source code, documentation, binaries, and associated assets)
+Additional Use Grant:
+    You may use the Licensed Work for internal development, testing, and security auditing, provided that you do not offer the Licensed Work, or any derivative work, as a hosted or managed service, or as part of a commercial product or service that competes with the Licensor's products or services (including BugX Cloud and associated hosted offerings).
+Change Date: 
+    3 years from the date of each release of the Licensed Work
+Change License: 
+    Apache License, Version 2.0 (as published by the Apache Software Foundation)
+
+Text
+
+The Licensor hereby grants you the right to copy, modify, create derivative
+works, redistribute, and make non-production and production use of the
+Licensed Work. The foregoing license is granted subject to the following
+conditions.
+
+The Licensor may define an "Additional Use Grant" as part of the Parameters
+above. You may use the Licensed Work pursuant to the Additional Use Grant
+until the Change Date.
+
+On the Change Date, or in the absence of a Change Date, on the fourth
+anniversary of the first publicly available distribution of a specific version of
+the Licensed Work under this License, this License will terminate, and the
+Licensor hereby grants you rights under the Change License.
+
+If you are using the Licensed Work pursuant to the Additional Use Grant, you
+may also use it for any non-commercial purposes or internal business purposes
+that do not violate the terms of the Additional Use Grant.
+
+If you violate the terms of this License, including the Additional Use Grant,
+your rights under this License will terminate automatically.
+
+To use the Licensed Work outside of the Additional Use Grant, please contact
+the Licensor at business@bugx.dev.
+
+Notices
+
+You must reproduce the Licensor's copyright notice, this License, and any
+other notices in all copies of the Licensed Work, or any derivative works that
+you create.
+
+DISCLAIMER
+
+THE LICENSED WORK IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE LICENSED WORK OR THE USE OR OTHER DEALINGS IN THE LICENSED WORK.
