@@ -1,0 +1,20 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "bugx",
+  "version": "0.1.7",
+  "description": "Autonomous code review and testing agent. Catches hidden deep bugs for developers, automates black-box, functional, and performance testing for QA, and ensures rock-solid software delivery.",
+  "author": {
+    "name": "BugX",
+    "url": "https://bugx.dev"
+  },
+  "homepage": "https://bugx.dev",
+  "repository": "https://github.com/Bencibr/bugx",
+  "license": "Apache-2.0",
+  "keywords": [
+    "security",
+    "code-audit",
+    "code-review",
+    "mcp",
+    "bugx"
+  ]
+}
