@@ -3,8 +3,11 @@
   "mcpServers": {
     "bugx": {
       "type": "stdio",
-      "command": "bugx",
+      "command": "npx",
       "args": [
+        "--yes",
+        "--quiet",
+        "bugx-cli",
         "mcp",
         "serve",
         "--root",

@@ -9,7 +9,7 @@ description: BugX 是一个具备自主代码审查与测试能力的智能体�
 
 BugX ChatGPT Skill 镜像。执行前用 `bugx engine path --name AGENT_GUIDE.md` 和 `bugx engine path --name bugx.md` 读取全局协议；项目 `.bugx/` 只保存状态与配置。
 
-协议镜像版本：0.1.6
+协议镜像版本：0.1.7
 
 ## ChatGPT 原生交互适配（强制）
 

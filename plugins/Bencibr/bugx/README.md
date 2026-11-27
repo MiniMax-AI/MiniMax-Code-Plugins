@@ -1,7 +1,7 @@
 # BugX - Autonomous Code Review & Testing Agent
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.1.6-green.svg)](https://bugx.dev)
+[![Version](https://img.shields.io/badge/version-0.1.7-green.svg)](https://bugx.dev)
 
 Autonomous code review and testing agent for MiniMax Code. Provides deep bug detection, multi-model consensus review, and evidence-backed verification.
 
@@ -18,7 +18,7 @@ Autonomous code review and testing agent for MiniMax Code. Provides deep bug det
 
 ## Prerequisites
 
-Install `bugx-cli` (`>=0.1.6`) locally before using this plugin:
+Install `bugx-cli` (`>=0.1.7`) locally before using this plugin:
 
 ```bash
 # Python
