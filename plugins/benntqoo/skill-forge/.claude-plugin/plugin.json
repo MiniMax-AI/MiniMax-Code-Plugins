@@ -1,0 +1,55 @@
+{
+  "name": "skill-forge",
+  "version": "1.0.0",
+  "description": "Distill reusable project-level skills after multi-step tasks, and keep the skill library fresh and within budget. Ships two Skills, a Stop-event nudge that catches a missing distillation, and a post-compaction rule reload.",
+  "author": {
+    "name": "benntqoo",
+    "url": "https://github.com/benntqoo"
+  },
+  "homepage": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins/tree/main/plugins/benntqoo/skill-forge",
+  "repository": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins.git",
+  "license": "MIT",
+  "keywords": [
+    "minimax-code",
+    "skills",
+    "workflow",
+    "hooks",
+    "self-improvement"
+  ],
+  "skills": [
+    "./skills/skill-forge/SKILL.md",
+    "./skills/skill-audit/SKILL.md"
+  ],
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/stop-skill-nudge.mjs"
+            ],
+            "timeout": 8
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/session-skill-rules.mjs"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
