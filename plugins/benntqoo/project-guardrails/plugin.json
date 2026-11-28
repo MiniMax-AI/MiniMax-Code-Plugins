@@ -1,0 +1,20 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "project-guardrails",
+  "version": "1.0.0",
+  "description": "Let a repository declare its own rules: project conventions and a todo-ledger index are injected at session start, and tool calls are checked against the repository's deny/ask rules before they run. Zero configuration when the repository has a ledger carrier.",
+  "author": {
+    "name": "benntqoo",
+    "url": "https://github.com/benntqoo"
+  },
+  "homepage": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins/tree/main/plugins/benntqoo/project-guardrails",
+  "repository": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins.git",
+  "license": "MIT",
+  "keywords": [
+    "minimax-code",
+    "hooks",
+    "guardrails",
+    "safety",
+    "project-config"
+  ]
+}

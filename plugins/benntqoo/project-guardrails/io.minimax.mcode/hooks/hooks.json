@@ -1,0 +1,36 @@
+{
+  "$schema": "https://minimax.io/schemas/mcode-hooks/0.1.0/hooks.schema.json",
+  "hooks": {
+    "SessionStart": [
+      {
+        "command": "node",
+        "args": [
+          "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/session-rules.mjs"
+        ],
+        "matcher": "startup|resume|clear|compact",
+        "timeout": 5000,
+        "once": false
+      },
+      {
+        "command": "node",
+        "args": [
+          "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/session-entrypoints.mjs"
+        ],
+        "matcher": "startup|resume|clear|compact",
+        "timeout": 5000,
+        "once": false
+      }
+    ],
+    "PreToolUse": [
+      {
+        "command": "node",
+        "args": [
+          "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/pretooluse-guard.mjs"
+        ],
+        "matcher": "*",
+        "timeout": 5000,
+        "once": false
+      }
+    ]
+  }
+}
