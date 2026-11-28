@@ -1,0 +1,26 @@
+{
+  "$schema": "https://minimax.io/schemas/mcode-hooks/0.1.0/hooks.schema.json",
+  "hooks": {
+    "Stop": [
+      {
+        "command": "node",
+        "args": [
+          "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/stop-skill-nudge.mjs"
+        ],
+        "timeout": 8000,
+        "once": false
+      }
+    ],
+    "SessionStart": [
+      {
+        "command": "node",
+        "args": [
+          "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/session-skill-rules.mjs"
+        ],
+        "matcher": "compact|clear",
+        "timeout": 5000,
+        "once": false
+      }
+    ]
+  }
+}
