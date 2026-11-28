@@ -1,0 +1,26 @@
+{
+  "$schema": "https://minimax.io/schemas/mcode-hooks/0.1.0/hooks.schema.json",
+  "hooks": {
+    "Stop": [
+      {
+        "command": "node",
+        "args": [
+          "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/collect-candidate.mjs"
+        ],
+        "timeout": 5000,
+        "once": false
+      }
+    ],
+    "SessionStart": [
+      {
+        "command": "node",
+        "args": [
+          "${PLUGIN_ROOT}/io.minimax.mcode/hooks/scripts/recall-memory.mjs"
+        ],
+        "matcher": "startup|resume|clear|compact",
+        "timeout": 5000,
+        "once": false
+      }
+    ]
+  }
+}

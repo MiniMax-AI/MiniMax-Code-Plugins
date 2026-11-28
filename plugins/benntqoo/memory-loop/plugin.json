@@ -1,0 +1,20 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "memory-loop",
+  "version": "1.0.0",
+  "description": "Close the memory loop: a Stop hook collects memory candidates per project, a Skill distills them into MEMORY.md, and SessionStart injects that memory into every new conversation. Fully local and version-controlled with the repository.",
+  "author": {
+    "name": "benntqoo",
+    "url": "https://github.com/benntqoo"
+  },
+  "homepage": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins/tree/main/plugins/benntqoo/memory-loop",
+  "repository": "https://github.com/MiniMax-AI/MiniMax-Code-Plugins.git",
+  "license": "MIT",
+  "keywords": [
+    "minimax-code",
+    "memory",
+    "hooks",
+    "context",
+    "workflow"
+  ]
+}
